@@ -1,0 +1,54 @@
+-- BI20. Recruitment: the closest employees of a company to a person (who does not work
+-- there), over friendships between classmates weighted by |year difference| + 1;
+-- those at the least distance, top 20 by distance then id.
+
+let request = input 0 : ((int, List(int), int) ; ());         -- (rid, company name, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let org     = import "ldbc.org"     : ((int, List(int), List(int), int) ; ());
+let study   = import "ldbc.study"   : ((int, int, int) ; ());
+let work    = import "ldbc.work"    : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- Classmate friendships, weighted by the closest pair of graduation years.
+let studied  = study | map(((who, at, year), ()) -> (at, (who, year)));
+let mates    = studied | join(studied, (_, (a, ya), (b, yb)) -> ((a, b), (ya, yb) sub))
+                       | filter(((a, b), _) -> (a, b) ne)
+                       | join(friend | map((a, b) -> ((a, b), ())), (pair, d, ()) -> (pair, ((d, 0) lt, d neg, d) select))
+                       | map((pair, gap) -> (pair, (gap, 1) add)) | min
+                       | map(((a, b), w) -> (a, (b, w)));
+
+-- The company's employees, and requests whose person is not one of them.
+let staff    = request | map(((rid, name, _), ()) -> (name, rid))
+                       | join(org | map(((id, name, _, _), ()) -> (name, id)), (_, rid, at) -> (at, rid))
+                       | join(work | map(((who, at, _), ()) -> (at, who)), (_, rid, who) -> ((rid, who), ())) | distinct;
+let asked    = request | map(((rid, _, who), ()) -> ((rid, who), ()));
+let outside  = asked - (asked | join(staff, (key, (), ()) -> (key, ())));
+
+-- Shortest paths from the person, then the employees at the least distance.
+let starts   = outside | map(((rid, who), ()) -> ((rid, who, who, 0), ()));
+search: {
+    let grow   = search | map(((rid, from, node, cost), ()) -> (node, (rid, from, cost)))
+                        | join(mates, (_, (rid, from, cost), (next, w)) -> ((rid, from, next, (cost, w) add), ()));
+    var search = (starts + grow) | map(((rid, from, node, cost), ()) -> ((rid, from, node), cost)) | min
+                                 | map(((rid, from, node), cost) -> ((rid, from, node, cost), ()));
+}
+let reached  = search::search | map(((rid, from, node, cost), ()) -> ((rid, node), (from, cost)))
+                              | join(staff, ((rid, node), (from, cost), ()) -> (rid, (node, from, cost)))
+                              | filter((_, (node, from, _)) -> (node, from) ne);
+let best     = reached | map((rid, (_, _, cost)) -> (rid, cost)) | min;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked   = reached | join(best, (rid, (node, _, cost), least) -> (rid, (node, cost, least)))
+                       | filter((_, (_, cost, least)) -> (cost, least) eq)
+                       | map((rid, (node, cost, _)) -> (rid, (cost, node)))
+                       | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer   = ranked | map((rid, (rank, (cost, node))) -> ((rid, rank), (node, cost)));
+
+export "bi20.answer" = answer | arrange;

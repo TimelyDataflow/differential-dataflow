@@ -1,0 +1,41 @@
+-- IC14 (v2). The cheapest interaction-weighted path between two people; among equally
+-- cheap paths, the lexicographically smallest list of people.
+
+let request = input 0 : ((int, int, int) ; ());               -- (rid, from, to)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+-- Interaction weights between friends: replies in either direction are counted per
+-- pair (n), and a friendship costs max(round(40 - sqrt(n)), 1), computed exactly as
+-- 1 + the number of k in 1..39 with k(k-1) + 1 > n.
+let author   = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
+let answered = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                       | map(((_, _, _, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, who))
+                       | join(author, (_, who, to) -> (who, to))
+                       | filter((who, to) -> (who, to) ne);
+let talks    = (answered | map((a, b) -> ((a, b), ()))) + (answered | map((a, b) -> ((b, a), ())));
+let weighted = talks | count
+                     | join(friend | map((a, b) -> ((a, b), ())), (pair, n, ()) -> (pair, n))
+                     | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
+                           ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
+
+-- Bellman-Ford rounds: the least (cost, path) to each node, starting from `from`.
+let starts = request | map(((rid, from, _), ()) -> ((rid, from, 0, from enlist), ()));
+search: {
+    let grow   = search | map(((rid, node, cost, path), ()) -> (node, (rid, cost, path)))
+                        | join(weighted, (_, (rid, cost, path), (next, w)) -> ((rid, next, (cost, w) add, (path, next enlist) append), ()));
+    var search = (starts + grow) | map(((rid, node, cost, path), ()) -> ((rid, node), (cost, path))) | min
+                                 | map(((rid, node), (cost, path)) -> ((rid, node, cost, path), ()));
+}
+
+let answer = search::search | map(((rid, node, cost, path), ()) -> ((rid, node), (cost, path)))
+                            | join(request | map(((rid, _, to), ()) -> ((rid, to), ())), ((rid, _), (cost, path), ()) -> ((rid, 0), (path, cost)));
+
+export "ic14.answer" = answer | arrange;

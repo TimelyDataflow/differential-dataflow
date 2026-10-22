@@ -1,0 +1,37 @@
+-- BI6. Most authoritative users on a topic: each author of a tagged message scores the
+-- popularity (likes received overall) of everyone who liked their tagged messages; top 100.
+
+let request = input 0 : ((int, List(int)) ; ());              -- (rid, tag name)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+
+-- Messages carrying the request's tag: (message, rid).
+let tagged  = request | map((req, ()) -> (req.1, req.0))
+                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
+                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid));
+
+let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
+let written = tagged | join(author, (m, rid, who) -> ((rid, m, who), ()));   -- one tag; (message, tag) is a set
+
+-- Popularity: likes received on all of a person's messages.
+let liked   = likes | map(((liker, m, _), ()) -> (m, liker));
+let popular = liked | join(author, (_, _, who) -> (who, ())) | count;
+
+-- Each (author, liker) pair once, scored by the liker's popularity; zero for the rest.
+let pairs   = written | map(((rid, m, who), ()) -> (m, (rid, who)))
+                      | join(liked, (_, (rid, who), liker) -> ((rid, who, liker), ())) | distinct;
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let scored  = pairs | map(((rid, who, liker), ()) -> (liker, (rid, who)))
+                    | join(popular, (_, (rid, who), p) -> ((rid, who), p))
+                    | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+let authors = written | map(((rid, _, who), ()) -> ((rid, who), ())) | distinct;
+let score   = scored + ((authors - (authors | join(scored, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked  = score | map(((rid, who), s) -> (rid, (s neg, who)))
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer  = ranked | map((rid, (rank, (neg, who))) -> ((rid, rank), (who, neg neg)));
+
+export "bi6.answer" = answer | arrange;

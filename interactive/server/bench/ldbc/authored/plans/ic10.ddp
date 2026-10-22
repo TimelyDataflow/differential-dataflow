@@ -1,0 +1,60 @@
+-- IC10. Friend recommendation: friends-of-friends (exactly two hops) born between the
+-- 21st of the given month and the 22nd of the next, scored by their posts: +1 for each
+-- post with a tag the person is interested in, -1 for each other post; top 10.
+
+let request = input 0 : ((int, int, int) ; ());               -- (rid, person, month)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let interest = import "ldbc.interest" : ((int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- Least hops to each person within two, keeping those at exactly two.
+let hop1   = request | map(((rid, who, month), ()) -> (who, (rid, who, month)))
+                     | join(exists, (who, req, ()) -> (who, req))
+                     | join(friend, (_, req, f) -> (f, (req, 1)));
+let hop2   = hop1 | join(friend, (_, (req, _), g) -> (g, (req, 2)));
+let twohop = (hop1 + hop2) | filter((node, ((_, who, _), _)) -> (node, who) ne)
+                           | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d)) | min
+                           | filter((_, d) -> (d, 2) eq);
+
+-- Born in the window, with gender and city.
+let city   = place | map(((id, name, _, _), ()) -> (id, name));
+let people = person | map(((id, first, last, gender, _, _, _, _, home, bmonth, bday, _), ()) -> (home, (id, first, last, gender, bmonth, bday)))
+                    | join(city, (_, (id, first, last, gender, bmonth, bday), town) -> (id, (first, last, gender, town, bmonth, bday)));
+let cands  = twohop | map(((rid, who, month, node), _) -> (node, (rid, who, month)))
+                    | join(people, (node, (rid, who, month), (first, last, gender, town, bmonth, bday)) ->
+                           ((rid, who, node), (first, last, gender, town, month, bmonth, bday)))
+                    | filter((_, (_, _, _, _, month, bmonth, bday)) ->
+                             (((bmonth, month) eq, (bday, 21) ge) all, ((bmonth, ((month, 12) eq, 1, (month, 1) add) select) eq, (bday, 22) lt) all) any)
+                    | map((key, (first, last, gender, town, _, _, _)) -> (key, (first, last, gender, town)));
+
+-- Their posts, and which of them carry one of the person's interests.
+let posts  = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                     | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, id));
+let wrote  = cands | map(((rid, who, node), _) -> (node, (rid, who))) | join(posts, (node, (rid, who), m) -> ((rid, who, node, m), ()));
+let liked  = wrote | map(((rid, who, node, m), ()) -> (m, (rid, who, node)))
+                   | join(mtag | map(((m, t), ()) -> (m, t)), (m, (rid, who, node), t) -> ((who, t), (rid, node, m)))
+                   | join(interest | map(((p, t), ()) -> ((p, t), ())), ((who, _), (rid, node, m), ()) -> ((rid, who, node, m), ()))
+                   | distinct;
+let points = (liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1)))
+           + ((wrote - liked) | map(((rid, who, node, _), ()) -> ((rid, who, node), -1)));
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let summed = points | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+let keys   = cands | map((key, _) -> (key, ()));
+let score  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked = score | join(cands, ((rid, _, node), s, (first, last, gender, town)) -> (rid, ((s neg, node), (first, last, s, gender, town))))
+                   | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, ((_, node), (first, last, s, gender, town)))) -> ((rid, rank), (node, first, last, s, gender, town)));
+
+export "ic10.answer" = answer | arrange;

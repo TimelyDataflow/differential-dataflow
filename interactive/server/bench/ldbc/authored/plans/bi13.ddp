@@ -1,0 +1,59 @@
+-- BI13. Zombies in a country: residents created before the end date who posted less than
+-- once a month on average; scored by the share of likes on their messages that came
+-- from other zombies (likers created before the end date); top 100.
+
+let request = input 0 : ((int, List(int), int, int) ; ());    -- (rid, country, end, end month as year*12+month)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+
+-- Where people live: (person, (city id, city name, country name)).
+let parent = place | map(((id, _, _, up), ()) -> (id, up));
+let pname  = place | map(((id, name, _, _), ()) -> (id, name));
+let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
+                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
+let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
+                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
+
+-- Candidates: residents created before the end, with their creation date and month.
+let born    = person | map(((id, _, _, _, _, created, _, _, _, _, _, month), ()) -> (id, (created, month)));
+let cands   = request | map(((rid, country, end, endmonth), ()) -> (country, (rid, end, endmonth)))
+                      | join(home | map((who, (_, _, kname)) -> (kname, who)), (_, req, who) -> (who, req))
+                      | join(born, (who, (rid, end, endmonth), (created, month)) -> ((rid, who), (end, endmonth, created, month)))
+                      | filter((_, (end, _, created, _)) -> (created, end) lt);
+
+-- Messages between their creation and the end; zombies post fewer than one per month.
+let wrote   = message | map(((id, _, created, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, (id, created)));
+let posts   = cands | map(((rid, who), (end, _, created, _)) -> (who, (rid, end, created)))
+                    | join(wrote, (who, (rid, end, since), (_, at)) -> ((rid, who), (at, since, end)))
+                    | filter((_, (at, since, end)) -> ((at, since) ge, (at, end) le) all)
+                    | map((key, _) -> (key, 1));
+let wrote_n = posts | map((key, _) -> (key, ())) | count;
+let counts  = wrote_n + ((cands - (cands | join(wrote_n, (key, v, _) -> (key, v)))) | map((key, _) -> (key, 0)));
+let zombies = cands | join(counts, (key, (end, endmonth, _, month), n) -> (key, (end, endmonth, month, n)))
+                    | filter((_, (_, endmonth, month, n)) -> (n, ((endmonth, month) sub, 1) add) lt)
+                    | map(((rid, who), (end, _, _, _)) -> ((rid, who), end));
+
+-- Likes on zombies' messages by people created before the end, flagged if the liker is a zombie.
+let liked   = likes | map(((liker, m, _), ()) -> (m, liker));
+let likes_z = zombies | map(((rid, who), end) -> (who, (rid, end)))
+                      | join(wrote, (who, req, (m, _)) -> (m, (who, req)))
+                      | join(liked, (_, (who, (rid, end)), liker) -> (liker, (rid, who, end)))
+                      | join(born, (liker, (rid, who, end), (created, _)) -> ((rid, liker), (who, created, end)))
+                      | filter((_, (_, created, end)) -> (created, end) lt)
+                      | map(((rid, liker), (who, _, _)) -> ((rid, liker), who));
+let known   = likes_z | join(zombies, (key, who, _) -> (key, who));
+-- Likes per zombie (kind 0) and likes from zombies (kind 1), pivoted into (total, zombie);
+-- a zombie without likes gets (0, 0).
+let tally   = ((likes_z | map(((rid, _), who) -> ((rid, who, 0), ()))) + (known | map(((rid, _), who) -> ((rid, who, 1), ())))) | count;
+let totals  = ((tally | map(((rid, who, kind), n) -> ((rid, who), (kind, n)))) + (zombies | map((key, _) -> (key, (0, 0))))) | collect
+              | map((key, parts) -> (key, ((0, 0), parts) fold (((t, z), (kind, n)) -> (((kind, 0) eq, (t, n) add, t) select, ((kind, 1) eq, n, z) select))));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked  = totals | map(((rid, who), (t, z)) -> (rid, (((t, 0) gt, (z to_float, t to_float) div, 0.0) select, who, z, t)))
+                     | map((rid, (score, who, z, t)) -> (rid, ((score neg, who), (z, t, score))))
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer  = ranked | map((rid, (rank, ((_, who), (z, t, score)))) -> ((rid, rank), (who, z, t, score)));
+
+export "bi13.answer" = answer | arrange;

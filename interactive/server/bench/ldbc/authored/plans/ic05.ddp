@@ -1,0 +1,67 @@
+-- IC5. New groups: forums that friends and friends-of-friends joined after a date,
+-- ranked by how many posts those people made there (zero counts included); top 20.
+-- Posts per (person, forum) are kept for all requests. Forums without such posts only
+-- matter when fewer than 20 forums have any; then each of the 20 smallest-id ones is
+-- among some person's 40 smallest-id forums, so people whose memberships all postdate
+-- the date contribute just those 40.
+
+let request = input 0 : ((int, int, int) ; ());               -- (rid, person, date)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let forum   = import "ldbc.forum"   : ((int, List(int), int, int) ; ());
+let member  = import "ldbc.member"  : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- The circle (one or two hops, not the person), with the request's date.
+let hop1   = request | map(((rid, who, date), ()) -> (who, (rid, who, date)))
+                     | join(exists, (who, req, ()) -> (who, req))
+                     | join(friend, (_, req, f) -> (f, req));
+let hop2   = hop1 | join(friend, (_, req, g) -> (g, req));
+let circle = (hop1 + hop2) | filter((node, (_, who, _)) -> (node, who) ne)
+                           | map((node, (rid, _, date)) -> ((node, rid, date), ())) | distinct
+                           | map(((node, rid, date), ()) -> (node, (rid, date)));
+
+-- Posts per (author, forum), and memberships by (person, forum).
+let posted = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                     | map(((_, _, _, who, _, _, _, _, _, f, _, _, _, _), ()) -> ((who, f), ())) | count
+                     | map(((who, f), n) -> (who, (f, n)));
+let joined = member | map(((f, who, since), ()) -> ((who, f), since));
+
+-- Forums with posts by circle members who joined after the date: ((rid, forum), posts).
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let busy   = circle | join(posted, (node, (rid, date), (f, n)) -> ((node, f), (rid, date, n)))
+                    | join(joined, ((_, f), (rid, date, n), since) -> ((rid, f), (date, since, n)))
+                    | filter((_, (date, since, _)) -> (since, date) gt)
+                    | join_function((key, (_, _, n)) -> ((key, ()), (0), n) enlist) | count;
+
+-- Forums joined after the date with no such posts: from each person's 40 smallest-id
+-- forums when all their memberships postdate the date, otherwise from all of them.
+let first  = member | map(((_, who, since), ()) -> (who, since)) | min;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let lowest = member | map(((f, who, _), ()) -> (who, f)) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1) | map((who, (_, f)) -> (who, f));
+let timed  = circle | join(first, (node, (rid, date), since) -> (node, (rid, date, since)));
+let fast   = timed | filter((_, (_, date, since)) -> (since, date) gt)
+                   | join(lowest, (_, (rid, _, _), f) -> ((rid, f), ()));
+let slow   = timed | filter((_, (_, date, since)) -> (since, date) le)
+                   | join(member | map(((f, who, since), ()) -> (who, (f, since))), (_, (rid, date, _), (f, since)) -> ((rid, f), (date, since)))
+                   | filter((_, (date, since)) -> (since, date) gt)
+                   | map((key, _) -> (key, ()));
+let idle   = (fast + slow) | distinct;
+let quiet  = (idle - (idle | join(busy, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0));
+
+-- Rank by posts (most first), then forum id.
+let titles = forum | map(((id, title, _, _), ()) -> (id, title));
+let ranked = (busy + quiet) | map(((rid, f), n) -> (f, (rid, n)))
+                            | join(titles, (f, (rid, n), title) -> (rid, ((n neg, f), title)))
+                            | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, ((neg, _), title))) -> ((rid, rank), (title, neg neg)));
+
+export "ic5.answer" = answer | arrange;

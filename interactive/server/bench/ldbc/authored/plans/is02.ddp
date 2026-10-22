@@ -1,0 +1,35 @@
+-- IS2. A person's 10 most recent messages, each with the post that started its
+-- thread and that post's author.
+
+let request = input 0 : ((int, int) ; ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+
+-- Threads: every post is its own root; a comment inherits its parent's root.
+let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                      | map(((id, _, _, author, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id, author), ()));
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+thread: {
+    let below = thread | map(((mid, root, op), ()) -> (mid, (root, op)))
+                       | join(replies, (_, (root, op), child) -> ((child, root, op), ()));
+    var thread = roots + below | distinct;
+}
+let threads = thread::thread | map(((mid, root, op), ()) -> (mid, (root, op)));
+
+-- The person's messages, newest first (ties by larger id), keeping only ids and times to rank.
+let mine   = message | map(((id, _, created, author, _, _, _, _, _, _, _, _, _, _), ()) -> (author, (id, created)))
+                     | join(request | map(((rid, who), ()) -> (who, rid)), (_, (id, created), rid) -> (id, (rid, created)))
+                     | join(threads, (id, (rid, created), (root, op)) -> (rid, ((created neg, id neg), (id, created, root, op))));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let top    = mine | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+
+-- Only now fetch the ten messages' text and the original posters' names.
+let text   = message | map(((id, _, _, _, _, content, image, _, _, _, _, _, _, _), ()) -> (id, ((content len, 0) gt, content, image) select));
+let names  = person  | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+let answer = top | map((rid, (rank, (_, (id, created, root, op)))) -> (id, (rid, rank, created, root, op)))
+                 | join(text,  (id, (rid, rank, created, root, op), body) -> (op, (rid, rank, id, body, created, root)))
+                 | join(names, (op, (rid, rank, id, body, created, root), (first, last)) -> ((rid, rank), (id, body, created, root, op, first, last)));
+
+export "is2.answer" = answer | arrange;

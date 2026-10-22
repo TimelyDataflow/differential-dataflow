@@ -1,0 +1,41 @@
+-- BI12. How many people wrote how many messages: counting each person's messages with
+-- text, created after a date, shorter than a length, in threads of the given languages
+-- (zero for everyone else). Messages are kept keyed by their thread's language for
+-- all requests, so a request reads only its languages.
+
+let request = input 0 : ((int, int, int, List(int), int) ; ());   -- (rid, start, length, language, enabled); one row per language
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+
+-- Threads, carrying the root post's language: (message, language).
+let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                      | map(((id, _, _, _, _, _, _, _, lang, _, _, _, _, _), ()) -> ((id, lang), ()));
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+thread: {
+    let below  = thread | map(((mid, lang), ()) -> (mid, lang)) | join(replies, (_, lang, child) -> ((child, lang), ()));
+    var thread = roots + below | distinct;
+}
+let bylang  = message | filter(((_, _, _, _, _, text, _, _, _, _, _, _, _, _), ()) -> (text len, 0) gt)
+                      | map(((id, _, created, who, _, _, _, length, _, _, _, _, _, _), ()) -> (id, (who, created, length)))
+                      | join(thread::thread | map(((mid, lang), ()) -> (mid, lang)), (id, (who, created, length), lang) -> (lang, (id, who, created, length)));
+
+-- Each person's qualifying messages. A message has one thread language and a request
+-- names each language once, so every message matches at most once: no distinct needed.
+let chosen  = request | filter(((_, _, _, _, on), ()) -> (on, 0) ne)
+                      | map(((rid, start, max, lang, _), ()) -> (lang, (rid, start, max)))
+                      | join(bylang, (_, (rid, start, max), (id, who, created, length)) -> ((rid, who, id), (created, start, length, max)))
+                      | filter((_, (created, start, length, max)) -> ((created, start) gt, (length, max) lt) all)
+                      | map((key, _) -> (key, ()));
+
+-- Everyone gets a count (zero by default); then people per count.
+let rids    = request | map(((rid, _, _, _, _), ()) -> ((), rid)) | map((u, rid) -> ((u, rid), ())) | distinct | map(((u, rid), ()) -> (u, rid));
+let everyone = rids | join(person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((), id)), (_, rid, who) -> ((rid, who), 0));
+let counted = chosen | map(((rid, who, _), ()) -> ((rid, who), ())) | count;
+let perhead = counted + ((everyone - (everyone | join(counted, (key, z, _) -> (key, z)))));
+let people  = perhead | map(((rid, _), n) -> ((rid, n), ())) | count;
+let ranked  = people | map(((rid, n), p) -> (rid, (p neg, n neg)))
+                     | collect | flatmap((_, entries) -> entries);
+let answer  = ranked | map((rid, (rank, (np, nn))) -> ((rid, rank), (nn neg, np neg)));
+
+export "bi12.answer" = answer | arrange;

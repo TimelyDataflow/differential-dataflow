@@ -1,0 +1,56 @@
+-- BI9. Top thread initiators: people whose posts in a window started threads, with the
+-- number of those threads and of their messages in the window; top 100 by messages.
+-- Replies never precede their post, so a window post's messages in the window are its
+-- whole thread minus those after the end: thread sizes are kept per post for all
+-- requests, and a request reads only its window's posts and the messages after it.
+
+let request = input 0 : ((int, int, int) ; ());               -- (rid, start, end)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+
+-- Threads: every post roots its own thread; a comment joins its parent's thread.
+-- Rows are (message, root post, forum of the root post).
+let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+thread: {
+    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
+                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
+    var thread = roots + below | distinct;
+}
+
+-- Messages by day, and the request's window days.
+let byday   = message | map(((id, kind, created, who, _, _, _, _, _, _, _, _, _, day), ()) -> (day, (id, kind, created, who)));
+let days    = byday | map((day, _) -> (day, ())) | distinct | map((day, ()) -> ((), day));
+let windays = request | map(((rid, start, end), ()) -> ((), (rid, start, end)))
+                      | join(days, (_, (rid, start, end), day) -> (day, (rid, start, end)))
+                      | filter((day, (_, start, end)) -> ((day, ((start, 86400000) div, 86400000) mul) ge, (day, end) le) all);
+let posts   = windays | join(byday, (_, (rid, start, end), (id, kind, created, who)) -> ((rid, id), (kind, created, who, start, end)))
+                      | filter((_, (kind, created, _, start, end)) -> ((kind, 0) eq, (created, start) ge, (created, end) le) all)
+                      | map(((rid, id), (_, _, who, _, _)) -> ((rid, id), who));
+
+-- Thread sizes per post, and messages after the request's end, by their post.
+let size    = thread::thread | map(((_, root, _), ()) -> (root, ())) | count;
+let late    = request | map(((rid, _, end), ()) -> ((), (rid, end)))
+                      | join(days, (_, (rid, end), day) -> (day, (rid, end)))
+                      | filter((day, (_, end)) -> (day, ((end, 86400000) div, 86400000) mul) ge)
+                      | join(byday, (_, (rid, end), (id, _, created, _)) -> (id, (rid, created, end)))
+                      | filter((_, (_, created, end)) -> (created, end) gt)
+                      | join(thread::thread | map(((mid, root, _), ()) -> (mid, root)), (_, (rid, _, _), root) -> ((rid, root), -1));
+
+-- Per author: threads started, and messages (thread sizes minus the late messages).
+let started = posts | map(((rid, _), who) -> ((rid, who), ())) | count;
+let parts   = (posts | map(((rid, id), who) -> (id, (rid, who))) | join(size, (_, (rid, who), n) -> ((rid, who), n)))
+            + (late | join(posts, ((rid, _), minus, who) -> ((rid, who), minus)));
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let msgs    = parts | join_function((key, n) -> ((key, ()), (0), n) enlist) | count;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked  = started | join(msgs, ((rid, who), t, m) -> (who, (rid, t, m)))
+                      | join(names, (who, (rid, t, m), (first, last)) -> (rid, ((m neg, who), (first, last, t))))
+                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer  = ranked | map((rid, (rank, ((neg, who), (first, last, t)))) -> ((rid, rank), (who, first, last, t, neg neg)));
+
+export "bi9.answer" = answer | arrange;

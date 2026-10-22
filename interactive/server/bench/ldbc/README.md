@@ -5,6 +5,11 @@ and BI1–20, with readable named-field definitions, generated DDP, shared serve
 inputs, varying interactive bindings, and maintained BI results. Start there
 for full query coverage. It requires no downloaded data for its CI fixture.
 
+Hand-written, readable DDP for all 41 reads, checked against the generated plans,
+is in [authored/](authored/README.md). SQL baselines for DuckDB and Umbra, with the
+method for comparing systems on one machine and one set of results, are in
+[baselines/](baselines/METHOD.md).
+
 The four-query `run.py` panel documented below remains a smaller control with
 independent graph oracles and hand-written physical plans. Its measurements
 are not directly interchangeable with the full suite's wider schema/plans.

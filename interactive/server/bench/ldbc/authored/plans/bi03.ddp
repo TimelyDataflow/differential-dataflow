@@ -1,0 +1,52 @@
+-- BI3. Forums moderated by someone in a country, ranked by how many of their messages
+-- carry a tag of the given class; top 20.
+
+let request = input 0 : ((int, List(int), List(int)) ; ());    -- (rid, class name, country name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let forum   = import "ldbc.forum"   : ((int, List(int), int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let tagclass = import "ldbc.tagclass" : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+
+-- Threads: every post roots its own thread; a comment joins its parent's thread.
+-- Rows are (message, root post, forum of the root post).
+let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+thread: {
+    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
+                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
+    var thread = roots + below | distinct;
+}
+-- Where people live: (person, (city id, city name, country name)).
+let parent = place | map(((id, _, _, up), ()) -> (id, up));
+let pname  = place | map(((id, name, _, _), ()) -> (id, name));
+let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
+                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
+let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
+                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
+
+-- Messages tagged with a tag of the class (once per message), and their forums.
+let classes = tagclass | map(((id, name, _), ()) -> (name, id));
+let inclass = request | map(((rid, cls, country), ()) -> (cls, (rid, country)))
+                      | join(classes, (_, req, c) -> (c, req))
+                      | join(tag | map(((id, _, c), ()) -> (c, id)), (_, req, t) -> (t, req))
+                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, (rid, country), m) -> ((rid, country, m), ())) | distinct;
+let forum_of = thread::thread | map(((mid, _, f), ()) -> (mid, f));
+let info     = forum | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)))
+                     | join(home, (moderator, (id, title, created), (_, _, kname)) -> (id, (title, created, moderator, kname)));
+let counts   = inclass | map(((rid, country, m), ()) -> (m, (rid, country)))
+                       | join(forum_of, (_, (rid, country), f) -> (f, (rid, country)))
+                       | join(info, (f, (rid, country), (title, created, moderator, kname)) -> ((rid, f, title, created, moderator), (country, kname)))
+                       | filter((_, (country, kname)) -> (country, kname) eq)
+                       | map((key, _) -> (key, ())) | count;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked   = counts | map(((rid, f, title, created, moderator), n) -> (rid, ((n neg, f), (title, created, moderator))))
+                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer   = ranked | map((rid, (rank, ((neg, f), (title, created, moderator)))) -> ((rid, rank), (f, title, created, moderator, neg neg)));
+
+export "bi3.answer" = answer | arrange;
