@@ -34,7 +34,11 @@ Across those 15 authored plans, the all-epoch mean per batch improved on the bes
 plan for 10 (BI6 9.31 → 2.32 ms, BI8 5.56 → 2.58, BI5 4.35 → 2.27, BI13 3.31 → 1.40,
 BI16 2.76 → 1.34), was level for 2 (BI2, BI15), and was worse for 3 (BI4 4.80 → 10.28,
 BI9 3.74 → 6.66, IC5 2.60 → 17.55). Those three rank large candidate sets with `collect`,
-where #996's generated plans use a bounded top-k that maintains only the first k.
+where #996's generated plans use a bounded top-k that maintains only the first k. The
+authored plans now use that same bounded `reduce` for every ranking with a limit: BI4,
+BI9 and IC5 then cost 4.2, 3.6 and 6.0 ms per batch. That last change was checked on the
+fixture for all 41 plans and spot-checked at SF1 (BI4, BI9, IC5 under updates; IC2, IC9,
+BI18, IS2, BI5 one-off, all answers identical); the one-off column predates it.
 
 **Summary** (geometric means of DDIR ÷ the faster of DuckDB and Umbra at 4 threads):
 
@@ -75,7 +79,7 @@ than once per day, and the DDIR rewrites have no SQL counterpart.
 | BI1 | 14.1 / 4.6 | 21.8 / 6.9 | 1909 | 951 | 1.8 | 12.7 / 30.8 | 1.1 |
 | BI2 | 7.3 / 3.7 | 5.3 / 3.4 | 15.3 | 21.4 | 0.6 | 11.9 / 27.0 | 1.2 |
 | BI3 | 24.1 / 12.7 | 22.7 / 10.5 | 36.3 | 34.6 | 17.2 | 20.3 / 34.3 | 1.9 |
-| BI4 | 115 / 42.4 | 102 / 35.7 | 1107 | 547 | 60.1 | 51.1 / 60.9 | 3.4 |
+| BI4 | 115 / 42.4 | 102 / 35.7 | 1107 | 547 | 60.1 | 51.1 / 60.9 | 3.1 |
 | BI5 | 16.9 / 7.1 | 14.4 / 11.4 | 14.1 | 10.1 | 6.1 | 16.9 / 37.4 | 2.7 |
 | BI6 | 69.5 / 28.2 | 54.3 / 27.0 | 12.9 | 10.3 | 7.0 | 40.6 / 56.1 | 2.5 |
 | BI7 | 19.3 / 8.8 | 64.5 / 23.0 | 31.9 | 27.1 | 10.1 | 18.8 / 48.8 | 2.9 |

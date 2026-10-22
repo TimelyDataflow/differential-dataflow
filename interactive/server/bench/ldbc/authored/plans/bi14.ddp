@@ -53,10 +53,12 @@ let keys    = pairs | map(((p1, p2), (rid, city, cname)) -> ((rid, city, cname, 
 let scored  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 
 -- The best pair per city, then the top 100 overall.
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let percity = scored | map(((rid, city, cname, p1, p2), s) -> ((rid, city), (s neg, p1, p2, cname)))
-                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 1) lt)
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 1) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 1) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 1) min in let before = (end, count) sub in let keep = (((1, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1)
                      | map(((rid, _), (_, (neg, p1, p2, cname))) -> (rid, ((neg, p1, p2), cname)));
-let ranked  = percity | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+let ranked  = percity | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((neg, p1, p2), cname))) -> ((rid, rank), (p1, p2, cname, neg neg)));
 
 export "bi14.answer" = answer | arrange;

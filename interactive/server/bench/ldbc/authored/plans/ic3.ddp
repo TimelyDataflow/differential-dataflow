@@ -52,9 +52,11 @@ let in_x   = seen | filter((_, (ix, _)) -> (ix, 1) eq) | map((key, _) -> (key, (
 let in_y   = seen | filter((_, (_, iy)) -> (iy, 1) eq) | map((key, _) -> (key, ())) | count;
 let counts = in_x | join(in_y, (key, nx, ny) -> (key, (nx, ny)));
 let names  = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked = counts | map(((rid, node), (nx, ny)) -> (node, (rid, nx, ny)))
                     | join(names, (node, (rid, nx, ny), (first, last)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))))
-                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((_, node), (first, last, nx, ny)))) -> ((rid, rank), (node, first, last, nx, ny, (nx, ny) add)));
 
 export "ic3.answer" = answer | arrange;

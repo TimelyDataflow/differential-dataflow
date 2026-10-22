@@ -57,8 +57,10 @@ let inclass = request | map(((rid, _, _, cls, _, _), ()) -> (cls, rid))
                       | join(people, ((rid, who), m, ()) -> (m, (rid, who)));
 let counts  = inclass | join(mtag | map(((m, t), ()) -> (m, t)), (_, (rid, who), t) -> (t, (rid, who)))
                       | join(names, (_, (rid, who), name) -> ((rid, who, name), ())) | count;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | map(((rid, who, name), n) -> (rid, (n neg, name, who)))
-                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, (neg, name, who))) -> ((rid, rank), (who, name, neg neg)));
 
 export "bi10.answer" = answer | arrange;

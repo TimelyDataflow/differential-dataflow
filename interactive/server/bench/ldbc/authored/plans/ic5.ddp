@@ -44,8 +44,9 @@ let busy   = circle | join(posted, (node, (rid, date), (f, n)) -> ((node, f), (r
 -- Forums joined after the date with no such posts: from each person's 40 smallest-id
 -- forums when all their memberships postdate the date, otherwise from all of them.
 let first  = member | map(((_, who, since), ()) -> (who, since)) | min;
-let lowest = member | map(((f, who, _), ()) -> (who, f)) | collect | flatmap((_, entries) -> entries)
-                    | filter((_, (rank, _)) -> (rank, 40) lt) | map((who, (_, f)) -> (who, f));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let lowest = member | map(((f, who, _), ()) -> (who, f)) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1) | map((who, (_, f)) -> (who, f));
 let timed  = circle | join(first, (node, (rid, date), since) -> (node, (rid, date, since)));
 let fast   = timed | filter((_, (_, date, since)) -> (since, date) gt)
                    | join(lowest, (_, (rid, _, _), f) -> ((rid, f), ()));
@@ -60,7 +61,7 @@ let quiet  = (idle - (idle | join(busy, (key, (), _) -> (key, ())))) | map((key,
 let titles = forum | map(((id, title, _, _), ()) -> (id, title));
 let ranked = (busy + quiet) | map(((rid, f), n) -> (f, (rid, n)))
                             | join(titles, (f, (rid, n), title) -> (rid, ((n neg, f), title)))
-                            | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+                            | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((neg, _), title))) -> ((rid, rank), (title, neg neg)));
 
 export "ic5.answer" = answer | arrange;

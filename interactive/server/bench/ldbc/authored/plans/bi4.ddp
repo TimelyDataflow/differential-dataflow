@@ -33,12 +33,14 @@ let popularity = members | join(country_of, (_, f, country) -> ((f, country), ()
 
 -- The request's top 100 forums created after its date.
 let created = forum  | map(((id, _, when, _), ()) -> (id, when));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let top     = request | map(((rid, date), ()) -> ((), (rid, date)))
                       | join(popularity | join(created, (f, neg, when) -> ((), (f, neg, when))),
                              (_, (rid, date), (f, neg, when)) -> (rid, ((neg, f), (date, when))))
                       | filter((_, (_, (date, when))) -> (when, date) gt)
                       | map((rid, (order, _)) -> (rid, order))
-                      | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt)
+                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1)
                       | map((rid, (_, (_, f))) -> (f, rid));
 
 -- Their members, and how many messages each person posted in them.
@@ -53,7 +55,7 @@ let counts  = wrote + ((joined - (joined | join(wrote, (key, (), _) -> (key, ())
 let profile = person | map(((id, first, last, _, _, created, _, _, _, _, _, _), ()) -> (id, (first, last, created)));
 let ranked  = counts | map(((rid, who), n) -> (who, (rid, n)))
                      | join(profile, (who, (rid, n), (first, last, created)) -> (rid, ((n neg, who), (first, last, created, n))))
-                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, who), (first, last, created, n)))) -> ((rid, rank), (who, first, last, created, n)));
 
 export "bi4.answer" = answer | arrange;

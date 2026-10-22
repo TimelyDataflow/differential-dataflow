@@ -10,9 +10,11 @@ let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) 
 let comment = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
                       | map(((id, _, created, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, (id, created, who)));
 let replies = comment | join(author, (_, (id, created, who), op) -> (op, (id, created, who)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let top     = request | map(((rid, who), ()) -> (who, rid))
                       | join(replies, (_, rid, (id, created, who)) -> (rid, ((created neg, id), who)))
-                      | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 
 let text    = message | map(((id, _, _, _, _, content, _, _, _, _, _, _, _, _), ()) -> (id, content));
 let answer  = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg neg, who)))

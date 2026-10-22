@@ -98,23 +98,20 @@ against the generated plan in [../baselines/METHOD.md](../baselines/METHOD.md).
 | [BI19](plans/bi19.ddp) | Cheapest interaction-weighted paths between anyone in city 1 and anyone in city 2 | Same as the generated plan |
 | [BI20](plans/bi20.ddp) | Recruitment: the closest employees of a company to a person, over a graph of classmates weighted by graduation-year gaps | Same as the generated plan |
 
-Two spelling differences apply throughout:
+Two conventions apply throughout:
 
-- **Ranking** uses `collect`: key the candidates by request, with values that
-  start with the sort key, `collect` them, and `flatmap` back out. The rows come
-  out as `(rid, (rank, value))` in order, and a `filter` on rank is the limit.
-  This reads well but is the most expensive way to maintain a ranking: `collect`
-  is a reduce over all of a request's candidates, so a change to any one rebuilds
-  the sorted list and re-ranks everything below it before the limit applies. The
-  generated plans use a bounded reducer (`snb/topk.py`) that reads only the first k
-  and is silent about changes below them, optionally over hierarchical hash buckets
-  for very large groups. When the data are append-only, a ranking can also live in
-  the multiplicity as a semigroup. These plans keep `collect` for readability; which
-  technique fits depends on group sizes and the update pattern. Swapping the bounded
-  reducer into the authored BI4, BI9 and IC5 (same answers) changed their mean SF1
-  update cost from 10.3 to 4.2 ms, 6.7 to 3.6 ms and 17.6 to 6.0 ms. IC5 stays above
-  the generated plan's 2.6 ms because its rewrite also maintains each person's 40
-  smallest forums for every request: faster reads, more work per update.
+- **Ranking with a limit** uses the same bounded `reduce` the generator emits
+  (`snb/topk.py`, single stage): a key's values arrive in sort order, the first k are
+  kept (copies capped at k) and emitted as `(rank, value)`, so changes below the top k
+  produce no output. Rankings without a limit (IS3, IS7, BI1, BI12, BI19, and IC11's
+  numbering of company names) use `collect` and `flatmap`, which emit every row anyway.
+  Ranking by `collect` with a limit reads more simply but is costly to maintain: a change
+  to any candidate re-ranks everything below it before the limit applies. With the
+  bounded `reduce`, BI4, BI9 and IC5 cost 4.2, 3.6 and 6.0 ms per SF1 update batch,
+  against 10.3, 6.7 and 17.6 ms with `collect`. IC5 stays above the generated plan's
+  2.6 ms because its rewrite also maintains each person's 40 smallest forums for every
+  request: faster reads, more work per update. For very large groups, `snb/topk.py`
+  can also stage the ranking through hash buckets.
 - **Only the fields a step needs** are carried, so the plans stay narrow without
   the projection pass.
 
@@ -139,7 +136,7 @@ Two spelling differences apply throughout:
   A total of zero has no row, so a default of 0 is added for keys that must appear.
   `collect` remains only for lists that are part of the answer (IC1, IC12), for
   pivoting two or three counts of one key into a tuple (BI1, BI2, BI5, BI13), and for
-  ranking.
+  rankings without a limit.
 - **Tuples.** `(e)` is a one-field tuple, not `e`; the compiler says so. Around a
   list this matters: `-> (x enlist)` is a tuple holding a list.
 - **Captured values in folds.** A fold's lambda sees only the accumulator and the

@@ -39,8 +39,10 @@ let others = with_it | map(((rid, message, name), ()) -> (message, (rid, name)))
                      | join(tagged, (_, (rid, name), other) -> ((rid, name, other), ()))
                      | filter(((_, name, other), ()) -> (name, other) ne)
                      | map(((rid, _, other), ()) -> ((rid, other), ())) | count;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked = others | map(((rid, other), n) -> (rid, (n neg, other)))
-                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 10) lt);
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, (neg, other))) -> ((rid, rank), (other, neg neg)));
 
 export "ic6.answer" = answer | arrange;

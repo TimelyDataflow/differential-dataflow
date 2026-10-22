@@ -37,8 +37,10 @@ let theirs  = score | map(((rid, f), s) -> (f, (rid, s)))
                     | join(score, (key, s, _) -> (key, s));
 let summed  = theirs | join_function((key, s) -> ((key, ()), (0), s) enlist) | count;
 let friends = summed + ((score - (score | join(summed, (key, s, _) -> (key, s)))) | map((key, _) -> (key, 0)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = score | join(friends, ((rid, who), s, fs) -> (rid, (((s, fs) add neg, who), (s, fs))))
-                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, who), (s, fs)))) -> ((rid, rank), (who, s, fs)));
 
 export "bi8.answer" = answer | arrange;

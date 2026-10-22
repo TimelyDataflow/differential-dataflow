@@ -37,9 +37,11 @@ let jobs    = circle | map(((node, rid, country, year), ()) -> (node, (rid, coun
 
 -- Within one person and start year, number companies by name; order puts the last name first.
 let named  = jobs | collect | flatmap((_, entries) -> entries);
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked = named | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)))
                    | join(names, (node, (rid, since, pos, company), (first, last)) -> (rid, ((since, node, pos neg), (first, last, company))))
-                   | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 10) lt);
+                   | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((since, node, _), (first, last, company)))) -> ((rid, rank), (node, first, last, company, since)));
 
 export "ic11.answer" = answer | arrange;

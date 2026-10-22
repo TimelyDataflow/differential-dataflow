@@ -46,9 +46,11 @@ let parts   = (posts | map(((rid, id), who) -> (id, (rid, who))) | join(size, (_
             + (late | join(posts, ((rid, _), minus, who) -> ((rid, who), minus)));
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
 let msgs    = parts | join_function((key, n) -> ((key, ()), (0), n) enlist) | count;
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = started | join(msgs, ((rid, who), t, m) -> (who, (rid, t, m)))
                       | join(names, (who, (rid, t, m), (first, last)) -> (rid, ((m neg, who), (first, last, t))))
-                      | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((neg, who), (first, last, t)))) -> ((rid, rank), (who, first, last, t, neg neg)));
 
 export "bi9.answer" = answer | arrange;
