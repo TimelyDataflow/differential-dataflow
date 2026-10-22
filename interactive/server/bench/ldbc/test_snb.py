@@ -2,7 +2,7 @@
 import unittest
 
 from snb.queries import Context,QUERIES
-from snb.rel import R,Compiler
+from snb.rel import R,Compiler,SourceRows,c,evaluate
 from snb.parameters import parameters,reference
 from snb import witness
 
@@ -65,12 +65,71 @@ class SuiteTests(unittest.TestCase):
         changed['mtag'] = {row for row in changed['mtag'] if row[0] != 10009}
         self.assertEqual(self.rows('ic3', changed), [])
 
+    def test_ic3_counts_messages_that_project_to_the_same_fields(self):
+        changed = {name:set(rows) for name,rows in self.graph.items()}
+        for identity, original in ((20001,10009),(20002,10010)):
+            message = next(row for row in self.graph['message'] if row[0] == original)
+            changed['message'].add((identity,*message[1:]))
+        self.assertEqual(self.rows('ic3',changed),
+                         [[4,list(b'Alex'),list(b'Person4'),2,2,4]])
+
     def test_hand_checked_floating_aggregates(self):
         rows=self.rows('bi1')
         self.assertEqual([(r[0],r[1],r[2],r[3],r[5]) for r in rows],[(2012,0,0,31,120),(2012,1,0,4,16)])
         self.assertAlmostEqual(rows[0][4],120/31)
         self.assertAlmostEqual(rows[0][6],3100/35)
         self.assertEqual([(r[0],r[1],r[2],r[3]) for r in self.rows('bi13')],[(7,1,1,1.0),(2,0,1,0.0),(5,0,0,0.0)])
+
+    def test_shared_reference_inputs_are_read_once(self):
+        schema={'key':'int','value':'int'}
+        source=R.source('rows',schema)
+        left=source.select('key',value=c.value+1)
+        right=source.where(c.value>=0).select('key',value=c.value*2)
+        plan=left.union(right).group(('key',),n=('count',c.value),total=('sum',c.value))
+        data={'rows':SourceRows(iter([(1,2),(1,2),(2,-1)]),schema)}
+        self.assertEqual(evaluate(plan,data),
+                         [{'key':1,'n':4,'total':14},{'key':2,'n':1,'total':0}])
+
+    def test_explicit_reference_cache_spans_exports(self):
+        schema={'key':'int','value':'int'}
+        source=R.source('rows',schema)
+        data={'rows':SourceRows(iter([(1,2),(1,2),(2,-1)]),schema)}
+        cache={}
+        first_plan=source.select('key',value=c.value+1)
+        second_plan=source.select('key',value=c.value*2)
+        first=evaluate(first_plan,data,cache)
+        second=evaluate(second_plan,data,cache)
+        self.assertEqual([row['value'] for row in first],[3,3,0])
+        self.assertEqual([row['value'] for row in second],[4,4,-2])
+
+    def test_ic12_class_filter_and_request_identity(self):
+        self.assertEqual(self.rows('ic12',classname='Root'),self.rows('ic12'))
+        self.assertEqual(self.rows('ic12',classname='Missing'),[])
+        fn,schema,_=QUERIES['ic12']
+        binding=parameters(self.graph,'ic12');binding.update(witness.params('ic12'))
+        active={tuple(rid if field=='rid' else binding[field] for field in schema) for rid in (0,1)}
+        plan=fn(Context(),R.source('request',schema));compiler=Compiler();compiler.compile(plan)
+        rows=reference(plan,compiler.inputs,{**self.graph,'request':active})
+        for rid in (0,1):
+            self.assertEqual([row[1] for row in rows if row[0][0]==rid],self.rows('ic12'))
+
+    def test_bi15_ignores_interactions_without_friendship(self):
+        changed={name:set(rows) for name,rows in self.graph.items()}
+        original=next(row for row in self.graph['message'] if row[0]==10004)
+        for identity in range(30000,30020):
+            row=list(original);row[0]=identity;row[3]=8
+            changed['message'].add(tuple(row))
+        self.assertEqual(self.rows('bi15',changed),self.rows('bi15'))
+
+    def test_bi17_counts_a_discussion_once_across_witnesses(self):
+        changed={name:set(rows) for name,rows in self.graph.items()}
+        original=next(row for row in self.graph['message'] if row[0]==10001)
+        changed['message'].add((30001,*original[1:]))
+        changed['mtag'].update((30001,tag) for mid,tag in self.graph['mtag'] if mid==10001)
+        changed['member'].update((forum,person,created+1) for forum,person,created in self.graph['member'])
+        self.assertEqual(self.rows('bi17',changed),[[1,1]])
+        changed['member'].add((1002,1,original[2]))
+        self.assertEqual(self.rows('bi17',changed),[])
 
 
 

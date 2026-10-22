@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import operator
 
+from .topk import pipeline
+
 
 @dataclass(eq=False)
 class E:
@@ -189,7 +191,19 @@ class _SourceRow(Mapping):
 def evaluate(root, data, cache=None):
     # A caller evaluating several exports against one snapshot can share this
     # cache. It must start a fresh cache when the input snapshot changes.
-    cache = {} if cache is None else cache
+    private = cache is None
+    cache = {} if private else cache
+    uses = Counter()
+    if private:
+        pending, seen = [root], set()
+        while pending:
+            node = pending.pop()
+            if id(node) in seen: continue
+            seen.add(id(node))
+            for child in node.args:
+                if isinstance(child,R):
+                    uses[id(child)] += 1
+                    pending.append(child)
     def ev(r):
         if id(r) in cache: return cache[id(r)]
         op,args = r.op,r.args
@@ -248,6 +262,13 @@ def evaluate(root, data, cache=None):
             rows = list(state.values())
         else: raise ValueError(op)
         cache[id(r)] = rows
+        if private:
+            # Every parent is evaluated once. Keep a shared child until all
+            # parents have consumed it, then release its intermediate rows.
+            for child in args:
+                if isinstance(child,R):
+                    uses[id(child)] -= 1
+                    if not uses[id(child)]: cache.pop(id(child),None)
         return rows
     try:
         return ev(root)
@@ -262,11 +283,13 @@ def source_shape(schema):
 
 
 class Compiler:
-    def __init__(self, imports=False):
+    def __init__(self, imports=False, *, rank_buckets=(1,), rank_hash_key='value'):
         self.lines = []
         self.names = {}
         self.inputs = []
         self.imports = imports
+        self.rank_buckets = tuple(rank_buckets)
+        self.rank_hash_key = rank_hash_key
 
     def emit(self, r):
         if id(r) in self.names: return self.names[id(r)]
@@ -312,6 +335,41 @@ class Compiler:
             refs = positions(source.fields)
             group_key = projection([col(n) for n in keys],refs)
             outs = list(positions(keys,'key').values())
+            if aggs and all(kind in ('count', 'sum') for kind, _ in aggs.values()):
+                group_rows = name+'_keys'
+                self.lines.append(f'let {group_rows} = {source_name} | map((row, ()) -> ({group_key}, ()));')
+                groups = name+'_groups'
+                if any(kind == 'sum' for kind, _ in aggs.values()):
+                    self.lines.append(f'let {groups} = {group_rows} | distinct;')
+                joined = None
+                for i, (kind, e) in enumerate(aggs.values()):
+                    aggregate = f'{name}_aggregate_{i}'
+                    if kind == 'count':
+                        code = f'{group_rows} | count'
+                    else:
+                        # DD adds integer contributions in the diff field. Zero
+                        # time leaves the input timestamp unchanged.
+                        weight = scalar(expr(e), refs)
+                        code = f'{source_name} | join_function((row, ()) -> (({group_key}, ()), (0), {weight}) enlist) | count'
+                    self.lines.append(f'let {aggregate} = {code};')
+                    if kind == 'sum':
+                        # count omits zero totals, but SQL-style grouping keeps
+                        # a zero sum while the input group remains nonempty.
+                        missing = f'({groups} - ({groups} | join({aggregate}, (key, _, _) -> (key, ()))))'
+                        present = aggregate+'_present'
+                        self.lines.append(f'let {present} = {aggregate} + ({missing} | map((key, ()) -> (key, 0)));')
+                        aggregate = present
+                    stage = f'{name}_joined_{i}'
+                    if joined is None:
+                        code = f'{aggregate} | map((key, total) -> (key, (total)))'
+                    else:
+                        values = product([*(f'left.{j}' for j in range(i)), 'right'])
+                        code = f'{joined} | join({aggregate}, (key, left, right) -> (key, {values}))'
+                    self.lines.append(f'let {stage} = {code};')
+                    joined = stage
+                fields = product([*outs, *(f'totals.{i}' for i in range(len(aggs)))])
+                self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {joined} | map((key, totals) -> ({fields}, ()));')
+                return name
             if len(aggs)==1 and next(iter(aggs.values()))[0]=='min':
                 _,e = next(iter(aggs.values()))
                 code = f'{source_name} | map((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | min | map((key, (best)) -> ({product([*outs,"best"])}, ()))'
@@ -338,10 +396,20 @@ class Compiler:
             src = self.emit(source)
             refs = positions(source.fields)
             sort = product([*(scalar(e,refs) for e in order),'row'])
-            code = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort})) | collect | flatmap((_, values) -> values)'
-            if limit is not None: code += f' | filter((_, (rank, _)) -> (rank, {limit}) lt)'
+            ordered = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort}))'
             out = product([*(f'item.{len(order)}.{i}' for i in range(len(source.fields))),'rank'])
-            code += f' | map((_, (rank, item)) -> ({out}, ()))'
+            if limit is None:
+                code = ordered+' | collect | flatmap((_, values) -> values)'
+                code += f' | map((_, (rank, item)) -> ({out}, ()))'
+            else:
+                # DD retains all candidates; the lambda copies only the best
+                # `limit` rows. Only the last bucket stage assigns ranks.
+                initial = name+'_input'
+                stages, last = pipeline(initial, name+'_top', self.rank_buckets,
+                                        self.rank_hash_key, limit)
+                self.lines.append('\n'.join([f'let {initial} = {ordered};', *stages,
+                    f'let {name} = {last} | map((_, (rank, item)) -> ({out}, ()));']))
+                return name
         elif op == 'closure':
             seed,nextrel,on,select,keys,best,condition = args
             s,n = self.emit(seed),self.emit(nextrel)

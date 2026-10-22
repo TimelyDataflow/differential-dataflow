@@ -134,14 +134,107 @@ then exceeded the 6-GiB sampled server limit during retirement, before deferred
 Python checking. Those captured SF1 answers were not validated. This is a
 historical investigation lead, not a failure assertion for newer binaries.
 
-Plan inspection suggests controls: project away unused message/person fields
-before joins, exclude other countries' messages before aggregation, and
-replace `collect`/fold country sums with weighted sums or separate counts.
-The widest intermediate has 46 fields, including unused message content;
-the final top twenty ranks aggregate person rows. These observations do not
-identify which operator accounts for the memory peak. Measure initial load,
-updates, and request retirement separately, and retain complete answer checks
-when changing the plan.
+The current query projects unused residence, message and country fields before
+the large joins, reducing message-expanded rows from 46 fields to 17. Integer
+counts and sums use differential weights rather than collected lists. Different
+messages that project to equal rows retain their multiplicities. The memory
+observations in [MEMORY.md](MEMORY.md) separate query-active storage from later
+transient peaks; a process peak does not identify which operator owns the bytes.
+
+## Query plans and reference memory
+
+Groups containing only integer sums and counts use native `count` over keyed
+unit values. Sums multiply each input diff by the integer contribution through
+`join_function`; the zero timestamp leaves input time unchanged. A separate
+presence relation preserves zero-sum results for nonempty groups. When the last
+input disappears, the group disappears. Other aggregate combinations retain the
+existing lowering. The Python grouping evaluator remains the logical oracle.
+
+The query definitions project away unused fields before large joins. IC12
+restricts tag classes before expanding ancestry, BI15 restricts scored
+interactions to friendship edges, and BI17 applies forum membership before
+joining initiators to discussions. These rewrites preserve request identity,
+output shapes and bag multiplicities. They do not constitute a general optimizer
+pass or claim to resolve every memory limit.
+
+Private Python reference evaluations release intermediate row lists after their
+last consumer. Shared children remain available until all parents consume them;
+an explicitly supplied cache retains the existing multi-export behavior. This
+changes checker memory use, without changing generated DDIR.
+
+## Bounded ranking plans
+
+The ordinary compiler uses the Corgi reducer in [snb/topk.py](snb/topk.py) for
+every finite rank limit. It keeps the complete original sort key and row, caps
+output multiplicities at the limit, and assigns ranks only at the last stage.
+Inputs remain maintained by DD so a deletion can expose a previously unselected
+candidate. Unbounded rankings and nested collection outputs still use `collect`.
+
+IC2 uses a flat top-twenty reduction. IC5 and IC9 use nested 1024/32/1 hash
+buckets; each count divides its predecessor. IC5 hashes its stable forum ID
+(the second sort field), keeping a forum in the same bucket when its score
+changes. IC9 hashes the full sort value. Other finite rankings use one stage.
+The normal suite, update runner and memory profiler all use these defaults:
+
+```sh
+python3 interactive/server/bench/ldbc/update_stream.py \
+  --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
+  --queries ic9 --check-mode replay --check-every 0 --no-check-first-class \
+  --output /tmp/ic9-bounded
+```
+
+`bounded_topk.py` overrides bucket/hash choices for IC2/IC5/IC9 experiments,
+using the same compiler and reducer. For example, try a flat IC9 plan:
+
+```sh
+python3 interactive/server/bench/ldbc/bounded_topk.py --query ic9 \
+  --buckets 1 --hash-key value --output /tmp/ic9-flat.ddp
+python3 interactive/server/bench/ldbc/update_stream.py \
+  --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
+  --queries ic9 --plan /tmp/ic9-flat.ddp --check-mode replay \
+  --check-every 0 --no-check-first-class --output /tmp/ic9-flat
+```
+
+These overrides change physical ranking; the ordinary logical query remains the
+Python reference. `test_topk.py` checks positive/negative diffs, duplicates,
+retractions, ties, empty groups, limits 0/1/10/20/100, varying sort-key arities
+and composite groups. It checks both the defaults and experimental IC2/IC5/IC9
+plans through all 49 update-fixture states at one/four workers.
+`test_aggregates.py` checks native integer aggregation independently.
+
+## Additional process memory
+
+`profile_memory.py` loads and settles the shared inputs before installing a query.
+A separate fresh server replays the same journal without a query as the input-only
+control. Queries also run in fresh servers, with one fixed request each. Compare
+query-active RSS with the control at the corresponding initial/final state; keep
+installation and retirement peaks separate. The three empty settling ticks after
+retirement can expose a later compaction peak that an immediately exiting server
+would miss.
+
+```sh
+python3 interactive/server/bench/ldbc/profile_memory.py \
+  --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
+  --parameters interactive/server/bench/ldbc/bindings/sf1-memory.json \
+  --output /tmp/ldbc-memory
+python3 interactive/server/bench/ldbc/summarize_memory.py /tmp/ldbc-memory
+```
+
+The parameter file pins the observed SF1 smoke requests, not official LDBC
+parameter-distribution samples. Profiling captures initial/final answers and
+checks that retirement empties the output; it **does not recompute Python**.
+Optional `--expected DIR` compares with saved `NAME.json` files containing
+`initial`, `final` and `validated` fields. This comparison is recorded separately
+from execution and does not replace `update_stream.py` correctness checking.
+
+Memory is sampled every 100 ms and at phase boundaries. On macOS, both resident
+size and physical footprint are recorded; other platforms record RSS through
+`ps`. Per-command and whole-job limits default to 120/300 seconds, server RSS to
+6 GiB, combined Python/server RSS or physical footprint to 10 GiB. Failures stay
+in the reports and censor peak measurements. `memory.csv` and `memory.json` rank
+query-active additional RSS and retain the overall peak, status and provenance.
+The differences include allocator retention and are not query-owned live bytes;
+small negative differences are preserved.
 
 ## Results and handoff
 
