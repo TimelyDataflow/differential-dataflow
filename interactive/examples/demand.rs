@@ -3,23 +3,17 @@
 
 use corgi::Shape;
 use interactive::corgi::container::Updates;
-use interactive::corgi::logic::transcode_owned;
-use interactive::ir::Value;
+use interactive::corgi::feed::FeedDecoder;
 use interactive::projection::{demand_graph, pushdown};
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn values(values: Vec<Value>, shape: &Shape) -> corgi::Value {
-    transcode_owned(values, shape)
-}
-
-fn updates(keys: Vec<Value>, shape: Shape) -> Updates {
-    let n = keys.len();
-    Updates {
-        keys: values(keys, &shape),
-        vals: corgi::Value::Unit(n),
-        diffs: vec![1; n],
+fn updates(keys: Vec<String>, shape: Shape) -> Updates {
+    let mut decoder = FeedDecoder::new(&shape, &Shape::Unit);
+    for key in keys {
+        decoder.push(&key, None, 1).unwrap();
     }
+    decoder.finish()
 }
 
 fn main() {
@@ -47,13 +41,13 @@ fn main() {
             let seeds = graph
                 .seeds
                 .iter()
-                .map(|&id| Value::Int(id as i64))
+                .map(|&id| id.to_string())
                 .collect();
             let edges = graph
                 .edges
                 .iter()
                 .map(|&(from, to)| {
-                    Value::Tuple(vec![Value::Int(from as i64), Value::Int(to as i64)])
+                    format!("tuple({from},{to})")
                 })
                 .collect();
             server
@@ -68,14 +62,11 @@ fn main() {
                 )
                 .unwrap();
             server.tick(worker);
-            let got = server.snapshot(worker, "live").unwrap().into_rows();
+            let got = server.snapshot(worker, "live").unwrap().rows();
             let mut actual = vec![false; graph.facts];
             for (key, _, diff) in got {
-                let Value::Int(id) = key else {
-                    panic!("a fact id is an Int")
-                };
                 assert_eq!(diff, 1);
-                actual[id as usize] = true;
+                actual[key.parse::<usize>().unwrap()] = true;
             }
             assert_eq!(expected, actual, "DDIR and Rust disagree on {path}");
 
@@ -91,13 +82,13 @@ fn main() {
             let seeds = graph
                 .seeds
                 .iter()
-                .map(|&id| Value::Int(id as i64))
+                .map(|&id| id.to_string())
                 .collect();
             let edges = graph
                 .edges
                 .iter()
                 .map(|&(from, to)| {
-                    Value::Tuple(vec![Value::Int(from as i64), Value::Int(to as i64)])
+                    format!("tuple({from},{to})")
                 })
                 .collect();
             let mut retract_seeds = updates(seeds, Shape::Int);

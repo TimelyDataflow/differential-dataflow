@@ -1080,8 +1080,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().into_rows(),
-                server.snapshot(worker, "after.out").unwrap().into_rows()
+                server.snapshot(worker, "before.out").unwrap().rows(),
+                server.snapshot(worker, "after.out").unwrap().rows()
             );
         });
     }
@@ -1160,8 +1160,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().into_rows(),
-                server.snapshot(worker, "after.out").unwrap().into_rows()
+                server.snapshot(worker, "before.out").unwrap().rows(),
+                server.snapshot(worker, "after.out").unwrap().rows()
             );
         });
     }
