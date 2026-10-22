@@ -1,0 +1,48 @@
+-- IC9. The 20 most recent messages written by a person's friends and friends-of-friends
+-- before a date.
+-- Each person's 20 newest messages are kept for all requests. A friend whose newest
+-- message is before the date contributes exactly those; anyone else falls back to
+-- their full list. Bodies and names are fetched only for the final 20.
+
+let request = input 0 : ((int, int, int) ; ());              -- (rid, person, max date)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows" : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- Every message, by author, in recency order (newest first, then smaller id).
+let by_author = message | map(((id, _, created, author, _, _, _, _, _, _, _, _, _, _), ()) -> (author, (created neg, id)));
+let latest    = by_author | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt)
+                          | map((author, (_, (neg, id))) -> (author, (neg, id)));
+let newest    = by_author | map((author, (neg, _)) -> (author, neg)) | min;
+
+-- The circle (one or two hops, not the person) and the request's cut-off.
+let hop1    = request | map(((rid, who, max), ()) -> (who, (rid, who, max))) | join(exists, (who, req, ()) -> (who, req))
+                      | join(friend, (_, req, f) -> (f, req));
+let hop2    = hop1 | join(friend, (_, req, g) -> (g, req));
+let friends = (hop1 + hop2) | filter((node, (_, who, _)) -> (node, who) ne)
+                            | map((node, (rid, _, max)) -> ((node, rid, max), ())) | distinct
+                            | map(((node, rid, max), ()) -> (node, (rid, max)));
+let ahead   = friends | join(newest, (f, (rid, max), neg) -> (f, (rid, max, neg neg)));
+let fast    = ahead | filter((_, (_, max, last)) -> (last, max) lt)
+                    | join(latest, (f, (rid, _, _), (neg, id)) -> (rid, ((neg, id), f)));
+let slow    = ahead | filter((_, (_, max, last)) -> (last, max) ge)
+                    | join(by_author, (f, (rid, max, _), (neg, id)) -> (rid, ((neg, id), f, max)))
+                    | filter((_, ((neg, _), _, max)) -> (neg neg, max) lt)
+                    | map((rid, (order, f, _)) -> (rid, (order, f)));
+let top     = (fast + slow) | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+
+-- Only now fetch the 20 messages' text and their authors' names.
+let text    = message | map(((id, _, _, _, _, content, image, _, _, _, _, _, _, _), ()) -> (id, ((content len, 0) gt, content, image) select));
+let names   = person  | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+let answer  = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg neg, f)))
+                  | join(text,  (id, (rid, rank, created, f), body) -> (f, (rid, rank, id, body, created)))
+                  | join(names, (f, (rid, rank, id, body, created), (first, last)) -> ((rid, rank), (f, first, last, id, body, created)));
+
+export "ic9.answer" = answer | arrange;

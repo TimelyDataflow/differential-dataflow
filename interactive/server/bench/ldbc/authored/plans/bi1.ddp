@@ -1,0 +1,48 @@
+-- BI1. Posting summary: messages created before a date, grouped by year, post or
+-- comment, and length category, with count, average length, total length and share.
+-- Per-day totals are kept for all requests; a request adds up the days before its
+-- date and reads only the messages from that date itself.
+
+let request = input 0 : ((int, int) ; ());                    -- (rid, end time in ms)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+
+-- Length categories: under 40, under 80, under 160, longer.
+let classified = message | map(((_, kind, created, _, _, _, _, length, _, _, _, year, _, day), ()) ->
+    ((day, year, kind, ((length, 40) lt, 0, ((length, 80) lt, 1, ((length, 160) lt, 2, 3) select) select) select), (created, length)));
+
+-- Sums move each value into the multiplicity (join_function) and let `count` add them up.
+-- For every day, year, kind and category: messages (c = 0) and total length (c = 1).
+let per_day = classified | join_function(((day, year, kind, cat), (_, length)) ->
+                  ((((day, year, kind, cat, 0), ()), (0), 1) enlist, (((day, year, kind, cat, 1), ()), (0), length) enlist) append)
+              | count;
+
+-- The request's cut-off day, and the groups' totals: whole days before it, plus the
+-- messages on that day created before the end time.
+let cutoff = request | map(((rid, end), ()) -> (rid, (end, ((end, 86400000) div, 86400000) mul)));
+let whole  = cutoff | map((rid, (_, day)) -> ((), (rid, day)))
+                    | join(per_day | map(((day, year, kind, cat, c), v) -> ((), (day, year, kind, cat, c, v))),
+                           (_, (rid, cut), (day, year, kind, cat, c, v)) -> ((rid, cut, day), (year, kind, cat, c, v)))
+                    | filter(((_, cut, day), _) -> (day, cut) lt)
+                    | join_function(((rid, _, _), (year, kind, cat, c, v)) -> (((rid, year, kind, cat, c), ()), (0), v) enlist);
+let part   = cutoff | map((rid, (end, day)) -> (day, (rid, end)))
+                    | join(classified | map(((day, year, kind, cat), (created, length)) -> (day, (year, kind, cat, created, length))),
+                           (_, (rid, end), (year, kind, cat, created, length)) -> ((rid, year, kind, cat), (created, end, length)))
+                    | filter((_, (created, end, _)) -> (created, end) lt)
+                    | join_function(((rid, year, kind, cat), (_, _, length)) ->
+                          ((((rid, year, kind, cat, 0), ()), (0), 1) enlist, (((rid, year, kind, cat, 1), ()), (0), length) enlist) append);
+let sums   = (whole + part) | count;
+
+-- Pair each group's two sums (a total length of zero has no row).
+let groups = sums | map(((rid, year, kind, cat, c), v) -> ((rid, year, kind, cat), (c, v))) | collect
+                  | map((key, parts) -> (key, ((0, 0), parts) fold (((n, s), (c, v)) -> (((c, 0) eq, v, n) select, ((c, 1) eq, v, s) select))));
+
+-- Share of the request's total, then order by year (newest first), kind, category.
+let total  = sums | filter(((_, _, _, _, c), _) -> (c, 0) eq)
+                  | join_function(((rid, _, _, _, _), n) -> ((rid, ()), (0), n) enlist) | count;
+let ranked = groups | map(((rid, year, kind, cat), (n, s)) -> (rid, (year, kind, cat, n, s)))
+                    | join(total, (rid, (year, kind, cat, n, s), all) -> (rid, ((year neg, kind, cat), (n, s, all))))
+                    | collect | flatmap((_, entries) -> entries);
+let answer = ranked | map((rid, (rank, ((neg_year, kind, cat), (n, s, all)))) -> ((rid, rank),
+                 (neg_year neg, kind, cat, n, (s to_float, n to_float) div, s, ((n, 100) mul to_float, all to_float) div)));
+
+export "bi1.answer" = answer | arrange;

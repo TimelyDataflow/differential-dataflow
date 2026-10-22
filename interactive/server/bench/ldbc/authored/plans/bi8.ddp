@@ -1,0 +1,44 @@
+-- BI8. Central people for a tag: 100 points for an interest in it, 1 per tagged message
+-- inside (start, end); plus the sum of their friends' points; top 100 by the total.
+
+let request  = input 0 : ((int, List(int), int, int) ; ());   -- (rid, tag name, start, end)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let interest = import "ldbc.interest" : ((int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+-- Messages carrying the request's tag: (message, rid).
+let tagged  = request | map((req, ()) -> (req.1, req.0))
+                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
+                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid));
+
+let tag_id  = request | map(((rid, name, _, _), ()) -> (name, rid)) | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid));
+let fans    = tag_id | join(interest | map(((who, t), ()) -> (t, who)), (_, rid, who) -> ((rid, who), 100));
+let window  = request | map(((rid, _, start, end), ()) -> (rid, (start, end)));
+let posted  = message | map(((id, _, created, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, (who, created)));
+let recent  = tagged | join(posted, (_, rid, (who, created)) -> (rid, (who, created)))
+                     | join(window, (rid, (who, created), (start, end)) -> ((rid, who), (created, start, end)))
+                     | filter((_, (created, start, end)) -> ((created, start) gt, (created, end) lt) all)
+                     | map((key, _) -> (key, 1));
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let score   = (fans + recent) | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+
+-- Friends' points: for each scored person, the points of their scored friends.
+let theirs  = score | map(((rid, f), s) -> (f, (rid, s)))
+                    | join(friend, (_, (rid, s), p) -> ((rid, p), s))
+                    | join(score, (key, s, _) -> (key, s));
+let summed  = theirs | join_function((key, s) -> ((key, ()), (0), s) enlist) | count;
+let friends = summed + ((score - (score | join(summed, (key, s, _) -> (key, s)))) | map((key, _) -> (key, 0)));
+let ranked  = score | join(friends, ((rid, who), s, fs) -> (rid, (((s, fs) add neg, who), (s, fs))))
+                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+let answer  = ranked | map((rid, (rank, ((_, who), (s, fs)))) -> ((rid, rank), (who, s, fs)));
+
+export "bi8.answer" = answer | arrange;

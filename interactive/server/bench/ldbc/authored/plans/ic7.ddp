@@ -1,0 +1,39 @@
+-- IC7. The people who most recently liked a person's messages: when, which message,
+-- how many minutes after it was posted, and whether they are not yet a friend.
+
+let request = input 0 : ((int, int) ; ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+
+-- Each liker's latest like on one of the person's messages (ties: smaller message id).
+let authored = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, id));
+let liked    = likes | map(((liker, m, when), ()) -> (m, (liker, when)));
+let latest   = request | map(((rid, who), ()) -> (who, rid))
+                       | join(authored, (who, rid, m) -> (m, (rid, who)))
+                       | join(liked, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m)))
+                       | min;
+
+-- The liked message's text and age, the liker's name, and whether they are friends.
+let posted   = message | map(((id, _, created, _, _, text, image, _, _, _, _, _, _, _), ()) -> (id, (created, ((text len, 0) gt, text, image) select)));
+let rows     = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg)))
+                      | join(posted, (m, (rid, who, liker, when), (created, body)) -> ((who, liker), (rid, liker, when, m, body, (when, created) sub)));
+let known    = rows | join(friend | map((a, b) -> ((a, b), ())), (pair, row, ()) -> (pair, row));
+let marked   = (known | map((_, row) -> (row, 0))) + ((rows - known) | map((_, row) -> (row, 1)));
+let ranked   = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker, (rid, when, m, body, age, fresh)))
+                      | join(names, (liker, (rid, when, m, body, age, fresh), (first, last)) ->
+                             (rid, ((when neg, liker), (first, last, m, body, (age, 60000) div, fresh))))
+                      | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+let answer   = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) ->
+                            ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
+
+export "ic7.answer" = answer | arrange;

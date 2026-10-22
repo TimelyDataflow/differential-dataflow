@@ -1,0 +1,37 @@
+-- BI2. Tag evolution: tags of a class, with their messages in the 100 days from a date
+-- and in the 100 days after that; top 100 by the difference. Tagged messages are kept
+-- keyed by (class, day) for all requests, so a request reads only its 200 days.
+
+let request = input 0 : ((int, int, List(int)) ; ());         -- (rid, date, class name)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let tagclass = import "ldbc.tagclass" : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+
+-- ((class, day), (tag name, created)) for every tagged message.
+let dated   = message | map(((id, _, created, _, _, _, _, _, _, _, _, _, _, day), ()) -> (id, (created, day)));
+let bytag   = tag | map(((id, name, cls), ()) -> (id, (cls, name)));
+let byday   = mtag | map(((m, t), ()) -> (t, m))
+                   | join(bytag, (_, m, (cls, name)) -> (m, (cls, name)))
+                   | join(dated, (_, (cls, name), (created, day)) -> ((cls, day), (name, created)));
+
+-- The request's class and its 200 window days (days that have messages).
+let days    = message | map(((_, _, _, _, _, _, _, _, _, _, _, _, _, day), ()) -> (day, ())) | distinct;
+let wanted  = request | map(((rid, date, name), ()) -> (name, (rid, date)))
+                      | join(tagclass | map(((id, name, _), ()) -> (name, id)), (_, (rid, date), cls) -> ((), (rid, date, cls)))
+                      | join(days | map((day, ()) -> ((), day)), (_, (rid, date, cls), day) -> ((cls, day), (rid, date)))
+                      | filter(((_, day), (_, date)) -> ((day, ((date, 86400000) div, 86400000) mul) ge, (day, (date, 17280000000) add) lt) all);
+
+-- Count each tag's messages in the two halves.
+let halves  = wanted | join(byday, (_, (rid, date), (name, created)) -> ((rid, name), (created, date)))
+                     | filter((_, (created, date)) -> ((created, date) ge, (created, (date, 17280000000) add) lt) all)
+                     | map((key, (created, date)) -> (key, ((created, (date, 8640000000) add) lt, (1, 0), (0, 1)) select));
+let counts  = halves | map(((rid, name), (a, _)) -> ((rid, name, a), ())) | count
+                     | map(((rid, name, first), n) -> ((rid, name), (first, n))) | collect
+                     | map((key, parts) -> (key, ((0, 0), parts) fold (((a, b), (first, n)) -> (((first, 1) eq, n, a) select, ((first, 0) eq, n, b) select))));
+let ranked  = counts | map(((rid, name), (a, b)) -> (rid, ((((a, b) sub, 0) lt, (b, a) sub, (a, b) sub) select, name, a, b)))
+                     | map((rid, (diff, name, a, b)) -> (rid, ((diff neg, name), (a, b, diff))))
+                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+let answer  = ranked | map((rid, (rank, ((_, name), (a, b, diff)))) -> ((rid, rank), (name, a, b, diff)));
+
+export "bi2.answer" = answer | arrange;

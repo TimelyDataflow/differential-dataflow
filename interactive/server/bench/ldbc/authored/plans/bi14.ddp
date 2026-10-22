@@ -1,0 +1,62 @@
+-- BI14. International dialog: friend pairs (person1 in country 1, person2 in country 2)
+-- scored 4 if person1 replied to person2, 1 for the reverse, 10 if person1 liked a
+-- message of person2's, 1 for the reverse. The best pair per person1's city; top 100.
+
+let request = input 0 : ((int, List(int), List(int)) ; ());    -- (rid, country 1, country 2)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+-- Where people live: (person, (city id, city name, country name)).
+let parent = place | map(((id, _, _, up), ()) -> (id, up));
+let pname  = place | map(((id, name, _, _), ()) -> (id, name));
+let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
+                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
+let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
+                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
+
+-- Candidate pairs: ((p1, p2), (rid, city, city name)).
+let in_country = home | map((who, (city, cname, kname)) -> (kname, (who, city, cname)));
+let pairs   = request | map(((rid, c1, c2), ()) -> (c1, (rid, c2)))
+                      | join(in_country, (_, (rid, c2), (p1, city, cname)) -> (p1, (rid, c2, city, cname)))
+                      | join(friend, (p1, (rid, c2, city, cname), p2) -> (p2, (rid, c2, p1, city, cname)))
+                      | join(home, (p2, (rid, c2, p1, city, cname), (_, _, k2)) -> ((p1, p2), (rid, c2, city, cname, k2)))
+                      | filter((_, (_, c2, _, _, k2)) -> (c2, k2) eq)
+                      | map((pair, (rid, _, city, cname, _)) -> (pair, (rid, city, cname)));
+
+-- Who replied to whom, and who liked whose messages (each direction, once).
+let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
+let replied = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((_, _, _, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, who))
+                      | join(author, (_, who, to) -> ((who, to), ())) | distinct;
+let fan     = likes | map(((who, m, _), ()) -> (m, who))
+                    | join(author, (_, who, to) -> ((who, to), ())) | distinct;
+
+-- Points per pair.
+let flip    = pairs | map(((p1, p2), v) -> ((p2, p1), v));
+let points  = (pairs | map((pair, v) -> (pair, (v, 0))))
+            + (pairs | join(replied, (pair, v, ()) -> (pair, (v, 4))))
+            + (flip  | join(replied, ((p2, p1), v, ()) -> ((p1, p2), (v, 1))))
+            + (pairs | join(fan,     (pair, v, ()) -> (pair, (v, 10))))
+            + (flip  | join(fan,     ((p2, p1), v, ()) -> ((p1, p2), (v, 1))));
+-- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
+let summed  = points | join_function(((p1, p2), ((rid, city, cname), s)) -> (((rid, city, cname, p1, p2), ()), (0), s) enlist) | count;
+let keys    = pairs | map(((p1, p2), (rid, city, cname)) -> ((rid, city, cname, p1, p2), ()));
+let scored  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
+
+-- The best pair per city, then the top 100 overall.
+let percity = scored | map(((rid, city, cname, p1, p2), s) -> ((rid, city), (s neg, p1, p2, cname)))
+                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 1) lt)
+                     | map(((rid, _), (_, (neg, p1, p2, cname))) -> (rid, ((neg, p1, p2), cname)));
+let ranked  = percity | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+let answer  = ranked | map((rid, (rank, ((neg, p1, p2), cname))) -> ((rid, rank), (p1, p2, cname, neg neg)));
+
+export "bi14.answer" = answer | arrange;

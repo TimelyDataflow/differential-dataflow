@@ -1,0 +1,32 @@
+-- IS7. Replies to a message, newest first, flagging whether each replier knows the
+-- message's author.
+
+let request = input 0 : ((int, int) ; ());                    -- (rid, message)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+
+-- The request's replies: ((replier, author of the message), (rid, comment, content, created)).
+let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
+let comment = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, created, who, _, text, _, _, _, _, parent, _, _, _), ()) -> (parent, (id, who, text, created)));
+let reply   = request | map(((rid, m), ()) -> (m, rid))
+                      | join(author, (m, rid, op) -> (m, (rid, op)))
+                      | join(comment, (_, (rid, op), (id, who, text, created)) -> ((who, op), (rid, id, text, created)));
+
+-- Known: the replier and the author are friends (never true of oneself).
+let known  = reply | join(friend | map((a, b) -> ((a, b), ())), (pair, row, ()) -> (pair, row));
+let marked = (known | map(((who, _), row) -> (who, (row, 1)))) + ((reply - known) | map(((who, _), row) -> (who, (row, 0))));
+let ranked = marked | join(names, (who, ((rid, id, text, created), k), (first, last)) -> (rid, ((created neg, who), (id, text, first, last, k))))
+                    | collect | flatmap((_, entries) -> entries);
+let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
+
+export "is7.answer" = answer | arrange;

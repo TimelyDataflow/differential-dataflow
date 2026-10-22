@@ -1,0 +1,3 @@
+-- IS1. Profile of a person: name, birthday, IP, browser, city, gender and creation date.
+-- Parameters: $pid. Rows come back in rank order; the runner numbers them 0, 1, 2, ...
+SELECT first, last, birthday, ip, browser, city, gender, created FROM (SELECT * FROM person WHERE id=$pid) r ORDER BY id

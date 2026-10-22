@@ -1,0 +1,45 @@
+-- IC11. Job referral: friends and friends-of-friends who started at a company in a given
+-- country before a given year; ordered by start year, person, then company name
+-- descending; top 10.
+
+let request = input 0 : ((int, int, List(int), int) ; ());    -- (rid, person, country name, before year)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let work    = import "ldbc.work"    : ((int, int, int) ; ());
+let org     = import "ldbc.org"     : ((int, List(int), List(int), int) ; ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+
+-- The circle: one or two hops from the person, not the person.
+let hop1   = request | map(((rid, who, country, year), ()) -> (who, (rid, who, country, year)))
+                     | join(exists, (who, req, ()) -> (who, req))
+                     | join(friend, (_, req, f) -> (f, req));
+let hop2   = hop1 | join(friend, (_, req, g) -> (g, req));
+let circle = (hop1 + hop2) | filter((node, (_, who, _, _)) -> (node, who) ne)
+                           | map((node, (rid, _, country, year)) -> ((node, rid, country, year), ())) | distinct;
+
+-- Their jobs before the year at companies located in the country.
+let located = org | map(((id, name, _, at), ()) -> (at, (id, name)))
+                  | join(place | map(((id, name, _, _), ()) -> (id, name)), (_, (id, company), country) -> (id, (company, country)));
+let jobs    = circle | map(((node, rid, country, year), ()) -> (node, (rid, country, year)))
+                     | join(work | map(((who, at, since), ()) -> (who, (at, since))), (node, (rid, country, year), (at, since)) -> (at, (rid, node, country, year, since)))
+                     | filter((_, (_, _, _, year, since)) -> (since, year) lt)
+                     | join(located, (_, (rid, node, country, _, since), (company, there)) -> ((rid, since, node), (company, country, there)))
+                     | filter((_, (_, country, there)) -> (country, there) eq)
+                     | map((key, (company, _, _)) -> (key, company));
+
+-- Within one person and start year, number companies by name; order puts the last name first.
+let named  = jobs | collect | flatmap((_, entries) -> entries);
+let ranked = named | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)))
+                   | join(names, (node, (rid, since, pos, company), (first, last)) -> (rid, ((since, node, pos neg), (first, last, company))))
+                   | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 10) lt);
+let answer = ranked | map((rid, (rank, ((since, node, _), (first, last, company)))) -> ((rid, rank), (node, first, last, company, since)));
+
+export "ic11.answer" = answer | arrange;

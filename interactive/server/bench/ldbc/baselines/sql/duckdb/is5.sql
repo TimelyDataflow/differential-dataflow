@@ -1,0 +1,3 @@
+-- IS5. The author of a message.
+-- Parameters: $mid. Rows come back in rank order; the runner numbers them 0, 1, 2, ...
+SELECT creator, first, last FROM (SELECT m.id, m.creator, p.first, p.last FROM message m JOIN person p ON m.creator=p.id WHERE m.id=$mid) r  ORDER BY creator

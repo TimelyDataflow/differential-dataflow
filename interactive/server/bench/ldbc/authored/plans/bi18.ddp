@@ -1,0 +1,39 @@
+-- BI18. Friend recommendation: pairs of people interested in a tag who are not friends
+-- yet, ranked by how many friends they share; top 20. Paths go person -> shared
+-- friend <- other, and the second hop is restricted to interested people before the
+-- paths are built (meeting in the middle).
+
+let request  = input 0 : ((int, List(int)) ; ());             -- (rid, tag name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let knows    = import "ldbc.knows"    : ((int, int, int) ; ());
+let tag      = import "ldbc.tag"      : ((int, List(int), int) ; ());
+let interest = import "ldbc.interest" : ((int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- People interested in the tag: (rid, person).
+let fans    = request | map(((rid, name), ()) -> (name, rid))
+                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
+                      | join(interest | map(((who, t), ()) -> (t, who)), (_, rid, who) -> ((rid, who), ()));   -- one tag; (person, tag) is a set
+
+-- Each fan's friends, as both ends of a path: (rid, shared friend) -> fan.
+let reach   = fans | map(((rid, who), ()) -> (who, rid)) | join(friend, (who, rid, mid) -> ((rid, mid), who));
+let paths   = reach | join(reach, ((rid, _), one, other) -> ((rid, one, other), ()))
+                    | filter(((_, one, other), ()) -> (one, other) ne);
+
+-- Drop pairs who are already friends, count shared friends, rank.
+let already = friend | map((a, b) -> ((a, b), ()));
+let counted = paths | map(((rid, one, other), ()) -> ((one, other), rid))
+                    | join(already, (pair, rid, ()) -> (pair, rid)) ;
+let fresh   = (paths | map(((rid, one, other), ()) -> ((one, other), rid))) - counted;
+let pairs   = fresh | map(((one, other), rid) -> ((rid, one, other), ())) | count;
+let ranked  = pairs | map(((rid, one, other), n) -> (rid, (n neg, one, other)))
+                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+let answer  = ranked | map((rid, (rank, (neg, one, other))) -> ((rid, rank), (one, other, neg neg)));
+
+export "bi18.answer" = answer | arrange;

@@ -1,0 +1,27 @@
+-- BI7. Related topics: tags on replies to messages with a given tag, where the reply
+-- itself does not carry it; top 100 by number of replies.
+
+let request = input 0 : ((int, List(int)) ; ());              -- (rid, tag name)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+
+-- Messages carrying the request's tag: (message, rid).
+let tagged  = request | map((req, ()) -> (req.1, req.0))
+                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
+                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid));
+
+let marked  = tagged | map((m, rid) -> ((rid, m), ()));   -- one tag; (message, tag) is a set
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
+                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+let answers = marked | map(((rid, m), ()) -> (m, rid)) | join(replies, (_, rid, r) -> ((rid, r), ()));
+let fresh   = answers - (answers | join(marked, (key, (), ()) -> (key, ())));
+let names   = tag | map(((id, name, _), ()) -> (id, name));
+let counts  = fresh | map(((rid, r), ()) -> (r, rid))
+                    | join(mtag | map(((m, t), ()) -> (m, t)), (_, rid, t) -> (t, rid))
+                    | join(names, (_, rid, name) -> ((rid, name), ())) | count;
+let ranked  = counts | map(((rid, name), n) -> (rid, (n neg, name)))
+                     | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 100) lt);
+let answer  = ranked | map((rid, (rank, (neg, name))) -> ((rid, rank), (name, neg neg)));
+
+export "bi7.answer" = answer | arrange;

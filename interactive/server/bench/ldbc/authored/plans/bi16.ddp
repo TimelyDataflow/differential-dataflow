@@ -1,0 +1,49 @@
+-- BI16. People who posted about tag A on day A and tag B on day B, and who know at most
+-- `maxknows` of the others posting about each; top 20 by messages on both days.
+
+let request = input 0 : ((int, List(int), int, List(int), int, int) ; ());   -- (rid, tag A, day A, tag B, day B, max knows)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- The two (tag, day) groups of a request, as side 0 and side 1.
+let sides   = (request | map(((rid, ta, da, _, _, k), ()) -> (ta, (rid, 0, da, k))))
+            + (request | map(((rid, _, _, tb, db, k), ()) -> (tb, (rid, 1, db, k))));
+let names   = tag | map(((id, name, _), ()) -> (name, id));
+let dayof   = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, day), ()) -> (id, (who, day)));
+let posts   = sides | join(names, (_, side, t) -> (t, side))
+                    | join(mtag | map(((m, t), ()) -> (t, m)), (_, side, m) -> (m, side))
+                    | join(dayof, (m, (rid, s, d, k), (who, day)) -> ((rid, s, who, m, k), (d, day)))
+                    | filter((_, (d, day)) -> (d, day) eq)
+                    | map((key, _) -> (key, ()));      -- one tag per side; (message, tag) is a set
+
+-- Messages per person and side; how many others in the same group they know.
+let counts  = posts | map(((rid, s, who, _, k), ()) -> ((rid, s, who, k), ())) | count;
+let members = counts | map(((rid, s, who, _), _) -> ((rid, s, who), ()));
+let degree  = members | map(((rid, s, who), ()) -> (who, (rid, s)))
+                      | join(friend, (who, (rid, s), f) -> ((rid, s, f), who))
+                      | join(members, ((rid, s, _), who, ()) -> ((rid, s, who), ()))
+                      | count;
+let sized   = counts | map(((rid, s, who, k), n) -> ((rid, s, who), (n, k)));
+let social  = sized | join(degree, (key, (n, k), d) -> (key, (n, k, d)))
+                    | filter((_, (_, k, d)) -> (d, k) le) | map((key, (n, _, _)) -> (key, n));
+let loners  = (sized - (sized | join(degree, (key, v, _) -> (key, v)))) | map((key, (n, _)) -> (key, n));
+let kept    = (social + loners) | map(((rid, s, who), n) -> ((rid, who), (s, n)));
+
+-- People in both groups, ranked by messages on both days.
+let a       = kept | filter((_, (s, _)) -> (s, 0) eq) | map((key, (_, n)) -> (key, n));
+let b       = kept | filter((_, (s, _)) -> (s, 1) eq) | map((key, (_, n)) -> (key, n));
+let ranked  = a | join(b, ((rid, who), na, nb) -> (rid, (((na, nb) add neg, who), (na, nb))))
+                | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 20) lt);
+let answer  = ranked | map((rid, (rank, ((_, who), (na, nb)))) -> ((rid, rank), (who, na, nb)));
+
+export "bi16.answer" = answer | arrange;

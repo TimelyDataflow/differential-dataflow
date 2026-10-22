@@ -1,0 +1,49 @@
+-- BI11. Friend triangles: how many triangles of friendships are there among the
+-- residents of a country, with all three friendships made inside [start, end]?
+
+let request = input 0 : ((int, List(int), int, int) ; ());     -- (rid, country, start, end)
+let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let place   = import "ldbc.place"  : ((int, List(int), List(int), int) ; ());
+let knows   = import "ldbc.knows"  : ((int, int, int) ; ());
+
+-- Where people live: person -> city -> country, keyed by country name.
+let city_of    = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id));
+let parent     = place  | map(((id, _, _, up), ()) -> (id, up));
+let name       = place  | map(((id, label, _, _), ()) -> (id, label));
+let country_of = city_of | join(parent, (_, who, country) -> (country, who))
+                         | join(name,   (_, who, label)   -> (label, who));
+
+-- Each request's residents, keyed by person, carrying the request and its window.
+let residents = request | map(((rid, country, start, end), ()) -> (country, (rid, start, end)))
+                        | join(country_of, (_, req, who) -> (who, req));
+
+-- Friendships in both directions, between people who exist.
+let exists  = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either  = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
+let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t)))
+                     | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct;
+
+-- Each request's friendships among its residents, made inside the window.
+let member = residents | map((who, (rid, _, _)) -> ((rid, who), ()));
+let inside = residents | join(friends | map(((a, b, t), ()) -> (a, (b, t))),
+                              (a, (rid, start, end), (b, t)) -> ((rid, a, b, t, start, end), ()))
+                       | filter(((_, _, _, t, start, end), ()) -> ((t, start) ge, (t, end) le) all)
+                       | map(((rid, a, b, _, _, _), ()) -> ((rid, b), a))
+                       | join(member, ((rid, b), a, ()) -> ((rid, a, b), ()));
+
+-- Triangles a < b < c: the path a-b-c closed by the friendship c-a.
+let by_first  = inside | map(((rid, a, b), ()) -> ((rid, a), b));
+let by_second = inside | map(((rid, a, b), ()) -> ((rid, b), a));
+let closing   = inside;              -- already a set: one row per friendship
+let triangles = by_second | join(by_first, ((rid, b), a, c) -> ((rid, a, b, c), ()))
+                          | filter(((_, a, b, c), ()) -> ((a, b) lt, (b, c) lt) all)
+                          | map(((rid, a, _, c), ()) -> ((rid, c, a), ()))
+                          | join(closing, ((rid, _, _), (), ()) -> (rid, ()));
+
+-- One row per request, zero when there are no triangles.
+let counted = triangles | count;
+let none    = request | map(((rid, _, _, _), ()) -> (rid, ()));
+let zero    = none - (none | join(counted, (rid, (), _) -> (rid, ())));
+let answer  = (counted | map((rid, n) -> ((rid, 0), (n)))) + (zero | map((rid, ()) -> ((rid, 0), (0))));
+
+export "bi11.answer" = answer | arrange;

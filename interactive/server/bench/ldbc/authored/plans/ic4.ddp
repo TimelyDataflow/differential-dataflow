@@ -1,0 +1,38 @@
+-- IC4. New topics: tags on friends' posts inside a window that never appeared on their
+-- posts before it; top 10 by number of posts.
+
+let request = input 0 : ((int, int, int, int) ; ());          -- (rid, person, start, days)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
+let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+
+-- Friendships in both directions, between people who exist.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
+let friend = either | join(exists, (a, b, ()) -> (b, a))
+                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
+                    | map(((a, b), ()) -> (a, b));
+
+-- Friends' posts with their tags: (rid, tag, tag name, created, window start, window end).
+let posts  = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
+                     | map(((id, _, created, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, (id, created)));
+let names  = tag | map(((id, name, _), ()) -> (id, name));
+let tags   = mtag | map(((m, t), ()) -> (t, m)) | join(names, (t, m, name) -> (m, (t, name)));
+let seen   = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)))
+                     | join(exists, (who, req, ()) -> (who, req))
+                     | join(friend, (_, req, f) -> (f, req))
+                     | join(posts, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end)))
+                     | join(tags, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
+
+-- Tags seen before the window, and the window's posts whose tag is new.
+let before = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ())) | distinct;
+let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
+let fresh  = during - (during | join(before, (key, row, ()) -> (key, row)));
+let counts = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ())) | count;
+let ranked = counts | map(((rid, name), n) -> (rid, (n neg, name)))
+                    | collect | flatmap((_, entries) -> entries) | filter((_, (rank, _)) -> (rank, 10) lt);
+let answer = ranked | map((rid, (rank, (neg, name))) -> ((rid, rank), (name, neg neg)));
+
+export "ic4.answer" = answer | arrange;

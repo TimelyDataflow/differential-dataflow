@@ -1,0 +1,21 @@
+-- IS3. A person's friends, with when each friendship was made, newest first.
+
+let request = input 0 : ((int, int) ; ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+
+-- Friendships in both directions, between people who exist, with their dates.
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
+let friend = either | join(exists, (a, (b, t), ()) -> (b, (a, t)))
+                    | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct
+                    | map(((a, b, t), ()) -> (a, (b, t)));
+
+let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+let ranked = request | map(((rid, who), ()) -> (who, rid))
+                     | join(friend, (_, rid, (f, since)) -> (f, (rid, since)))
+                     | join(names, (f, (rid, since), (first, last)) -> (rid, ((since neg, f), (first, last))))
+                     | collect | flatmap((_, entries) -> entries);
+let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
+
+export "is3.answer" = answer | arrange;
