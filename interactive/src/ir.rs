@@ -11,7 +11,10 @@ pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::poin
 /// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
 /// the registered functions and the Float functions as words `call` reaches, and the program's
 /// `type` declarations as enums. A parse error is kept, and reported where the program is compiled
-/// or run. It serializes as its source, which deserializes in the empty scope.
+/// or run. A composed lambda's graph is authoritative: its readable `src` is
+/// reconstructed from the component sources and may reparse to a different
+/// graph, especially after masking. Serialization stores only `src` and
+/// deserialization reparses it in the empty scope.
 #[derive(Clone)]
 pub struct Lambda {
     pub src: String,
