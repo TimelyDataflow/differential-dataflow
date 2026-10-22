@@ -98,7 +98,7 @@ Per update batch, what does it cost to have every answer current again?
 - **Shortest paths** are recursive CTEs: DuckDB uses `USING KEY` (Bellman-Ford rounds that
   expand only improved rows); Umbra, which has no `USING KEY`, carries the whole state in
   each round, as LDBC's Umbra queries do.
-- **No hand tuning beyond that.** The DDIR side has 18 rewritten strategies (below); the
+- **No hand tuning beyond that.** The DDIR side has 17 rewritten strategies (below); the
   SQL was not rewritten the same way. Several of the same ideas (semijoins first, keeping
   per-day or per-forum aggregates) would help the SQL systems too.
 
@@ -109,7 +109,7 @@ Results distinguish:
 - **as shipped:** plans generated at master-next `bdc950a5`;
 - **#996:** plans generated after #996 (bounded top-k, fewer carried columns);
 - **#996 + projection:** the same with the field-demand pass of #1001 (`DDIR_PROJECTION=1`);
-- **authored:** `../authored/plans/`, hand-written. Eighteen follow rewritten strategies,
+- **authored:** `../authored/plans/`, hand-written. Seventeen follow rewritten strategies,
   each found by looking at what a query's plan does with its request:
   - *apply the request's selective part first* (a semijoin or join on a key): IC3 (the two
     countries' messages by country id), IC6 (the tag's posts), BI10 (the class's messages),
