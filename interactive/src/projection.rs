@@ -402,6 +402,17 @@ fn graph_fields(lambda: &Lambda, shapes: &[Shape], output_path: &[usize]) -> Vec
     fields
 }
 
+/// Conservatively report the input slot and top-level field read by a typed
+/// lambda for one output path. The DDIR demand-rule example and the installed
+/// Rust pass use this same probe.
+pub fn lambda_input_fields(
+    lambda: &Lambda,
+    input_shapes: &[Shape],
+    output_path: &[usize],
+) -> Vec<(usize, usize)> {
+    graph_fields(lambda, input_shapes, output_path)
+}
+
 fn lambda_fields(lambda: &Lambda, inputs: &[&Site], output_path: &[usize]) -> Vec<(usize, usize)> {
     // A linear lambda has two row slots from one site; a join lambda has a
     // shared key and one value slot from each of two sites.

@@ -1,0 +1,178 @@
+-- Field-demand rules over the self-optimizer's program graph.
+-- Inputs 0 and 1 are exactly optimize.ddp's nodes and edges encoding.
+-- 2 facts: (site,side,position) ; fact. side 0 key, 1 value, 2 presence.
+-- 3 widths: (site,side) ; width.
+-- 4 targets: (scope,ref_tag,a,b) ; site. Ref tags match optimize.ddp.
+-- 5 node_sites: node ; output site. 6 holder_sites: holder ; output site.
+-- 7 marks: site ; reason (1 declared shape, 2 root export).
+-- 8 stages: (linear node, step) ; (output site, linear kind).
+-- 9 reducers: node ; kind (0 count, 1 full-src barrier).
+-- 10 reads: (node,step,output side,output position) ; (src slot,src position).
+--     step -1 denotes join or half_join; side/position -1 denotes a scalar
+--     lambda. Only Corgi lambda internals are precomputed.
+
+let nodes = input 0 : ((int) ; (int, int, int, List(int)))
+          | map(((id), payload) -> (id, payload));
+let edges = input 1 : ((int, int) ; (int, int, int));
+let facts = input 2 : ((int, int, int) ; int);
+let widths = input 3 : ((int, int) ; int);
+let targets = input 4 : ((int, int, int, int) ; int);
+let node_sites = input 5 : (int ; int);
+let holder_sites = input 6 : (int ; int);
+let marks = input 7 : (int ; int);
+let stages = input 8 : ((int, int) ; (int, int));
+let reducers = input 9 : (int ; int);
+let reads = input 10 : ((int, int, int, int) ; (int, int));
+
+let all_fact = facts | map(((site, _, _), fact) -> (site, fact));
+let presence = facts | filter(((_, side, _), _) -> (side, 2) eq)
+                     | map(((site, _, _), fact) -> (site, fact));
+let keys = facts | filter(((_, side, _), _) -> (side, 0) eq)
+                 | map(((site, _, pos), fact) -> (site, (pos, fact)));
+let vals = facts | filter(((_, side, _), _) -> (side, 1) eq)
+                 | map(((site, _, pos), fact) -> (site, (pos, fact)));
+let fields_by_side = facts | map(((site, side, pos), fact) -> ((site, side), (pos, fact)));
+
+-- Resolve the existing edges through the same scope/ref encoding as optimize.ddp.
+let edge_holder = edges | map(((holder, pos), (tag, a, b)) -> (holder, (pos, tag, a, b)));
+let scoped = nodes | join(edge_holder, (holder, (scope, _, _, _), (pos, tag, a, b))
+                   -> ((scope, tag, a, b), (holder, pos)));
+let links = scoped | join(targets, (_, (holder, pos), site) -> ((holder, pos), site));
+let link_holder = links | map(((holder, pos), site) -> (holder, (pos, site)));
+let typed_nodes = nodes | join(node_sites, (node, (_, kind, _, _), site) -> (node, (kind, site)));
+let op_inputs = typed_nodes | join(link_holder, (node, (kind, out), (pos, src))
+                            -> ((kind, pos), (node, out, src)));
+
+-- Linear stages use edge 0 for their first src, then the prior stage's site.
+let first_step = op_inputs | filter(((kind, pos), _) -> ((kind, 0) eq, (pos, 0) eq) all)
+                           | map((_, (node, _, src)) -> ((node, 0), src));
+let later_steps = stages | map(((node, step), (site, _)) -> ((node, (step, 1) add), site));
+let step_input = first_step + later_steps;
+let step_io = stages | join(step_input, ((node, step), (out, kind), src)
+                          -> ((node, step), (kind, out, src)));
+let step_pairs = step_io | map((_, (kind, out, src)) -> (kind, (out, src)));
+let identity_steps = step_pairs | filter((kind, _) -> ((kind, 1) eq, ((kind, 2) eq, (kind, 3) eq) add) add)
+                                | map((_, pair) -> pair);
+let key_steps = step_pairs | filter((kind, _) -> ((kind, 4) eq, ((kind, 5) eq, (kind, 6) eq) add) add)
+                           | map((_, pair) -> pair);
+let lifted_iter = step_pairs | filter((kind, _) -> (kind, 4) eq) | map((_, pair) -> pair);
+let lifted_pairs = step_pairs | filter((kind, _) -> (kind, 5) eq) | map((_, pair) -> pair);
+let projections = step_pairs | filter((kind, _) -> (kind, 0) eq) | map((_, pair) -> pair);
+let join_functions = step_pairs | filter((kind, _) -> (kind, 7) eq) | map((_, pair) -> pair);
+
+-- Collection-structure dependencies, one rule family per operator kind.
+let holders = holder_sites | join(link_holder, (holder, out, (_, src)) -> (out, src));
+let concat_pairs = op_inputs | filter(((kind, _), _) -> (kind, 1) eq)
+                       | map((_, (_, out, src)) -> (out, src));
+let arranged_pairs = op_inputs | filter(((kind, _), _) -> (kind, 2) eq)
+                        | map((_, (_, out, src)) -> (out, src));
+let joins = op_inputs | filter(((kind, _), _) -> (kind, 3) eq)
+                      | map((_, (_, out, src)) -> (out, src));
+let half_joins = op_inputs | filter(((kind, _), _) -> (kind, 6) eq)
+                           | map((_, (_, out, src)) -> (out, src));
+let reduced = op_inputs | filter(((kind, _), _) -> (kind, 4) eq)
+                        | map((_, (node, out, src)) -> (node, (out, src)))
+                        | join(reducers, (node, pair, kind) -> (kind, pair));
+let counts = reduced | filter((kind, _) -> (kind, 0) eq) | map((_, pair) -> pair);
+let full_reduces = reduced | filter((kind, _) -> (kind, 1) eq) | map((_, pair) -> pair);
+let inspects = op_inputs | filter(((kind, _), _) -> (kind, 5) eq)
+                          | map((_, (_, out, src)) -> (out, src));
+let identity = holders + concat_pairs + arranged_pairs + identity_steps;
+let key_identity = key_steps;
+let presence_pairs = identity + key_identity + projections + join_functions + joins + half_joins + counts;
+let whole_keys = arranged_pairs + joins + half_joins + counts;
+let opaque = full_reduces + inspects;
+
+-- Every output fact needs src presence for row existence.
+let presence_deps = presence_pairs | map((out, src) -> (src, out))
+                                   | join(presence, (src, out, need) -> (out, need))
+                                   | join(all_fact, (out, need, fact) -> (fact, need));
+-- Arrange, join, half_join and count demand all src key fields.
+let key_deps = whole_keys | map((out, src) -> (src, out))
+                           | join(keys, (src, out, (_, need)) -> (out, need))
+                           | join(all_fact, (out, need, fact) -> (fact, need));
+-- Distinct, min, collect, user reduce and inspect require every src fact.
+let opaque_deps = opaque | join(all_fact, (out, src, fact) -> (src, fact))
+                         | join(all_fact, (src, fact, need) -> (fact, need));
+-- Half join also reads the lifted stream's time at value field 1.
+let half_stream = op_inputs | filter(((kind, pos), _) -> ((kind, 6) eq, (pos, 0) eq) all)
+                            | map((_, (_, out, src)) -> ((src, 1, 1), out));
+let half_time_deps = half_stream | join(facts, (_, out, need) -> (out, need))
+                                 | join(all_fact, (out, need, fact) -> (fact, need));
+
+-- Identity preserves each key/value position when widths match; the Rust rule
+-- conservatively reads all src facts when a side's widths disagree.
+let widths_by_site = widths | map(((site, side), width) -> (site, (side, width)));
+let identity_out_width = identity | join(widths_by_site, (out, src, (side, width))
+                                         -> ((src, side), (out, width)));
+let identity_widths = identity_out_width | join(widths, ((src, side), (out, out_width), input_width)
+                                         -> ((out, src, side), (out_width, input_width)));
+let same_width = identity_widths | filter((_, (a, b)) -> (a, b) eq);
+let changed_width = identity_widths | filter((_, (a, b)) -> (a, b) ne);
+let identity_deps = same_width | map(((out, src, side), _) -> ((out, side), src))
+                               | join(fields_by_side, ((out, side), src, (pos, fact))
+                                   -> ((src, side, pos), fact))
+                               | join(facts, (_, fact, need) -> (fact, need));
+let changed_deps = changed_width | map(((out, src, side), _) -> ((out, side), src))
+                                 | join(fields_by_side, (_, src, (_, fact)) -> (src, fact))
+                                 | join(all_fact, (src, fact, need) -> (fact, need));
+-- LiftIter copies key and value positions; Lift and FlatMap copy only keys.
+let key_zip_deps = key_identity | join(keys, (out, src, (pos, fact)) -> ((src, 0, pos), fact))
+                                | join(facts, (_, fact, need) -> (fact, need));
+let val_zip_deps = lifted_iter | join(vals, (out, src, (pos, fact)) -> ((src, 1, pos), fact))
+                              | join(facts, (_, fact, need) -> (fact, need));
+let lift_val_deps = lifted_pairs | map((out, src) -> ((out, 1, 0), src))
+                         | join(facts, (_, src, fact) -> (src, fact))
+                         | join(vals, (src, fact, (_, need)) -> (fact, need));
+
+-- Corgi-supplied lambda reads are resolved here to src sites and facts.
+let reads_by_step = reads | map(((node, step, side, pos), (slot, field))
+                                -> ((node, step), (side, pos, slot, field)));
+let linear_reads = step_io | join(reads_by_step, ((node, step), (_, out, src), (side, pos, slot, field))
+                                 -> ((out, side, pos), (src, slot, field)));
+let join_left = op_inputs | filter(((kind, pos), _) -> ((kind, 3) eq, (pos, 0) eq) all);
+let join_right = op_inputs | filter(((kind, pos), _) -> ((kind, 3) eq, (pos, 1) eq) all);
+let half_left = op_inputs | filter(((kind, pos), _) -> ((kind, 6) eq, (pos, 0) eq) all);
+let half_right = op_inputs | filter(((kind, pos), _) -> ((kind, 6) eq, (pos, 1) eq) all);
+let both_left = join_left + half_left;
+let both_right = join_right + half_right;
+let slots = (both_left | map((_, (node, out, src)) -> ((node, 0), (out, src, 0, 0))))
+          + (join_left | map((_, (node, out, src)) -> ((node, 1), (out, src, 1, 0))))
+          + (half_left | map((_, (node, out, src)) -> ((node, 1), (out, src, 1, 1))))
+          + (both_right | map((_, (node, out, src)) -> ((node, 2), (out, src, 1, 0))));
+let reads_by_slot = reads | filter(((_, step, _, _), _) -> (step, -1) eq)
+                          | map(((node, _, side, pos), (slot, field)) -> ((node, slot), (side, pos, field)));
+let raw_join_reads = slots | join(reads_by_slot, ((node, slot), (out, src, input_side, mode), (side, pos, field))
+                                -> ((out, side, pos), (src, input_side, field, mode)));
+let join_reads = (raw_join_reads | filter((_, (_, _, _, mode)) -> (mode, 0) eq)
+                                 | map((out, (src, input_side, field, _)) -> (out, (src, input_side, field))))
+               + (raw_join_reads | filter((_, (_, _, _, mode)) -> (mode, 1) eq)
+                                 | map((out, (src, input_side, _, _)) -> (out, (src, input_side, 0))));
+let field_reads = linear_reads | filter(((_, side, _), _) -> (side, -1) ne);
+let scalar_reads = linear_reads | filter(((_, side, _), _) -> (side, -1) eq)
+                                | map(((out, _, _), input_field) -> (out, input_field));
+let scalar_deps = scalar_reads | join(all_fact, (out, input_field, fact) -> (input_field, fact))
+                               | join(facts, (_, fact, need) -> (fact, need));
+let lambda_deps = (field_reads + join_reads)
+                | join(facts, ((out, side, pos), input_field, fact) -> (input_field, fact))
+                | join(facts, (_, fact, need) -> (fact, need));
+
+let raw_deps = presence_deps + key_deps + opaque_deps + half_time_deps
+             + identity_deps + changed_deps + key_zip_deps + val_zip_deps
+             + lift_val_deps + lambda_deps + scalar_deps;
+let dep_set = raw_deps | map((fact, need) -> ((fact, need), ())) | distinct;
+let dependencies = dep_set | map(((fact, need), ()) -> (fact, need));
+
+-- Declared shapes and root exports seed every fact; inspect is observable.
+let inspect_sites = typed_nodes | filter((_, (kind, _)) -> (kind, 5) eq)
+                                | map((_, (_, site)) -> (site, ()));
+let marked_sites = marks | map((site, _) -> (site, ()));
+let seed_sites = marked_sites + inspect_sites | distinct;
+let seeds = seed_sites | join(all_fact, (site, (), fact) -> (fact, ())) | distinct;
+
+demand: {
+    let reached = live | join(dependencies, (_, (), need) -> (need, ()));
+    var live = seeds + reached | distinct;
+}
+export "live" = demand::live;
+export "dependencies" = dep_set;
