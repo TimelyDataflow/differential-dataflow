@@ -6,6 +6,7 @@ pub mod scope_ir;
 pub mod backend;
 pub mod explain;
 pub mod projection;
+pub mod diag;
 pub mod server;
 pub mod shapes;
 // `folded` (the flat `[i64]` per-coordinate time-filter algebra) is retired:

@@ -97,6 +97,10 @@ pub fn lower_tree(stmts: Vec<Stmt>) -> st::Program {
 struct ScopeLower {
     is_root: bool,
     items: Vec<st::Item>,
+    /// Each item's statement name (see `st::Scope::labels`).
+    labels: Vec<String>,
+    /// The statement being lowered, which names the items it pushes.
+    statement: String,
     imports: Vec<st::Import>,
     input_import: HashMap<usize, usize>, // input n  -> import idx (root, deduped)
     trace_import: HashMap<String, usize>, // trace name -> import idx (root, deduped)
@@ -109,6 +113,7 @@ impl ScopeLower {
     fn push(&mut self, n: st::Node) -> st::Ref {
         let i = self.items.len();
         self.items.push(st::Item::Op(n));
+        self.labels.push(self.statement.clone());
         st::Ref::Local(i)
     }
     fn input_ref(&mut self, n: usize) -> st::Ref {
@@ -194,6 +199,8 @@ fn lower_scope_tree(
     let mut s = ScopeLower {
         is_root,
         items: Vec::new(),
+        labels: Vec::new(),
+        statement: String::new(),
         imports: Vec::new(),
         input_import: HashMap::new(),
         trace_import: HashMap::new(),
@@ -263,6 +270,7 @@ fn lower_scope_tree(
         match kind {
             ItemKind::Let => {
                 let e = lets.remove(&name).unwrap();
+                s.statement = name.clone();
                 let r = s.lower_expr(e);
                 s.env.insert(name, r);
             },
@@ -272,6 +280,7 @@ fn lower_scope_tree(
                 let child = lower_scope_tree(&name, b, &s.env, &wanted, false);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
+                s.labels.push(name.clone());
                 s.child_idx.insert(name.clone(), cidx);
                 s.child_exports.insert(name, wanted);
             },
@@ -281,6 +290,7 @@ fn lower_scope_tree(
     // Lower var bodies and emit binds.
     let mut binds: Vec<st::Bind> = Vec::new();
     for (name, _, e) in &var_list {
+        s.statement = (*name).to_string();
         let r = s.lower_expr(e);
         binds.push(st::Bind { var: var_id[*name], value: r });
     }
@@ -290,6 +300,7 @@ fn lower_scope_tree(
     let mut exports: Vec<st::Export> = Vec::new();
     if is_root {
         for (name, shape, e) in &export_stmts {
+            s.statement = format!("export {name}");
             let r = s.lower_expr(e);
             exports.push(st::Export { name: (*name).to_string(), value: r, shape: (*shape).clone() });
         }
@@ -301,7 +312,7 @@ fn lower_scope_tree(
         }
     }
 
-    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, binds, exports }
+    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, binds, exports }
 }
 
 /// The fields of child scope `scope` that this body references via `scope::field`.

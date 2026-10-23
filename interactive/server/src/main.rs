@@ -143,8 +143,8 @@ fn main() {
             };
             control_loop::run_worker(worker, events);
 
-            // The live server intentionally keeps installed dataflows and
-            // diagnostics around. Once every worker observes shutdown, remove
+            // The live server intentionally keeps installed dataflows
+            // around. Once every worker observes shutdown, remove
             // them so Timely's post-closure drain can finish normally.
             for id in worker.installed_dataflows() {
                 worker.drop_dataflow(id);
