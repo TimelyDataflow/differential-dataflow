@@ -1,7 +1,7 @@
 -- Connected components by label propagation, written with `+` as a pipeline stage:
 -- `a | map(f) + b | distinct` is `((a | map(f)) + b) | distinct`.
 
-let raw   = input 0 : ((int, int) ; ());
+let raw   = input 0 : ((int, int), ());
 
 -- symmetrize the edges, and name the nodes
 let edges = raw | map(((a, b), ()) -> ((b, a), ())) + raw | distinct | map(((a, b), ()) -> (a, b));

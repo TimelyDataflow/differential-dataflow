@@ -16,7 +16,7 @@
 -- RULE  arrange(x) ≡ x   when x's class is already arranged.
 -- output trace "classes": (node-id, class-leader).
 
-let node  = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));    -- id ; op, [children]
+let node  = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));    -- (id, (op, [children]))
 let elems = node | map((id, _) -> (id, id));                     -- id ; id   (seed each to itself)
 
 -- explode each node's children (UNNEST via flatmap) so they can be
