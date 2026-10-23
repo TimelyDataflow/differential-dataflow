@@ -4,8 +4,8 @@ use crate::lattice::Lattice;
 
 /// An accumulation of (value, time, diff) updates.
 pub struct EditList<V, T, D> {
-    values: Vec<(V, usize)>,
-    edits: Vec<(T, D)>,
+    pending: Vec<(T, D)>,
+    edits: Vec<((T, V), D)>,
 }
 
 impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, D> {
@@ -13,14 +13,14 @@ impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, 
     #[inline]
     fn new() -> Self {
         EditList {
-            values: Vec::new(),
+            pending: Vec::new(),
             edits: Vec::new(),
         }
     }
     /// Clears the list of edits.
     #[inline]
     pub fn clear(&mut self) {
-        self.values.clear();
+        self.pending.clear();
         self.edits.clear();
     }
     fn len(&self) -> usize { self.edits.len() }
@@ -28,25 +28,16 @@ impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, 
     #[inline]
     pub fn push(&mut self, time: T, diff: D) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
-        self.edits.push((time, diff));
+        self.pending.push((time, diff));
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
     pub fn seal(&mut self, value: V) {
-        let prev = self.values.last().map(|x| x.1).unwrap_or(0);
-        crate::consolidation::consolidate_from(&mut self.edits, prev);
-        if self.edits.len() > prev {
-            self.values.push((value, self.edits.len()));
-        }
+        crate::consolidation::consolidate(&mut self.pending);
+        self.edits.extend(self.pending.drain(..).map(|(time, diff)| ((time, value), diff)));
     }
     fn map<F: FnMut(V, &T, &D)>(&self, mut logic: F) {
-        for index in 0 .. self.values.len() {
-            let lower = if index == 0 { 0 } else { self.values[index-1].1 };
-            let upper = self.values[index].1;
-            for edit in lower .. upper {
-                logic(self.values[index].0, &self.edits[edit].0, &self.edits[edit].1);
-            }
-        }
+        for ((time, value), diff) in &self.edits { logic(*value, time, diff); }
     }
 }
 
@@ -57,7 +48,7 @@ impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, 
 /// and replay cost stays linear in edits rather than quadratic.
 pub struct ValueHistory<V, T, D> {
     edits: EditList<V, T, D>,
-    history: Vec<(T, T, usize, usize)>,     // (time, meet, value_index, edit_offset)
+    history: Vec<T>,                       // prefix meets of the descending edits
     buffer: Vec<((V, T), D)>,               // where we accumulate / collapse updates.
 }
 
@@ -93,20 +84,15 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
     fn build(&mut self) {
         self.buffer.clear();
         self.history.clear();
-        for value_index in 0 .. self.edits.values.len() {
-            let lower = if value_index > 0 { self.edits.values[value_index-1].1 } else { 0 };
-            let upper = self.edits.values[value_index].1;
-            for edit_index in lower .. upper {
-                let time = self.edits.edits[edit_index].0.clone();
-                self.history.push((time.clone(), time, value_index, edit_index));
-            }
+        self.edits.edits.sort_unstable_by(|x, y| y.0.cmp(&x.0));
+        self.history.extend(self.edits.edits.iter().map(|((time, _), _)| time.clone()));
+        for i in 1..self.history.len() {
+            let (prefix, suffix) = self.history.split_at_mut(i);
+            suffix[0].meet_assign(&prefix[i - 1]);
         }
-
-        self.history.sort_by(|x,y| y.cmp(x));
-        self.history.iter_mut().reduce(|prev, cur| { cur.1.meet_assign(&prev.1); cur });
     }
 
-    /// Organizes history based on current contents of edits, returning a fresh replay.
+    /// Organizes history based on current contents of edits, returning a consuming replay.
     pub(in crate::operators) fn replay<'history>(&'history mut self) -> HistoryReplay<'history, V, T, D> {
         self.build();
         HistoryReplay { replay: self }
@@ -135,19 +121,20 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
 
 impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: Clone + crate::difference::Semigroup> ValueHistory<V, T, D> {
     /// The next (least) un-replayed time.
-    pub fn time(&self) -> Option<&T> { self.history.last().map(|x| &x.0) }
+    pub fn time(&self) -> Option<&T> { self.edits.edits.last().map(|x| &x.0.0) }
     /// The meet of all un-replayed times.
-    pub fn meet(&self) -> Option<&T> { self.history.last().map(|x| &x.1) }
+    pub fn meet(&self) -> Option<&T> { self.history.last() }
     /// The next un-replayed edit, as `(value, time, diff)`.
     pub fn edit(&self) -> Option<(V, &T, &D)> {
-        self.history.last().map(|&(ref t, _, v, e)| (self.edits.values[v].0, t, &self.edits.edits[e].1))
+        self.edits.edits.last().map(|((t, v), d)| (*v, t, d))
     }
     /// The buffered (stepped-in, advanced, consolidated) edits.
     pub fn buffer(&self) -> &[((V, T), D)] { &self.buffer[..] }
     /// Move the next edit into the buffer.
     pub fn step(&mut self) {
-        let (time, _, value_index, edit_offset) = self.history.pop().unwrap();
-        self.buffer.push(((self.edits.values[value_index].0, time), self.edits.edits[edit_offset].1.clone()));
+        self.history.pop().unwrap();
+        let ((time, value), diff) = self.edits.edits.pop().unwrap();
+        self.buffer.push(((value, time), diff));
     }
     /// Step edits while the next time equals `time`; true iff any did.
     pub fn step_while_time_is(&mut self, time: &T) -> bool {
