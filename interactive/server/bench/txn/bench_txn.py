@@ -162,7 +162,7 @@ class Client:
 
 
 class ServerProcess:
-    def __init__(self, binary: Path, workers: int, wrap: list[str], frames: bool = False):
+    def __init__(self, binary: Path, workers: int, wrap: list[str], frames: bool = False, profile: bool = False):
         ports = free_ports(3)
         env = os.environ.copy()
         env.update(
@@ -172,6 +172,8 @@ class ServerProcess:
             DDIR_WS_BIND=f"127.0.0.1:{ports[1]}",
             DDIR_DIAG_PORT=str(ports[2]),
         )
+        if profile:
+            env.update(DDIR_PROFILE="1")
         self.process = subprocess.Popen(
             [*wrap, str(binary)],
             cwd=ROOT,
@@ -432,6 +434,14 @@ def main() -> None:
     )
     parser.add_argument("--replicas", type=int, default=1)
     parser.add_argument(
+        "--profile",
+        type=int,
+        default=0,
+        metavar="N",
+        help="run the server with DDIR_PROFILE=1 and print the N operators that took the most "
+        "time over the measured rounds",
+    )
+    parser.add_argument(
         "--wrap",
         default="",
         help="a command to run the server under, e.g. 'samply record --save-only -o p.json --'",
@@ -479,7 +489,7 @@ def main() -> None:
                 next_key = 0
                 samples: list[Sample] = []
                 key_count = batch if args.keys_from_batch else args.keys
-                with ServerProcess(args.binary.resolve(), workers, shlex.split(args.wrap), args.feed == "frames") as client:
+                with ServerProcess(args.binary.resolve(), workers, shlex.split(args.wrap), args.feed == "frames", args.profile > 0) as client:
                     if mode == "maintained":
                         client.load("bank", args.maintained_program.resolve())
                     else:
@@ -500,8 +510,16 @@ def main() -> None:
                         sample = run_cycle(client, mode, transactions, state, args.resolve_program.resolve())
                         if round_index >= args.warmup:
                             samples.append(sample)
+                        if args.profile and round_index + 1 == args.warmup:
+                            client.request("profile reset")
 
                     encode_ms = client.encode_ms / (args.warmup + args.rounds)
+                    if args.profile:
+                        rows, _ = client.request("profile")
+                        print(f"-- {mode}, {workers} workers, batch {batch}: operator time over "
+                              f"{args.rounds} rounds, summed over workers", flush=True)
+                        for row in rows[: args.profile]:
+                            print(f"   {row}", flush=True)
                     if mode == "maintained":
                         rollback, _ = client.peek("rollback")
                         if rollback:

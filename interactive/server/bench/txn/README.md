@@ -204,20 +204,21 @@ against under 1% for the one-off resolver.
 
 ### The resolution tick's operators
 
-Each operator's own scheduling time, from Timely's logs, summed over workers
-and the measured rounds, for the case above. Operators are named by their
-address in the resolver; inside `res` the addresses follow `resolve.ddp`'s
-order:
+Each operator's own scheduling time, summed over workers and the measured
+rounds, for the case above, as `--profile 8` prints it (`DDIR_PROFILE=1`; see
+the server README's `profile`). Each operator is labelled with the
+`resolve.ddp` statement that built it:
 
-| Operator | Line | Share |
+| Label | Operator | Share |
 |---|---|---:|
-| `CorgiReduce [3, 8, 18]` | `best = (pairs + base) \| min` | 25.8% |
-| `Join [3, 8, 14]` | `pairs = rk \| join(wk, …)` | 10.5% |
-| `CorgiArrange [3, 8, 17]` | the `min`'s input | 8.2% |
-| `CorgiReduce [3, 8, 31]` | `rollback = … \| distinct` | 6.5% |
-| `Join [3, 7]` | `base = rk \| join(store, …)` | 5.8% |
-| `CorgiArrange [3, 8, 25]` | `unseen`'s arrangement | 4.2% |
-| `Join [3, 8, 8]` | `wr_bad = wid \| join(rollback, …)` | 4.0% |
+| `best` | `CorgiReduce` (the `min`) | 25.3% |
+| `pairs` | `Join` | 10.4% |
+| `best` | `CorgiArrange` (the `min`'s input) | 8.6% |
+| `rollback` | `CorgiReduce` (the `distinct`) | 6.5% |
+| `base` | `Join` (against the store) | 6.1% |
+| `bad_absent` | `CorgiArrange` (`unseen`, for its join) | 4.1% |
+| `wr_bad` | `Join` | 3.9% |
+| `res` | the recursion's own scheduling | 3.4% |
 
 ### Answering each key with one reduce
 
@@ -265,5 +266,6 @@ DDIR_MAX_FEED_BYTES=268435456 python3 interactive/server/bench/txn/bench_txn.py 
 `--maintained-program` substitute a program (`resolve_by_key.ddp`, say);
 `--feed text` sends framed text rows instead of a binary frame; `--replicas R`
 makes groups of `R` transactions race the same expected value; `--wrap` runs
-the server under another command (a profiler); `--json` keeps per-cycle
-phases and the client's encoding time.
+the server under another command (a profiler); `--profile N` prints the `N`
+operators that took the most time; `--json` keeps per-cycle phases and the
+client's encoding time.

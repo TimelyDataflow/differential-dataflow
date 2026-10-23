@@ -101,6 +101,8 @@ pub enum Cmd {
     Tail { name: String, columnar: bool },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
+    /// Report per-operator time (`DDIR_PROFILE=1`), or with `reset` forget it.
+    Profile { reset: bool },
     /// Update positional `input` of `prog` with one row, read into columns at
     /// the input's declared shapes, at `time` (default the current epoch).
     /// Identity and ordering of writes are convention, not enforcement:
@@ -158,6 +160,7 @@ pub enum PreparedCommand {
     Peek { name: String, key: Option<String>, columnar: bool },
     Tail { name: String, columnar: bool },
     Stop { tail_reqid: ReqId },
+    Profile { reset: bool },
 }
 
 /// The declared shapes of loaded programs' inputs, by program name, shared by every session so
@@ -225,6 +228,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         Cmd::Peek { name, key, columnar } => return Ok(PreparedCommand::Peek { name, key, columnar }),
         Cmd::Tail { name, columnar } => return Ok(PreparedCommand::Tail { name, columnar }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
+        Cmd::Profile { reset } => return Ok(PreparedCommand::Profile { reset }),
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
         Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
         Cmd::Source { prog, input, source, diff } => ServerCommand::Load { prog, input, source, diff },
@@ -325,7 +329,7 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
+    "load", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind", "profile",
     "unbind",
 ];
 
@@ -795,6 +799,11 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             [] => ParseOutcome::Cmd(Cmd::List),
             _ => ParseOutcome::Err("list: takes no arguments".into()),
         },
+        "profile" => match args {
+            [] => ParseOutcome::Cmd(Cmd::Profile { reset: false }),
+            ["reset"] => ParseOutcome::Cmd(Cmd::Profile { reset: true }),
+            _ => ParseOutcome::Err("profile: expected `[reset]`".into()),
+        },
         "peek" => {
             let (args, columnar) = as_corgi(args);
             match args {
@@ -912,6 +921,15 @@ mod tests {
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad diff must be rejected: {out:?}");
         let out = feed_all(&mut p, &["r2 feed world x from iota:3\n"]);
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad input index must be rejected: {out:?}");
+    }
+
+    #[test]
+    fn profile_and_reset() {
+        let mut p = LineParser::new(Catalog::default());
+        let got = feed_all(&mut p, &["r0 profile", "r1 profile reset", "r2 profile now"]);
+        assert!(matches!(got[0].1, Ok(Cmd::Profile { reset: false })));
+        assert!(matches!(got[1].1, Ok(Cmd::Profile { reset: true })));
+        assert!(got[2].1.is_err());
     }
 
     #[test]
