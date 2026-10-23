@@ -20,6 +20,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<String>> {
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],
         "scc" => vec![edges.clone()],
+        // cc_stages: components {1, 2, 3, 4} and {5, 6}.
+        "cc_stages" => vec![edges.clone()],
         // kcore: the same edges. Symmetrized they leave a 2-core of {2, 3, 4} and peel
         // 1, 5 and 6 away, so the fixpoint has to retract as well as accumulate.
         "kcore" => vec![edges],
@@ -160,6 +162,7 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test] fn reach() { assert_matches_expected("reach"); }
 #[test] fn scc() { assert_matches_expected("scc"); }
+#[test] fn cc_stages() { assert_matches_expected("cc_stages"); }
 #[test] fn kcore() { assert_matches_expected("kcore"); }
 #[test] fn stable() { assert_matches_expected("stable"); }
 #[test] fn unnest() { assert_matches_expected("unnest"); }

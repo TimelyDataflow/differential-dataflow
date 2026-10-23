@@ -40,7 +40,9 @@
 //!   `(k' ; (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
 //!   each row to at least the time the lambda gives.
-//! - `a + b` (concat), `a - b` (concat with `b` negated).
+//! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
+//!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
+//!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
 //! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
@@ -418,26 +420,25 @@ impl Parser {
 
     fn parse_ident(&mut self) -> String { match self.next() { Token::Ident(s) => s, other => panic!("Expected ident, got {:?}", other) } }
 
+    /// An atom followed by stages, applied left to right: `| op`, `+ atom` and `- atom`. A run of
+    /// `+`/`-` stages is one `Concat`.
     fn parse_pipe_expr(&mut self) -> Expr {
-        let mut expr = self.parse_concat_expr();
-        while *self.peek() == Token::Pipe {
-            self.next();
-            expr = self.parse_pipe_op(expr);
+        let mut expr = self.parse_atom();
+        let mut concat = false;
+        loop {
+            let part = match self.peek() {
+                Token::Pipe => { self.next(); expr = self.parse_pipe_op(expr); concat = false; continue },
+                Token::Plus => { self.next(); self.parse_atom() },
+                Token::Minus => { self.next(); Expr::Negate(Box::new(self.parse_atom())) },
+                _ => break,
+            };
+            expr = match expr {
+                Expr::Concat(mut parts) if concat => { parts.push(part); Expr::Concat(parts) },
+                lhs => Expr::Concat(vec![lhs, part]),
+            };
+            concat = true;
         }
         expr
-    }
-
-    fn parse_concat_expr(&mut self) -> Expr {
-        let first = self.parse_atom();
-        let mut parts = vec![first];
-        loop {
-            match self.peek() {
-                Token::Plus => { self.next(); parts.push(self.parse_atom()); },
-                Token::Minus => { self.next(); parts.push(Expr::Negate(Box::new(self.parse_atom()))); },
-                _ => break,
-            }
-        }
-        if parts.len() == 1 { parts.pop().unwrap() } else { Expr::Concat(parts) }
     }
 
     fn parse_atom(&mut self) -> Expr {
@@ -448,12 +449,6 @@ impl Parser {
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
             other => panic!("Unexpected token in atom: {:?}", other),
         }
-    }
-
-    fn parse_join_arg(&mut self) -> Expr {
-        let mut expr = self.parse_atom();
-        while *self.peek() == Token::Pipe { self.next(); expr = self.parse_pipe_op(expr); }
-        expr
     }
 
     fn source_shape(&mut self, source: Expr) -> Expr {
@@ -483,7 +478,7 @@ impl Parser {
                 let val = self.slot();
                 Expr::Map(Box::new(lhs), Lambda::compose("(k, v)", &[(&val, "(k, v)".into())], |r| format!("(k, {})", r[0])))
             },
-            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
+            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_pipe_expr(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
@@ -498,7 +493,7 @@ impl Parser {
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
             Token::Ident(name) if name == "half_join" => {
                 self.next(); self.expect(&Token::LParen);
-                let r = self.parse_join_arg(); self.expect(&Token::Comma);
+                let r = self.parse_pipe_expr(); self.expect(&Token::Comma);
                 let strict = match self.next() {
                     Token::Int(0) => false,
                     Token::Int(1) => true,
