@@ -526,7 +526,8 @@ where
         // Each key wants its rows of `desired`, each with its diff (once each, but for a lambda's), and
         // has `(id, diff)`s of output. The
         // correction nets the two by value: a wanted row equal to an output id's value counts
-        // toward that id, and one equal to none gets a new id. Keys have a handful of each.
+        // toward that id, and one equal to none gets a new id. Keys usually have a handful of each;
+        // a key with many desired rows is sorted and consolidated instead (see below).
         //
         // A colliding identifier's bracket holds several real keys' values. It is split into one
         // bracket per real key, each reduced on its own, and its rows are matched against output
@@ -595,6 +596,9 @@ where
         let Pool { columns, refs } = &mut self.output;
         let (output_keys, key_columns) = (&mut self.output_keys, &self.key_columns);
         let (mut corr, mut corr_ends) = (Vec::new(), Vec::with_capacity(keys.len()));
+        // Scratch for keys with many rows, reused across keys.
+        let mut order: Vec<(usize, usize, bool, usize)> = Vec::new();
+        let (mut target, mut alloc): (Vec<Result<usize, usize>>, Vec<usize>) = (Vec::new(), Vec::new());
         let (mut bs, mut os) = (0, 0);
         for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
             let be = if split { bracket_ends[b] } else { b + 1 };
@@ -603,32 +607,81 @@ where
             // here used to allocate once for every key, even for an initial singleton result.
             let net_start = corr.len();
             corr.extend(output[os..oe].iter().map(|&(id, d)| (id, -d)));
-            for s in bs..be {
-                let (ds, de) = (if s == 0 { 0 } else { desired_ends[s - 1] }, desired_ends[s]);
-                if ds == de { continue; }
-                // A desired row's key: that of the input it was reduced from, which is non-empty.
-                let first = if s == 0 { 0 } else { in_ends[s - 1] };
+            // A key with many desired rows: diff and consolidate. The search below costs the
+            // key's rows for each desired row, quadratic in them; instead order the key's existing
+            // and desired rows together by value, and give each desired row the entry that search
+            // would find: the first existing row of its value, else the first desired row of its
+            // value, which allocates. A key that is not colliding has one bracket, `bs`.
+            let resolved = singleton_matches.get(b).copied().flatten().is_some();
+            let (lo, hi) = (if bs == 0 { 0 } else { desired_ends[bs - 1] }, desired_ends[be - 1]);
+            let rows = (oe - os) + (hi - lo);
+            if !checked && !resolved && hi - lo > 16 && hi - lo > 2 * (usize::BITS - rows.leading_zeros()) as usize {
+                let first = if bs == 0 { 0 } else { in_ends[bs - 1] };
                 let (kc, kr) = self.input.refs[input[first].0 as usize];
-                for row in ds..de {
+                // (column, row, desired, position): of equal values, existing rows come first,
+                // each side in its own order, so a run's first item is the search's answer.
+                order.clear();
+                order.extend(output[os..oe].iter().enumerate().map(|(i, &(id, _))| { let (c, r) = refs[id as usize]; (c, r, false, i) }));
+                order.extend((lo..hi).map(|row| (fresh, row, true, row)));
+                order.sort_by(|x, y| compare_at(&columns[x.0], x.1, &columns[y.0], y.1).then((x.2, x.3).cmp(&(y.2, y.3))));
+                // Each desired row's entry: `Ok(i)` the key's `i`th existing row, `Err(r)` the
+                // entry desired row `r` allocates.
+                target.clear();
+                target.resize(hi - lo, Err(0));
+                let mut start = 0;
+                while start < order.len() {
+                    let (c, r, _, _) = order[start];
+                    let mut end = start + 1;
+                    while end < order.len() && compare_at(&columns[c], r, &columns[order[end].0], order[end].1).is_eq() { end += 1; }
+                    let to = if order[start].2 { Err(order[start].3) } else { Ok(order[start].3) };
+                    for &(_, _, wanted, row) in &order[start..end] {
+                        if wanted { target[row - lo] = to; }
+                    }
+                    start = end;
+                }
+                alloc.clear();
+                alloc.resize(hi - lo, 0);
+                for row in lo..hi {
                     let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
-                    let equal = |&(id, _): &(u64, Diff)| {
-                        let (column, r) = refs[id as usize];
-                        compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
-                            let (oc, or) = output_keys[id as usize];
-                            compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
-                        })
-                    };
-                    let found = match singleton_matches.get(b).copied().flatten() {
-                        Some(true) => Some(0),
-                        Some(false) => None,
-                        None => corr[net_start..].iter().position(equal),
-                    };
-                    match found {
-                        Some(at) => corr[net_start + at].1 += diff,
-                        None => {
+                    match target[row - lo] {
+                        Ok(i) => corr[net_start + i].1 += diff,
+                        Err(r) if r == row => {
+                            alloc[row - lo] = corr.len();
                             corr.push((refs.len() as u64, diff));
                             refs.push((fresh, row));
                             output_keys.push((kc, kr));
+                        }
+                        Err(r) => corr[alloc[r - lo]].1 += diff,
+                    }
+                }
+            } else {
+                for s in bs..be {
+                    let (ds, de) = (if s == 0 { 0 } else { desired_ends[s - 1] }, desired_ends[s]);
+                    if ds == de { continue; }
+                    // A desired row's key: that of the input it was reduced from, which is non-empty.
+                    let first = if s == 0 { 0 } else { in_ends[s - 1] };
+                    let (kc, kr) = self.input.refs[input[first].0 as usize];
+                    for row in ds..de {
+                        let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
+                        let equal = |&(id, _): &(u64, Diff)| {
+                            let (column, r) = refs[id as usize];
+                            compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
+                                let (oc, or) = output_keys[id as usize];
+                                compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
+                            })
+                        };
+                        let found = match singleton_matches.get(b).copied().flatten() {
+                            Some(true) => Some(0),
+                            Some(false) => None,
+                            None => corr[net_start..].iter().position(equal),
+                        };
+                        match found {
+                            Some(at) => corr[net_start + at].1 += diff,
+                            None => {
+                                corr.push((refs.len() as u64, diff));
+                                refs.push((fresh, row));
+                                output_keys.push((kc, kr));
+                            }
                         }
                     }
                 }
