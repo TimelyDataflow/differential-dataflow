@@ -44,6 +44,9 @@ def main():
     p.add_argument('--mode', default='full', choices=('full', 'split', 'updates', 'reads'))
     p.add_argument('--merge', type=int, default=1)
     p.add_argument('--workers', type=int, default=4)
+    p.add_argument('--oneoff', type=lambda s: s.split(','), default=None)
+    p.add_argument('--oneoff-dir', type=Path)
+    p.add_argument('--only', choices=('is', 'ic'), help='keep only short or only complex reads')
     p.add_argument('--output', type=Path, default=Path('/tmp/ddir-replay'))
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -55,7 +58,8 @@ def main():
     with gzip.open(args.snapshot) as f:
         graph = pickle.load(f)
     sut = systems.Ddir(argparse.Namespace(server=args.server, output=args.output, workers=args.workers,
-                                          timeout=900, max_rss_gib=24), graph)
+                                          timeout=900, max_rss_gib=24, oneoff=args.oneoff,
+                                          oneoff_dir=args.oneoff_dir), graph)
     gc.collect()
     gc.freeze()
     pid = sut.server.process.pid
@@ -63,7 +67,8 @@ def main():
     retract = 0.0
     for t in ticks:
         updates = [ops[i] for i in t['u']] if args.mode != 'reads' else []
-        reads = [SimpleNamespace(plan=p, binding=b) for p, b in t['r']] if args.mode != 'updates' else []
+        reads = [SimpleNamespace(plan=p, binding=b) for p, b in t['r']
+                 if not args.only or p.startswith(args.only)] if args.mode != 'updates' else []
         sut.tick(updates, reads)
         if args.mode == 'split':
             s = time.perf_counter()

@@ -32,6 +32,11 @@ SPEC = {
              [('below::below | map(((low, high), ()) -> (high, low))', 'below_hl')]),
     'ic14': ({'weighted': '(int, (int, int))'}, []),
     'ic01': ({}, []), 'ic13': ({}, []),
+    'ic02': ({'by_author': '(int, (int, int))', 'latest': '(int, (int, int))', 'newest': '(int, int)'}, []),
+    'ic03': ({'sent_from': '(int, (int, int))'}, []),
+    'ic04': ({'posts': '(int, (int, int))', 'tags': '(int, (int, List(int)))'}, []),
+    'ic05': ({'posted': '((int, int), int)', 'first': '(int, int)', 'lowest': '(int, int)'}, []),
+    'ic06': ({}, []), 'ic07': ({}, []), 'ic08': ({}, []), 'ic11': ({}, []),
 }
 
 def split(plan):
