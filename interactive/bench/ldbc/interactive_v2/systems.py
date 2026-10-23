@@ -84,7 +84,7 @@ class Ddir:
         self.shapes = {n: (parse_shape(source_shape(p['parameters'])), 'unit') for n, p in self.plans.items()}
         self.relations = list(data.SCHEMA)
         self.graph_shapes = [(parse_shape(source_shape(s)), 'unit') for s in data.SCHEMA.values()]
-        plan_dir = HERE.parent / 'authored' / 'plans'
+        plan_dir = Path(os.environ.get('DDIR_PLAN_DIR', HERE.parent / 'authored' / 'plans'))
         self.server.commands([f'load graph begin\n{graph_program()}\n{{rid}} end-load', 'tick'])
         for name in PLANS:
             text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
@@ -100,18 +100,22 @@ class Ddir:
         self.tick_log = (args.output / 'ticks.jsonl').open('w') if getattr(args, 'tick_log', False) else None
         self.lock = threading.Condition()
         self.queued_updates, self.queued_reads, self.closing = [], [], False
+        # Hold a tick until its oldest operation has waited this long, so ticks are fuller.
+        self.batch_ms, self.first_queued = getattr(args, 'batch_ms', 0), None
         self.error = None
         self.loop = threading.Thread(target=self.run, daemon=True)
         self.loop.start()
 
     def apply(self, updates, done):
         with self.lock:
+            self.first_queued = self.first_queued or now_ms()
             self.queued_updates.append((updates, done))
             self.lock.notify()
 
     def read(self, read):
         slot = dict(event=threading.Event())
         with self.lock:
+            self.first_queued = self.first_queued or now_ms()
             self.queued_reads.append((read, slot))
             self.lock.notify()
         slot['event'].wait()
@@ -126,6 +130,9 @@ class Ddir:
                     self.lock.wait()
                 if self.closing and not (self.queued_updates or self.queued_reads):
                     break
+                while not self.closing and self.first_queued and now_ms() < self.first_queued + self.batch_ms:
+                    self.lock.wait((self.first_queued + self.batch_ms - now_ms()) / 1000)
+                self.first_queued = None
                 updates, self.queued_updates = self.queued_updates, []
                 reads, self.queued_reads = self.queued_reads, []
             start = now_ms()
