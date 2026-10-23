@@ -61,6 +61,10 @@ Python 3.11+.
 Output: `results_log.csv` in the Java driver's format, and `results.json` with
 the audit, throughput, and per-type count, late count and latency percentiles.
 
+`--tick-log` (DDIR) writes what each tick held to `ticks.jsonl`, for `replay.py`
+and `costs.py`. `--batch-ms M` (DDIR) holds each tick until its oldest operation
+has waited M ms, so ticks are fuller; it needs enough `--threads` to fill them.
+
 `--validate --operations N` runs the first N operations one at a time in a fixed
 order, ignoring the clock, and writes every read's answer to `answers.jsonl`.
 Two systems' files can be compared line by line; the first 3,000 operations
@@ -83,24 +87,60 @@ driver's thread pool does.
 Both receive the same deltas: the cascades are computed in the driver process
 for both, inside the timed update.
 
-## First results (SF1, Apple M4, 16 GB)
+## Results (SF1, Apple M4 with 4 performance and 6 efficiency cores, 16 GB)
 
-10,000 warmup and 60,000 measured operations, 16 read threads; DDIR with 4
-timely workers (8 did not help), DuckDB 2.0 with its default threads.
+**The time compression ratio (TCR)** is wall time per unit of simulated time.
+The update stream covers 33 simulated days; at TCR 0.006 the driver replays it
+167 times faster than it happened, asking for about 440 operations per second.
+Lower is harder. The score is the throughput at the lowest TCR that passes the
+audit. The spec's floor is 0.001 (about 2,600 operations per second at SF1).
+
+10,000 warmup and 60,000 measured operations; DDIR with 4 timely workers (more
+did not help), DuckDB 2.0 with its default 10 threads.
 
 | | lowest passing TCR | throughput | first failing TCR |
 | --- | ---: | ---: | ---: |
-| DDIR | 0.008 | 330 ops/s | 0.007 (about 10% of each complex read late) |
-| DuckDB | 0.006 | 434 ops/s | 0.005 |
+| DuckDB, 16 read threads | 0.006 | 434 ops/s | 0.005 |
+| DDIR, 16 read threads, plans before IC9 and IC14 were rewritten | 0.008 | 330 ops/s | 0.007 |
+| DDIR, 16 read threads | 0.007 | 377 ops/s | 0.006 |
+| DDIR, 64 read threads, `--batch-ms 50` | 0.006 | 441 ops/s | 0.005 |
 
-At its passing TCR, DDIR's median latency is lower than DuckDB's for 13 of the
-17 complex-read variants (IC14 100 ms against 1.3 s), but its p99 is 300–600 ms
-for every read type, because every operation in a tick waits for the slowest.
-The cost is in the complex reads, and retracting one costs as much as answering
-it (install / retract in an otherwise idle server, ms): IC9 120 / 112,
-IC14b 57 / 81, IC13a 17 / 19, IC1 12 / 10. A retraction runs in the next tick,
-so a tick holding only a short read can take hundreds of milliseconds. An empty
-tick costs 1 ms, and a short read adds well under one.
+At 0.005 DDIR's server is saturated: about 3.2 of the 4 workers' cores are busy.
+
+**Where DDIR's time goes.** `driver.py --tick-log` records each tick, and
+`replay.py` runs those ticks again back to back. For the first 8,000 ticks of a
+TCR 0.008 run (26,000 operations), with 4 workers and the earlier plans:
+
+- 71.1 s in all, matching the live run's server time.
+- Reads take 68.4 s, about half of it retracting the previous tick's reads.
+  Retractions already share a tick with the next reads; giving them ticks of
+  their own costs 83.8 s.
+- Updates take about 2 s: keeping the shared indexes and all 21 plans' standing
+  state current is cheap.
+- Every tick costs about 1 ms even when empty. Each tick advances every input
+  of every program, so all 1,122 operators of the graph program and the 21
+  plans are scheduled, about 0.6 µs each.
+- The rewritten IC9 and IC14 bring the slice to 61.4 s. Merging every 16 ticks
+  into one (`--merge 16`, what `--batch-ms` does live) brings it to 44.3 s.
+- By workers: 117.7 s with 1, 78.1 s with 2, 61.4 s with 4. CPU grows from 116
+  to 212 s. Work is spread evenly across workers (per tick, the busiest worker
+  does 1.09 times the mean), except in ranking steps keyed by request, which
+  is what the IC9 rewrite addresses.
+
+**Work per read, against DuckDB.** `costs.py` answers every read of that slice
+on its own, against the initial graph, on one core (earlier plans):
+
+| | reads | DDIR answer + retract | DuckDB |
+| --- | ---: | ---: | ---: |
+| IS1–IS7 | 19,677 | 6.4 s | 94.8 s |
+| IC1–IC12 | 1,775 | 75.4 s | 46.3 s |
+| IC13, IC14 (paths) | 446 | 54.8 s | 144.1 s |
+
+DDIR does far less work on short reads and paths; DuckDB's short reads are slow
+because it has no point-lookup indexes. On the other complex reads DDIR does
+1.6 times DuckDB's work, IC9 (6.5 times) and IC12 (2.3 times) most of all. DuckDB
+passes lower TCRs because it runs its 16 connections' queries at once on 10
+cores, while DDIR runs one tick at a time.
 
 ## Departures from the Java driver
 
