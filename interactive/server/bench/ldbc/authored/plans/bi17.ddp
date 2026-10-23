@@ -6,36 +6,25 @@
 -- person's tagged posts in a forum are reduced to their earliest.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, tag name, delta hours)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let tag     = import "ldbc.tag"    : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"   : ((int, int), ());
-let member  = import "ldbc.member" : ((int, int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = import "ldbc.message.root" : (int, int);              -- (message, root post of its thread)
+let tag_by_name = import "ldbc.tag.by_name" : (List(int), int);     -- (name, tag)
+let mtag_by_tag = import "ldbc.mtag.by_tag" : (int, int);           -- (tag, message)
+let member  = import "ldbc.member.by_forum" : (int, (int, int));    -- (forum, (person, joined))
 
--- Threads: every post roots its own thread; a comment joins its parent's thread.
--- Rows are (message, root, forum of the root post).
-let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-thread: {
-    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
-                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
-    var thread = roots + below | distinct;
-}
-let forum_of = thread::thread | map(((mid, _, forum), ()) -> (mid, forum));
-
--- The request's tagged messages: (rid, message, author, created, parent, forum).
--- Tag names are unique and (message, tag) pairs are a set, so each message appears once.
-let details = message | map(((id, _, created, author, _, _, _, _, _, _, parent, _, _, _), ()) -> (id, (author, created, parent)));
+-- The request's tagged messages: (rid, message, author, created, parent, forum), where a
+-- message's forum is its thread's (the root post's). Tag names are unique and
+-- (message, tag) pairs are a set, so each message appears once.
 let tagged  = request | map(((rid, name, _), ()) -> (name, rid))
-                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid))
-                      | join(details, (m, rid, (author, created, parent)) -> (m, (rid, author, created, parent)))
-                      | join(forum_of, (m, (rid, author, created, parent), f) -> ((rid, m, author, created, parent, f), ()));
+                      | join(tag_by_name, (_, rid, t) -> (t, rid))
+                      | join(mtag_by_tag, (_, rid, m) -> (m, rid))
+                      | join(message, (m, rid, (_, created, author, _, _, _, _, _, _, parent, _, _, _)) -> (m, (rid, author, created, parent)))
+                      | join(root, (m, row, top) -> (top, (m, row)))
+                      | join(message, (_, (m, (rid, author, created, parent)), (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> ((rid, m, author, created, parent, f), ()));
 
 -- Memberships, but only of forums holding one of the request's tagged messages.
 let forums  = tagged | map(((rid, _, _, _, _, f), ()) -> ((f, rid), ())) | distinct | map(((f, rid), ()) -> (f, rid));
-let members = forums | join(member | map(((f, who, _), ()) -> (f, who)), (f, rid, who) -> ((rid, f, who), ()));
+let members = forums | join(member, (f, rid, (who, _)) -> ((rid, f, who), ()));
 
 -- Discussions: a tagged message2 with a tagged reply by someone else. For each, the
 -- candidate forum1s: forums (other than forum2) where both authors are members.

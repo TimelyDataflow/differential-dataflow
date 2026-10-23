@@ -17,13 +17,46 @@ An authored plan is a drop-in replacement for the generated one:
   query's `@query(...)` declaration in `snb/queries.py`, prefixed by `rid`. For
   example IC3 is `(rid, person, country X, country Y, start, days)`. Byte strings
   are `List(int)`.
-- **Graph.** The 17 projected relations are imported by name, `import "ldbc.person"`
-  and so on, with the shapes in `snb/data.py` (`SCHEMA`), from the suite's shared
-  graph program.
+- **Graph.** Plans import the arrangements the suite's shared graph program publishes
+  (`snb/indexes.py`), and join against them directly:
+  - **primary keys**, `ldbc.person`, `ldbc.message`, `ldbc.forum`, `ldbc.tag`,
+    `ldbc.tagclass`, `ldbc.place`, `ldbc.org`: `(id, (the other fields))`, in
+    `snb/data.py`'s field order;
+  - **secondary indexes** from a foreign key to the id, such as
+    `ldbc.message.by_creator : (int, int)` (author, message) or `ldbc.person.by_city`;
+  - **relations without an id**, by the endpoint looked up from, such as
+    `ldbc.likes.by_message : (int, (int, int))` (message, (person, when));
+  - **derived**: `ldbc.friend` (person, (friend, since)), friendships in both
+    directions between people who exist; `ldbc.friend.pair` ((person, friend), ());
+    `ldbc.message.root` (message, root post) and `ldbc.message.by_root`.
+
+  Every query's server shares these, so a plan pays only for what it builds itself.
+  A `map` or `filter` on an import makes a private copy; the plans do that only for
+  parts kept for all requests, and each header says which.
 - **Answer.** `export "<query>.answer"` is arranged as `((rid, rank), (fields…))`,
   where rank is the 0-based position in the query's order and the fields are the
   query's outputs, in the order `finish(...)` lists them. One-field outputs are
   written `(n)`: parentheses make a one-field tuple.
+
+## Shared indexes, measured
+
+All 41 plans installed in one server (SF1, 4 workers, the 521 update epochs of the BI
+stream, each plan's `suite-0` binding standing; identical answers at every capture),
+with the graph program publishing whole rows (as in #1003) and with the indexes above:
+
+| | Whole rows | Indexes |
+| --- | ---: | ---: |
+| Mean cost per update epoch | 144 ms | 56 ms |
+| Settle after loading | 16.7 s | 4.1 s |
+| Updates held in arrangements (the server's `sizes`) | 506 M | 179 M |
+| Physical footprint late in the stream (`vmmap`) | 24.8 GB | 9.6 GB |
+
+The gain is in sharing: each plan used to keep its own copies of the large relations
+(a few hundred arrangements of about 3.6 M updates each). With one query per server the
+indexed graph program costs more on its own: 2.9 ms against 0.9 ms per epoch, and
+3.7 GB against 2.1 GB, most of the difference being the thread-root loop and the
+secondary indexes. On macOS, resident set size understates memory under pressure: the
+whole-row run's RSS read 4.3 GB while 21.4 GB of its 24.8 GB footprint was swapped out.
 
 ## Checking and timing them
 
@@ -51,21 +84,22 @@ the update stream, pass it to `update_stream.py --plan`.
 
 "Same as the generated plan" means the same joins in the same order, the same
 filters at the same points, and the same parts kept for all requests; only the
-spelling differs (below). The others follow a rewritten strategy, measured
+spelling differs (below), and the authored plan looks rows up in the published
+arrangements where the generated plan rebuilds whole rows from them. The others follow a rewritten strategy, measured
 against the generated plan in [../baselines/METHOD.md](../baselines/METHOD.md).
 
 | Query | What it asks | Strategy |
 | --- | --- | --- |
 | [IS1](plans/is01.ddp) | Profile of a person: name, birthday, IP, browser, city, gender and creation date | Same as the generated plan |
-| [IS2](plans/is02.ddp) | A person's 10 most recent messages, each with the original post of its thread and that post's author | Rank on narrow rows, then fetch text and names |
+| [IS2](plans/is02.ddp) | A person's 10 most recent messages, each with the original post of its thread and that post's author | Rank on narrow rows, then fetch text and names; the root post's author only for the 10 winners |
 | [IS3](plans/is03.ddp) | A person's friends, with the date each friendship was made, newest first | Same as the generated plan |
 | [IS4](plans/is04.ddp) | A message's creation date and content (or image file) | Same as the generated plan |
 | [IS5](plans/is05.ddp) | The author of a message | Same as the generated plan |
 | [IS6](plans/is06.ddp) | The forum that contains a message's thread, and its moderator | Same as the generated plan |
 | [IS7](plans/is07.ddp) | Replies to a message, flagging whether each replier knows the original author | Same as the generated plan. The 'knows' flag is computed as known replies plus the rest, rather than a left join with a default |
-| [IC1](plans/ic01.ddp) | People named X within three friendship hops, with their emails, languages, city, universities and companies; 20 closest, then by last name | Same as the generated plan. Missing email, language, study and work lists are attached as empty lists by subtraction rather than a left join |
+| [IC1](plans/ic01.ddp) | People named X within three friendship hops, with their emails, languages, city, universities and companies; 20 closest, then by last name | Same as the generated plan, except that emails, languages, study and work are looked up for the people found rather than kept for everyone. Missing lists are attached as empty lists by subtraction rather than a left join |
 | [IC2](plans/ic02.ddp) | The 20 most recent messages written by a person's friends before a date | Each person's 20 newest messages kept for all requests, with a fallback for friends who posted after the cut-off |
-| [IC3](plans/ic03.ddp) | Friends and friends-of-friends living outside countries X and Y who posted from both X and Y in a time window; top 20 by message count | The two countries' messages in the window first, joined on country id, then the circle |
+| [IC3](plans/ic03.ddp) | Friends and friends-of-friends living outside countries X and Y who posted from both X and Y in a time window; top 20 by message count | The two countries found by name through `place.by_name`, their messages in the window joined on country id, then the circle |
 | [IC4](plans/ic04.ddp) | Tags that first appear on friends' posts inside a window (never before it); top 10 by post count | Same as the generated plan |
 | [IC5](plans/ic05.ddp) | Forums that friends and friends-of-friends joined after a date, ranked by how many posts those people made there | Per-(person, forum) post counts kept for all requests, and at most 40 zero-count forums per person |
 | [IC6](plans/ic06.ddp) | Tags that co-occur with a given tag on posts by friends and friends-of-friends; top 10 | The tag's posts first, then those by the circle |
@@ -78,8 +112,8 @@ against the generated plan in [../baselines/METHOD.md](../baselines/METHOD.md).
 | [IC13](plans/ic13.ddp) | Length of the shortest friendship path between two people (-1 if none) | Bidirectional search |
 | [IC14](plans/ic14.ddp) | The cheapest interaction-weighted path between two people (v2 definition), with ties broken by the lexicographically smallest path | Same as the generated plan |
 | [BI1](plans/bi01.ddp) | Posting summary: messages before a date grouped by year, post/comment and length category, with counts, average length and share | Per-day totals for all requests, plus the cut-off day's own messages |
-| [BI2](plans/bi02.ddp) | Tags in a tag class whose usage changed most between two consecutive 100-day windows | Tagged messages keyed by (class, day) for all requests |
-| [BI3](plans/bi03.ddp) | Forums moderated by people in a country, ranked by messages tagged with a given tag class | Same as the generated plan |
+| [BI2](plans/bi02.ddp) | Tags in a tag class whose usage changed most between two consecutive 100-day windows | Tagged messages keyed by (class, day) for all requests; the window's days come from that table |
+| [BI3](plans/bi03.ddp) | Forums moderated by people in a country, ranked by messages tagged with a given tag class | Starts from the country: its cities, residents and the forums they moderate; the class's tagged messages reach forums through their thread root |
 | [BI4](plans/bi04.ddp) | Top 100 forums (by largest single-country membership) created after a date; their members ranked by messages posted in those forums | Popularity kept per forum, a request filters by date and ranks |
 | [BI5](plans/bi05.ddp) | Most active posters on a tag, scored by messages, replies and likes | Same as the generated plan. Messages, replies and likes are counted in one count keyed by kind, then pivoted, instead of three counts and two left joins |
 | [BI6](plans/bi06.ddp) | Most authoritative users on a tag: authors scored by the popularity of the people who liked their tagged messages | Same as the generated plan. Scores are one sum over the pairs plus a zero per author, instead of a left join |
@@ -91,12 +125,12 @@ against the generated plan in [../baselines/METHOD.md](../baselines/METHOD.md).
 | [BI12](plans/bi12.ddp) | Distribution of people by how many short messages they wrote after a date in given languages | Messages keyed by their thread's language for all requests |
 | [BI13](plans/bi13.ddp) | Zombies in a country: people posting less than once a month, and how many of their likes come from other zombies | Same as the generated plan. Like tallies are one sum, instead of counts joined back with defaults |
 | [BI14](plans/bi14.ddp) | International dialog: the best-scoring friend pair per city between two countries, scored by replies and likes | Same as the generated plan. Pair scores are one sum over five contribution streams |
-| [BI15](plans/bi15.ddp) | Cheapest path between two people where friendship weights shrink with interactions in forums created inside a window | Bidirectional search with costs computed on demand |
+| [BI15](plans/bi15.ddp) | Cheapest path between two people where friendship weights shrink with interactions in forums created inside a window | Bidirectional search with costs computed on demand; pairs need no friendship check, since the search only steps along friendships |
 | [BI16](plans/bi16.ddp) | People active on tag A on day A and tag B on day B who know at most 'maxknows' others in each group | Same as the generated plan |
 | [BI17](plans/bi17.ddp) | Information propagation: people who posted a tag in forum1 before a discussion of it in forum2 among forum1's members | Memberships restricted to tagged forums, and each person's earliest tagged message per forum |
-| [BI18](plans/bi18.ddp) | Friend recommendation: pairs of people interested in a tag with the most mutual friends, who are not already friends | Both hops restricted to interested people, meeting in the middle |
+| [BI18](plans/bi18.ddp) | Friend recommendation: pairs of people interested in a tag with the most mutual friends, who are not already friends | Both hops restricted to interested people, meeting in the middle; 'already friends' is checked against the fans' own friendships |
 | [BI19](plans/bi19.ddp) | Cheapest interaction-weighted paths between anyone in city 1 and anyone in city 2 | Same as the generated plan |
-| [BI20](plans/bi20.ddp) | Recruitment: the closest employees of a company to a person, over a graph of classmates weighted by graduation-year gaps | Same as the generated plan |
+| [BI20](plans/bi20.ddp) | Recruitment: the closest employees of a company to a person, over a graph of classmates weighted by graduation-year gaps | Classmate friendships found from each friendship and both people's schools, rather than all pairs at a school filtered to friends |
 
 Two conventions apply throughout:
 
@@ -124,8 +158,8 @@ Two conventions apply throughout:
 - **Destructuring.** Lambdas name what they take apart:
   `map(((id, _, created, author, …), ()) -> (author, (id, created)))`.
 - **Loops.** A `var` inside a scope is a fixpoint, and its rows are unit-valued:
-  `((mid, root, forum), ())`. Threads (each message's root post), the tag-class
-  hierarchy and the shortest-path searches are all loops.
+  `((rid, node, cost), ())`. The tag-class hierarchy and the shortest-path searches
+  are loops; threads (each message's root post) are a loop in the graph program.
 - **`distinct` takes unit values.** Re-key to `((fields), ())` first. Many
   `distinct`s are unnecessary: a message has one thread language, tag names are
   unique, and (message, tag) pairs are a set. Each plan says why where it omits one.
@@ -150,6 +184,6 @@ Two conventions apply throughout:
   only while `2 · cost < best`. BI15 computes each friendship's cost only when the
   search reaches it.
 
-Recurring fragments (the friendship relation, threads, where people live, the
-interaction weights) are repeated in each file, so that every plan is complete
-on its own.
+Recurring fragments (where people live, the interaction weights) are repeated in
+each file, so that every plan is complete on its own; friendships and threads are
+imported.

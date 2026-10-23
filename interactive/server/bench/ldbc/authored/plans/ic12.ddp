@@ -1,47 +1,44 @@
 -- IC12. Expert search: friends who replied to posts tagged with a tag of the given class
 -- or any of its subclasses; count of such replies and the tags involved; top 20.
+-- Kept for all requests: the class hierarchy (a loop over `ldbc.tagclass`), and every
+-- reply keyed by its author (a private copy of `message`).
 
 let request  = input 0 : ((int, int, List(int)), ());         -- (rid, person, class name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
-let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+let person   = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = import "ldbc.friend" : (int, (int, int));              -- (person, (friend, since))
+let tag      = import "ldbc.tag" : (int, (List(int), int));
+let by_class = import "ldbc.tag.by_class" : (int, int);               -- (class, tag)
+let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+let classes  = import "ldbc.tagclass.by_name" : (List(int), int);     -- (name, class)
+let mtag     = import "ldbc.mtag.by_tag" : (int, int);                -- (tag, message)
 
 -- Class ancestry: every class is below itself, and below its parent's ancestors.
-let selves = tagclass | map(((id, _, _), ()) -> ((id, id), ()));
-let up     = tagclass | filter(((_, _, parent), ()) -> (parent, 0) ge) | map(((id, _, parent), ()) -> (id, parent));
+let selves = tagclass | map((id, _) -> ((id, id), ()));
 below: {
-    let step  = below | map(((low, high), ()) -> (high, low)) | join(up, (_, low, higher) -> ((low, higher), ()));
+    let step  = below | map(((low, high), ()) -> (high, low))
+                      | join(tagclass, (_, low, (_, parent)) -> (low, parent))
+                      | filter((_, parent) -> (parent, 0) ge)
+                      | map((low, higher) -> ((low, higher), ()));
     var below = selves + step | distinct;
 }
 
 -- Tagged posts in the requested class: ((rid, post), tag name).
-let classes = tagclass | map(((id, name, _), ()) -> (name, id));
-let posts   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ()));
 let intag   = request | map(((rid, _, name), ()) -> (name, rid))
                       | join(classes, (_, rid, high) -> (high, rid))
                       | join(below::below | map(((low, high), ()) -> (high, low)), (_, rid, low) -> (low, rid))
-                      | join(tag | map(((id, name, cls), ()) -> (cls, (id, name))), (_, rid, (t, name)) -> (t, (rid, name)))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, (rid, name), m) -> (m, (rid, name)))
-                      | join(posts, (m, (rid, name), ()) -> ((rid, m, name), ()));   -- each tag reached once; names unique
+                      | join(by_class, (_, rid, t) -> (t, rid))
+                      | join(tag, (t, rid, (name, _)) -> (t, (rid, name)))
+                      | join(mtag, (_, (rid, name), m) -> (m, (rid, name)))
+                      | join(message, (m, (rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, name), kind))
+                      | filter((_, kind) -> (kind, 0) eq)
+                      | map((key, _) -> (key, ()));   -- each tag reached once; names unique
 
 -- Friends' replies to those posts.
-let reply   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (who, (id, parent)));
+let reply   = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
+                      | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
 let hits    = request | map(((rid, who, _), ()) -> (who, rid))
-                      | join(exists, (who, rid, ()) -> (who, rid))
-                      | join(friend, (_, rid, f) -> (f, rid))
+                      | join(friend, (_, rid, (f, _)) -> (f, rid))
                       | join(reply, (f, rid, (id, parent)) -> ((rid, parent), (f, id)))
                       | join(intag | map(((rid, m, name), ()) -> ((rid, m), name)), ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
 
@@ -53,7 +50,7 @@ let tagset  = hits | map(((rid, f), (_, name)) -> ((rid, f, name), ())) | distin
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | join(tagset, ((rid, f), n, list) -> (f, (rid, n, list)))
-                     | join(names, (f, (rid, n, list), (first, last)) -> (rid, ((n neg, f), (first, last, list))))
+                     | join(person, (f, (rid, n, list), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((n neg, f), (first, last, list))))
                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((neg, f), (first, last, list)))) -> ((rid, rank), (f, first, last, list, neg neg)));
 

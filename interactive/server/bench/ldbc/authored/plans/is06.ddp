@@ -1,28 +1,17 @@
 -- IS6. The forum holding a message's thread, and the forum's moderator.
+-- A thread's forum is its root post's: message -> root post -> forum -> moderator.
 
 let request = input 0 : ((int, int), ());                    -- (rid, message)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let forum   = import "ldbc.forum"   : ((int, List(int), int, int), ());
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let forum   = import "ldbc.forum"   : (int, (List(int), int, int));
+let root_of = import "ldbc.message.root" : (int, int);
 
--- Threads: every post roots its own thread; a comment joins its parent's thread.
--- Rows are (message, root post, forum of the root post).
-let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-thread: {
-    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
-                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
-    var thread = roots + below | distinct;
-}
-
-let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
-let forum_of  = thread::thread | map(((mid, _, f), ()) -> (mid, f));
-let moderated = forum | map(((id, title, _, moderator), ()) -> (id, (title, moderator)));
-let answer    = request | map(((rid, m), ()) -> (m, rid))
-                        | join(forum_of, (_, rid, f) -> (f, rid))
-                        | join(moderated, (f, rid, (title, moderator)) -> (moderator, (rid, f, title)))
-                        | join(names, (moderator, (rid, f, title), (first, last)) -> ((rid, 0), (f, title, moderator, first, last)));
+let answer  = request | map(((rid, m), ()) -> (m, rid))
+                      | join(root_of, (_, rid, root) -> (root, rid))
+                      | join(message, (_, rid, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, rid))
+                      | join(forum, (f, rid, (title, _, moderator)) -> (moderator, (rid, f, title)))
+                      | join(person, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) ->
+                             ((rid, 0), (f, title, moderator, first, last)));
 
 export "is6.answer" = answer | arrange;

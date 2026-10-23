@@ -4,42 +4,22 @@
 -- computed when the search reaches it.
 
 let request = input 0 : ((int, int, int, int, int), ());     -- (rid, from, to, start, end)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows" : ((int, int, int), ());
-let forum   = import "ldbc.forum" : ((int, List(int), int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = import "ldbc.message.root" : (int, int);              -- (message, root post of its thread)
+let forum   = import "ldbc.forum" : (int, (List(int), int, int));
+let friend  = import "ldbc.friend" : (int, (int, int));             -- (person, (friend, since))
 
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
-
--- Threads: every post roots its own thread; a comment joins its parent's thread.
--- Rows are (message, root, forum of the root post).
-let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-thread: {
-    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
-                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
-    var thread = roots + below | distinct;
-}
-let forum_of = thread::thread | map(((mid, _, forum), ()) -> (mid, forum));
-
--- Every reply between two friends, scored and dated by its thread's forum:
--- ((a, b), (forum created, score)), in both directions.
-let author  = message | map(((id, kind, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, (who, kind)));
-let reply   = replies | join(author, (_, child, (to, kind)) -> (child, (to, ((kind, 0) eq, 2, 1) select)))
-                      | join(author, (child, (to, score), (from, _)) -> (child, (from, to, score)))
+-- Every reply between two people, scored (2 to a post, 1 to a comment) and dated by its
+-- thread's forum (the root post's): ((a, b), (forum created, score)), in both directions.
+-- Only friendships the search crosses are looked up here, so no friendship filter.
+let replies = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
+                      | map((child, (_, _, from, _, _, _, _, _, _, parent, _, _, _)) -> (parent, (child, from)));
+let reply   = replies | join(message, (_, (child, from), (kind, _, to, _, _, _, _, _, _, _, _, _, _)) -> (child, (from, to, ((kind, 0) eq, 2, 1) select)))
                       | filter((_, (from, to, _)) -> (from, to) ne);
-let created = forum | map(((id, _, when, _), ()) -> (id, when));
-let dated   = reply | join(forum_of, (_, (from, to, score), f) -> (f, (from, to, score)))
-                    | join(created, (_, (from, to, score), when) -> ((from, to), (when, score)));
-let scored  = (dated + (dated | map(((from, to), v) -> ((to, from), v))))
-            | join(friend | map((a, b) -> ((a, b), ())), (pair, v, ()) -> (pair, v));
+let dated   = reply | join(root, (_, row, top) -> (top, row))
+                    | join(message, (_, row, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, row))
+                    | join(forum, (_, (from, to, score), (_, when, _)) -> ((from, to), (when, score)));
+let scored  = dated + (dated | map(((from, to), v) -> ((to, from), v)));
 
 let window  = request | map(((rid, _, _, start, end), ()) -> (rid, (start, end)));
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
@@ -60,7 +40,7 @@ search: {
                         | filter((_, (_, _, c, b)) -> ((c, c) add, b) lt)
                         | map((rid, (side, node, c, _)) -> (rid, (side, node, c)));
     let steps  = (open + near) | map((rid, (side, node, c)) -> (node, (rid, side, c)))
-                               | join(friend, (node, (rid, side, c), next) -> ((rid, node, next), (side, c)));
+                               | join(friend, (node, (rid, side, c), (next, _)) -> ((rid, node, next), (side, c)));
 
     -- Cost only the friendships being crossed: sum scores inside the request's window.
     let wanted = steps | map((key, _) -> (key, ())) | distinct;

@@ -3,15 +3,7 @@
 -- distance reaches the best meeting found so far.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, from, to)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let knows   = import "ldbc.knows"  : ((int, int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let friend  = import "ldbc.friend" : (int, (int, int));              -- (person, (friend, since))
 
 -- Searches are rows (rid, side, node, hops): side 0 grows from `from`, side 1 from `to`.
 let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ())))
@@ -31,7 +23,7 @@ search: {
                         | filter((_, (_, _, d, b)) -> ((d, d) add, b) lt)
                         | map((rid, (side, node, d, _)) -> (rid, (side, node, d)));
     let grow   = (open + near) | map((rid, (side, node, d)) -> (node, (rid, side, d)))
-                               | join(friend, (_, (rid, side, d), next) -> ((rid, side, next, (d, 1) add), ()));
+                               | join(friend, (_, (rid, side, d), (next, _)) -> ((rid, side, next, (d, 1) add), ()));
 
     var search = (starts + search + grow) | map(((rid, side, node, d), ()) -> ((rid, side, node), d)) | min
                                           | map(((rid, side, node), d) -> ((rid, side, node, d), ()));

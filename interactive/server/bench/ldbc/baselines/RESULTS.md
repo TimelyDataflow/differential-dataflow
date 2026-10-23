@@ -4,6 +4,11 @@ These are the numbers from one run of the method in [METHOD.md](METHOD.md). They
 for comparison on this machine only: the SQL engines, DDIR and the hardware all
 matter, and other systems measured elsewhere will not be directly comparable.
 
+**Plans measured.** The DDIR columns predate the shared indexes in
+`../snb/indexes.py`: the authored plans were measured importing whole-row arrangements.
+The indexed graph program and the plans that use it are measured in
+[../authored/README.md](../authored/README.md#shared-indexes-measured).
+
 **Machine.** Apple M4 (4 performance and 6 efficiency cores), 16 GB, macOS 15.
 DuckDB 2.0.0 (in process); Umbra 26.10 (`umbradb/umbra`, arm64, in an OrbStack Linux
 VM, CPU set pinned); DDIR `ddir_server` release builds. LDBC SNB BI SF1

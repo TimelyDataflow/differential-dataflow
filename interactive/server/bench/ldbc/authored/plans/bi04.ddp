@@ -1,60 +1,50 @@
 -- BI4. The 100 most popular forums created after a date, where a forum's popularity
 -- is its largest membership from any one country; rank their members by how many
 -- messages they posted in those forums. Popularity is kept per forum for all
--- requests; a request only filters by creation date and ranks.
+-- requests (every membership, through each member's city); a request only filters by
+-- creation date and ranks, then looks up the winners' members, posts and threads.
 
-let request = input 0 : ((int, int), ());                    -- (rid, date)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let forum   = import "ldbc.forum"  : ((int, List(int), int, int), ());
-let member  = import "ldbc.member" : ((int, int, int), ());
-let place   = import "ldbc.place"  : ((int, List(int), List(int), int), ());
-
--- Threads: every post roots its own thread; a comment joins its parent's thread.
--- Rows are (message, root, forum of the root post).
-let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-thread: {
-    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
-                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
-    var thread = roots + below | distinct;
-}
-let forum_of = thread::thread | map(((mid, _, forum), ()) -> (mid, forum));
+let request   = input 0 : ((int, int), ());                  -- (rid, date)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+    -- (id, (first, last, gender, birthday, created, ip, browser, city, birth month, birth day, creation month))
+let forum     = import "ldbc.forum"            : (int, (List(int), int, int));    -- (id, (title, created, moderator))
+let place     = import "ldbc.place"            : (int, (List(int), List(int), int));  -- (id, (name, type, parent))
+let residents = import "ldbc.person.by_city"   : (int, int);                      -- (city, person)
+let members   = import "ldbc.member.by_forum"  : (int, (int, int));               -- (forum, (person, joined))
+let joins     = import "ldbc.member.by_person" : (int, (int, int));               -- (person, (forum, joined))
+let posts_in  = import "ldbc.message.by_forum" : (int, int);                      -- (forum, post)
+let thread    = import "ldbc.message.by_root"  : (int, int);                      -- (root, message)
 
 -- Each person's country, and each forum's popularity (negated, so min is max).
-let parent     = place  | map(((id, _, _, up), ()) -> (id, up));
-let country_of = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
-                        | join(parent, (_, who, country) -> (who, country));
-let members    = member | map(((f, who, _), ()) -> (who, f));
-let popularity = members | join(country_of, (_, f, country) -> ((f, country), ())) | count
-                         | map(((f, _), n) -> (f, n neg)) | min;
+let country_of = place | join(residents, (_, (_, _, country), who) -> (who, country));
+let popularity = country_of | join(joins, (_, country, (f, _)) -> ((f, country), ())) | count
+                            | map(((f, _), n) -> (f, n neg)) | min;
 
 -- The request's top 100 forums created after its date.
-let created = forum  | map(((id, _, when, _), ()) -> (id, when));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let top     = request | map(((rid, date), ()) -> ((), (rid, date)))
-                      | join(popularity | join(created, (f, neg, when) -> ((), (f, neg, when))),
+                      | join(popularity | join(forum, (f, neg, (_, when, _)) -> ((), (f, neg, when))),
                              (_, (rid, date), (f, neg, when)) -> (rid, ((neg, f), (date, when))))
                       | filter((_, (_, (date, when))) -> (when, date) gt)
                       | map((rid, (order, _)) -> (rid, order))
                       | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1)
                       | map((rid, (_, (_, f))) -> (f, rid));
 
--- Their members, and how many messages each person posted in them.
-let joined  = top | join(member | map(((f, who, _), ()) -> (f, who)), (_, rid, who) -> ((rid, who), ())) | distinct;
-let authors = message | map(((id, _, _, author, _, _, _, _, _, _, _, _, _, _), ()) -> (id, author));
-let posted  = top | join(forum_of | map((mid, f) -> (f, mid)), (_, rid, mid) -> (mid, rid))
-                  | join(authors, (_, rid, author) -> ((rid, author), 1));
+-- Their members, and how many messages each person posted in them (every message in
+-- a thread rooted at one of the forum's posts).
+let joined  = top | join(members, (_, rid, (who, _)) -> ((rid, who), ())) | distinct;
+let posted  = top | join(posts_in, (_, rid, post) -> (post, rid))
+                  | join(thread, (_, rid, mid) -> (mid, rid))
+                  | join(message, (_, rid, (_, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), 1));
 let wrote   = posted | join(joined, (key, _, ()) -> (key, ())) | count;
 let counts  = wrote + ((joined - (joined | join(wrote, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 
 -- Rank members by messages (most first), then id.
-let profile = person | map(((id, first, last, _, _, created, _, _, _, _, _, _), ()) -> (id, (first, last, created)));
 let ranked  = counts | map(((rid, who), n) -> (who, (rid, n)))
-                     | join(profile, (who, (rid, n), (first, last, created)) -> (rid, ((n neg, who), (first, last, created, n))))
+                     | join(person, (who, (rid, n), (first, last, _, _, created, _, _, _, _, _, _)) -> (rid, ((n neg, who), (first, last, created, n))))
                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, who), (first, last, created, n)))) -> ((rid, rank), (who, first, last, created, n)));
 

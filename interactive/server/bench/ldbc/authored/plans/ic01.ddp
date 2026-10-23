@@ -1,65 +1,60 @@
 -- IC1. People named X within three friendship hops: their distance, profile, emails,
 -- languages, city, universities and companies; top 20 by distance, last name, id.
+-- Everything after the friendship hops is a lookup for the people found: profile and
+-- city by primary key, emails, languages, study and work by their person indexes.
 
-let request = input 0 : ((int, int, List(int)), ());           -- (rid, person, first name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
-let org     = import "ldbc.org"     : ((int, List(int), List(int), int), ());
-let study   = import "ldbc.study"   : ((int, int, int), ());
-let work    = import "ldbc.work"    : ((int, int, int), ());
-let email   = import "ldbc.email"   : ((int, List(int)), ());
-let language = import "ldbc.language" : ((int, List(int)), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let request  = input 0 : ((int, int, List(int)), ());           -- (rid, person, first name)
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend  = import "ldbc.friend"  : (int, (int, int));      -- (person, (friend, since))
+let place   = import "ldbc.place"   : (int, (List(int), List(int), int));
+let org      = import "ldbc.org"      : (int, (List(int), List(int), int));
+let study    = import "ldbc.study.by_person" : (int, (int, int));   -- (person, (org, year))
+let work     = import "ldbc.work.by_person"  : (int, (int, int));
+let email    = import "ldbc.email.by_person"    : (int, List(int));
+let language = import "ldbc.language.by_person" : (int, List(int));
 
 -- The circle with distances: least hops (1 to 3) to each person, not the person.
 let hop1   = request | map(((rid, who, name), ()) -> (who, (rid, who, name)))
-                     | join(exists, (who, req, ()) -> (who, req))
-                     | join(friend, (_, req, f) -> (f, (req, 1)));
-let hop2   = hop1 | join(friend, (_, (req, _), g) -> (g, (req, 2)));
-let hop3   = hop2 | join(friend, (_, (req, _), h) -> (h, (req, 3)));
+                     | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
+let hop2   = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
+let hop3   = hop2 | join(friend, (_, (req, _), (h, _)) -> (h, (req, 3)));
 let circle = (hop1 + hop2 + hop3) | filter((node, ((_, who, _), _)) -> (node, who) ne)
                                   | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | min;
 
--- Those with the first name, with their city.
-let city   = place | map(((id, name, _, _), ()) -> (id, name));
-let named  = person | map(((id, first, last, gender, birthday, created, ip, browser, home, _, _, _), ()) ->
-                          (home, (id, first, last, gender, birthday, created, ip, browser)))
-                    | join(city, (_, (id, first, last, gender, birthday, created, ip, browser), town) ->
-                          ((id, first), (last, gender, birthday, created, ip, browser, town)));
-let found  = circle | map(((rid, node, name), d) -> ((node, name), (rid, d)))
-                    | join(named, ((node, _), (rid, d), profile) -> (node, (rid, d, profile)));
+-- Those with the first name, with their city's name: ((rid, node), (d, profile)).
+let found  = circle | map(((rid, node, name), d) -> (node, (rid, name, d)))
+                    | join(person, (node, (rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _)) ->
+                           ((first, name) eq, (home, (rid, node, d, last, gender, birthday, created, ip, browser))))
+                    | filter((named, _) -> named)
+                    | map((_, row) -> row)
+                    | join(place, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) ->
+                           ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
 
--- Per person: sorted emails, languages, and (organisation, year, place) for study and work.
-let emails = email    | map(((who, value), ()) -> (who, value)) | collect;
-let langs  = language | map(((who, value), ()) -> (who, value)) | collect;
-let orgs   = org | map(((id, name, _, at), ()) -> (at, (id, name)))
-                 | join(city, (_, (id, name), where) -> (id, (name, where)));
-let school = study | map(((who, at, year), ()) -> (at, (who, year)))
-                   | join(orgs, (_, (who, year), (name, where)) -> (who, (name, year, where))) | collect;
-let jobs   = work  | map(((who, at, year), ()) -> (at, (who, year)))
-                   | join(orgs, (_, (who, year), (name, where)) -> (who, (name, year, where))) | collect;
+-- For the people found: sorted emails, languages, and (organisation, year, place) for
+-- study and work.
+let who    = found | map(((rid, node), _) -> (node, rid));
+let emails = who | join(email,    (node, rid, value) -> ((rid, node), value)) | collect;
+let langs  = who | join(language, (node, rid, value) -> ((rid, node), value)) | collect;
+let school = who | join(study, (node, rid, (at, year)) -> (at, (rid, node, year)))
+                 | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year)))
+                 | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
+let jobs   = who | join(work, (node, rid, (at, year)) -> (at, (rid, node, year)))
+                 | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year)))
+                 | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
 
 -- Attach a list, or an empty one for people without entries.
-let keyed  = found | map((node, (rid, d, profile)) -> (node, (rid, d, profile)));
-let with1  = (keyed | join(emails, (node, row, list) -> (node, (row, list))))
-           + ((keyed - (keyed | join(emails, (node, row, _) -> (node, row)))) | map((node, row) -> (node, (row, [] : List(List(int))))));
-let with2  = (with1 | join(langs, (node, (row, e), list) -> (node, (row, e, list))))
-           + ((with1 - (with1 | join(langs, (node, row, _) -> (node, row)))) | map((node, (row, e)) -> (node, (row, e, [] : List(List(int))))));
-let with3  = (with2 | join(school, (node, (row, e, l), list) -> (node, (row, e, l, list))))
-           + ((with2 - (with2 | join(school, (node, row, _) -> (node, row)))) | map((node, (row, e, l)) -> (node, (row, e, l, [] : List((List(int), int, List(int)))))));
-let with4  = (with3 | join(jobs, (node, (row, e, l, s), list) -> (node, (row, e, l, s, list))))
-           + ((with3 - (with3 | join(jobs, (node, row, _) -> (node, row)))) | map((node, (row, e, l, s)) -> (node, (row, e, l, s, [] : List((List(int), int, List(int)))))));
+let with1  = (found | join(emails, (key, row, list) -> (key, (row, list))))
+           + ((found - (found | join(emails, (key, row, _) -> (key, row)))) | map((key, row) -> (key, (row, [] : List(List(int))))));
+let with2  = (with1 | join(langs, (key, (row, e), list) -> (key, (row, e, list))))
+           + ((with1 - (with1 | join(langs, (key, row, _) -> (key, row)))) | map((key, (row, e)) -> (key, (row, e, [] : List(List(int))))));
+let with3  = (with2 | join(school, (key, (row, e, l), list) -> (key, (row, e, l, list))))
+           + ((with2 - (with2 | join(school, (key, row, _) -> (key, row)))) | map((key, (row, e, l)) -> (key, (row, e, l, [] : List((List(int), int, List(int)))))));
+let with4  = (with3 | join(jobs, (key, (row, e, l, s), list) -> (key, (row, e, l, s, list))))
+           + ((with3 - (with3 | join(jobs, (key, row, _) -> (key, row)))) | map((key, (row, e, l, s)) -> (key, (row, e, l, s, [] : List((List(int), int, List(int)))))));
 
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
-let ranked = with4 | map((node, ((rid, d, (last, gender, birthday, created, ip, browser, town)), e, l, s, w)) ->
+let ranked = with4 | map(((rid, node), ((d, (last, gender, birthday, created, ip, browser, town)), e, l, s, w)) ->
                          (rid, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w))))
                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w)))) ->

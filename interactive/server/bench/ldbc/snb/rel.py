@@ -303,11 +303,11 @@ class Compiler:
             return f'({source} | map((row, ()) -> ({key}, {"row" if keep else "()"})))'
         if op == 'source':
             self.inputs.append((args[0],args[1]))
-            if self.imports:
-                code = 'input 0' if args[0] == 'request' else f'import "ldbc.{args[0]}"'
+            if self.imports and args[0] != 'request':
+                from .indexes import import_rows
+                code = import_rows(args[0])
             else:
-                code = f'input {len(self.inputs)-1}'
-            code += f' : ({source_shape(args[1])}, ())'
+                code = f'input {0 if self.imports else len(self.inputs)-1} : ({source_shape(args[1])}, ())'
         elif op == 'select':
             source,pairs = args
             code = f'{self.emit(source)} | map((row, ()) -> ({projection(pairs.values(),positions(source.fields))}, ()))'

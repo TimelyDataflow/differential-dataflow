@@ -1,11 +1,10 @@
 -- IS4. A message's creation date and content (or image file, when it has no text).
 
 let request = input 0 : ((int, int), ());                    -- (rid, message)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 
-let content = message | map(((id, _, created, _, _, text, image, _, _, _, _, _, _, _), ()) ->
-                            (id, (created, ((text len, 0) gt, text, image) select)));
 let answer  = request | map(((rid, m), ()) -> (m, rid))
-                      | join(content, (_, rid, details) -> ((rid, 0), details));
+                      | join(message, (_, rid, (_, created, _, _, text, image, _, _, _, _, _, _, _)) ->
+                             ((rid, 0), (created, ((text len, 0) gt, text, image) select)));
 
 export "is4.answer" = answer | arrange;

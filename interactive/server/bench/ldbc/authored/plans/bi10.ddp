@@ -1,62 +1,53 @@
 -- BI10. Experts in a social circle: people between `minimum` and `maximum` hops away who
 -- live in a country, and the tags on their messages that carry a tag of the class;
--- top 100 by count. The search stops growing at `maximum` hops, and the class's
--- messages are found first, then kept if their author qualifies.
+-- top 100 by count. The search stops growing at `maximum` hops; the people it reaches
+-- are checked against the country through their city; the class's messages are found
+-- first, then kept if their author qualifies.
 
-let request = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, country, class, minimum, maximum)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
--- Where people live: (person, (city id, city name, country name)).
-let parent = place | map(((id, _, _, up), ()) -> (id, up));
-let pname  = place | map(((id, name, _, _), ()) -> (id, name));
-let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
-                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
-let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
-                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
+let request  = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, country, class, minimum, maximum)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+    -- (id, (first, last, gender, birthday, created, ip, browser, city, birth month, birth day, creation month))
+let friend   = import "ldbc.friend"          : (int, (int, int));             -- (person, (friend, since))
+let place    = import "ldbc.place"           : (int, (List(int), List(int), int));  -- (id, (name, type, parent))
+let tag      = import "ldbc.tag"             : (int, (List(int), int));        -- (id, (name, class))
+let class_id = import "ldbc.tagclass.by_name" : (List(int), int);              -- (name, id)
+let in_class = import "ldbc.tag.by_class"    : (int, int);                     -- (class, tag)
+let tagged   = import "ldbc.mtag.by_tag"     : (int, int);                     -- (tag, message)
+let tags_of  = import "ldbc.mtag.by_message" : (int, int);                     -- (message, tag)
 
 -- Breadth-first search from the person, growing only below `maximum` hops.
 let starts = request | map(((rid, who, _, _, _, most), ()) -> ((rid, most, who, 0), ()));
 search: {
     let grow   = search | filter(((_, most, _, d), ()) -> (d, most) lt)
                         | map(((rid, most, node, d), ()) -> (node, (rid, most, d)))
-                        | join(friend, (_, (rid, most, d), next) -> ((rid, most, next, (d, 1) add), ()));
+                        | join(friend, (_, (rid, most, d), (next, _)) -> ((rid, most, next, (d, 1) add), ()));
     var search = (starts + grow) | map(((rid, most, node, d), ()) -> ((rid, most, node), d)) | min
                                  | map(((rid, most, node), d) -> ((rid, most, node, d), ()));
 }
 
--- People in range and in the country.
+-- People in range whose city is in the country.
 let asked  = request | map(((rid, who, country, _, least, _), ()) -> (rid, (who, country, least)));
 let people = search::search | map(((rid, _, node, d), ()) -> (rid, (node, d)))
                             | join(asked, (rid, (node, d), (who, country, least)) -> (node, (rid, d, who, country, least)))
                             | filter((node, (_, d, who, _, least)) -> ((d, least) ge, (node, who) ne) all)
-                            | join(home, (node, (rid, _, _, country, _), (_, _, kname)) -> ((rid, node), (country, kname)))
+                            | join(person, (node, (rid, _, _, country, _), (_, _, _, _, _, _, _, city, _, _, _)) -> (city, (rid, node, country)))
+                            | join(place, (_, (rid, node, country), (_, _, up)) -> (up, (rid, node, country)))
+                            | join(place, (_, (rid, node, country), (kname, _, _)) -> ((rid, node), (country, kname)))
                             | filter((_, (country, kname)) -> (country, kname) eq)
                             | map((key, _) -> (key, ()));
 
 -- The class's messages, by author, kept if the author qualifies; then all their tags.
-let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
-let names   = tag | map(((id, name, _), ()) -> (id, name));
 let inclass = request | map(((rid, _, _, cls, _, _), ()) -> (cls, rid))
-                      | join(tagclass | map(((id, name, _), ()) -> (name, id)), (_, rid, c) -> (c, rid))
-                      | join(tag | map(((id, _, c), ()) -> (c, id)), (_, rid, t) -> (t, rid))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> ((rid, m), ())) | distinct
+                      | join(class_id, (_, rid, c) -> (c, rid))
+                      | join(in_class, (_, rid, t) -> (t, rid))
+                      | join(tagged, (_, rid, m) -> ((rid, m), ())) | distinct
                       | map(((rid, m), ()) -> (m, rid))
-                      | join(author, (m, rid, who) -> ((rid, who), m))
+                      | join(message, (m, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> ((rid, who), m))
                       | join(people, ((rid, who), m, ()) -> (m, (rid, who)));
-let counts  = inclass | join(mtag | map(((m, t), ()) -> (m, t)), (_, (rid, who), t) -> (t, (rid, who)))
-                      | join(names, (_, (rid, who), name) -> ((rid, who, name), ())) | count;
+let counts  = inclass | join(tags_of, (_, (rid, who), t) -> (t, (rid, who)))
+                      | join(tag, (_, (rid, who), (name, _)) -> ((rid, who, name), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | map(((rid, who, name), n) -> (rid, (n neg, name, who)))

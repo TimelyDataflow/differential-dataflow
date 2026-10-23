@@ -2,21 +2,16 @@
 -- Each person's 20 newest messages are kept for all requests. A friend whose newest
 -- message is before the date contributes exactly those; anyone else falls back to
 -- their full list. Bodies and names are fetched only for the final 20.
+-- The per-author lists cover every author, so they are built from the whole message
+-- relation (a private arrangement), not looked up.
 
 let request = input 0 : ((int, int, int), ());              -- (rid, person, max date)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows" : ((int, int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend"  : (int, (int, int));      -- (person, (friend, since))
 
 -- Every message, by author, in recency order (newest first, then smaller id).
-let by_author = message | map(((id, _, created, author, _, _, _, _, _, _, _, _, _, _), ()) -> (author, (created neg, id)));
+let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let latest    = by_author | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1)
@@ -24,8 +19,8 @@ let latest    = by_author | reduce((_, vals) -> let positive = (vals map ((_, d)
 let newest    = by_author | map((author, (neg, _)) -> (author, neg)) | min;
 
 -- The person's friends and the request's cut-off.
-let friends = request | map(((rid, who, max), ()) -> (who, (rid, max))) | join(exists, (who, req, ()) -> (who, req))
-                      | join(friend, (_, req, f) -> (f, req));
+let friends = request | map(((rid, who, max), ()) -> (who, (rid, max)))
+                      | join(friend, (_, req, (f, _)) -> (f, req));
 let ahead   = friends | join(newest, (f, (rid, max), neg) -> (f, (rid, max, neg neg)));
 let fast    = ahead | filter((_, (_, max, last)) -> (last, max) lt)
                     | join(latest, (f, (rid, _, _), (neg, id)) -> (rid, ((neg, id), f)));
@@ -36,10 +31,9 @@ let slow    = ahead | filter((_, (_, max, last)) -> (last, max) ge)
 let top     = (fast + slow) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 
 -- Only now fetch the 20 messages' text and their authors' names.
-let text    = message | map(((id, _, _, _, _, content, image, _, _, _, _, _, _, _), ()) -> (id, ((content len, 0) gt, content, image) select));
-let names   = person  | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
 let answer  = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg neg, f)))
-                  | join(text,  (id, (rid, rank, created, f), body) -> (f, (rid, rank, id, body, created)))
-                  | join(names, (f, (rid, rank, id, body, created), (first, last)) -> ((rid, rank), (f, first, last, id, body, created)));
+                  | join(message, (id, (rid, rank, created, f), (_, _, _, _, content, image, _, _, _, _, _, _, _)) ->
+                         (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created)))
+                  | join(person, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
 
 export "ic2.answer" = answer | arrange;
