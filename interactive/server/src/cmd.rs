@@ -93,6 +93,8 @@ pub enum Cmd {
     Drop { name: String },
     /// List held names.
     List,
+    /// Report arrangement sizes (needs `DDIR_SIZES=1`); see `sizes.rs`.
+    Sizes,
     /// One-shot snapshot of a named trace, optionally of one key (text, read at the trace's key
     /// shape): a text line of its columns, or with `as corgi` binary frames.
     Peek { name: String, key: Option<String>, columnar: bool },
@@ -158,6 +160,7 @@ pub enum PreparedCommand {
     Peek { name: String, key: Option<String>, columnar: bool },
     Tail { name: String, columnar: bool },
     Stop { tail_reqid: ReqId },
+    Sizes,
 }
 
 /// The declared shapes of loaded programs' inputs, by program name, shared by every session so
@@ -222,6 +225,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         }
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
+        Cmd::Sizes => return Ok(PreparedCommand::Sizes),
         Cmd::Peek { name, key, columnar } => return Ok(PreparedCommand::Peek { name, key, columnar }),
         Cmd::Tail { name, columnar } => return Ok(PreparedCommand::Tail { name, columnar }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
@@ -795,6 +799,10 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             [] => ParseOutcome::Cmd(Cmd::List),
             _ => ParseOutcome::Err("list: takes no arguments".into()),
         },
+        "sizes" => match args {
+            [] => ParseOutcome::Cmd(Cmd::Sizes),
+            _ => ParseOutcome::Err("sizes: takes no arguments".into()),
+        },
         "peek" => {
             let (args, columnar) = as_corgi(args);
             match args {
@@ -1144,6 +1152,8 @@ mod tests {
             .as_ref()
             .is_err_and(|error| error.contains("time= is not allowed")));
         assert!(matches!(p.feed("r2 list"), Some((_, Ok(Cmd::List)))));
+        assert!(matches!(p.feed("r3 sizes"), Some((_, Ok(Cmd::Sizes)))));
+        assert!(matches!(p.feed("r4 sizes all"), Some((_, Err(_)))));
     }
 
     #[test]

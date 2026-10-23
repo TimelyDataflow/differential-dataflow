@@ -121,6 +121,10 @@ pub fn run_worker(
     } else {
         (None, None)
     };
+    // Arrangement sizes for `sizes`. Diagnostics own the same loggers, so it is one or the other.
+    if crate::sizes::enabled() && !diagnostics_enabled {
+        crate::sizes::register(worker);
+    }
 
     let work_queue = Rc::new(RefCell::new(VecDeque::new()));
     let queue_out = work_queue.clone();
@@ -421,6 +425,7 @@ fn dispatch(
             worker,
         )
         .map(|()| format!("tailing {:?} from t={}", name, server.epoch())),
+        Ok(PreparedCommand::Sizes) => sizes(response.as_ref(), reqid, server),
         Ok(PreparedCommand::Stop { tail_reqid }) => {
             let key = (connection_id, tail_reqid.clone());
             match tails.remove(&key) {
@@ -558,6 +563,9 @@ fn tick(server: &mut Server, tails: &mut HashMap<TailKey, Tail>, worker: &mut Wo
     while tails.values().any(|tail| tail.probe.less_than(&host_time(epoch))) {
         worker.step();
     }
+    if crate::sizes::enabled() {
+        crate::sizes::record_traces(worker.index(), server.trace_footprints());
+    }
 }
 
 fn stop_connection(
@@ -590,4 +598,56 @@ fn send(sender: &Sender<Out>, reqid: &str, kind: &str, body: String) {
 fn send_frame(sender: &Sender<Out>, reqid: &str, kind: &str, bytes: Vec<u8>, pending: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>) {
     let header = format!("{} frame {} {}\n", reqid, kind, bytes.len());
     let _ = sender.send(Out::Frame { header, bytes, pending });
+}
+
+/// `sizes`: one `arrangement` line per operator holding updates, summed across this process's
+/// workers and attributed to the program whose dataflow it is in; a `trace` line per published
+/// trace with its heap bytes, as of each worker's last tick; then a `program` line of totals per
+/// program. Worker 0 answers; the table is process-wide.
+fn sizes(response: Option<&Sender<Out>>, reqid: &str, server: &Server) -> Result<String, String> {
+    if !crate::sizes::enabled() || std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1") {
+        return Err("sizes: start the server with DDIR_SIZES=1 (and without DDIR_DIAGNOSTICS)".into());
+    }
+    if let Some(response) = response {
+        let programs: HashMap<usize, String> = server.program_info().into_iter().map(|p| (p.dataflow_id, p.name)).collect();
+        let mut totals: std::collections::BTreeMap<String, crate::sizes::Totals> = Default::default();
+        for row in crate::sizes::report() {
+            let program = row.addr.first().and_then(|id| programs.get(id)).cloned().unwrap_or_else(|| "-".into());
+            let t = &row.totals;
+            send(
+                response,
+                reqid,
+                "data",
+                format!(
+                    "arrangement program={:?} addr={:?} name={:?} batches={} updates={} shares={} batcher_updates={} batcher_bytes={}",
+                    program, row.addr, row.name, t.batches, t.updates, t.shares, t.batcher_updates, t.batcher_bytes
+                ),
+            );
+            let total = totals.entry(program).or_default();
+            total.batches += t.batches;
+            total.updates += t.updates;
+            total.batcher_updates += t.batcher_updates;
+            total.batcher_bytes += t.batcher_bytes;
+        }
+        for (name, f) in crate::sizes::traces() {
+            send(
+                response,
+                reqid,
+                "data",
+                format!("trace name={:?} batches={} updates={} bytes={}", name, f.batches, f.updates, f.bytes),
+            );
+        }
+        for (program, t) in totals {
+            send(
+                response,
+                reqid,
+                "data",
+                format!(
+                    "program name={:?} batches={} updates={} batcher_updates={} batcher_bytes={}",
+                    program, t.batches, t.updates, t.batcher_updates, t.batcher_bytes
+                ),
+            );
+        }
+    }
+    Ok(format!("t={}", server.epoch()))
 }
