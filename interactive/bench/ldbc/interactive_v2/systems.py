@@ -1,0 +1,218 @@
+"""Systems under test for the Interactive v2 driver: DDIR, and DuckDB as a baseline.
+
+Both receive the same operations and the same exact deltas. Delete cascades are
+resolved in the client by `snb.operations.Cascade` for both, inside the timed
+update, so neither system is credited or charged for them differently.
+
+A system offers two calls, made from the driver's threads:
+- `apply(updates, done)`: apply a batch of updates in order, then call
+  `done(start_ms, end_ms)`. One thread makes these calls, in time order.
+- `read(read)`: answer one read; returns (rows, start_ms, end_ms). Each read
+  worker thread calls it for one read at a time.
+
+DDIR runs both through one loop that ticks the server: a tick applies every
+update batch and answers every read submitted since the previous tick began,
+and retracts the previous tick's reads. DuckDB applies each batch as one
+transaction on the update thread and answers each read on its worker's own
+connection, so reads run concurrently with each other and with updates.
+"""
+from collections import Counter, defaultdict
+import sys
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from client import Server, decode, parse_shape  # noqa: E402
+from snb import data  # noqa: E402
+from snb.operations import Cascade  # noqa: E402
+from snb.parameters import requests  # noqa: E402
+from snb.rel import source_shape  # noqa: E402
+from suite import compile_queries, graph_program  # noqa: E402
+
+PLANS = [f'is{i}' for i in range(1, 8)] + [f'ic{i}' for i in range(1, 15)]
+
+
+def now_ms():
+    return time.time() * 1000
+
+
+def net_changes(cascade, updates):
+    """Updates applied in order, as one delta per relation: {name: {removed: [...], added: [...]}}."""
+    net = defaultdict(Counter)
+    for op in updates:
+        for name, delta in cascade.apply(op.kind, op.rows).items():
+            for row in delta['removed']:
+                net[name][row] -= 1
+            for row in delta['added']:
+                net[name][row] += 1
+    changes = {}
+    for name, counts in net.items():
+        if any(abs(d) > 1 for d in counts.values()):
+            raise ValueError(f'{name}: a row changed twice in one direction')
+        removed = sorted(r for r, d in counts.items() if d < 0)
+        added = sorted(r for r, d in counts.items() if d > 0)
+        if removed or added:
+            changes[name] = dict(removed=removed, added=added)
+    return changes
+
+
+class Ddir:
+    """The DDIR server with the graph program and the 21 authored Interactive plans.
+
+    A read is a request row in its plan's input, retracted in the following tick."""
+    name = 'ddir'
+
+    def __init__(self, args, graph):
+        self.server = Server(args.server, args.output / 'server.log', args.workers, args.timeout, args.max_rss_gib)
+        self.cascade = Cascade(graph)
+        self.plans = compile_queries(PLANS)
+        self.shapes = {n: (parse_shape(source_shape(p['parameters'])), 'unit') for n, p in self.plans.items()}
+        self.relations = list(data.SCHEMA)
+        self.graph_shapes = [(parse_shape(source_shape(s)), 'unit') for s in data.SCHEMA.values()]
+        plan_dir = HERE.parent / 'authored' / 'plans'
+        self.server.commands([f'load graph begin\n{graph_program()}\n{{rid}} end-load', 'tick'])
+        for name in PLANS:
+            text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
+            self.server.commands([f'load {name} begin\n{text}\n{{rid}} end-load', 'tick'])
+        for i, name in enumerate(self.relations):
+            rows = sorted(graph[name])
+            for off in range(0, len(rows), 20000):
+                self.server.commands([Server.feed('graph', i, rows[off:off+20000], 1, self.graph_shapes[i])])
+        self.server.commands(['tick'])
+        self.live, self.rid, self.ticks = [], 0, 0
+        self.profile = Counter()   # client-side time per tick phase, ms, and operation counts
+        self.lock = threading.Condition()
+        self.queued_updates, self.queued_reads, self.closing = [], [], False
+        self.error = None
+        self.loop = threading.Thread(target=self.run, daemon=True)
+        self.loop.start()
+
+    def apply(self, updates, done):
+        with self.lock:
+            self.queued_updates.append((updates, done))
+            self.lock.notify()
+
+    def read(self, read):
+        slot = dict(event=threading.Event())
+        with self.lock:
+            self.queued_reads.append((read, slot))
+            self.lock.notify()
+        slot['event'].wait()
+        if 'error' in slot:
+            raise RuntimeError(slot['error'])
+        return slot['rows'], slot['start'], slot['end']
+
+    def run(self):
+        while True:
+            with self.lock:
+                while not (self.queued_updates or self.queued_reads or self.closing):
+                    self.lock.wait()
+                if self.closing and not (self.queued_updates or self.queued_reads):
+                    break
+                updates, self.queued_updates = self.queued_updates, []
+                reads, self.queued_reads = self.queued_reads, []
+            start = now_ms()
+            try:
+                answers = self.tick([op for batch, _ in updates for op in batch], [r for r, _ in reads])
+            except Exception as error:   # surface to every waiting reader, then stop
+                self.error = error
+                for _, slot in reads:
+                    slot.update(error=repr(error))
+                    slot['event'].set()
+                raise
+            end = now_ms()
+            for _, done in updates:
+                done(start, end)
+            for (_, slot), rows in zip(reads, answers):
+                slot.update(rows=rows, start=start, end=end)
+                slot['event'].set()
+        self.tick([], [])   # retract the last reads
+
+    def tick(self, updates, reads):
+        self.ticks += 1
+        t0 = time.perf_counter()
+        commands = []
+        for name, delta in net_changes(self.cascade, updates).items():
+            i = self.relations.index(name)
+            for side, diff in (('removed', -1), ('added', 1)):
+                if delta[side]:
+                    commands.append(Server.feed('graph', i, delta[side], diff, self.graph_shapes[i]))
+        for plan, rows in self.live:
+            commands.append(Server.feed(plan, 0, rows, -1, self.shapes[plan]))
+        live, rids = [], []
+        for read in reads:
+            self.rid += 1
+            rows = sorted(requests(read.plan, self.plans[read.plan]['parameters'], read.binding, self.rid))
+            commands.append(Server.feed(read.plan, 0, rows, 1, self.shapes[read.plan]))
+            live.append((read.plan, rows))
+            rids.append(self.rid)
+        commands.append('tick')
+        plans = sorted({r.plan for r in reads})
+        commands.extend(f'peek {p}.answer as corgi' for p in plans)
+        t1 = time.perf_counter()
+        _, replies = self.server.commands(commands)
+        t2 = time.perf_counter()
+        self.live = live
+        answers = defaultdict(list)
+        for lines in replies[len(replies) - len(plans):] if plans else []:
+            for (rid, _rank), values, _diff in decode(lines):
+                answers[rid].append(values)
+        t3 = time.perf_counter()
+        self.profile.update(prepare_ms=1000 * (t1 - t0), server_ms=1000 * (t2 - t1), decode_ms=1000 * (t3 - t2),
+                            updates=len(updates), reads=len(reads))
+        return [answers.get(rid, []) for rid in rids]
+
+    def close(self):
+        with self.lock:
+            self.closing = True
+            self.lock.notify()
+        self.loop.join()
+        self.server.close()
+
+
+class Duck:
+    """DuckDB with the baselines' schema, derived tables and SQL (baselines/sql/duckdb).
+
+    An update batch is one transaction (baselines/sqlsystems.duckdb_apply, which also
+    maintains the `thread` table)."""
+    name = 'duckdb'
+
+    def __init__(self, args, graph):
+        sys.path.insert(0, str(HERE.parent / 'baselines'))
+        import sqlsystems as S
+        self.S = S
+        self.cascade = Cascade(graph)
+        self.con = S.duckdb_connect(threads=args.duck_threads)
+        S.duckdb_load(self.con, args.data / 'initial_snapshot')
+        self.sql = S.queries('duckdb')
+        self.columns = {r: [c[0] for c in self.con.execute(f'DESCRIBE {r}').fetchall()] for r in S.RELATIONS}
+        self.types = {r: [c[1] for c in self.con.execute(f'DESCRIBE {r}').fetchall()] for r in S.RELATIONS}
+        self.writer = self.cursor()
+        self.local = threading.local()
+
+    def cursor(self):
+        cursor = self.con.cursor()
+        cursor.execute("SET TimeZone='UTC'")
+        return cursor
+
+    def apply(self, updates, done):
+        start = now_ms()
+        changes = net_changes(self.cascade, updates)
+        if changes:
+            self.S.duckdb_apply(self.writer, changes, self.columns, self.types)
+        done(start, now_ms())
+
+    def read(self, read):
+        if not hasattr(self.local, 'cursor'):
+            self.local.cursor = self.cursor()
+        start = now_ms()
+        rows = self.S.duckdb_run(self.local.cursor, read.plan, self.sql[read.plan], read.binding)
+        return [values for _key, values, _diff in rows], start, now_ms()
+
+    def close(self):
+        self.con.close()
+
+
+SYSTEMS = {'ddir': Ddir, 'duckdb': Duck}
