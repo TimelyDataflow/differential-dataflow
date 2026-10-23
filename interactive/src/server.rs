@@ -441,6 +441,16 @@ pub struct ProgramInfo {
     pub imports: Vec<String>,
     pub exports: Vec<String>,
     pub origin: &'static str,
+    /// The timely dataflow id: the first coordinate of its operators' addresses.
+    pub dataflow_id: usize,
+}
+
+/// A published trace's size on one worker: see [`Server::trace_footprints`].
+#[derive(Clone, Debug, Default)]
+pub struct TraceFootprint {
+    pub batches: usize,
+    pub updates: usize,
+    pub bytes: usize,
 }
 
 /// A live export→input binding: a persistent tap on a published trace whose
@@ -552,6 +562,31 @@ impl Server {
         self.traces.get(&canonical_source_name(name)).cloned().map(Published)
     }
 
+    /// Each published trace on this worker: its batches, updates and heap bytes, in name order.
+    /// A buffer shared between traces (or batches) counts once, toward the first trace that holds
+    /// it; see [`crate::corgi::chunk::value_bytes`].
+    pub fn trace_footprints(&mut self) -> Vec<(String, TraceFootprint)> {
+        use differential_dataflow::trace::chunk::Chunk;
+        let mut seen = std::collections::HashSet::new();
+        let mut names: Vec<String> = self.traces.keys().cloned().collect();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| {
+                let mut footprint = TraceFootprint::default();
+                let batches = self.traces.get_mut(&name).expect("listed").batches_through(Antichain::new().borrow());
+                for batch in batches.unwrap_or_default() {
+                    footprint.batches += 1;
+                    for chunk in batch.chunks.iter() {
+                        footprint.updates += chunk.len();
+                        footprint.bytes += chunk.heap_bytes(&mut seen);
+                    }
+                }
+                (name, footprint)
+            })
+            .collect()
+    }
+
     /// The shape of a published trace's rows.
     pub fn trace_shape(&self, name: &str) -> Option<RowShape> {
         self.shapes.get(&canonical_source_name(name)).cloned()
@@ -570,6 +605,7 @@ impl Server {
                     inputs,
                     imports: installed.imports.clone(),
                     exports: installed.exports.clone(),
+                    dataflow_id: installed.dataflow_id,
                     origin: match installed.origin {
                         Origin::Program => "program",
                         Origin::Generated => "generated",

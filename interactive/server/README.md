@@ -13,6 +13,12 @@ defaults. Diagnostics are disabled by default so an idle server can park;
 `DDIR_DIAG_PORT` (default 51371). `DDIR_WORKERS` selects the number of worker
 threads (default 1).
 
+`DDIR_SIZES=1` (without `DDIR_DIAGNOSTICS`) enables `sizes`, which reports every
+arrangement's batches and updates, how many handles share it, and its merge batcher's
+contents, summed across the process's workers and attributed to the program whose
+dataflow it is in, plus each published trace's heap bytes as of the last `tick`. An
+arrangement whose updates grow while its data does not is keeping history.
+
 Installed programs render on the Corgi backend, and their data stays in Corgi
 columns: fed text is read into columns at each input's declared shape, exports are
 kept as traces of Corgi chunks, and imports, binds, `peek` and `tail` read the
@@ -38,7 +44,7 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
+The useful commands are `load`, `drop`, `list`, `sizes`, `feed`, `bind`, `unbind`,
 `peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps

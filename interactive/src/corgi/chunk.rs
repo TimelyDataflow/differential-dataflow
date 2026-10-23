@@ -102,6 +102,55 @@ impl<T, R> CorgiChunk<T, R> {
     pub fn diffs(&self) -> &[R] { &self.0.diffs }
 }
 
+/// Heap bytes behind a corgi column, by capacity where it is visible. A buffer whose address is
+/// already in `seen` is not counted again, so one `seen` across many chunks counts each shared
+/// buffer (an `i64` leaf, a partition, a referenced arena) once, the first time it is met. Narrow
+/// (`u8`) and float leaves are not visible from outside corgi: they count their serialized
+/// payload every time.
+pub fn value_bytes(v: &CValue, seen: &mut std::collections::HashSet<usize>) -> usize {
+    use corgi::{Bounds, Tags};
+    fn buffer<T>(a: &std::sync::Arc<Vec<T>>, seen: &mut std::collections::HashSet<usize>) -> usize {
+        if seen.insert(std::sync::Arc::as_ptr(a) as usize) { a.capacity() * std::mem::size_of::<T>() } else { 0 }
+    }
+    match v {
+        CValue::Prim(_) => match corgi::arrange::borrowed_i64(v) {
+            Some(xs) => if seen.insert(xs.as_ptr() as usize) { 8 * xs.len() } else { 0 },
+            None => corgi::bytes::length_in_bytes(v).saturating_sub(24),
+        },
+        CValue::Prod(cols) => cols.iter().map(|c| value_bytes(c, seen)).sum(),
+        CValue::Sum(tags, lanes) => {
+            let tags = match tags {
+                Tags::Const(..) => 0,
+                Tags::Column(p, offs) => value_bytes(&CValue::Prim(p.clone()), seen) + buffer(offs, seen),
+            };
+            tags + lanes.iter().map(|l| value_bytes(l, seen)).sum::<usize>()
+        }
+        CValue::List(bounds, vals) => {
+            let bounds = match bounds { Bounds::Offsets(a) => buffer(a, seen), Bounds::Stride(..) => 0 };
+            bounds + value_bytes(vals, seen)
+        }
+        CValue::Unit(_) => 0,
+        CValue::Ref(arena, rows) => {
+            let arena = if seen.insert(std::sync::Arc::as_ptr(arena) as usize) { value_bytes(arena, seen) } else { 0 };
+            buffer(rows, seen) + arena
+        }
+    }
+}
+
+impl<T, R> CorgiChunk<T, R> {
+    /// Heap bytes of this chunk: its columns (see [`value_bytes`]), times and diffs. A chunk
+    /// already in `seen` (shared by `Rc` with another batch) counts nothing.
+    pub fn heap_bytes(&self, seen: &mut std::collections::HashSet<usize>) -> usize {
+        if !seen.insert(Rc::as_ptr(&self.0) as *const u8 as usize) {
+            return 0;
+        }
+        value_bytes(&self.0.keys, seen)
+            + value_bytes(&self.0.vals, seen)
+            + self.0.times.heap_bytes()
+            + self.0.diffs.capacity() * std::mem::size_of::<R>()
+    }
+}
+
 impl<T, R> CorgiChunk<T, R>
 where
     T: ColTime,

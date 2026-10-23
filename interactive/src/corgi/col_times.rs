@@ -95,6 +95,9 @@ impl<T> ColTimes<T> {
     #[inline]
     pub fn new() -> Self { Self::default() }
 
+    /// Heap bytes of the lanes, by capacity.
+    pub fn heap_bytes(&self) -> usize { self.lanes.iter().map(|l| 8 * l.capacity()).sum::<usize>() + 24 * self.lanes.capacity() }
+
     #[inline]
     pub fn len(&self) -> usize { self.len }
 
