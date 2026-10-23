@@ -179,6 +179,7 @@ def main():
     p.add_argument('--duck-threads', type=int, default=None, help='DuckDB threads (default: all cores)')
     p.add_argument('--timeout', type=int, default=600)
     p.add_argument('--max-rss-gib', type=int, default=24)
+    p.add_argument('--tick-log', action='store_true', help="DDIR: write each tick's updates and reads to ticks.jsonl")
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
@@ -186,6 +187,8 @@ def main():
     with gzip.open(args.snapshot) as f:
         graph = pickle.load(f)
     updates = operations(args.data)
+    for i, op in enumerate(updates):
+        op.index = i
     t0 = updates[0].time
     reads = complex_reads(json.loads(args.parameters.read_text()), t0, updates[-1].time, args.sf)
     print(f'{len(updates)} updates and {len(reads)} complex reads over {(updates[-1].time - t0) / 86400000:.1f} '

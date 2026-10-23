@@ -17,6 +17,9 @@ transaction on the update thread and answers each read on its worker's own
 connection, so reads run concurrently with each other and with updates.
 """
 from collections import Counter, defaultdict
+import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +39,16 @@ PLANS = [f'is{i}' for i in range(1, 8)] + [f'ic{i}' for i in range(1, 15)]
 
 def now_ms():
     return time.time() * 1000
+
+
+def cpu_seconds(pid):
+    """A process's user+system CPU time so far, from ps (`[[dd-]hh:]mm:ss.ss`)."""
+    text = subprocess.run(['ps', '-o', 'time=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+    days, _, text = text.rpartition('-')
+    seconds = 0.0
+    for part in text.split(':'):
+        seconds = seconds * 60 + float(part)
+    return seconds + 86400 * int(days or 0)
 
 
 def net_changes(cascade, updates):
@@ -83,6 +96,8 @@ class Ddir:
         self.server.commands(['tick'])
         self.live, self.rid, self.ticks = [], 0, 0
         self.profile = Counter()   # client-side time per tick phase, ms, and operation counts
+        self.cpu_start = cpu_seconds(self.server.process.pid)
+        self.tick_log = (args.output / 'ticks.jsonl').open('w') if getattr(args, 'tick_log', False) else None
         self.lock = threading.Condition()
         self.queued_updates, self.queued_reads, self.closing = [], [], False
         self.error = None
@@ -123,6 +138,10 @@ class Ddir:
                     slot['event'].set()
                 raise
             end = now_ms()
+            if self.tick_log:
+                self.tick_log.write(json.dumps(dict(
+                    u=[op.index for batch, _ in updates for op in batch],
+                    r=[[r.plan, r.binding] for r, _ in reads], ms=round(end - start, 3))) + '\n')
             for _, done in updates:
                 done(start, end)
             for (_, slot), rows in zip(reads, answers):
@@ -169,6 +188,9 @@ class Ddir:
             self.closing = True
             self.lock.notify()
         self.loop.join()
+        self.profile['server_cpu_s'] = cpu_seconds(self.server.process.pid) - self.cpu_start
+        if self.tick_log:
+            self.tick_log.close()
         self.server.close()
 
 
@@ -191,6 +213,8 @@ class Duck:
         self.types = {r: [c[1] for c in self.con.execute(f'DESCRIBE {r}').fetchall()] for r in S.RELATIONS}
         self.writer = self.cursor()
         self.local = threading.local()
+        self.profile = Counter()
+        self.cpu_start = cpu_seconds(os.getpid())   # DuckDB runs in this process, with the driver
 
     def cursor(self):
         cursor = self.con.cursor()
@@ -212,6 +236,7 @@ class Duck:
         return [values for _key, values, _diff in rows], start, now_ms()
 
     def close(self):
+        self.profile['process_cpu_s'] = cpu_seconds(os.getpid()) - self.cpu_start
         self.con.close()
 
 
