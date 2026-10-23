@@ -1,0 +1,5 @@
+-- Two identical non-linear pipelines: dedup merges them one level per round.
+let x = input 0 | key($0[0] ; $0[1]);
+let p1 = x | join(x, ($0 ; $1, $2)) | min | join(x, ($0 ; $2)) | count | join(x, ($0 ; $1)) | distinct;
+let p2 = x | join(x, ($0 ; $1, $2)) | min | join(x, ($0 ; $2)) | count | join(x, ($0 ; $1)) | distinct;
+export "p" = p1 + p2 | arrange;
