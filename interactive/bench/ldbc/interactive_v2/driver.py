@@ -180,6 +180,9 @@ def main():
     p.add_argument('--timeout', type=int, default=600)
     p.add_argument('--max-rss-gib', type=int, default=24)
     p.add_argument('--batch-ms', type=float, default=0, help='DDIR: hold each tick until its oldest operation has waited this long')
+    p.add_argument('--oneoff', type=lambda s: s.split(','), default=None,
+                   help='DDIR: plans answered one-off, e.g. ic1,ic9 (needs --oneoff-dir)')
+    p.add_argument('--oneoff-dir', type=Path, help='DDIR: <plan>.standing.ddp and <plan>.oneoff.ddp files')
     p.add_argument('--tick-log', action='store_true', help="DDIR: write each tick's updates and reads to ticks.jsonl")
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)

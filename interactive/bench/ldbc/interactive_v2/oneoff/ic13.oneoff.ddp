@@ -1,0 +1,30 @@
+let request = input 0 : ((int, int, int), ());
+let friend  = import "ldbc.friend" : (int, (int, int));
+let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ())))
+           + (request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ())));
+search: {
+    
+    let side0  = search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
+    let side1  = search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
+    let best   = side0 | join(side1, ((rid, _), d0, d1) -> (rid, (d0, d1) add)) | min;
+
+    
+    let by_rid = search | map(((rid, side, node, d), ()) -> (rid, (side, node, d)));
+    let met    = best | map((rid, _) -> (rid, ()));
+    let open   = by_rid - (by_rid | join(met, (rid, row, ()) -> (rid, row)));
+    let near   = by_rid | join(best, (rid, (side, node, d), b) -> (rid, (side, node, d, b)))
+                        | filter((_, (_, _, d, b)) -> ((d, d) add, b) lt)
+                        | map((rid, (side, node, d, _)) -> (rid, (side, node, d)));
+    let grow   = (open + near) | map((rid, (side, node, d)) -> (node, (rid, side, d)))
+                               | join(friend, (_, (rid, side, d), (next, _)) -> ((rid, side, next, (d, 1) add), ()));
+
+    var search = (starts + search + grow) | map(((rid, side, node, d), ()) -> ((rid, side, node), d)) | min
+                                          | map(((rid, side, node), d) -> ((rid, side, node, d), ()));
+}
+let side0  = search::search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
+let side1  = search::search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
+let best   = side0 | join(side1, ((rid, _), d0, d1) -> (rid, (d0, d1) add)) | min;
+let asked  = request | map(((rid, _, _), ()) -> (rid, ()));
+let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
+let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
+export "ic13.answer" = answer | arrange;

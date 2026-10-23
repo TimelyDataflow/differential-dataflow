@@ -86,7 +86,19 @@ class Ddir:
         self.graph_shapes = [(parse_shape(source_shape(s)), 'unit') for s in data.SCHEMA.values()]
         plan_dir = Path(os.environ.get('DDIR_PLAN_DIR', HERE.parent / 'authored' / 'plans'))
         self.server.commands([f'load graph begin\n{graph_program()}\n{{rid}} end-load', 'tick'])
+        # Plans answered one-off: each read installs its own copy of the plan's one-off half,
+        # which imports what the standing half publishes, and drops it at the next tick.
+        self.oneoff = {}
+        oneoff_dir = getattr(args, 'oneoff_dir', None)
+        for name in getattr(args, 'oneoff', None) or []:
+            stem = f'{name[:2]}{int(name[2:]):02}'
+            standing = Path(oneoff_dir) / f'{stem}.standing.ddp'
+            if standing.exists():
+                self.server.commands([f'load {name}s begin\n{standing.read_text()}\n{{rid}} end-load', 'tick'])
+            self.oneoff[name] = (Path(oneoff_dir) / f'{stem}.oneoff.ddp').read_text()
         for name in PLANS:
+            if name in self.oneoff:
+                continue
             text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
             self.server.commands([f'load {name} begin\n{text}\n{{rid}} end-load', 'tick'])
         for i, name in enumerate(self.relations):
@@ -97,6 +109,7 @@ class Ddir:
         self.live, self.rid, self.ticks = [], 0, 0
         self.profile = Counter()   # client-side time per tick phase, ms, and operation counts
         self.cpu_start = cpu_seconds(self.server.process.pid)
+        self.client_cpu_start = cpu_seconds(os.getpid())
         self.tick_log = (args.output / 'ticks.jsonl').open('w') if getattr(args, 'tick_log', False) else None
         self.lock = threading.Condition()
         self.queued_updates, self.queued_reads, self.closing = [], [], False
@@ -166,18 +179,28 @@ class Ddir:
                 if delta[side]:
                     commands.append(Server.feed('graph', i, delta[side], diff, self.graph_shapes[i]))
         for plan, rows in self.live:
-            commands.append(Server.feed(plan, 0, rows, -1, self.shapes[plan]))
-        live, rids = [], []
+            if plan in self.plans:
+                commands.append(Server.feed(plan, 0, rows, -1, self.shapes[plan]))
+            else:
+                commands.append(f'drop {plan}')   # a one-off program from the previous tick
+        live, rids, loads = [], [], []
         for read in reads:
             self.rid += 1
             rows = sorted(requests(read.plan, self.plans[read.plan]['parameters'], read.binding, self.rid))
-            commands.append(Server.feed(read.plan, 0, rows, 1, self.shapes[read.plan]))
-            live.append((read.plan, rows))
+            target = read.plan
+            if read.plan in self.oneoff:
+                target = f'{read.plan}x{self.rid}'
+                text = self.oneoff[read.plan].replace(f'export "{read.plan}.answer"', f'export "{target}.answer"')
+                loads.append(f'load {target} begin\n{text}\n{{rid}} end-load')
+            commands.append(Server.feed(target, 0, rows, 1, self.shapes[read.plan]))
+            live.append((target, rows))
             rids.append(self.rid)
         commands.append('tick')
-        plans = sorted({r.plan for r in reads})
+        plans = sorted({target for target, _ in live})
         commands.extend(f'peek {p}.answer as corgi' for p in plans)
         t1 = time.perf_counter()
+        if loads:
+            self.server.commands(loads)
         _, replies = self.server.commands(commands)
         t2 = time.perf_counter()
         self.live = live
@@ -196,6 +219,7 @@ class Ddir:
             self.lock.notify()
         self.loop.join()
         self.profile['server_cpu_s'] = cpu_seconds(self.server.process.pid) - self.cpu_start
+        self.profile['client_cpu_s'] = cpu_seconds(os.getpid()) - self.client_cpu_start
         if self.tick_log:
             self.tick_log.close()
         self.server.close()
