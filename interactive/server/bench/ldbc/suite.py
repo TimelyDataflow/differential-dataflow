@@ -16,7 +16,7 @@ import time
 from client import Server, parse_shape
 import measure
 from run import checked, digest, positive
-from snb import data, witness
+from snb import data, indexes, witness
 from snb.parameters import alternate, parameters, reference, requests
 from snb.queries import Context, QUERIES
 from snb.rel import Compiler, R, source_shape
@@ -45,8 +45,7 @@ def compile_queries(names):
 
 
 def graph_program():
-    return '\n'.join(f'export "ldbc.{name}" = input {i} : ({source_shape(schema)}, ()) | arrange;'
-                     for i, (name, schema) in enumerate(data.SCHEMA.items())) + '\n'
+    return indexes.graph_program()
 
 
 def fingerprint(graph):

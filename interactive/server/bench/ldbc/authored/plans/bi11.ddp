@@ -2,31 +2,21 @@
 -- residents of a country, with all three friendships made inside [start, end]?
 
 let request = input 0 : ((int, List(int), int, int), ());     -- (rid, country, start, end)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let place   = import "ldbc.place"  : ((int, List(int), List(int), int), ());
-let knows   = import "ldbc.knows"  : ((int, int, int), ());
+let place_by_name   = import "ldbc.place.by_name"   : (List(int), int);     -- (name, place)
+let place_by_parent = import "ldbc.place.by_parent" : (int, int);           -- (country, city)
+let person_by_city  = import "ldbc.person.by_city"  : (int, int);           -- (city, person)
+let friend          = import "ldbc.friend"          : (int, (int, int));    -- (person, (friend, since))
 
--- Where people live: person -> city -> country, keyed by country name.
-let city_of    = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id));
-let parent     = place  | map(((id, _, _, up), ()) -> (id, up));
-let name       = place  | map(((id, label, _, _), ()) -> (id, label));
-let country_of = city_of | join(parent, (_, who, country) -> (country, who))
-                         | join(name,   (_, who, label)   -> (label, who));
-
--- Each request's residents, keyed by person, carrying the request and its window.
+-- Each request's residents, keyed by person, carrying the request and its window:
+-- country name -> country -> its cities -> the people living there.
 let residents = request | map(((rid, country, start, end), ()) -> (country, (rid, start, end)))
-                        | join(country_of, (_, req, who) -> (who, req));
-
--- Friendships in both directions, between people who exist.
-let exists  = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either  = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
-let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t)))
-                     | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct;
+                        | join(place_by_name,   (_, req, country) -> (country, req))
+                        | join(place_by_parent, (_, req, city)    -> (city, req))
+                        | join(person_by_city,  (_, req, who)     -> (who, req));
 
 -- Each request's friendships among its residents, made inside the window.
 let member = residents | map((who, (rid, _, _)) -> ((rid, who), ()));
-let inside = residents | join(friends | map(((a, b, t), ()) -> (a, (b, t))),
-                              (a, (rid, start, end), (b, t)) -> ((rid, a, b, t, start, end), ()))
+let inside = residents | join(friend, (a, (rid, start, end), (b, t)) -> ((rid, a, b, t, start, end), ()))
                        | filter(((_, _, _, t, start, end), ()) -> ((t, start) ge, (t, end) le) all)
                        | map(((rid, a, b, _, _, _), ()) -> ((rid, b), a))
                        | join(member, ((rid, b), a, ()) -> ((rid, a, b), ()));

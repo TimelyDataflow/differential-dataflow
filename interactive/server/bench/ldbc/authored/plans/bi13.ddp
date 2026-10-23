@@ -3,30 +3,27 @@
 -- from other zombies (likers created before the end date); top 100.
 
 let request = input 0 : ((int, List(int), int, int), ());    -- (rid, country, end, end month as year*12+month)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let likes   = import "ldbc.likes"   : ((int, int, int), ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = import "ldbc.message.by_creator" : (int, int);          -- (person, message)
+let liked   = import "ldbc.likes.by_message"   : (int, (int, int));   -- (message, (liker, created))
+let place_by_name   = import "ldbc.place.by_name"   : (List(int), int);
+let place_by_parent = import "ldbc.place.by_parent" : (int, int);
+let person_by_city  = import "ldbc.person.by_city"  : (int, int);
 
--- Where people live: (person, (city id, city name, country name)).
-let parent = place | map(((id, _, _, up), ()) -> (id, up));
-let pname  = place | map(((id, name, _, _), ()) -> (id, name));
-let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
-                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
-let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
-                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
-
--- Candidates: residents created before the end, with their creation date and month.
-let born    = person | map(((id, _, _, _, _, created, _, _, _, _, _, month), ()) -> (id, (created, month)));
+-- Candidates: residents (country name -> country -> cities -> people) created before
+-- the end, with their creation date and month.
 let cands   = request | map(((rid, country, end, endmonth), ()) -> (country, (rid, end, endmonth)))
-                      | join(home | map((who, (_, _, kname)) -> (kname, who)), (_, req, who) -> (who, req))
-                      | join(born, (who, (rid, end, endmonth), (created, month)) -> ((rid, who), (end, endmonth, created, month)))
+                      | join(place_by_name,   (_, req, country) -> (country, req))
+                      | join(place_by_parent, (_, req, city)    -> (city, req))
+                      | join(person_by_city,  (_, req, who)     -> (who, req))
+                      | join(person, (who, (rid, end, endmonth), (_, _, _, _, created, _, _, _, _, _, month)) -> ((rid, who), (end, endmonth, created, month)))
                       | filter((_, (end, _, created, _)) -> (created, end) lt);
 
 -- Messages between their creation and the end; zombies post fewer than one per month.
-let wrote   = message | map(((id, _, created, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, (id, created)));
 let posts   = cands | map(((rid, who), (end, _, created, _)) -> (who, (rid, end, created)))
-                    | join(wrote, (who, (rid, end, since), (_, at)) -> ((rid, who), (at, since, end)))
+                    | join(wrote, (who, req, m) -> (m, (who, req)))
+                    | join(message, (_, (who, (rid, end, since)), (_, at, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, who), (at, since, end)))
                     | filter((_, (at, since, end)) -> ((at, since) ge, (at, end) le) all)
                     | map((key, _) -> (key, 1));
 let wrote_n = posts | map((key, _) -> (key, ())) | count;
@@ -36,11 +33,10 @@ let zombies = cands | join(counts, (key, (end, endmonth, _, month), n) -> (key, 
                     | map(((rid, who), (end, _, _, _)) -> ((rid, who), end));
 
 -- Likes on zombies' messages by people created before the end, flagged if the liker is a zombie.
-let liked   = likes | map(((liker, m, _), ()) -> (m, liker));
 let likes_z = zombies | map(((rid, who), end) -> (who, (rid, end)))
-                      | join(wrote, (who, req, (m, _)) -> (m, (who, req)))
-                      | join(liked, (_, (who, (rid, end)), liker) -> (liker, (rid, who, end)))
-                      | join(born, (liker, (rid, who, end), (created, _)) -> ((rid, liker), (who, created, end)))
+                      | join(wrote, (who, req, m) -> (m, (who, req)))
+                      | join(liked, (_, (who, (rid, end)), (liker, _)) -> (liker, (rid, who, end)))
+                      | join(person, (liker, (rid, who, end), (_, _, _, _, created, _, _, _, _, _, _)) -> ((rid, liker), (who, created, end)))
                       | filter((_, (_, created, end)) -> (created, end) lt)
                       | map(((rid, liker), (who, _, _)) -> ((rid, liker), who));
 let known   = likes_z | join(zombies, (key, who, _) -> (key, who));

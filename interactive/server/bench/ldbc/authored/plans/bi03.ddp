@@ -1,51 +1,41 @@
 -- BI3. Forums moderated by someone in a country, ranked by how many of their messages
--- carry a tag of the given class; top 20.
+-- carry a tag of the given class; top 20. Both sides start from the request: the
+-- country's cities, residents and the forums they moderate; the class's tags, their
+-- messages, and each message's thread root, whose forum is the thread's.
 
-let request = input 0 : ((int, List(int), List(int)), ());    -- (rid, class name, country name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let forum   = import "ldbc.forum"   : ((int, List(int), int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
+let request   = input 0 : ((int, List(int), List(int)), ());  -- (rid, class name, country name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let forum     = import "ldbc.forum"              : (int, (List(int), int, int));  -- (id, (title, created, moderator))
+let moderates = import "ldbc.forum.by_moderator" : (int, int);                    -- (person, forum)
+let residents = import "ldbc.person.by_city"     : (int, int);                    -- (city, person)
+let place_id  = import "ldbc.place.by_name"      : (List(int), int);              -- (name, id)
+let within    = import "ldbc.place.by_parent"    : (int, int);                    -- (parent, place)
+let class_id  = import "ldbc.tagclass.by_name"   : (List(int), int);              -- (name, id)
+let in_class  = import "ldbc.tag.by_class"       : (int, int);                    -- (class, tag)
+let tagged    = import "ldbc.mtag.by_tag"        : (int, int);                    -- (tag, message)
+let root_of   = import "ldbc.message.root"       : (int, int);                    -- (message, thread root)
 
--- Threads: every post roots its own thread; a comment joins its parent's thread.
--- Rows are (message, root post, forum of the root post).
-let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, forum, _, _, _, _), ()) -> ((id, id, forum), ()));
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-thread: {
-    let below  = thread | map(((mid, root, forum), ()) -> (mid, (root, forum)))
-                        | join(replies, (_, (root, forum), child) -> ((child, root, forum), ()));
-    var thread = roots + below | distinct;
-}
--- Where people live: (person, (city id, city name, country name)).
-let parent = place | map(((id, _, _, up), ()) -> (id, up));
-let pname  = place | map(((id, name, _, _), ()) -> (id, name));
-let towns  = parent | join(pname, (city, country, cname) -> (country, (city, cname)))
-                    | join(pname, (_, (city, cname), kname) -> (city, (cname, kname)));
-let home   = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
-                    | join(towns, (city, who, (cname, kname)) -> (who, (city, cname, kname)));
+-- Forums moderated by someone living in a city of the country.
+let local    = request | map(((rid, _, country), ()) -> (country, rid))
+                       | join(place_id, (_, rid, country) -> (country, rid))
+                       | join(within, (_, rid, city) -> (city, rid))
+                       | join(residents, (_, rid, who) -> (who, rid))
+                       | join(moderates, (_, rid, f) -> ((rid, f), ()));
 
--- Messages tagged with a tag of the class (once per message), and their forums.
-let classes = tagclass | map(((id, name, _), ()) -> (name, id));
-let inclass = request | map(((rid, cls, country), ()) -> (cls, (rid, country)))
-                      | join(classes, (_, req, c) -> (c, req))
-                      | join(tag | map(((id, _, c), ()) -> (c, id)), (_, req, t) -> (t, req))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, (rid, country), m) -> ((rid, country, m), ())) | distinct;
-let forum_of = thread::thread | map(((mid, _, f), ()) -> (mid, f));
-let info     = forum | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)))
-                     | join(home, (moderator, (id, title, created), (_, _, kname)) -> (id, (title, created, moderator, kname)));
-let counts   = inclass | map(((rid, country, m), ()) -> (m, (rid, country)))
-                       | join(forum_of, (_, (rid, country), f) -> (f, (rid, country)))
-                       | join(info, (f, (rid, country), (title, created, moderator, kname)) -> ((rid, f, title, created, moderator), (country, kname)))
-                       | filter((_, (country, kname)) -> (country, kname) eq)
-                       | map((key, _) -> (key, ())) | count;
+-- Messages tagged with a tag of the class (once per message), and their threads' forums.
+let inclass  = request | map(((rid, cls, _), ()) -> (cls, rid))
+                       | join(class_id, (_, rid, c) -> (c, rid))
+                       | join(in_class, (_, rid, t) -> (t, rid))
+                       | join(tagged, (_, rid, m) -> ((rid, m), ())) | distinct;
+let counts   = inclass | map(((rid, m), ()) -> (m, rid))
+                       | join(root_of, (_, rid, root) -> (root, rid))
+                       | join(message, (_, rid, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> ((rid, f), ()))
+                       | join(local, (key, (), ()) -> (key, ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
-let ranked   = counts | map(((rid, f, title, created, moderator), n) -> (rid, ((n neg, f), (title, created, moderator))))
+let ranked   = counts | map(((rid, f), n) -> (f, (rid, n)))
+                      | join(forum, (f, (rid, n), (title, created, moderator)) -> (rid, ((n neg, f), (title, created, moderator))))
                       | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer   = ranked | map((rid, (rank, ((neg, f), (title, created, moderator)))) -> ((rid, rank), (f, title, created, moderator, neg neg)));
 

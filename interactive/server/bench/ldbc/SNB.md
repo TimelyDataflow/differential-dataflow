@@ -117,12 +117,14 @@ bank entries are for transient request batches, not simultaneous BI bindings.
 | `mixed` (default) | Standing until final retirement | Bound per batch, then retracted | Paid with BI live and interactive parameter inputs empty |
 | `maintained` | Standing | Standing | All bound answers maintained and checked |
 
-All query programs are installed once. Every query imports the shared raw
-graph program and has a separate request input. Parameter-independent parts
-of an installed query remain as dataflows even when its request input is empty;
-their maintenance is included. Named imports currently cross the server's row
-boundary: this is not native Corgi arrangement sharing. Derived relations are
-not factored across different query programs.
+All query programs are installed once, with the shared graph program, before
+any data arrives. Every query imports the arrangements the graph program
+publishes (`snb/indexes.py`: each relation by primary key, secondary indexes,
+friendships and thread roots) and has a separate request input. Imports read
+the published arrangement in place. Parameter-independent parts of an installed
+query remain as dataflows even when its request input is empty; their
+maintenance is included. Other derived relations are not factored across
+query programs.
 
 Each round visits the initial graph, changes it, and restores it. The witness
 removes a friendship and leaf post (including tags) and renames a person. CSV

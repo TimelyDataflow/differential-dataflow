@@ -1,35 +1,28 @@
 -- IC3. Friends and friends-of-friends who live outside countries X and Y but posted
 -- from both inside a time window; top 20 by messages from X and Y together.
 -- The two countries' messages in the window are found first (joining on the
--- country id), and only then matched against the person's circle.
+-- country id), and only then matched against the person's circle. Messages keyed by
+-- country are a private arrangement (no index is published by country); everything
+-- else is a lookup.
 
 let request = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, X, Y, start, days)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows" : ((int, int, int), ());
-let place   = import "ldbc.place" : ((int, List(int), List(int), int), ());
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend"  : (int, (int, int));      -- (person, (friend, since))
+let place   = import "ldbc.place"   : (int, (List(int), List(int), int));
+let by_name = import "ldbc.place.by_name" : (List(int), int);
 
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
-
--- Country ids by name ("Country" is the place type), and each person's country.
-let countries  = place | filter(((_, _, kind, _), ()) -> (kind, [67,111,117,110,116,114,121]) eq)
-                       | map(((id, name, _, _), ()) -> (name, id));
-let parent     = place | map(((id, _, _, up), ()) -> (id, up));
-let country_of = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id))
-                        | join(parent, (_, who, country) -> (who, country));
-
--- The request with X and Y as ids: (rid, (person, x, y, start, end)).
+-- The request with X and Y as country ids ("Country" is the place type): (rid, (person, x, y, start, end)).
 let asked = request | map(((rid, who, x, y, start, days), ()) -> (x, (rid, who, y, start, (start, (days, 86400000) mul) add)))
-                    | join(countries, (_, (rid, who, y, start, end), x) -> (y, (rid, who, x, start, end)))
-                    | join(countries, (_, (rid, who, x, start, end), y) -> (rid, (who, x, y, start, end)));
+                    | join(by_name, (_, req, x) -> (x, req))
+                    | join(place, (x, (rid, who, y, start, end), (_, kind, _)) -> ((kind, [67,111,117,110,116,114,121]) eq, (y, (rid, who, x, start, end))))
+                    | filter((country, _) -> country) | map((_, row) -> row)
+                    | join(by_name, (_, req, y) -> (y, req))
+                    | join(place, (y, (rid, who, x, start, end), (_, kind, _)) -> ((kind, [67,111,117,110,116,114,121]) eq, (rid, (who, x, y, start, end))))
+                    | filter((country, _) -> country) | map((_, row) -> row);
 
 -- Messages sent from X or from Y inside the window: ((rid, author), (in X, in Y)).
-let sent_from = message | map(((_, _, created, author, country, _, _, _, _, _, _, _, _, _), ()) -> (country, (author, created)));
+let sent_from = message | map((_, (_, created, author, country, _, _, _, _, _, _, _, _, _)) -> (country, (author, created)));
 let window    = (asked | map((rid, (_, x, _, start, end)) -> (x, (rid, start, end, 1, 0))))
               + (asked | map((rid, (_, _, y, start, end)) -> (y, (rid, start, end, 0, 1))));
 let visits    = window | join(sent_from, (_, (rid, start, end, ix, iy), (author, created)) -> ((rid, author), (created, start, end, ix, iy)))
@@ -37,11 +30,12 @@ let visits    = window | join(sent_from, (_, (rid, start, end, ix, iy), (author,
                        | map((key, (_, _, _, ix, iy)) -> (key, (ix, iy)));
 
 -- The circle (one or two hops, not the person), living outside both X and Y.
-let hop1   = asked | map((rid, (who, x, y, _, _)) -> (who, (rid, who, x, y))) | join(exists, (who, req, ()) -> (who, req))
-                   | join(friend, (_, req, f) -> (f, req));
-let hop2   = hop1 | join(friend, (_, req, g) -> (g, req));
+let hop1   = asked | map((rid, (who, x, y, _, _)) -> (who, (rid, who, x, y)))
+                   | join(friend, (_, req, (f, _)) -> (f, req));
+let hop2   = hop1 | join(friend, (_, req, (g, _)) -> (g, req));
 let circle = (hop1 + hop2) | filter((node, (_, who, _, _)) -> (node, who) ne)
-                           | join(country_of, (node, (rid, _, x, y), home) -> ((rid, node), (x, y, home)))
+                           | join(person, (node, (rid, _, x, y), (_, _, _, _, _, _, _, city, _, _, _)) -> (city, (rid, node, x, y)))
+                           | join(place, (_, (rid, node, x, y), (_, _, home)) -> ((rid, node), (x, y, home)))
                            | filter((_, (x, y, home)) -> ((home, x) ne, (home, y) ne) all)
                            | map((key, _) -> (key, ())) | distinct;
 
@@ -51,11 +45,10 @@ let seen   = visits | join(circle, (key, (ix, iy), ()) -> (key, (ix, iy)));
 let in_x   = seen | filter((_, (ix, _)) -> (ix, 1) eq) | map((key, _) -> (key, ())) | count;
 let in_y   = seen | filter((_, (_, iy)) -> (iy, 1) eq) | map((key, _) -> (key, ())) | count;
 let counts = in_x | join(in_y, (key, nx, ny) -> (key, (nx, ny)));
-let names  = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked = counts | map(((rid, node), (nx, ny)) -> (node, (rid, nx, ny)))
-                    | join(names, (node, (rid, nx, ny), (first, last)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))))
+                    | join(person, (node, (rid, nx, ny), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))))
                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((_, node), (first, last, nx, ny)))) -> ((rid, rank), (node, first, last, nx, ny, (nx, ny) add)));
 

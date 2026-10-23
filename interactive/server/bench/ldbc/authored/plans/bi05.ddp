@@ -1,26 +1,26 @@
 -- BI5. Most active posters on a topic: for each author of a message with the tag,
--- score = messages + 2 * replies to them + 10 * likes on them; top 100.
+-- score = messages + 2 * replies to them + 10 * likes on them; top 100. Everything is
+-- looked up from the request: the tag's messages, their authors, replies and likes.
 
-let request = input 0 : ((int, List(int)), ());              -- (rid, tag name)
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let likes   = import "ldbc.likes"   : ((int, int, int), ());
+let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let tag_id   = import "ldbc.tag.by_name"       : (List(int), int);        -- (name, id)
+let tagged   = import "ldbc.mtag.by_tag"       : (int, int);              -- (tag, message)
+let replies  = import "ldbc.message.by_parent" : (int, int);              -- (message, reply)
+let liked_by = import "ldbc.likes.by_message"  : (int, (int, int));       -- (message, (person, created))
 
 -- The request's tagged messages and their authors: (message, (rid, author)).
 -- Tag names are unique and (message, tag) pairs are a set, so each message appears once.
-let author_of = message | map(((id, _, _, author, _, _, _, _, _, _, _, _, _, _), ()) -> (id, author));
-let tagged    = request | map(((rid, name), ()) -> (name, rid))
-                        | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, tag) -> (tag, rid))
-                        | join(mtag | map(((message, tag), ()) -> (tag, message)), (_, rid, message) -> (message, rid))
-                        | join(author_of, (message, rid, author) -> (message, (rid, author)));
+let written  = request | map(((rid, name), ()) -> (name, rid))
+                       | join(tag_id, (_, rid, tag) -> (tag, rid))
+                       | join(tagged, (_, rid, m) -> (m, rid))
+                       | join(message, (m, rid, (_, _, author, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, author)));
 
 -- Count each author's tagged messages (kind 0), replies to them (1) and likes on them (2).
-let as_message = tagged | map((_, (rid, author)) -> ((rid, author, 0), ()));
-let as_like    = tagged | join(likes | map(((_, message, _), ()) -> (message, ())), (_, (rid, author), ()) -> ((rid, author, 2), ()));
-let comments   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                         | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
-let as_reply   = tagged | join(comments, (_, (rid, author), _) -> ((rid, author, 1), ()));
+let as_message = written | map((_, (rid, author)) -> ((rid, author, 0), ()));
+let as_like    = written | join(liked_by, (_, (rid, author), _) -> ((rid, author, 2), ()));
+let as_reply   = written | join(replies, (_, (rid, author), _) -> ((rid, author, 1), ()));
 let tally      = (as_message + as_reply + as_like) | count;
 
 -- Pivot the (at most three) counts per author into (messages, replies, likes).

@@ -1,24 +1,25 @@
 -- IC8. The 20 most recent replies to a person's messages. Ranked on narrow rows; the
 -- text and the repliers' names are fetched only for the 20.
+-- Reaches the replies through the author and parent indexes.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
+let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = import "ldbc.message.by_creator" : (int, int);          -- (author, message)
+let replies = import "ldbc.message.by_parent" : (int, int);           -- (parent, message)
 
-let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
-let comment = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, created, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, (id, created, who)));
-let replies = comment | join(author, (_, (id, created, who), op) -> (op, (id, created, who)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let top     = request | map(((rid, who), ()) -> (who, rid))
-                      | join(replies, (_, rid, (id, created, who)) -> (rid, ((created neg, id), who)))
+                      | join(wrote, (_, rid, op) -> (op, rid))
+                      | join(replies, (_, rid, id) -> (id, rid))
+                      | join(message, (id, rid, (kind, created, who, _, _, _, _, _, _, _, _, _, _)) -> (rid, (kind, (created neg, id), who)))
+                      | filter((_, (kind, _, _)) -> (kind, 1) eq)
+                      | map((rid, (_, order, who)) -> (rid, (order, who)))
                       | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 
-let text    = message | map(((id, _, _, _, _, content, _, _, _, _, _, _, _, _), ()) -> (id, content));
 let answer  = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg neg, who)))
-                  | join(text, (id, (rid, rank, created, who), content) -> (who, (rid, rank, id, content, created)))
-                  | join(names, (who, (rid, rank, id, content, created), (first, last)) -> ((rid, rank), (who, first, last, created, id, content)));
+                  | join(message, (id, (rid, rank, created, who), (_, _, _, _, content, _, _, _, _, _, _, _, _)) -> (who, (rid, rank, id, content, created)))
+                  | join(person, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
 
 export "ic8.answer" = answer | arrange;

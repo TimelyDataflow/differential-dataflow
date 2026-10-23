@@ -1,33 +1,27 @@
 -- BI20. Recruitment: the closest employees of a company to a person (who does not work
 -- there), over friendships between classmates weighted by |year difference| + 1;
--- those at the least distance, top 20 by distance then id.
+-- those at the least distance, top 20 by distance then id. Classmate friendships are
+-- found from the friendships (each person's few schools), not from all pairs of classmates.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, company name, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let org     = import "ldbc.org"     : ((int, List(int), List(int), int), ());
-let study   = import "ldbc.study"   : ((int, int, int), ());
-let work    = import "ldbc.work"    : ((int, int, int), ());
+let friend          = import "ldbc.friend"          : (int, (int, int));  -- (person, (friend, since))
+let study_by_person = import "ldbc.study.by_person" : (int, (int, int));  -- (person, (school, year))
+let org_by_name     = import "ldbc.org.by_name"     : (List(int), int);   -- (name, org)
+let work_by_org     = import "ldbc.work.by_org"     : (int, (int, int));  -- (org, (person, year))
 
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
-
--- Classmate friendships, weighted by the closest pair of graduation years.
-let studied  = study | map(((who, at, year), ()) -> (at, (who, year)));
-let mates    = studied | join(studied, (_, (a, ya), (b, yb)) -> ((a, b), (ya, yb) sub))
-                       | filter(((a, b), _) -> (a, b) ne)
-                       | join(friend | map((a, b) -> ((a, b), ())), (pair, d, ()) -> (pair, ((d, 0) lt, d neg, d) select))
-                       | map((pair, gap) -> (pair, (gap, 1) add)) | min
-                       | map(((a, b), w) -> (a, (b, w)));
+-- Classmate friendships, weighted by the closest pair of graduation years: start from
+-- each friendship and look up both people's schools.
+let mates    = friend | join(study_by_person, (a, (b, _), (at, ya)) -> (b, (a, at, ya)))
+                      | join(study_by_person, (b, (a, at, ya), (bt, yb)) -> ((a, b), (at, bt, (ya, yb) sub)))
+                      | filter(((a, b), (at, bt, _)) -> ((at, bt) eq, (a, b) ne) all)
+                      | map((pair, (_, _, d)) -> (pair, ((d, 0) lt, d neg, d) select))
+                      | map((pair, gap) -> (pair, (gap, 1) add)) | min
+                      | map(((a, b), w) -> (a, (b, w)));
 
 -- The company's employees, and requests whose person is not one of them.
 let staff    = request | map(((rid, name, _), ()) -> (name, rid))
-                       | join(org | map(((id, name, _, _), ()) -> (name, id)), (_, rid, at) -> (at, rid))
-                       | join(work | map(((who, at, _), ()) -> (at, who)), (_, rid, who) -> ((rid, who), ())) | distinct;
+                       | join(org_by_name, (_, rid, at) -> (at, rid))
+                       | join(work_by_org, (_, rid, (who, _)) -> ((rid, who), ())) | distinct;
 let asked    = request | map(((rid, _, who), ()) -> ((rid, who), ()));
 let outside  = asked - (asked | join(staff, (key, (), ()) -> (key, ())));
 

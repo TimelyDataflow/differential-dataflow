@@ -1,25 +1,25 @@
 -- BI2. Tag evolution: tags of a class, with their messages in the 100 days from a date
 -- and in the 100 days after that; top 100 by the difference. Tagged messages are kept
 -- keyed by (class, day) for all requests, so a request reads only its 200 days.
+-- Building that table walks every tag through the tag-to-message index and looks up
+-- each message's date in the message arrangement.
 
-let request = input 0 : ((int, int, List(int)), ());         -- (rid, date, class name)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let request  = input 0 : ((int, int, List(int)), ());        -- (rid, date, class name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let tag      = import "ldbc.tag"           : (int, (List(int), int));        -- (id, (name, class))
+let tagged   = import "ldbc.mtag.by_tag"   : (int, int);                     -- (tag, message)
+let class_id = import "ldbc.tagclass.by_name" : (List(int), int);            -- (name, id)
 
--- ((class, day), (tag name, created)) for every tagged message.
-let dated   = message | map(((id, _, created, _, _, _, _, _, _, _, _, _, _, day), ()) -> (id, (created, day)));
-let bytag   = tag | map(((id, name, cls), ()) -> (id, (cls, name)));
-let byday   = mtag | map(((m, t), ()) -> (t, m))
-                   | join(bytag, (_, m, (cls, name)) -> (m, (cls, name)))
-                   | join(dated, (_, (cls, name), (created, day)) -> ((cls, day), (name, created)));
+-- ((class, day), (tag name, created)) for every tagged message, and each class's days.
+let byday   = tag | join(tagged, (_, (name, cls), m) -> (m, (cls, name)))
+                  | join(message, (_, (cls, name), (_, created, _, _, _, _, _, _, _, _, _, _, day)) -> ((cls, day), (name, created)));
+let days    = byday | map(((cls, day), _) -> ((cls, day), ())) | distinct | map(((cls, day), ()) -> (cls, day));
 
--- The request's class and its 200 window days (days that have messages).
-let days    = message | map(((_, _, _, _, _, _, _, _, _, _, _, _, _, day), ()) -> (day, ())) | distinct;
+-- The request's class and its 200 window days (days with a message of the class).
 let wanted  = request | map(((rid, date, name), ()) -> (name, (rid, date)))
-                      | join(tagclass | map(((id, name, _), ()) -> (name, id)), (_, (rid, date), cls) -> ((), (rid, date, cls)))
-                      | join(days | map((day, ()) -> ((), day)), (_, (rid, date, cls), day) -> ((cls, day), (rid, date)))
+                      | join(class_id, (_, (rid, date), cls) -> (cls, (rid, date)))
+                      | join(days, (cls, (rid, date), day) -> ((cls, day), (rid, date)))
                       | filter(((_, day), (_, date)) -> ((day, ((date, 86400000) div, 86400000) mul) ge, (day, (date, 17280000000) add) lt) all);
 
 -- Count each tag's messages in the two halves.

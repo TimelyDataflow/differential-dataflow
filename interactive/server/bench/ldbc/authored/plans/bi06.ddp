@@ -1,27 +1,27 @@
 -- BI6. Most authoritative users on a topic: each author of a tagged message scores the
--- popularity (likes received overall) of everyone who liked their tagged messages; top 100.
+-- popularity (likes received overall) of everyone who liked their tagged messages; top
+-- 100. Popularity is kept per person for all requests (every like, through the liked
+-- message's author); the rest is looked up from the request.
 
-let request = input 0 : ((int, List(int)), ());              -- (rid, tag name)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-let likes   = import "ldbc.likes"   : ((int, int, int), ());
+let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let tag_id   = import "ldbc.tag.by_name"      : (List(int), int);         -- (name, id)
+let tagged   = import "ldbc.mtag.by_tag"      : (int, int);               -- (tag, message)
+let liked_by = import "ldbc.likes.by_message" : (int, (int, int));        -- (message, (person, created))
 
--- Messages carrying the request's tag: (message, rid).
-let tagged  = request | map((req, ()) -> (req.1, req.0))
-                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid));
-
-let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
-let written = tagged | join(author, (m, rid, who) -> ((rid, m, who), ()));   -- one tag; (message, tag) is a set
+-- The request's tagged messages and their authors (one tag; (message, tag) is a set).
+let written = request | map(((rid, name), ()) -> (name, rid))
+                      | join(tag_id, (_, rid, t) -> (t, rid))
+                      | join(tagged, (_, rid, m) -> (m, rid))
+                      | join(message, (m, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, who), ()));
 
 -- Popularity: likes received on all of a person's messages.
-let liked   = likes | map(((liker, m, _), ()) -> (m, liker));
-let popular = liked | join(author, (_, _, who) -> (who, ())) | count;
+let popular = liked_by | join(message, (_, _, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, ())) | count;
 
 -- Each (author, liker) pair once, scored by the liker's popularity; zero for the rest.
 let pairs   = written | map(((rid, m, who), ()) -> (m, (rid, who)))
-                      | join(liked, (_, (rid, who), liker) -> ((rid, who, liker), ())) | distinct;
+                      | join(liked_by, (_, (rid, who), (liker, _)) -> ((rid, who, liker), ())) | distinct;
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
 let scored  = pairs | map(((rid, who, liker), ()) -> (liker, (rid, who)))
                     | join(popular, (_, (rid, who), p) -> ((rid, who), p))

@@ -1,25 +1,23 @@
 -- BI7. Related topics: tags on replies to messages with a given tag, where the reply
--- itself does not carry it; top 100 by number of replies.
+-- itself does not carry it; top 100 by number of replies. Looked up from the request:
+-- the tag's messages, their replies, and the replies' tags.
 
-let request = input 0 : ((int, List(int)), ());              -- (rid, tag name)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
+let tag      = import "ldbc.tag"               : (int, (List(int), int));  -- (id, (name, class))
+let tag_id   = import "ldbc.tag.by_name"       : (List(int), int);         -- (name, id)
+let tagged   = import "ldbc.mtag.by_tag"       : (int, int);               -- (tag, message)
+let tags_of  = import "ldbc.mtag.by_message"   : (int, int);               -- (message, tag)
+let replies  = import "ldbc.message.by_parent" : (int, int);               -- (message, reply)
 
--- Messages carrying the request's tag: (message, rid).
-let tagged  = request | map((req, ()) -> (req.1, req.0))
-                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
-                      | join(mtag | map(((m, t), ()) -> (t, m)), (_, rid, m) -> (m, rid));
-
-let marked  = tagged | map((m, rid) -> ((rid, m), ()));   -- one tag; (message, tag) is a set
-let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                      | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+-- Messages carrying the request's tag (one tag; (message, tag) is a set).
+let marked  = request | map(((rid, name), ()) -> (name, rid))
+                      | join(tag_id, (_, rid, t) -> (t, rid))
+                      | join(tagged, (_, rid, m) -> ((rid, m), ()));
 let answers = marked | map(((rid, m), ()) -> (m, rid)) | join(replies, (_, rid, r) -> ((rid, r), ()));
 let fresh   = answers - (answers | join(marked, (key, (), ()) -> (key, ())));
-let names   = tag | map(((id, name, _), ()) -> (id, name));
 let counts  = fresh | map(((rid, r), ()) -> (r, rid))
-                    | join(mtag | map(((m, t), ()) -> (m, t)), (_, rid, t) -> (t, rid))
-                    | join(names, (_, rid, name) -> ((rid, name), ())) | count;
+                    | join(tags_of, (_, rid, t) -> (t, rid))
+                    | join(tag, (_, rid, (name, _)) -> ((rid, name), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | map(((rid, name), n) -> (rid, (n neg, name)))

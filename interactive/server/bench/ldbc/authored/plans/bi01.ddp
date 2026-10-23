@@ -1,13 +1,15 @@
 -- BI1. Posting summary: messages created before a date, grouped by year, post or
 -- comment, and length category, with count, average length, total length and share.
 -- Per-day totals are kept for all requests; a request adds up the days before its
--- date and reads only the messages from that date itself.
+-- date and reads only the messages from that date itself. The per-day totals read
+-- every message, so this plan scans the message arrangement rather than looking up in it.
 
 let request = input 0 : ((int, int), ());                    -- (rid, end time in ms)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
 
 -- Length categories: under 40, under 80, under 160, longer.
-let classified = message | map(((_, kind, created, _, _, _, _, length, _, _, _, year, _, day), ()) ->
+let classified = message | map((_, (kind, created, _, _, _, _, length, _, _, _, year, _, day)) ->
     ((day, year, kind, ((length, 40) lt, 0, ((length, 80) lt, 1, ((length, 160) lt, 2, 3) select) select) select), (created, length)));
 
 -- Sums move each value into the multiplicity (join_function) and let `count` add them up.

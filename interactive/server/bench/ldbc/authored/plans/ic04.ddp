@@ -1,28 +1,20 @@
 -- IC4. New topics: tags on friends' posts inside a window that never appeared on their
 -- posts before it; top 10 by number of posts.
+-- Kept for all requests: every post keyed by its author, and every message's tags with
+-- their names, keyed by message (both private: `message` and the tag index re-keyed).
 
 let request = input 0 : ((int, int, int, int), ());          -- (rid, person, start, days)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend"  : (int, (int, int));      -- (person, (friend, since))
+let tag     = import "ldbc.tag"     : (int, (List(int), int));
+let mtag    = import "ldbc.mtag.by_tag" : (int, int);         -- (tag, message)
 
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
-
--- Friends' posts with their tags: (rid, tag, tag name, created, window start, window end).
-let posts  = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                     | map(((id, _, created, who, _, _, _, _, _, _, _, _, _, _), ()) -> (who, (id, created)));
-let names  = tag | map(((id, name, _), ()) -> (id, name));
-let tags   = mtag | map(((m, t), ()) -> (t, m)) | join(names, (t, m, name) -> (m, (t, name)));
+-- Friends' posts with their tags: ((rid, tag), (tag name, created, window start, window end)).
+let posts  = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)
+                     | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
+let tags   = mtag | join(tag, (t, m, (name, _)) -> (m, (t, name)));
 let seen   = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)))
-                     | join(exists, (who, req, ()) -> (who, req))
-                     | join(friend, (_, req, f) -> (f, req))
+                     | join(friend, (_, req, (f, _)) -> (f, req))
                      | join(posts, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end)))
                      | join(tags, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
 

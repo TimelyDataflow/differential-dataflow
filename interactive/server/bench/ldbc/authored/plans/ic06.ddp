@@ -1,47 +1,41 @@
 -- IC6. Tag co-occurrence: on posts by a person's friends and friends-of-friends that
 -- carry a given tag, which other tags appear most often? Top 10.
--- Starts from the tag's posts and keeps those by people in the circle.
+-- Starts from the tag's posts (through the tag-name and message-tag indexes) and keeps
+-- those by people in the circle.
 
 let request = input 0 : ((int, int, List(int)), ());           -- (rid, person, tag name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows" : ((int, int, int), ());
-let tag     = import "ldbc.tag"   : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"  : ((int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend" : (int, (int, int));                -- (person, (friend, since))
+let tag     = import "ldbc.tag" : (int, (List(int), int));
+let by_name = import "ldbc.tag.by_name" : (List(int), int);
+let tagged  = import "ldbc.mtag.by_tag" : (int, int);                  -- (tag, message)
+let tags_of = import "ldbc.mtag.by_message" : (int, int);              -- (message, tag)
 
 -- The circle: everyone one or two hops from the person, except the person.
-let hop1   = request | map(((rid, who, _), ()) -> (who, (rid, who))) | join(exists, (who, req, ()) -> (who, req))
-                     | join(friend, (_, (rid, who), f) -> (f, (rid, who)));
-let hop2   = hop1 | join(friend, (_, (rid, who), g) -> (g, (rid, who)));
+let hop1   = request | map(((rid, who, _), ()) -> (who, (rid, who))) | join(person, (who, req, _) -> (who, req))
+                     | join(friend, (_, (rid, who), (f, _)) -> (f, (rid, who)));
+let hop2   = hop1 | join(friend, (_, (rid, who), (g, _)) -> (g, (rid, who)));
 let circle = (hop1 + hop2) | filter((node, (_, who)) -> (node, who) ne)
                            | map((node, (rid, _)) -> ((rid, node), ())) | distinct;
 
--- Tag names by message, and the tag's posts.
+-- The tag's posts by people in the circle: ((rid, post), the tag).
 -- Tag names are unique and (message, tag) pairs are a set, so each message appears once.
-let names   = tag  | map(((id, name, _), ()) -> (id, name));
-let tagged  = mtag | map(((message, t), ()) -> (t, message)) | join(names, (_, message, name) -> (message, name));
-let posts   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
-                      | map(((id, _, _, author, _, _, _, _, _, _, _, _, _, _), ()) -> (id, author));
 let with_it = request | map(((rid, _, name), ()) -> (name, rid))
-                      | join(tagged | map((message, name) -> (name, message)), (name, rid, message) -> (message, (rid, name)))
-                      | join(posts, (message, (rid, name), author) -> ((rid, author), (message, name)))
-                      | join(circle, ((rid, _), (message, name), ()) -> ((rid, message, name), ()));
+                      | join(by_name, (_, rid, t) -> (t, rid))
+                      | join(tagged, (t, rid, m) -> (m, (rid, t)))
+                      | join(message, (m, (rid, t), (kind, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), (kind, m, t)))
+                      | filter((_, (kind, _, _)) -> (kind, 0) eq)
+                      | join(circle, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
 
 -- Count the other tags on those posts, and rank by count, then name.
-let others = with_it | map(((rid, message, name), ()) -> (message, (rid, name)))
-                     | join(tagged, (_, (rid, name), other) -> ((rid, name, other), ()))
-                     | filter(((_, name, other), ()) -> (name, other) ne)
+let others = with_it | join(tags_of, (_, (rid, t), other) -> ((rid, t, other), ()))
+                     | filter(((_, t, other), ()) -> (t, other) ne)
                      | map(((rid, _, other), ()) -> ((rid, other), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
-let ranked = others | map(((rid, other), n) -> (rid, (n neg, other)))
+let ranked = others | map(((rid, other), n) -> (other, (rid, n)))
+                    | join(tag, (_, (rid, n), (name, _)) -> (rid, (n neg, name)))
                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, (neg, other))) -> ((rid, rank), (other, neg neg)));
 

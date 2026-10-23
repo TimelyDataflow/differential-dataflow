@@ -2,34 +2,27 @@
 -- city 2: every (person1, person2) pair at the least cost, ordered by the pair.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, city 1, city 2)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals    = import "ldbc.friend.pair" : ((int, int), ());        -- ((person, friend), ())
+let person_by_city = import "ldbc.person.by_city" : (int, int);     -- (city, person)
 
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
 -- Interaction weights between friends: replies in either direction are counted per
 -- pair (n), and a friendship costs max(round(40 - sqrt(n)), 1), computed exactly as
 -- 1 + the number of k in 1..39 with k(k-1) + 1 > n.
-let author   = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));
-let answered = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq)
-                       | map(((_, _, _, who, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, who))
-                       | join(author, (_, who, to) -> (who, to))
+let answered = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
+                       | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who))
+                       | join(message, (_, who, (_, _, to, _, _, _, _, _, _, _, _, _, _)) -> (who, to))
                        | filter((who, to) -> (who, to) ne);
 let talks    = (answered | map((a, b) -> ((a, b), ()))) + (answered | map((a, b) -> ((b, a), ())));
 let weighted = talks | count
-                     | join(friend | map((a, b) -> ((a, b), ())), (pair, n, ()) -> (pair, n))
+                     | join(pals, (pair, n, ()) -> (pair, n))
                      | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
                            ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
 
 -- One search per (request, source in city 1).
-let lives  = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id));
 let starts = request | map(((rid, c1, _), ()) -> (c1, rid))
-                     | join(lives, (_, rid, who) -> ((rid, who, who, 0), ()));
+                     | join(person_by_city, (_, rid, who) -> ((rid, who, who, 0), ()));
 search: {
     let grow   = search | map(((rid, source, node, cost), ()) -> (node, (rid, source, cost)))
                         | join(weighted, (_, (rid, source, cost), (next, w)) -> ((rid, source, next, (cost, w) add), ()));
@@ -39,7 +32,7 @@ search: {
 
 -- Paths that end in city 2, and the least cost among them.
 let ends   = search::search | map(((rid, source, node, cost), ()) -> (node, (rid, source, cost)))
-                            | join(lives | map((city, who) -> (who, city)), (node, (rid, source, cost), city) -> ((rid, city), (source, node, cost)))
+                            | join(person, (node, (rid, source, cost), (_, _, _, _, _, _, _, city, _, _, _)) -> ((rid, city), (source, node, cost)))
                             | join(request | map(((rid, _, c2), ()) -> ((rid, c2), ())), ((rid, _), row, ()) -> (rid, row));
 let best   = ends | map((rid, (_, _, cost)) -> (rid, cost)) | min;
 let ranked = ends | join(best, (rid, (source, node, cost), least) -> (rid, (source, node, cost, least)))

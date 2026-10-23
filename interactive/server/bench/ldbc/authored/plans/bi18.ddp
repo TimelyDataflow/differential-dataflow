@@ -4,34 +4,25 @@
 -- paths are built (meeting in the middle).
 
 let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let knows    = import "ldbc.knows"    : ((int, int, int), ());
-let tag      = import "ldbc.tag"      : ((int, List(int), int), ());
-let interest = import "ldbc.interest" : ((int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let tag_by_name      = import "ldbc.tag.by_name"      : (List(int), int);   -- (name, tag)
+let interest_by_tag  = import "ldbc.interest.by_tag"  : (int, int);         -- (tag, person)
+let friend           = import "ldbc.friend"           : (int, (int, int));  -- (person, (friend, since))
 
 -- People interested in the tag: (rid, person).
 let fans    = request | map(((rid, name), ()) -> (name, rid))
-                      | join(tag | map(((id, name, _), ()) -> (name, id)), (_, rid, t) -> (t, rid))
-                      | join(interest | map(((who, t), ()) -> (t, who)), (_, rid, who) -> ((rid, who), ()));   -- one tag; (person, tag) is a set
+                      | join(tag_by_name, (_, rid, t) -> (t, rid))
+                      | join(interest_by_tag, (_, rid, who) -> ((rid, who), ()));   -- one tag; (person, tag) is a set
 
 -- Each fan's friends, as both ends of a path: (rid, shared friend) -> fan.
-let reach   = fans | map(((rid, who), ()) -> (who, rid)) | join(friend, (who, rid, mid) -> ((rid, mid), who));
+let reach   = fans | map(((rid, who), ()) -> (who, rid)) | join(friend, (who, rid, (mid, _)) -> ((rid, mid), who));
 let paths   = reach | join(reach, ((rid, _), one, other) -> ((rid, one, other), ()))
                     | filter(((_, one, other), ()) -> (one, other) ne);
 
--- Drop pairs who are already friends, count shared friends, rank.
-let already = friend | map((a, b) -> ((a, b), ()));
-let counted = paths | map(((rid, one, other), ()) -> ((one, other), rid))
-                    | join(already, (pair, rid, ()) -> (pair, rid)) ;
-let fresh   = (paths | map(((rid, one, other), ()) -> ((one, other), rid))) - counted;
-let pairs   = fresh | map(((one, other), rid) -> ((rid, one, other), ())) | count;
+-- Drop pairs who are already friends (both are fans, so `reach` holds their
+-- friendships), count shared friends, rank.
+let known   = reach | map(((rid, mid), who) -> ((rid, who, mid), ()));
+let fresh   = paths - (paths | join(known, (key, (), ()) -> (key, ())));
+let pairs   = fresh | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = pairs | map(((rid, one, other), n) -> (rid, (n neg, one, other)))

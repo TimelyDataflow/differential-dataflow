@@ -2,27 +2,17 @@
 -- `maxknows` of the others posting about each; top 20 by messages on both days.
 
 let request = input 0 : ((int, List(int), int, List(int), int, int), ());   -- (rid, tag A, day A, tag B, day B, max knows)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
-let knows   = import "ldbc.knows"   : ((int, int, int), ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
-let mtag    = import "ldbc.mtag"    : ((int, int), ());
-
--- Friendships in both directions, between people who exist.
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
-let either = (knows | map(((a, b, _), ()) -> (a, b))) + (knows | map(((a, b, _), ()) -> (b, a)));
-let friend = either | join(exists, (a, b, ()) -> (b, a))
-                    | join(exists, (b, a, ()) -> ((a, b), ())) | distinct
-                    | map(((a, b), ()) -> (a, b));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tag_by_name = import "ldbc.tag.by_name" : (List(int), int);     -- (name, tag)
+let mtag_by_tag = import "ldbc.mtag.by_tag" : (int, int);           -- (tag, message)
+let friend  = import "ldbc.friend" : (int, (int, int));             -- (person, (friend, since))
 
 -- The two (tag, day) groups of a request, as side 0 and side 1.
 let sides   = (request | map(((rid, ta, da, _, _, k), ()) -> (ta, (rid, 0, da, k))))
             + (request | map(((rid, _, _, tb, db, k), ()) -> (tb, (rid, 1, db, k))));
-let names   = tag | map(((id, name, _), ()) -> (name, id));
-let dayof   = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, day), ()) -> (id, (who, day)));
-let posts   = sides | join(names, (_, side, t) -> (t, side))
-                    | join(mtag | map(((m, t), ()) -> (t, m)), (_, side, m) -> (m, side))
-                    | join(dayof, (m, (rid, s, d, k), (who, day)) -> ((rid, s, who, m, k), (d, day)))
+let posts   = sides | join(tag_by_name, (_, side, t) -> (t, side))
+                    | join(mtag_by_tag, (_, side, m) -> (m, side))
+                    | join(message, (m, (rid, s, d, k), (_, _, who, _, _, _, _, _, _, _, _, _, day)) -> ((rid, s, who, m, k), (d, day)))
                     | filter((_, (d, day)) -> (d, day) eq)
                     | map((key, _) -> (key, ()));      -- one tag per side; (message, tag) is a set
 
@@ -30,7 +20,7 @@ let posts   = sides | join(names, (_, side, t) -> (t, side))
 let counts  = posts | map(((rid, s, who, _, k), ()) -> ((rid, s, who, k), ())) | count;
 let members = counts | map(((rid, s, who, _), _) -> ((rid, s, who), ()));
 let degree  = members | map(((rid, s, who), ()) -> (who, (rid, s)))
-                      | join(friend, (who, (rid, s), f) -> ((rid, s, f), who))
+                      | join(friend, (who, (rid, s), (f, _)) -> ((rid, s, f), who))
                       | join(members, ((rid, s, _), who, ()) -> ((rid, s, who), ()))
                       | count;
 let sized   = counts | map(((rid, s, who, k), n) -> ((rid, s, who), (n, k)));

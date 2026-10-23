@@ -1,11 +1,10 @@
--- IS1. A person's profile.
+-- IS1. A person's profile: one lookup in the person primary key.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
 
-let profile = person | map(((id, first, last, gender, birthday, created, ip, browser, city, _, _, _), ()) ->
-                           (id, (first, last, birthday, ip, browser, city, gender, created)));
 let answer  = request | map(((rid, who), ()) -> (who, rid))
-                      | join(profile, (_, rid, details) -> ((rid, 0), details));
+                      | join(person, (_, rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _)) ->
+                             ((rid, 0), (first, last, birthday, ip, browser, city, gender, created)));
 
 export "is1.answer" = answer | arrange;
