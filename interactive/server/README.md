@@ -8,9 +8,11 @@ or stdin.
 Run `cargo run -p ddir-server`, then open `interactive/server/console.html` or
 connect a line-oriented client to TCP port 7777. The same protocol is available
 over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
-defaults. Diagnostics are disabled by default so an idle server can park;
-`DDIR_DIAGNOSTICS=1` enables the diagnostics dataflow and its listener on
-`DDIR_DIAG_PORT` (default 51371). `DDIR_WORKERS` selects the number of worker
+defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
+becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
+the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
+`peek diag.time_by_statement` reads time by program statement like any other
+trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1).
 
 Installed programs render on the Corgi backend, and their data stays in Corgi

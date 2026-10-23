@@ -319,6 +319,8 @@ enum Origin {
     Program,
     Generated,
     Clock,
+    /// A `diag.*` source, fed from the server's own logging at each `tick` (see [`crate::diag`]).
+    Diagnostics,
 }
 
 /// `clock` rows for these epochs, each with its multiplicity: `((t), ())`.
@@ -505,6 +507,8 @@ pub struct Server {
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
     arranged_imports: bool,
+    /// This worker's diagnostics, when they are on: the source of the `diag.*` collections.
+    diagnostics: Option<Rc<RefCell<crate::diag::Diagnostics>>>,
 }
 
 impl Server {
@@ -520,7 +524,44 @@ impl Server {
             bindings: Vec::new(),
             epoch: 0,
             arranged_imports: true,
+            diagnostics: None,
         }
+    }
+
+    /// Turn diagnostics on with this worker's `diagnostics` (see [`crate::diag::register`]):
+    /// programs may then import the `diag.*` sources.
+    pub fn set_diagnostics(&mut self, diagnostics: Rc<RefCell<crate::diag::Diagnostics>>) {
+        self.diagnostics = Some(diagnostics);
+    }
+
+    /// Record that dataflow `index` runs the installed `name`, for diagnostics.
+    fn note_dataflow(&self, index: usize, name: &str) {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.borrow_mut().note_dataflow(index, name);
+        }
+    }
+
+    /// Bring diagnostics up to date with the worker's logging: flush the loggers and fold their
+    /// events into the pending changes.
+    fn process_diagnostics(&self, worker: &Worker) {
+        if let Some(diagnostics) = &self.diagnostics {
+            crate::diag::flush(worker);
+            let installed: std::collections::HashSet<usize> = worker.installed_dataflows().into_iter().collect();
+            diagnostics.borrow_mut().process(&installed);
+        }
+    }
+
+    /// Give each installed `diag.*` source its pending changes at `time`, and forget the rest.
+    fn feed_diagnostics(&mut self, time: OuterTime) {
+        let Some(diagnostics) = &self.diagnostics else { return };
+        let mut diagnostics = diagnostics.borrow_mut();
+        for (name, installed) in self.programs.iter_mut() {
+            if installed.origin != Origin::Diagnostics { continue; }
+            if let (Some(rows), Some(input)) = (diagnostics.take_pending(name), installed.inputs.get_mut(&0)) {
+                input.give_columns(rows, time).expect("diagnostics rows have their source's shape");
+            }
+        }
+        diagnostics.clear_pending();
     }
 
     /// The current epoch (the open host time).
@@ -574,6 +615,7 @@ impl Server {
                         Origin::Program => "program",
                         Origin::Generated => "generated",
                         Origin::Clock => "clock",
+                        Origin::Diagnostics => "diagnostics",
                     },
                 }
             })
@@ -636,7 +678,13 @@ impl Server {
             if let st::Source::Trace(t) = &imp.from {
                 let key = canonical_source_name(t);
                 if !self.is_published(&key) {
-                    if key != "clock" && Recipe::parse(&key).is_none() {
+                    if crate::diag::is_source(&key) && self.diagnostics.is_none() {
+                        return Err(format!(
+                            "program {:?} imports {:?}, but diagnostics are off; start the server with DDIR_DIAGNOSTICS=1",
+                            name, t
+                        ));
+                    }
+                    if key != "clock" && Recipe::parse(&key).is_none() && !crate::diag::is_source(&key) {
                         return Err(format!(
                             "program {:?} imports unknown trace {:?}; install its producer first",
                             name, t
@@ -658,6 +706,8 @@ impl Server {
             }
             if key == "clock" {
                 self.install_clock(worker);
+            } else if crate::diag::is_source(&key) {
+                self.install_diagnostics(worker, &key);
             } else {
                 let recipe = Recipe::parse(&key).expect("checked above");
                 self.install_generated(worker, &key, recipe);
@@ -708,6 +758,9 @@ impl Server {
 
         // The id this dataflow will get; captured so `drop` can remove it.
         let dataflow_id = worker.next_dataflow_index();
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.borrow_mut().note_dataflow(dataflow_id, name);
+        }
 
         #[allow(clippy::type_complexity)]
         let (published, inputs): (Vec<(String, crate::backend::corgi::ExportTrace, Option<crate::backend::corgi::ExportTap>)>, Vec<(usize, ServerInput)>) =
@@ -803,7 +856,7 @@ impl Server {
     fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<(crate::shapes::ScopeShapes, Vec<(String, RowShape)>), String> {
         let published = |t: &str| -> Option<RowShape> {
             let key = canonical_source_name(t);
-            self.shapes.get(&key).cloned().or_else(|| generated_shape(&key))
+            self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
         };
         for imp in &prog.root.imports {
             if let (st::Source::Trace(t), Some(declared)) = (&imp.from, &imp.shape) {
@@ -895,11 +948,43 @@ impl Server {
         );
     }
 
+    /// Install diagnostics source `name` (see [`crate::diag`]): published like any source, fed by
+    /// each worker from its own logging at every `tick`. A source installed after others are
+    /// running starts from the whole of what it describes now: the installed sources first take
+    /// the changes pending for them, so nothing is counted twice.
+    fn install_diagnostics(&mut self, worker: &mut Worker, name: &str) {
+        self.process_diagnostics(worker);
+        self.feed_diagnostics(self.epoch);
+        let shape = crate::diag::shape(name).expect("a diagnostics source");
+        let (mut input, dataflow_id, probe) = self.install_source(worker, name, shape);
+        let seed = self.diagnostics.as_ref().and_then(|d| d.borrow().snapshot(name));
+        if let Some(rows) = seed {
+            input.give_columns(rows, self.epoch).expect("diagnostics rows have their source's shape");
+        }
+        input.advance_to(self.epoch);
+        input.flush();
+        let mut inputs = HashMap::new();
+        inputs.insert(0usize, input);
+        self.programs.insert(
+            name.to_string(),
+            Installed {
+                inputs,
+                imports: Vec::new(),
+                exports: vec![name.to_string()],
+                dataflow_id,
+                probe,
+                origin: Origin::Diagnostics,
+                generators: HashMap::new(),
+            },
+        );
+    }
+
     /// Build a source's dataflow, one input arranged and published as trace `name` of `shape`, as
     /// corgi chunks. Returns the input, the dataflow's id, and the probe on its arrangement.
     fn install_source(&mut self, worker: &mut Worker, name: &str, shape: RowShape) -> (ServerInput, usize, ProbeHandle<HostTime>) {
         let probe = ProbeHandle::new();
         let dataflow_id = worker.next_dataflow_index();
+        self.note_dataflow(dataflow_id, name);
         let (handle, trace) = host_dataflow(worker, |outer, scope| {
             use timely::dataflow::operators::core::Input as _;
             use timely::dataflow::operators::Probe;
@@ -1395,7 +1480,10 @@ impl Server {
             .map(|(source, _)| source.clone())
             .collect();
         for source in garbage {
-            self.drop_program(worker, &source)?;
+            // Dropping one source reclaims any others it leaves unused, so some may be gone.
+            if self.programs.contains_key(&source) {
+                self.drop_program(worker, &source)?;
+            }
         }
         Ok(())
     }
@@ -1408,6 +1496,9 @@ impl Server {
         let w0 = worker.index() == 0;
         let (index, peers) = (worker.index(), worker.peers());
         let mine = |e: &u64| (*e as usize) % peers == index;
+        // Diagnostics of everything since the last tick enter at the epoch being closed.
+        self.process_diagnostics(worker);
+        self.feed_diagnostics(cur);
         for installed in self.programs.values_mut() {
             // The clock's single row advances by one each tick (worker 0 owns
             // it): retract the current epoch, add the next — an O(1) change.

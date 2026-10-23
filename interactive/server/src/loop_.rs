@@ -96,31 +96,18 @@ impl Work {
     }
 }
 
+/// The diagnostics views, installed as program `diag` when diagnostics are on.
+const DIAG_PROGRAM: &str = include_str!("../diag.ddp");
+
 pub fn run_worker(
     worker: &mut Worker,
     events: Option<Receiver<ControlEvent>>,
 ) {
-    // Logging a park wakes the diagnostics dataflow, whose scheduling logs can
-    // in turn wake it again. Keep idle servers genuinely idle unless an
-    // operator explicitly requests diagnostics.
-    let diagnostics_enabled = std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1");
-    let (_diagnostics_traces, _diagnostics_server) = if diagnostics_enabled {
-        let diagnostics_port = std::env::var("DDIR_DIAG_PORT")
-            .ok()
-            .and_then(|port| port.parse().ok())
-            .unwrap_or(51371);
-        let diagnostics::logging::LoggingState { traces, sink } =
-            diagnostics::logging::register(worker, false);
-        let server = if worker.index() == 0 {
-            Some(diagnostics::server::Server::start(diagnostics_port, sink))
-        } else {
-            drop(sink);
-            None
-        };
-        (Some(traces), server)
-    } else {
-        (None, None)
-    };
+    // With DDIR_DIAGNOSTICS=1 diagnostics own the worker's loggers, registered before any dataflow
+    // is built so that every operator is seen. Their events are only folded in at `tick`, so an
+    // idle server stays idle.
+    let diagnostics = (std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1"))
+        .then(|| interactive::diag::register(worker));
 
     let work_queue = Rc::new(RefCell::new(VecDeque::new()));
     let queue_out = work_queue.clone();
@@ -143,6 +130,13 @@ pub fn run_worker(
     let mut work_input = (worker.index() == 0).then_some(input);
 
     let mut server = Server::new();
+    // The diagnostics program: views over the `diag.*` sources, published as `diag.*` traces.
+    if let Some(diagnostics) = &diagnostics {
+        server.set_diagnostics(Rc::clone(diagnostics));
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
+        program.optimize();
+        server.install(worker, "diag", &program).expect("the diagnostics program installs");
+    }
     // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
     // instead (each importer re-arranges what it joins).
     server.set_arranged_imports(std::env::var("DDIR_ARRANGED_IMPORTS").map_or(true, |v| v != "0"));
