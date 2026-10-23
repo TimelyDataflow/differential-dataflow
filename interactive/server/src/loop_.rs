@@ -132,7 +132,7 @@ pub fn run_worker(
     let mut server = Server::new();
     // The diagnostics program: views over the `diag.*` sources, published as `diag.*` traces.
     if let Some(diagnostics) = &diagnostics {
-        server.set_diagnostics(diagnostics.clone());
+        server.set_diagnostics(Rc::clone(diagnostics));
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
         program.optimize();
         server.install(worker, "diag", &program).expect("the diagnostics program installs");

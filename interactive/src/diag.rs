@@ -118,37 +118,37 @@ struct Pending {
 pub fn register(worker: &mut Worker) -> Rc<RefCell<Diagnostics>> {
     let diag = Rc::new(RefCell::new(Diagnostics { worker: worker.index(), ..Default::default() }));
     let mut registry = worker.log_register().expect("timely logging is available");
-    let sink = diag.clone();
+    let timely_sink = Rc::clone(&diag);
     registry.insert::<TimelyEventBuilder, _>("timely", move |_time, data| {
         if let Some(events) = data {
-            let mut diag = sink.borrow_mut();
+            let mut state = timely_sink.borrow_mut();
             for (time, event) in events.drain(..) {
                 match event {
-                    TimelyEvent::Operates(_) | TimelyEvent::Schedule(_) | TimelyEvent::Shutdown(_) => diag.timely.push((time, event)),
+                    TimelyEvent::Operates(_) | TimelyEvent::Schedule(_) | TimelyEvent::Shutdown(_) => state.timely.push((time, event)),
                     _ => {}
                 }
             }
         }
     });
-    let sink = diag.clone();
+    let arrange_sink = Rc::clone(&diag);
     registry.insert::<DifferentialEventBuilder, _>("differential/arrange", move |_time, data| {
         if let Some(events) = data {
-            let mut diag = sink.borrow_mut();
+            let mut state = arrange_sink.borrow_mut();
             for (_, event) in events.drain(..) {
                 match event {
-                    DifferentialEvent::Batch(_) | DifferentialEvent::Merge(_) | DifferentialEvent::Drop(_) => diag.differential.push(event),
+                    DifferentialEvent::Batch(_) | DifferentialEvent::Merge(_) | DifferentialEvent::Drop(_) => state.differential.push(event),
                     _ => {}
                 }
             }
         }
     });
-    let sink = diag.clone();
+    let label_sink = Rc::clone(&diag);
     registry.insert::<LabelEventBuilder, _>("ddir/labels", move |_time, data| {
         if let Some(events) = data {
-            let mut diag = sink.borrow_mut();
+            let mut state = label_sink.borrow_mut();
             for (_, event) in events.drain(..) {
                 for id in event.first..event.end {
-                    diag.labels.entry(id).or_insert_with(|| event.label.clone());
+                    state.labels.entry(id).or_insert_with(|| event.label.clone());
                 }
             }
         }
@@ -384,3 +384,4 @@ fn retired_rows(worker: i64, rows: HashMap<(String, String, String), i64>) -> Op
     ]);
     Some(Updates { keys, vals: CValue::Unit(rows.len()), diffs: rows.iter().map(|(_, n)| *n).collect() })
 }
+

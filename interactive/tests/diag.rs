@@ -54,7 +54,7 @@ fn views_see_programs_and_state_stays_bounded() {
     timely::execute_directly(move |worker| {
         let diagnostics = diag::register(worker);
         let mut server = Server::new();
-        server.set_diagnostics(diagnostics.clone());
+        server.set_diagnostics(std::rc::Rc::clone(&diagnostics));
         server.install(worker, "diag", &program(DIAG)).unwrap();
         server.install(worker, "p", &program(&PAIRS.replace("NAME", "p.pairs"))).unwrap();
         server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", None).unwrap();
@@ -86,8 +86,8 @@ fn views_see_programs_and_state_stays_bounded() {
         }
         let by_program = view(&mut server, worker, "diag.time_by_program");
         assert!(by_program.get("\"q\"").is_some_and(|&ns| ns > 0), "q's time survives its drops: {by_program:#?}");
-        let operators = view(&mut server, worker, "diag.operators_by_program");
-        assert!(!operators.contains_key("\"q\""), "q has no live operators: {operators:#?}");
+        let live = view(&mut server, worker, "diag.operators_by_program");
+        assert!(!live.contains_key("\"q\""), "q has no live operators: {live:#?}");
         assert_eq!(held[0].0, held[1].0, "live operators after 10 and 30 cycles: {held:?}");
         assert_eq!(held[0].1, held[1].1, "retired triples after 10 and 30 cycles: {held:?}");
         assert!(held[1].2 <= held[0].2 + held[0].2 / 4 + 64, "the diagnostics program's records stay flat: {held:?}");

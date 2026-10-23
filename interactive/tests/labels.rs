@@ -54,7 +54,7 @@ fn every_item_is_labelled_after_optimize() {
 fn rendering_logs_the_operators_of_each_label() {
     let events = timely::execute_directly(move |worker| {
         let events: Rc<RefCell<Vec<(usize, usize, String)>>> = Rc::default();
-        let sink = events.clone();
+        let sink = Rc::clone(&events);
         worker.log_register().unwrap().insert::<LabelEventBuilder, _>("ddir/labels", move |_, data| {
             if let Some(data) = data {
                 sink.borrow_mut().extend(data.iter().map(|(_, e)| (e.first, e.end, e.label.clone())));

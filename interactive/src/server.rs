@@ -1480,7 +1480,10 @@ impl Server {
             .map(|(source, _)| source.clone())
             .collect();
         for source in garbage {
-            self.drop_program(worker, &source)?;
+            // Dropping one source reclaims any others it leaves unused, so some may be gone.
+            if self.programs.contains_key(&source) {
+                self.drop_program(worker, &source)?;
+            }
         }
         Ok(())
     }

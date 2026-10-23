@@ -442,7 +442,21 @@ pub fn render_program<'s>(
         CorgiImport::Columns(c) => crate::backend::Rendered::Collection(c),
         CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(a),
     }).collect();
-    crate::backend::render_scope::<CorgiBackend>(s, scope, 0, imports, shapes).iter().map(|r| r.arrange()).collect()
+    let rendered = crate::backend::render_scope::<CorgiBackend>(s, scope, 0, imports, shapes);
+    // An export that is not already an arrangement is arranged here, after its statement has
+    // rendered: label those operators with the export, for diagnostics.
+    let logger = scope.worker().logger_for::<crate::backend::LabelEventBuilder>("ddir/labels");
+    let arranged = rendered.iter().zip(&s.exports).map(|(r, export)| {
+        let first = scope.worker().peek_identifier();
+        let arranged = r.arrange();
+        if let Some(logger) = &logger {
+            let end = scope.worker().peek_identifier();
+            logger.log(crate::backend::LabelEvent { first, end, label: format!("export {}", export.name) });
+        }
+        arranged
+    }).collect();
+    if let Some(logger) = &logger { logger.flush(); }
+    arranged
 }
 
 /// A published export: a trace of corgi chunks at the program time, as the program built it.

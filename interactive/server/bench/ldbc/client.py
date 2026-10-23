@@ -206,7 +206,7 @@ class Server:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
         env = dict(os.environ, DDIR_BIND=f'127.0.0.1:{port}', DDIR_WS_BIND='127.0.0.1:0',
-                   DDIR_DIAGNOSTICS='0', DDIR_WORKERS=str(workers))
+                   DDIR_DIAGNOSTICS=os.environ.get('DDIR_DIAGNOSTICS', '0'), DDIR_WORKERS=str(workers))
         self.process = subprocess.Popen([str(binary)], stdin=subprocess.PIPE,
                                         stdout=subprocess.DEVNULL, stderr=self.log, env=env)
         self.stop_monitor = threading.Event()
