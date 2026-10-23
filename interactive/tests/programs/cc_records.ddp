@@ -1,0 +1,19 @@
+-- Connected components by label propagation.
+-- input 0: edges (src, dst), keyed by source.
+
+let raw   = input 0 : (int, int);
+
+-- symmetrize the edge collection; identify nodes
+let edges = raw | map((a, b) -> (b, a)) + raw | distinct;
+let nodes = edges | map((a, _) -> (a, ())) | distinct;
+
+-- evolve a set of (node, label) pairs, each node
+-- starting from its own name as a label, and
+-- maintaining the least label it has seen.
+cc: {
+    let props  = labels | join(edges, (_, lbl, dst) -> (dst, lbl));
+    var labels = nodes | map((n, _) -> (n, n)) + props | min;
+}
+
+-- the labels now identify components.
+export "parts" = cc::labels | map((_, label) -> (label, ()));

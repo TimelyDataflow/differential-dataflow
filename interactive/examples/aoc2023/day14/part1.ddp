@@ -4,13 +4,13 @@
 -- row 0 remove the no-blocker case; rank counts include self (no defaults).
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, code), ()) -> ((r, c), code));
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, code), ()) -> ((r, c), code));
 let os    = cells | filter((_, code) -> (code, 79) eq) | map((rc, _) -> (rc, ()));
 let cubes = cells | filter((_, code) -> (code, 35) eq) | map((rc, _) -> (rc, ()));
 
 let allcols = cells | map(((_, c), _) -> (c, ())) | distinct;
 let cubesN = cubes + (allcols | map((c, _) -> ((0, c), ())));
-let cubcol = cubesN | map(((r, c), _) -> (c, r));          -- (c ; rc)
+let cubcol = cubesN | map(((r, c), _) -> (c, r));          -- (c, rc)
 
 -- nearest cube above each rock
 let b = os | map(((r, c), _) -> (c, r))
@@ -18,12 +18,12 @@ let b = os | map(((r, c), _) -> (c, r))
     | filter(((_, r), rc) -> (rc, r) lt)
     | map(((c, r), rc) -> ((r, c), (1000000, rc) sub)) | min
     | map((rc, v) -> (rc, (1000000, v) sub));
--- (r, c ; b)
+-- ((r, c), b)
 
-let seg = b | map(((r, c), b) -> ((c, b), r));           -- (c, b ; r)
+let seg = b | map(((r, c), b) -> ((c, b), r));           -- ((c, b), r)
 let cnt = seg | join(seg, ((c, b), r, r2) -> ((c, b, r), r2))
     | filter(((_, _, r), r2) -> (r2, r) le) | map((k, _) -> (k, ())) | count;
--- (c, b, r ; n): rank incl. self
+-- ((c, b, r), n): rank incl. self
 let rolled = cnt | map(((c, b, _), n) -> (((b, n) add, c), ()));    -- (newr, c)
 
 let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min

@@ -77,6 +77,8 @@ impl<'de> serde::Deserialize<'de> for Lambda {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
     Min,
+    /// Each `(key, val)` whose accumulated diff is not zero, once: a collection read as a set of
+    /// records. A key's values are kept, and grouping stays by key, since equal records share one.
     Distinct,
     /// The sum of a key's diffs, as an `Int`, when it is not zero. It may be negative, as DD's
     /// `count` is: a negative count is how a program finds a negative accumulation.
@@ -110,7 +112,7 @@ pub enum LinearOp {
     /// UNNEST: explode the `List` a lambda gives into one row per element, value
     /// `(pos, element)`. See `parse::Expr::FlatMap`.
     FlatMap(Lambda),
-    /// Pair each value with its whole time: `(key ; val)` becomes `(key ; (val, time))`.
+    /// Pair each value with its whole time: `(key, val)` becomes `(key, (val, time))`.
     /// The time is a tuple of `Int`s, the epoch and then every scope coordinate, so its
     /// width is one more than the op's scope depth. Time itself is unchanged.
     Lift,

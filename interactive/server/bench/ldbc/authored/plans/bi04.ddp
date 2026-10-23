@@ -3,12 +3,12 @@
 -- messages they posted in those forums. Popularity is kept per forum for all
 -- requests; a request only filters by creation date and ranks.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, date)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let forum   = import "ldbc.forum"  : ((int, List(int), int, int) ; ());
-let member  = import "ldbc.member" : ((int, int, int) ; ());
-let place   = import "ldbc.place"  : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, date)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let forum   = import "ldbc.forum"  : ((int, List(int), int, int), ());
+let member  = import "ldbc.member" : ((int, int, int), ());
+let place   = import "ldbc.place"  : ((int, List(int), List(int), int), ());
 
 -- Threads: every post roots its own thread; a comment joins its parent's thread.
 -- Rows are (message, root, forum of the root post).

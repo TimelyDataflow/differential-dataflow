@@ -2,7 +2,7 @@
 -- max via min of (BIG - x), avoiding negatives.
 -- input 0: (game, set, green, red, blue)
 
-let sets = input 0 : ((int, int, int, int, int) ; ());
+let sets = input 0 : ((int, int, int, int, int), ());
 let maxg = sets | map(((game, _, g, _, _), _) -> (game, (1000000, g) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
 let maxr = sets | map(((game, _, _, r, _), _) -> (game, (1000000, r) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
 let maxb = sets | map(((game, _, _, _, b), _) -> (game, (1000000, b) sub)) | min | map((game, x) -> (game, (1000000, x) sub));

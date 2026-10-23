@@ -10,7 +10,7 @@ fn tup(fields: &[i64]) -> String {
 fn feed_validates_before_staging_one_epoch() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
-            "let rows = input 0 : ((int) ; (int)); export \"rows\" = rows;",
+            "let rows = input 0 : ((int), (int)); export \"rows\" = rows;",
         ));
         program.optimize();
 
@@ -42,7 +42,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
         let barrier = Arc::new(Barrier::new(3));
         let guards = timely::execute(timely::Config::process(3), move |worker| {
             let mut program = lower::lower_tree(parse::pipe::parse(
-                "let rows = input 0 : ((int) ; ()); export \"rows\" = rows;",
+                "let rows = input 0 : ((int), ()); export \"rows\" = rows;",
             ));
             program.optimize();
             let mut server = Server::new();
@@ -101,7 +101,7 @@ fn listed(k: i64, xs: &[i64]) -> String {
 fn split_feeds_keep_their_shapes() {
     let guards = timely::execute(timely::Config::process(2), |worker| {
         let mut server = Server::new();
-        install(&mut server, worker, r#"export "rows" = input 0 : ((int, List(int)) ; ());"#);
+        install(&mut server, worker, r#"export "rows" = input 0 : ((int, List(int)), ());"#);
         let columns = decoded(&listed_shape(), &["tuple(1,list(7))", "tuple(2,list())"]);
         let mine: Vec<usize> = (worker.index()..columns.len()).step_by(worker.peers()).collect();
         server.feed_columns("world", 0, columns.select(&mine), None).unwrap();
@@ -117,10 +117,10 @@ fn split_feeds_keep_their_shapes() {
 fn misshaped_columns_are_refused() {
     timely::execute_directly(|worker| {
         let mut server = Server::new();
-        install(&mut server, worker, r#"export "rows" = input 0 : ((int, List(int)) ; ());"#);
+        install(&mut server, worker, r#"export "rows" = input 0 : ((int, List(int)), ());"#);
         let pair = corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int]);
         let refused = server.feed_columns("world", 0, decoded(&pair, &["1,2"]), None).unwrap_err();
-        assert_eq!(refused, "a feed of shape ((Int, Int) ; ()) reached an input of shape ((Int, List<Int>) ; ())");
+        assert_eq!(refused, "a feed of shape ((Int, Int), ()) reached an input of shape ((Int, List<Int>), ())");
         server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), None).unwrap();
         server.tick(worker);
         assert_eq!(server.snapshot(worker, "rows").unwrap().rows(), vec![(listed(1, &[]), "tuple()".to_string(), 1)]);
@@ -134,7 +134,7 @@ fn fed_sums_arrive_at_their_time() {
         let mut server = Server::new();
         install(&mut server, worker, r#"
             type Node = Leaf int | Pair (int, int);
-            export "rows" = input 0 : (Node ; ());
+            export "rows" = input 0 : (Node, ());
         "#);
         let node = corgi::Shape::Sum(vec![corgi::Shape::Int, corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int])]);
         server.feed_columns("world", 0, decoded(&node, &["inject(1,tuple(1,2))"]), None).unwrap();
@@ -157,7 +157,7 @@ fn fed_sums_arrive_at_their_time() {
 fn peek_by_key_reads_reference_keys() {
     timely::execute_directly(|worker| {
         let mut server = Server::new();
-        install(&mut server, worker, r#"export "rows" = input 0 : (List(int) ; ()) | map((k, ()) -> (k ref, ()));"#);
+        install(&mut server, worker, r#"export "rows" = input 0 : (List(int), ()) | map((k, ()) -> (k ref, ()));"#);
         let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
         server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
         server.tick(worker);

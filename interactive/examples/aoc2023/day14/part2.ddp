@@ -3,7 +3,7 @@
 -- monotone accumulation, k capped at 141. Rolls are closed-form.
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, code), ()) -> ((r, c), code));
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, code), ()) -> ((r, c), code));
 let rocks0 = cells | filter((_, code) -> (code, 79) eq) | map(((r, c), _) -> ((0, r, c), ()));
 let cubes  = cells | filter((_, code) -> (code, 35) eq) | map((rc, _) -> (rc, ()));
 
@@ -21,8 +21,8 @@ let cubesX = cubes
     + (allrows | map((r, _) -> ((r, 0), ())))
     + (allrows | map((r, _) -> ((), r)) | join(maxc, (_, r, m) -> ((r, (m, 1) add), ())));
 
-let cubcol = cubesX | map(((r, c), _) -> (c, r));   -- (c ; rc)
-let cubrow = cubesX | map(((r, c), _) -> (r, c));   -- (r ; cc)
+let cubcol = cubesX | map(((r, c), _) -> (c, r));   -- (c, rc)
+let cubrow = cubesX | map(((r, c), _) -> (r, c));   -- (r, cc)
 
 spin: {
     let cur = os | filter(((k, _, _), _) -> (k, 140) le);
@@ -34,8 +34,8 @@ spin: {
         | filter(((_, _, r), rc) -> (rc, r) lt)
         | map(((c, k, r), rc) -> ((k, r, c), (1000000, rc) sub)) | min
         | map((x, v) -> (x, (1000000, v) sub));
-    -- (k, r, c ; b)
-    let segn = bn | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
+    -- ((k, r, c), b)
+    let segn = bn | map(((k, r, c), b) -> ((k, c, b), r));   -- ((k, c, b), r)
     let osn = segn | join(segn, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
         | filter(((_, _, _, r), r2) -> (r2, r) le) | map((x, _) -> (x, ())) | count
         | map(((k, c, b, _), n) -> ((k, (b, n) add, c), ()));
@@ -47,8 +47,8 @@ spin: {
         | filter(((_, _, c), cc) -> (cc, c) lt)
         | map(((r, k, c), cc) -> ((k, r, c), (1000000, cc) sub)) | min
         | map((x, v) -> (x, (1000000, v) sub));
-    -- (k, r, c ; b)
-    let segw = bw | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
+    -- ((k, r, c), b)
+    let segw = bw | map(((k, r, c), b) -> ((k, r, b), c));   -- ((k, r, b), c)
     let osw = segw | join(segw, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
         | filter(((_, _, _, c), c2) -> (c2, c) le) | map((x, _) -> (x, ())) | count
         | map(((k, r, b, _), n) -> ((k, r, (b, n) add), ()));
@@ -59,8 +59,8 @@ spin: {
         | join(cubcol, (c, (k, r), rc) -> ((c, k, r), rc))
         | filter(((_, _, r), rc) -> (rc, r) gt)
         | map(((c, k, r), rc) -> ((k, r, c), rc)) | min;
-    -- (k, r, c ; b)
-    let segs = bs | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
+    -- ((k, r, c), b)
+    let segs = bs | map(((k, r, c), b) -> ((k, c, b), r));   -- ((k, c, b), r)
     let oss = segs | join(segs, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
         | filter(((_, _, _, r), r2) -> (r2, r) ge) | map((x, _) -> (x, ())) | count
         | map(((k, c, b, _), n) -> ((k, (b, n) sub, c), ()));
@@ -70,8 +70,8 @@ spin: {
         | join(cubrow, (r, (k, c), cc) -> ((r, k, c), cc))
         | filter(((_, _, c), cc) -> (cc, c) gt)
         | map(((r, k, c), cc) -> ((k, r, c), cc)) | min;
-    -- (k, r, c ; b)
-    let sege = be | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
+    -- ((k, r, c), b)
+    let sege = be | map(((k, r, c), b) -> ((k, r, b), c));   -- ((k, r, b), c)
     let ose = sege | join(sege, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
         | filter(((_, _, _, c), c2) -> (c2, c) ge) | map((x, _) -> (x, ())) | count
         | map(((k, r, b, _), n) -> (((k, 1) add, r, (b, n) sub), ()));

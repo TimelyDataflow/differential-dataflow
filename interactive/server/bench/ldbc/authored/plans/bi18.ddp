@@ -3,11 +3,11 @@
 -- friend <- other, and the second hop is restricted to interested people before the
 -- paths are built (meeting in the middle).
 
-let request  = input 0 : ((int, List(int)) ; ());             -- (rid, tag name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows    = import "ldbc.knows"    : ((int, int, int) ; ());
-let tag      = import "ldbc.tag"      : ((int, List(int), int) ; ());
-let interest = import "ldbc.interest" : ((int, int) ; ());
+let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows    = import "ldbc.knows"    : ((int, int, int), ());
+let tag      = import "ldbc.tag"      : ((int, List(int), int), ());
+let interest = import "ldbc.interest" : ((int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

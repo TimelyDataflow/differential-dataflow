@@ -5,7 +5,7 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+    let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
     export "lift" = pairs | lift;
     export "epoch" = pairs | delay((_, b) -> (b)) | lift;
     export "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);
@@ -51,7 +51,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
 
 fn int(n: i64) -> String { n.to_string() }
 fn ints(ns: &[i64]) -> String { format!("tuple({})", ns.iter().map(i64::to_string).collect::<Vec<_>>().join(",")) }
-/// `(key ; (val, time))`, as `lift` writes a row of `pairs`.
+/// `(key, (val, time))`, as `lift` writes a row of `pairs`.
 fn lifted(k: i64, v: i64, time: &[i64], d: i64) -> (String, String, i64) {
     (int(k), format!("tuple({v},{})", ints(time)), d)
 }
@@ -63,7 +63,7 @@ fn expected() -> Vec<Vec<(String, String, i64)>> {
         vec![lifted(1, 2, &[0], 1), lifted(1, 2, &[1], -1), lifted(1, 2, &[2], 1), lifted(3, 4, &[0], 1), lifted(5, 1, &[1], 1)],
         // Delayed to epoch `b` they do cancel; `(3, 4)` is at epoch 4, not yet complete.
         vec![lifted(1, 2, &[2], 1), lifted(5, 1, &[1], 1)],
-        // `(b ; a)` with diff 2 and `(a ; a)` with diff -1, for each of `(1, 2)`, `(3, 4)`, `(5, 1)`.
+        // `(b, a)` with diff 2 and `(a, a)` with diff -1, for each of `(1, 2)`, `(3, 4)`, `(5, 1)`.
         vec![
             (int(1), int(1), -1), (int(1), int(5), 2), (int(2), int(1), 2),
             (int(3), int(3), -1), (int(4), int(3), 2), (int(5), int(5), -1),
@@ -91,9 +91,9 @@ fn rows_are_as_expected() {
 fn ill_shaped_times_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
-            (r#"export "a" = input 0 : ((int, int) ; ()) | delay((_, _) -> (0, 0));"#, "join_function"),
-            (r#"let i = input 0 : ((int, int) ; ()); s: { var a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
-            (r#"export "a" = input 0 : ((int, int) ; ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
+            (r#"export "a" = input 0 : ((int, int), ()) | delay((_, _) -> (0, 0));"#, "join_function"),
+            (r#"let i = input 0 : ((int, int), ()); s: { var a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
+            (r#"export "a" = input 0 : ((int, int), ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
             program.optimize();

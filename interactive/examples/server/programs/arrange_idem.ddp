@@ -14,9 +14,9 @@
 -- arrangement, so a class containing either is "already arranged".
 --
 -- RULE  arrange(x) ≡ x   when x's class is already arranged.
--- output trace "classes": (node-id ; class-leader).
+-- output trace "classes": (node-id, class-leader).
 
-let node  = input 0 : ((int) ; (int, List(int))) | map(((id), v) -> (id, v));    -- id ; op, [children]
+let node  = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));    -- (id, (op, [children]))
 let elems = node | map((id, _) -> (id, id));                     -- id ; id   (seed each to itself)
 
 -- explode each node's children (UNNEST via flatmap) so they can be
@@ -24,7 +24,7 @@ let elems = node | map((id, _) -> (id, id));                     -- id ; id   (s
 let pc = node
     | map((id, (op, cs)) -> ((id, op), cs))
     | flatmap((_, cs) -> cs)
-    | map(((id, op), (pos, child)) -> (child, (id, op, pos)));              -- child ; (id, op, pos)
+    | map(((id, op), (pos, child)) -> (child, (id, op, pos)));              -- (child, (id, op, pos))
 
 -- nodes that produce an arrangement (op 1 = Arrange, op 2 = Reduce)
 let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ())))
@@ -35,7 +35,7 @@ let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, 
 
 eqsat: {
     -- congruence closure: group nodes by (op ++ canonicalized children)
-    let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));   -- (id,op) ; (pos,class)
+    let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));   -- ((id,op), (pos,class))
     let bsig  = canon | collect | map(((id, op), cs) -> ((op, cs), id));       -- signature ; id
     let reps  = bsig | min;                                     -- signature ; min id
     let cong  = bsig | join(reps, (_, id, rep) -> (id, rep));             -- id ; representative

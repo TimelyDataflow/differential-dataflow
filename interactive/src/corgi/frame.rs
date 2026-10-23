@@ -84,7 +84,7 @@ pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> 
     }
     let shapes = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
     if shapes.0 != *key || shapes.1 != *val {
-        return Err(format!("frame: rows of shape ({} ; {}), but the input's are ({key} ; {val})", shapes.0, shapes.1));
+        return Err(format!("frame: rows of shape ({}, {}), but the input's are ({key}, {val})", shapes.0, shapes.1));
     }
     Ok(updates)
 }

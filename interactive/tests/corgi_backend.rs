@@ -20,6 +20,10 @@ fn inputs_for(prog: &str) -> Vec<Vec<String>> {
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],
         "scc" => vec![edges.clone()],
+        // cc_stages: components {1, 2, 3, 4} and {5, 6}.
+        "cc_stages" => vec![edges.clone()],
+        // cc_records: the same edges, keyed by source; components {1, 2, 3, 4} and {5, 6}.
+        "cc_records" => vec![[(1, 2), (2, 3), (3, 4), (5, 6), (4, 2)].iter().map(|(s, d)| format!("{s} val={d}")).collect()],
         // kcore: the same edges. Symmetrized they leave a 2-core of {2, 3, 4} and peel
         // 1, 5 and 6 away, so the fixpoint has to retract as well as accumulate.
         "kcore" => vec![edges],
@@ -160,6 +164,8 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test] fn reach() { assert_matches_expected("reach"); }
 #[test] fn scc() { assert_matches_expected("scc"); }
+#[test] fn cc_stages() { assert_matches_expected("cc_stages"); }
+#[test] fn cc_records() { assert_matches_expected("cc_records"); }
 #[test] fn kcore() { assert_matches_expected("kcore"); }
 #[test] fn stable() { assert_matches_expected("stable"); }
 #[test] fn unnest() { assert_matches_expected("unnest"); }
@@ -253,7 +259,7 @@ fn register_test_functions() {
 /// A filter predicate must be an `Int`: a tuple is rejected rather than keeping nothing.
 #[test]
 fn filter_requires_an_int_predicate() {
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter((k, ()) -> k);"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int), ()) | filter((k, ()) -> k);"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
@@ -265,7 +271,7 @@ fn filter_requires_an_int_predicate() {
 fn call_argument_shapes_are_checked() {
     register_test_functions();
     // `blend` takes a pair; pass it an Int.
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map(((n), ()) -> ((n), (n call blend)));"#
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int), ()) | map(((n), ()) -> ((n), (n call blend)));"#
 ));
     tree.optimize();
     let inputs = vec![rows(&[&[1], &[2]])];

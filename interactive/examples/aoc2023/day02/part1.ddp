@@ -1,7 +1,7 @@
 -- AoC 2023 day 2 part 1: sum of game ids where every set fits 13g/12r/14b.
 -- input 0: (game, set, green, red, blue)
 
-let sets = input 0 : ((int, int, int, int, int) ; ());
+let sets = input 0 : ((int, int, int, int, int), ());
 let games = sets | map(((game, _, _, _, _), _) -> (game, ())) | distinct;
 let bad   = sets
     | filter(((_, _, g, r, b), _) -> (((g, 13) le, (r, 12) le, (b, 14) le) all, 0) eq)

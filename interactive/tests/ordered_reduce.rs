@@ -20,15 +20,16 @@ fn reference<K: Ord, V: Ord>(name: &str, net: &BTreeMap<(K, V), i64>, key: impl 
     for ((k, v), d) in net {
         if *d != 0 { groups.entry(k).or_default().push((v, *d)); }
     }
-    sorted(groups.into_iter().filter_map(|(k, vals)| {
-        let out = match name {
-            "minimum" => val(vals[0].0),
-            "distinct" => "tuple()".to_string(),
-            "counted" => match vals.iter().map(|(_, d)| d).sum::<i64>() { 0 => return None, n => n.to_string() },
-            "collected" => format!("list({})", join(vals.iter().flat_map(|(v, d)| std::iter::repeat_n(*v, (*d).max(0) as usize)), &val)),
+    sorted(groups.into_iter().flat_map(|(k, vals)| {
+        let outs = match name {
+            "minimum" => vec![val(vals[0].0)],
+            "distinct" => vals.iter().map(|(v, _)| val(v)).collect(),
+            "counted" => match vals.iter().map(|(_, d)| d).sum::<i64>() { 0 => Vec::new(), n => vec![n.to_string()] },
+            "collected" => vec![format!("list({})", join(vals.iter().flat_map(|(v, d)| std::iter::repeat_n(*v, (*d).max(0) as usize)), &val))],
             other => panic!("no reference for {other}"),
         };
-        Some((key(k), out, 1))
+        let k = key(k);
+        outs.into_iter().map(move |out| (k.clone(), out, 1))
     }).collect())
 }
 
@@ -50,7 +51,7 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
     timely::execute_directly(|worker| {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(
             r#"
-            let x = input 0 : ((int, int, List(int)); ())
+            let x = input 0 : ((int, int, List(int)), ())
                 | map(((k, n, xs), ()) -> (k, (n, xs)));
             export "keyed" = x;
             export "minimum" = x | min;
@@ -113,7 +114,7 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
 fn batched_equality_spans_windows_and_retracts_compound_keys() {
     timely::execute_directly(|worker| {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
-            let x = input 0 : ((int, List(int)); ())
+            let x = input 0 : ((int, List(int)), ())
                 | map(((k, xs), ()) -> ((k, (k, 7) mul), xs));
             export "keyed" = x;
             export "minimum" = x | min;

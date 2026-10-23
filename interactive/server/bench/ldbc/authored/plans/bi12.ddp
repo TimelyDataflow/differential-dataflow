@@ -3,9 +3,9 @@
 -- (zero for everyone else). Messages are kept keyed by their thread's language for
 -- all requests, so a request reads only its languages.
 
-let request = input 0 : ((int, int, int, List(int), int) ; ());   -- (rid, start, length, language, enabled); one row per language
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let request = input 0 : ((int, int, int, List(int), int), ());   -- (rid, start, length, language, enabled); one row per language
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
 
 -- Threads, carrying the root post's language: (message, language).
 let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)

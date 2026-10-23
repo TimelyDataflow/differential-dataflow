@@ -1,9 +1,9 @@
 -- Reachability over an edge set imported from another installed program.
--- trace "edges": (src ; dst), published by `producer.ddp`.
--- input 0 : ((int) ; ()): roots (node ;)
+-- trace "edges": (src, dst), published by `producer.ddp`.
+-- input 0 : ((int), ()): roots (node, ())
 
 let edges = import "edges";
-let roots = input 0 : ((int) ; ()) | map((n, ()) -> (n, ()));
+let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

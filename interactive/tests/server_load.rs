@@ -25,7 +25,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
 
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
-            "let rows = input 0 : ((int) ; ()); export \"rows\" = rows;",
+            "let rows = input 0 : ((int), ()); export \"rows\" = rows;",
         ));
         program.optimize();
         let mut server = Server::new();
@@ -73,7 +73,7 @@ fn a_well_formed_file_is_fed_exactly_once_across_workers() {
 fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let install = |server: &mut Server, worker: &mut _, name: &str| {
-            let text = format!("let rows = input 0 : ((int) ; ()); export \"{name}.rows\" = rows;");
+            let text = format!("let rows = input 0 : ((int), ()); export \"{name}.rows\" = rows;");
             let mut program = lower::lower_tree(parse::pipe::parse(&text));
             program.optimize();
             server.install(worker, name, &program).unwrap();

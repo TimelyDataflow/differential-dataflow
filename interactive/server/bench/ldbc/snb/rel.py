@@ -307,7 +307,7 @@ class Compiler:
                 code = 'input 0' if args[0] == 'request' else f'import "ldbc.{args[0]}"'
             else:
                 code = f'input {len(self.inputs)-1}'
-            code += f' : ({source_shape(args[1])} ; ())'
+            code += f' : ({source_shape(args[1])}, ())'
         elif op == 'select':
             source,pairs = args
             code = f'{self.emit(source)} | map((row, ()) -> ({projection(pairs.values(),positions(source.fields))}, ()))'

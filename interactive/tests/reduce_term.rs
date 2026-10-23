@@ -5,11 +5,11 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+    let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
     export "count" = pairs | count;
     export "count_lambda" = pairs | reduce((_, vals) -> ((0, vals) fold ((acc, (_, d)) -> (acc, d) add), 1) enlist);
     export "distinct" = pairs | distinct;
-    export "distinct_lambda" = pairs | reduce(_ -> ((), 1) enlist);
+    export "distinct_lambda" = pairs | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
     export "min" = pairs | min;
     export "min_lambda" = pairs | reduce((_, vals) -> ((1000000, vals) fold ((acc, (v, _)) -> ((v, acc) lt, v, acc) select), 1) enlist);
     export "sum" = pairs | reduce((_, vals) -> ((vals map (p -> (p.0, p.1) mul) fold_add), 1) enlist);

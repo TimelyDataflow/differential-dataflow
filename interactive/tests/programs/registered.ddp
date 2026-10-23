@@ -6,8 +6,8 @@
 -- a flatmap, a join, and a refinement fixpoint (the shape of a procedural-
 -- generation layer: a record's children come from a rule, until none has any).
 
--- Seeds: (n ;).
-let seeds = input 0 : ((int) ; ()) | map(((n), ()) -> (n, ()));
+-- Seeds: (n, ).
+let seeds = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
 
 -- Refine: each cell's children are `cell call grow`, until `grow` returns none.
 refine: {

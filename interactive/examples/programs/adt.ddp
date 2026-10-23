@@ -1,11 +1,11 @@
 -- Named constructors (`inject`) + `match`. Each edge is tagged by orientation,
--- carrying the field-sum as payload, then matched back out to a (bucket; sum)
+-- carrying the field-sum as payload, then matched back out to a (bucket, sum)
 -- and counted per bucket. (Contrived — exercises sum intro/outro + fold.)
 
 type Dir = Fwd int   -- src < dst
          | Bwd int;  -- otherwise
 
-let edges = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let edges = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
 let tagged = edges
     | map((a, b) ->

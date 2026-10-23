@@ -5,8 +5,8 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let a = input 0 : ((int, int) ; ()) | map(((k, x), ()) -> (k, x));
-    let b = input 1 : ((int, int) ; ()) | map(((k, y), ()) -> (k, y));
+    let a = input 0 : ((int, int), ()) | map(((k, x), ()) -> (k, x));
+    let b = input 1 : ((int, int), ()) | map(((k, y), ()) -> (k, y));
 
     -- Each of `a`'s updates meets `b`'s at or before it, and each of `b`'s meets `a`'s strictly
     -- before it, so every pair meets once, at the later of its two times.

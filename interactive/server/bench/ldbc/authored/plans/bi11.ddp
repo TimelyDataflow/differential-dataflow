@@ -1,10 +1,10 @@
 -- BI11. Friend triangles: how many triangles of friendships are there among the
 -- residents of a country, with all three friendships made inside [start, end]?
 
-let request = input 0 : ((int, List(int), int, int) ; ());     -- (rid, country, start, end)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let place   = import "ldbc.place"  : ((int, List(int), List(int), int) ; ());
-let knows   = import "ldbc.knows"  : ((int, int, int) ; ());
+let request = input 0 : ((int, List(int), int, int), ());     -- (rid, country, start, end)
+let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let place   = import "ldbc.place"  : ((int, List(int), List(int), int), ());
+let knows   = import "ldbc.knows"  : ((int, int, int), ());
 
 -- Where people live: person -> city -> country, keyed by country name.
 let city_of    = person | map(((id, _, _, _, _, _, _, _, city, _, _, _), ()) -> (city, id));

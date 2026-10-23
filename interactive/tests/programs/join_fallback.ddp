@@ -3,8 +3,8 @@
 -- shapes, so such terms need no separate path. The gate is its recorded answer.
 type L = L int;
 
-let left = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
-let right = input 1 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let left = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+let right = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let out = left | join(right, (k, l, r) -> (k, ((l, r) add inject L match (L (s -> s)), r)));
 
 export "result" = out | arrange | inspect(total);

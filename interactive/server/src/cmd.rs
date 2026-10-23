@@ -834,10 +834,10 @@ mod tests {
     fn world() -> LineParser {
         let program = r#"
             type T = A int | B int | C (int, int);
-            export "pairs" = input 0 : ((int, int) ; ());
-            export "both" = input 1 : ((int, int) ; (int, int));
-            export "tagged" = input 2 : (() ; T);
-            export "ones" = input 3 : ((int) ; (int));
+            export "pairs" = input 0 : ((int, int), ());
+            export "both" = input 1 : ((int, int), (int, int));
+            export "tagged" = input 2 : ((), T);
+            export "ones" = input 3 : ((int), (int));
         "#;
         let catalog = Catalog::default();
         let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };

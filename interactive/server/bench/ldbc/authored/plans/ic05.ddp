@@ -5,12 +5,12 @@
 -- among some person's 40 smallest-id forums, so people whose memberships all postdate
 -- the date contribute just those 40.
 
-let request = input 0 : ((int, int, int) ; ());               -- (rid, person, date)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let forum   = import "ldbc.forum"   : ((int, List(int), int, int) ; ());
-let member  = import "ldbc.member"  : ((int, int, int) ; ());
+let request = input 0 : ((int, int, int), ());               -- (rid, person, date)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let forum   = import "ldbc.forum"   : ((int, List(int), int, int), ());
+let member  = import "ldbc.member"  : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

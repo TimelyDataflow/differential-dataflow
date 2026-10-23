@@ -5,7 +5,7 @@
 
 type Size = Small int | Big int;
 
-let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let tagged = pairs | map((a, b) -> (a, ((b, 15) lt, b inject Small, b inject Big) select));
 
 let picked = tagged

@@ -4,14 +4,14 @@
 -- with the group's writes (`cap_list`), keeps the latest write before the read,
 -- and emits the reads it contradicts. Same input, exports, and answers.
 
-let store = import "store" : ((int) ; (int, int));
-let intents = input 0 : ((int, int, int) ; (int));
+let store = import "store" : ((int), (int, int));
+let intents = input 0 : ((int, int, int), (int));
 
 let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
 let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
 let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 
--- ((k) ; (tag, id, value)): tag 1 a read and its expected value, tag 0 a write.
+-- ((k), (tag, id, value)): tag 1 a read and its expected value, tag 0 a write.
 let read_entries = reads | map(((rid, k), (e)) -> ((k), (1, rid, e)));
 -- The store row of each key read, as a write older than any of this epoch's.
 let store_entries = read_entries | join(store, ((k), _, (sw, v)) -> ((k), (0, sw, v)));

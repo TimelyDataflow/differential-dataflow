@@ -3,7 +3,7 @@
 -- (The slt resolves S to '???', which never toggles; we mirror that.)
 -- input 0: (row, col, code), 1-indexed
 
-let symbols = input 0 : ((int, int, int) ; ()) | map(((r, c, s), ()) -> ((r, c), s));
+let symbols = input 0 : ((int, int, int), ()) | map(((r, c, s), ()) -> ((r, c), s));
 let pipes = symbols | filter((_, s) -> ((s, 46) ne, (s, 83) ne) all);
 
 let e1 = pipes | map(((r, c), s) -> ((r, c,
@@ -37,7 +37,7 @@ let toggles = loop | join(symbols, (rc, _, s) -> (rc, s))
 
 status: {
     let cur = st | map(((r, c, e), _) -> ((r, c), e)) | join(symbols, (rc, e, _) -> (rc, e));
-    -- in-grid status cells (r, c ; e)
+    -- in-grid status cells ((r, c), e)
     let tog = cur | join(toggles, ((r, c), e, _) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
     let matched = cur | join(toggles, (rc, e, _) -> (rc, e));
     let nontog = (cur - matched) | map(((r, c), e) -> (((r, 1) add, (c, 1) add, e), ()));

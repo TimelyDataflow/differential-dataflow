@@ -3,8 +3,8 @@
 -- from k successive self-joins (no substring primitive, no string literals).
 -- input 0: (line, pos, charcode)
 
-let chars = input 0 : ((int, int, int) ; ()) | map(((line, pos, c), _) -> ((line, pos), c));
--- (line, pos ; code)
+let chars = input 0 : ((int, int, int), ()) | map(((line, pos, c), _) -> ((line, pos), c));
+-- ((line, pos), code)
 
 let s2 = chars | map(((line, p), c0) -> ((line, (p, 1) add), (p, c0)))
                | join(chars, ((line, _), (p, c0), c1) -> ((line, p), (c0, c1)));
@@ -14,7 +14,7 @@ let s4 = s3    | map(((line, p), (c0, c1, c2)) -> ((line, (p, 3) add), (p, c0, c
                | join(chars, ((line, _), (p, c0, c1, c2), c3) -> ((line, p), (c0, c1, c2, c3)));
 let s5 = s4    | map(((line, p), (c0, c1, c2, c3)) -> ((line, (p, 4) add), (p, c0, c1, c2, c3)))
                | join(chars, ((line, _), (p, c0, c1, c2, c3), c4) -> ((line, p), (c0, c1, c2, c3, c4)));
--- sk: (line, pos ; c0..c{k-1})
+-- sk: ((line, pos), c0..c{k-1})
 
 let digits = chars | filter((_, c) -> ((c, 48) ge, (c, 57) le) all)
                    | map(((line, pos), c) -> (line, (pos, (c, 48) sub)));
@@ -31,7 +31,7 @@ let w_eight = s5 | filter((_, w) -> (w, (101, 105, 103, 104, 116)) eq) | map(((l
 let w_nine  = s4 | filter((_, w) -> (w, (110, 105, 110, 101)) eq)      | map(((line, pos), _) -> (line, (pos, 9)));
 
 let findings = digits + w_zero + w_one + w_two + w_three + w_four + w_five + w_six + w_seven + w_eight + w_nine;
--- (line ; pos, digit)
+-- (line, (pos, digit))
 
 let first = findings | min | map((line, (_, d)) -> (line, d));
 let last  = findings | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map((line, (_, d)) -> (line, d));

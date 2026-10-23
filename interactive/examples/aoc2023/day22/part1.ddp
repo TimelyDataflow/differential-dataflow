@@ -3,10 +3,10 @@
 -- input 0: (r, x1,y1,z1, x2,y2,z2)
 
 -- slt's generate_series drops bricks with ANY reversed axis; mirror that.
-let lines = input 0 : ((int, int, int, int, int, int, int) ; ());
+let lines = input 0 : ((int, int, int, int, int, int, int), ());
 let bricks = lines | filter(((_, x1, y1, z1, x2, y2, z2), _) -> ((x1, x2) le, (y1, y2) le, (z1, z2) le) all)
     | map(((r, x1, y1, z1, x2, y2, z2), ()) -> (r, (x1, y1, z1, x2, y2, z2)));
--- (r ; xlo, ylo, zlo, xhi, yhi, zhi)
+-- (r, (xlo, ylo, zlo, xhi, yhi, zhi))
 
 let bu = bricks | map((r, (xl, yl, zl, xh, yh, zh)) -> ((), (r, xl, yl, zl, xh, yh, zh)));
 let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, zl2, xh2, yh2, zh2)) ->
@@ -16,7 +16,7 @@ let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, z
              (zl1, zl2) lt) all,
             ((zh1, zl1) sub, 1) add)))
     | filter((_, (hit, _)) -> (hit, 1) eq) | map(((lo, up), (_, h)) -> (lo, (up, h)));
--- (lower ; upper, height_lower) for xy-overlapping pairs
+-- (lower, (upper, height_lower)) for xy-overlapping pairs
 
 -- resting z per brick, stored negated (mz = BIG - z) so `min` computes max
 rests: {
@@ -24,11 +24,11 @@ rests: {
     var rest = (bricks | map((r, _) -> (r, 999999))) + lifted | min;
 }
 let rest = rests::rest;
--- (r ; BIG - resting z), BIG = 1000000
+-- (r, BIG - resting z), BIG = 1000000
 
 -- direct supports: rest_top(lower) + 1 == rest_z(upper)
 let s1 = ovl | join(rest, (lo, (up, h), mz) -> (up, (lo, (mz, h) sub)));
--- (upper ; lower, required mz_upper)
+-- (upper, (lower, required mz_upper))
 let sup = s1 | join(rest, (up, (lo, req), mz) -> ((lo, up, (req, mz) eq), ()))
     | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((lo, up, _), _) -> ((lo, up), ()));
 -- (lower, upper)

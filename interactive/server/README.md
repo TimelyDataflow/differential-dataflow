@@ -43,7 +43,7 @@ The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
-the one after the program's own, its rows `(key ; (val, q))`, and the demand
+the one after the program's own, its rows `(key, (val, q))`, and the demand
 sets are `peek`able exports. `feed <prog> <in#> from <source>` fills an input from a
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
 or `iota:N`, or a file of integer rows — with each worker taking its shard, so
@@ -111,7 +111,7 @@ state, not elapsed wall-clock time.
     feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]
 
 pushes one update into a loaded program's positional input. The input declares
-its shapes (`input 0 : ((int, int) ; ())`), and each value is read at them:
+its shapes (`input 0 : ((int, int), ())`), and each value is read at them:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
 `inject(lane,payload)` for a sum. A whole key or value may drop its wrapper:
 `1,2` for a tuple of integers, and `_` or nothing for unit. The session reads

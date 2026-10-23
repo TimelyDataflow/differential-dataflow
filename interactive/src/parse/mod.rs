@@ -14,7 +14,7 @@ use crate::ir::{Lambda, Reducer};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Input(usize),
-    /// Shape ascription on an external source: `input N : (key_shape ; val_shape)`.
+    /// Shape ascription on an external source: `input N : (key_shape, val_shape)`.
     /// The same syntax follows `import "name"` for independently installed consumers.
     TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
     /// Named external trace resolved at install time. Carries only the name;
@@ -54,7 +54,7 @@ pub enum Expr {
 #[derive(Debug)]
 pub enum Stmt {
     Let(String, Expr),
-    /// `var name = expr;`, or `var name : (k ; v) = expr;` with a declared shape.
+    /// `var name = expr;`, or `var name : (k, v) = expr;` with a declared shape.
     Var(String, Option<crate::scope_ir::RowShape>, Expr),
     Scope(String, Vec<Stmt>),
     /// `export "name" = expr;` — registers a named output in the program, with

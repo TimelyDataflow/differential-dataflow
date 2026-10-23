@@ -5,8 +5,8 @@
 
 type Dir = Fwd int | Bwd int;
 
-let edges = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
-let roots = input 1 : ((int) ; ()) | map(((n), ()) -> (n, ()));
+let edges = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
 
 -- Scalars: arithmetic, (signed) compares, unaries, `hash`, `select`.
 let scored = edges
@@ -32,7 +32,7 @@ let nested = edges | flatmap((a, b) -> (b enlist, a enlist) append) | collect;
 -- Reducers.
 let counted = edges | count;
 let least   = edges | min;
-let uniq    = edges | distinct;
+let uniq    = edges | map((a, _) -> (a, ())) | distinct;
 
 -- Iteration: reach, with concat (+) and distinct.
 reach: {

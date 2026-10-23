@@ -6,7 +6,7 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N : (key_shape ; val_shape)` (positional input), `import "name"`
+//! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
 //! (named trace), `name` (a `let`/`var` in scope), `scope::field` (a child scope's
 //! export). An input declares its shape, using the shape syntax below, as a table
 //! declares its columns: the server refuses to install a program with an undeclared
@@ -20,8 +20,8 @@
 //! - `| map((k, v) -> (k', v'))` — reshape each row to the `(key, val)` the lambda gives.
 //! - `| value((k, v) -> v')` — replace the value, keeping the key.
 //! - `| join(other, (k, v, v1) -> (k', v'))` — equijoin on the key.
-//! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
-//!   NEST (gather a key's values into a `List`).
+//! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `distinct` keeps each `(key, val)`
+//!   record once, and `collect` is NEST (gather a key's values into a `List`).
 //! - `| reduce((k, vals) -> out)` — reduce by a lambda: `vals` is the key's values with their
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
 //!   `List` of `(val, diff)`.
@@ -30,28 +30,36 @@
 //!   element, value `(pos, element)`.
 //! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at((k, v) -> round)` ·
 //!   `| lift_iter`.
-//! - `| lift` — pair each value with its whole time, `(key ; (val, time))`, the time a tuple
+//! - `| lift` — pair each value with its whole time, `(key, (val, time))`, the time a tuple
 //!   of the epoch and every scope coordinate.
 //! - `| join_function((k, v) -> list)` — replace each row by the lambda's list of
 //!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
 //! - `| half_join(other, strict, (k, v, v1) -> (k', v'))` — each update of a lifted stream,
-//!   `(k ; (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
+//!   `(k, (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
 //!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
-//!   `(k' ; (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
+//!   `(k', (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
 //!   each row to at least the time the lambda gives.
-//! - `a + b` (concat), `a - b` (concat with `b` negated).
+//! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
+//!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
+//!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
 //! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
 //! program output, root scope only). A `var` or `export` may declare its
-//! shape, `var x : (key_shape ; val_shape) = …;`, which installation checks
+//! shape, `var x : (key_shape, val_shape) = …;`, which installation checks
 //! against the shape inferred for its value. `type Name = V0 shape? | V1 shape? …;`
 //! declares a sum type, an enum of the program's lambdas (below); it emits no IR.
 //!
 //! A shape is `int`, `float`, `()`, `(a, b, …)`, `List(a)`, `Option(a)`, `Result(a, b)`, or a
 //! declared type's name. A variant's payload shape is `()` when omitted, and a type's payloads
 //! may name earlier types, never recursively.
+//!
+//! A collection's shape, as `input`, `import`, `var` and `export` declare it, is the pair
+//! `(key_shape, val_shape)`: its root has exactly two fields, the key and the value, as a slot's
+//! input `(key, val)` does. `((int, int), ())` is a two-field key with a unit value, and
+//! `(int, int)` keys by the first int with the second as the value. The older `(key ; val)` is
+//! still accepted, and deprecated.
 //!
 //! # Lambdas
 //!
@@ -418,26 +426,25 @@ impl Parser {
 
     fn parse_ident(&mut self) -> String { match self.next() { Token::Ident(s) => s, other => panic!("Expected ident, got {:?}", other) } }
 
+    /// An atom followed by stages, applied left to right: `| op`, `+ atom` and `- atom`. A run of
+    /// `+`/`-` stages is one `Concat`.
     fn parse_pipe_expr(&mut self) -> Expr {
-        let mut expr = self.parse_concat_expr();
-        while *self.peek() == Token::Pipe {
-            self.next();
-            expr = self.parse_pipe_op(expr);
+        let mut expr = self.parse_atom();
+        let mut concat = false;
+        loop {
+            let part = match self.peek() {
+                Token::Pipe => { self.next(); expr = self.parse_pipe_op(expr); concat = false; continue },
+                Token::Plus => { self.next(); self.parse_atom() },
+                Token::Minus => { self.next(); Expr::Negate(Box::new(self.parse_atom())) },
+                _ => break,
+            };
+            expr = match expr {
+                Expr::Concat(mut parts) if concat => { parts.push(part); Expr::Concat(parts) },
+                lhs => Expr::Concat(vec![lhs, part]),
+            };
+            concat = true;
         }
         expr
-    }
-
-    fn parse_concat_expr(&mut self) -> Expr {
-        let first = self.parse_atom();
-        let mut parts = vec![first];
-        loop {
-            match self.peek() {
-                Token::Plus => { self.next(); parts.push(self.parse_atom()); },
-                Token::Minus => { self.next(); parts.push(Expr::Negate(Box::new(self.parse_atom()))); },
-                _ => break,
-            }
-        }
-        if parts.len() == 1 { parts.pop().unwrap() } else { Expr::Concat(parts) }
     }
 
     fn parse_atom(&mut self) -> Expr {
@@ -450,12 +457,6 @@ impl Parser {
         }
     }
 
-    fn parse_join_arg(&mut self) -> Expr {
-        let mut expr = self.parse_atom();
-        while *self.peek() == Token::Pipe { self.next(); expr = self.parse_pipe_op(expr); }
-        expr
-    }
-
     fn source_shape(&mut self, source: Expr) -> Expr {
         match self.declared_shape() {
             Some((key, val)) => Expr::TypedSource(Box::new(source), key, val),
@@ -463,15 +464,22 @@ impl Parser {
         }
     }
 
-    /// An optional `: (key ; val)` shape declaration.
+    /// An optional `: (key, val)` shape declaration: the root pair is the key and the value.
+    /// The older `(key ; val)` is accepted too, and deprecated.
     fn declared_shape(&mut self) -> Option<crate::scope_ir::RowShape> {
         if *self.peek() != Token::Colon { return None; }
         self.next();
         self.expect(&Token::LParen);
         let key = self.parse_shape();
-        self.expect(&Token::Semi);
+        match self.next() {
+            Token::Comma | Token::Semi => {}
+            other => panic!("a collection shape is (key, value), got {:?} after its key", other),
+        }
         let val = self.parse_shape();
-        self.expect(&Token::RParen);
+        if *self.peek() != Token::RParen {
+            panic!("a collection shape is (key, value), with exactly two fields; got {:?} after its value", self.peek());
+        }
+        self.next();
         Some((key, val))
     }
 
@@ -483,7 +491,7 @@ impl Parser {
                 let val = self.slot();
                 Expr::Map(Box::new(lhs), Lambda::compose("(k, v)", &[(&val, "(k, v)".into())], |r| format!("(k, {})", r[0])))
             },
-            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
+            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_pipe_expr(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
@@ -498,7 +506,7 @@ impl Parser {
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
             Token::Ident(name) if name == "half_join" => {
                 self.next(); self.expect(&Token::LParen);
-                let r = self.parse_join_arg(); self.expect(&Token::Comma);
+                let r = self.parse_pipe_expr(); self.expect(&Token::Comma);
                 let strict = match self.next() {
                     Token::Int(0) => false,
                     Token::Int(1) => true,

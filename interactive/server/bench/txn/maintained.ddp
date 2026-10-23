@@ -11,9 +11,9 @@
 -- rows the log no longer needs are `log - store`, exported as `retire`, and
 -- `feed bank 0 from retire diff=-1` leaves the log equal to the store.
 
-let intents = input 0 : ((int, int, int) ; (int));
+let intents = input 0 : ((int, int, int), (int));
 
--- ((rid, k) ; expected) and ((wid, k) ; v)
+-- ((rid, k), expected) and ((wid, k), v)
 let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
 let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
 let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
@@ -48,7 +48,7 @@ let rb = res::rollback;
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
--- ((k) ; (-wid, v)): each key's latest committed write.
+-- ((k), (-wid, v)): each key's latest committed write.
 let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
 
 export "rollback" = rb;

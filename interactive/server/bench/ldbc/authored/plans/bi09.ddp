@@ -4,9 +4,9 @@
 -- whole thread minus those after the end: thread sizes are kept per post for all
 -- requests, and a request reads only its window's posts and the messages after it.
 
-let request = input 0 : ((int, int, int) ; ());               -- (rid, start, end)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let request = input 0 : ((int, int, int), ());               -- (rid, start, end)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
 let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
 
 -- Threads: every post roots its own thread; a comment joins its parent's thread.

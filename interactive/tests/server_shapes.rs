@@ -14,7 +14,7 @@ fn program(src: &str) -> Program {
 
 fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
+const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
 
 
 #[test]
@@ -40,8 +40,8 @@ fn a_declared_import_must_match_its_trace() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "agrees", &program(r#"export "a" = import "edges" : ((int) ; (int));"#)).unwrap();
-        let err = server.install(worker, "disagrees", &program(r#"export "b" = import "edges" : ((int, int) ; ());"#)).unwrap_err();
+        server.install(worker, "agrees", &program(r#"export "a" = import "edges" : ((int), (int));"#)).unwrap();
+        let err = server.install(worker, "disagrees", &program(r#"export "b" = import "edges" : ((int, int), ());"#)).unwrap_err();
         assert!(err.contains("published as"), "{err}");
         assert!(server.snapshot(worker, "b").is_err(), "a rejected program publishes nothing");
     });
@@ -52,7 +52,7 @@ fn conflicting_shapes_reject_the_install() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         // Join keys of different shapes.
-        let join = r#"let a = input 0 : ((int) ; ()); let b = input 1 : ((int, int) ; ()); export "j" = a | join(b, (k, _, _) -> (k, ()));"#;
+        let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); export "j" = a | join(b, (k, _, _) -> (k, ()));"#;
         let err = server.install(worker, "join", &program(join)).unwrap_err();
         assert!(err.contains("join keys"), "{err}");
         // A field of an integer, through an import whose shape is published.
@@ -84,7 +84,7 @@ fn bindings_and_recipe_loads_must_match_declared_inputs() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "target", &program(r#"export "t" = input 0 : ((int, int) ; ());"#)).unwrap();
+        server.install(worker, "target", &program(r#"export "t" = input 0 : ((int, int), ());"#)).unwrap();
         let err = server.bind(worker, "edges", "target", 0).unwrap_err();
         assert!(err.contains("published as"), "{err}");
         let err = server.load(worker, "target", 0, "random:nodes=8,edges=12,arity=3", 1).unwrap_err();
@@ -98,10 +98,10 @@ fn declared_exports_publish_their_shapes() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         // An export may declare the shape it is inferred to have.
-        server.install(worker, "declared", &program(r#"export "d" : ((int) ; ()) = input 0 : ((int) ; ());"#)).unwrap();
+        server.install(worker, "declared", &program(r#"export "d" : ((int), ()) = input 0 : ((int), ());"#)).unwrap();
         assert_eq!(server.trace_shape("d"), Some((ints(1), Shape::Unit)));
         // A declaration that disagrees with the inferred shape rejects the install.
-        let err = server.install(worker, "wrong", &program(&PRODUCER.replace("export \"edges\" =", "export \"w\" : ((int) ; ()) ="))).unwrap_err();
+        let err = server.install(worker, "wrong", &program(&PRODUCER.replace("export \"edges\" =", "export \"w\" : ((int), ()) ="))).unwrap_err();
         assert!(err.contains("export `w`"), "{err}");
     });
 }
@@ -115,7 +115,7 @@ fn collections_without_a_shape_reject_the_install() {
         let alone = r#"s: { var v = v | distinct; } export "out" = s::v;"#;
         let err = server.install(worker, "alone", &program(alone)).unwrap_err();
         assert!(err.contains("variable `v` has no shape"), "{err}");
-        let declared = alone.replace("var v =", "var v : ((int) ; ()) =");
+        let declared = alone.replace("var v =", "var v : ((int), ()) =");
         server.install(worker, "declared", &program(&declared)).unwrap();
     });
 }

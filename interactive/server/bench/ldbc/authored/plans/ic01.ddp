@@ -1,15 +1,15 @@
 -- IC1. People named X within three friendship hops: their distance, profile, emails,
 -- languages, city, universities and companies; top 20 by distance, last name, id.
 
-let request = input 0 : ((int, int, List(int)) ; ());           -- (rid, person, first name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
-let org     = import "ldbc.org"     : ((int, List(int), List(int), int) ; ());
-let study   = import "ldbc.study"   : ((int, int, int) ; ());
-let work    = import "ldbc.work"    : ((int, int, int) ; ());
-let email   = import "ldbc.email"   : ((int, List(int)) ; ());
-let language = import "ldbc.language" : ((int, List(int)) ; ());
+let request = input 0 : ((int, int, List(int)), ());           -- (rid, person, first name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
+let org     = import "ldbc.org"     : ((int, List(int), List(int), int), ());
+let study   = import "ldbc.study"   : ((int, int, int), ());
+let work    = import "ldbc.work"    : ((int, int, int), ());
+let email   = import "ldbc.email"   : ((int, List(int)), ());
+let language = import "ldbc.language" : ((int, List(int)), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

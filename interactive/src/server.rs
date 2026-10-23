@@ -321,7 +321,7 @@ enum Origin {
     Clock,
 }
 
-/// `clock` rows for these epochs, each with its multiplicity: `((t) ; ())`.
+/// `clock` rows for these epochs, each with its multiplicity: `((t), ())`.
 fn clock_rows(rows: &[(OuterTime, Diff)]) -> Updates {
     Updates {
         keys: corgi::Value::Prod(vec![corgi::Value::int(rows.iter().map(|&(t, _)| t as i64))]),
@@ -341,7 +341,7 @@ fn generated_shape(name: &str) -> Option<RowShape> {
 }
 
 fn fmt_shape((k, v): &RowShape) -> String {
-    format!("({k} ; {v})")
+    format!("({k}, {v})")
 }
 
 /// Map a source name to its canonical form: a recipe canonicalizes, any other
@@ -623,7 +623,7 @@ impl Server {
         for imp in &prog.root.imports {
             if let (st::Source::Input(n), None) = (&imp.from, &imp.shape) {
                 return Err(format!(
-                    "program {:?} reads input {n} without declaring its shape; write `input {n} : (key ; val)`",
+                    "program {:?} reads input {n} without declaring its shape; write `input {n} : (key, val)`",
                     name
                 ));
             }

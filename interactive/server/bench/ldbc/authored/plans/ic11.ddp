@@ -2,12 +2,12 @@
 -- country before a given year; ordered by start year, person, then company name
 -- descending; top 10.
 
-let request = input 0 : ((int, int, List(int), int) ; ());    -- (rid, person, country name, before year)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let work    = import "ldbc.work"    : ((int, int, int) ; ());
-let org     = import "ldbc.org"     : ((int, List(int), List(int), int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, int, List(int), int), ());    -- (rid, person, country name, before year)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let work    = import "ldbc.work"    : ((int, int, int), ());
+let org     = import "ldbc.org"     : ((int, List(int), List(int), int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

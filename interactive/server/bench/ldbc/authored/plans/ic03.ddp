@@ -3,11 +3,11 @@
 -- The two countries' messages in the window are found first (joining on the
 -- country id), and only then matched against the person's circle.
 
-let request = input 0 : ((int, int, List(int), List(int), int, int) ; ());   -- (rid, person, X, Y, start, days)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows" : ((int, int, int) ; ());
-let place   = import "ldbc.place" : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, X, Y, start, days)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows" : ((int, int, int), ());
+let place   = import "ldbc.place" : ((int, List(int), List(int), int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

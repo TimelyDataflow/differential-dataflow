@@ -5,7 +5,7 @@ use interactive::server::evaluate;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> ((a), (b)));
+    let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
     let shifted = pairs | map((a, (b)) -> (a, ((b, 1) add)));
 
     export "positive" = pairs | count;

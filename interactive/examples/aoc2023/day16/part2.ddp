@@ -2,7 +2,7 @@
 -- Mirrors the slt exactly, including its 'u' seeds sitting at row=MAX(c).
 -- input 0: (row, col, code) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, code), ()) -> ((r, c), code));
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, code), ()) -> ((r, c), code));
 
 let shift = cells | map(_ -> ((), ())) | distinct | flatmap(_ -> [
       (0, 46, 0, 1, 0), (0, 45, 0, 1, 0), (0, 124, 1, 0, 3), (0, 124, -1, 0, 2),
@@ -29,7 +29,7 @@ let seeds = (rows | map((r, _) -> ((), r)) | join(minc, (_, r, m) -> ((r, m, 0, 
 beam: {
     let onsym = l | map(((r, c, d, sd, si), _) -> ((r, c), (d, sd, si)))
         | join(cells, ((r, c), (d, sd, si), s) -> ((d, s), (r, c, sd, si)));
-    -- (dir, sym ; r, c, sd, si)
+    -- ((dir, sym), (r, c, sd, si))
     let next = onsym | join(shift, (_, (r, c, sd, si), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd, sd, si), ()));
     var l = seeds + next | distinct;
 }
@@ -37,7 +37,7 @@ beam: {
 let energized = beam::l | map(((r, c, _, sd, si), _) -> ((r, c), (sd, si)))
     | join(cells, ((r, c), (sd, si), _) -> ((r, c, sd, si), ())) | distinct
     | map(((_, _, sd, si), _) -> ((sd, si), ())) | count;
--- (sd, si ; n)
+-- ((sd, si), n)
 
 export "result" = energized | map((_, n) -> ((), (1000000, n) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub))

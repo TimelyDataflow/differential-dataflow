@@ -1,7 +1,7 @@
 -- IS1. A person's profile.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, person)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
 
 let profile = person | map(((id, first, last, gender, birthday, created, ip, browser, city, _, _, _), ()) ->
                            (id, (first, last, birthday, ip, browser, city, gender, created)));

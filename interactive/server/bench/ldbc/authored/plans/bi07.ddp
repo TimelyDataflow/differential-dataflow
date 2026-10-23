@@ -1,10 +1,10 @@
 -- BI7. Related topics: tags on replies to messages with a given tag, where the reply
 -- itself does not carry it; top 100 by number of replies.
 
-let request = input 0 : ((int, List(int)) ; ());              -- (rid, tag name)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let request = input 0 : ((int, List(int)), ());              -- (rid, tag name)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
 
 -- Messages carrying the request's tag: (message, rid).
 let tagged  = request | map((req, ()) -> (req.1, req.0))

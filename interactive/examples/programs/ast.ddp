@@ -10,7 +10,7 @@
 
 type Dir = Fwd int | Bwd int;
 
-let rows = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
 -- eight derived values per row
 let lists = rows

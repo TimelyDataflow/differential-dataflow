@@ -12,7 +12,7 @@
 //! Every method speaks in terms of one object — a **demand row**, written
 //!
 //! ```text
-//!     (K ; V, chain, [q])
+//!     (K, (V, chain, [q]))
 //! ```
 //!
 //! where `;` separates the *key* from the *value*. The key `K` is the user's
@@ -35,13 +35,13 @@
 //! row exposes `$0` = the join key, `$1` = the left input's value, `$2` = the
 //! right input's value; before a join, `$0`/`$1` are key/value. A method's doc
 //! gives the *input row shape it expects* and the *output row shape it
-//! produces*, both in the `(K ; …)` notation above; an implementer needs only
+//! produces*, both in the `(K, …)` notation above; an implementer needs only
 //! those shapes, not the positions. Sizes arrive as parameters: `*_len`/`*_depth`
 //! chain lengths, `min` toggling Min's value-narrowing. Predicate methods return
 //! `None` for "no constraint" (the rule then skips the filter).
 
 /// Builds the projections/predicates the reverse rules need, in terms of the
-/// demand envelope `(K ; V, chain, [q])` documented at the module level.
+/// demand envelope `(K, (V, chain, [q]))` documented at the module level.
 pub trait RowModel {
     type Proj;
     type Pred;
@@ -49,24 +49,24 @@ pub trait RowModel {
     // --- packing data into the join key ---
 
     /// Move the data `(K, V)` into the join key, keeping the row's `chain` (and
-    /// `q` when `has_q`): `(K ; V, chain, [q]) -> ((K, V) ; chain, [q])`. Pair
+    /// `q` when `has_q`): `(K, (V, chain, [q])) -> ((K, V), (chain, [q]))`. Pair
     /// rows pass `has_q = false`, `dep` rows `has_q = true`.
     fn pack(chain_len: usize, has_q: bool) -> Self::Proj;
-    /// Drop a row's chain and `q`, leaving the user's row: `(K ; V, chain, [q]) -> (K ; V)`.
+    /// Drop a row's chain and `q`, leaving the user's row: `(K, (V, chain, [q])) -> (K, V)`.
     fn strip_all() -> Self::Proj;
 
     // --- shape-preserving lookup (Concat/Leave) ---
 
     /// Reassemble after the SP join on `(K, V)`. Input: the joined row
     /// `[$0 = (K, V), $1 = chain_out ++ q (dep), $2 = chain_in (pair)]`.
-    /// Output: `(K ; V, chain_in, chain_out, q)`.
+    /// Output: `(K, (V, chain_in, chain_out, q))`.
     fn sp_reassemble(in_len: usize, out_len: usize) -> Self::Proj;
 
     // --- keyed lookup (Reduce) ---
 
     /// Project the keyed (join-on-`K`) row. Input:
     /// `[$0 = K, $1 = V_out ++ chain_out ++ q (dep), $2 = V_in ++ chain_in (pair)]`.
-    /// Output: `(K ; V_in, [V_out,] chain_in, chain_out, q)` — `V_out` is
+    /// Output: `(K, (V_in, [V_out,] chain_in, chain_out, q))` — `V_out` is
     /// carried only when `min`, for the narrowing below.
     fn ky_join(in_len: usize, out_len: usize, min: bool) -> Self::Proj;
     /// Min value-narrowing on the `min` row above: keep rows with `V_in <= V_out`. A min's output at
@@ -77,10 +77,10 @@ pub trait RowModel {
     /// key's output is made as in the reference either way.
     fn ky_data_le() -> Option<Self::Pred>;
     /// Drop the carried `V_out`, restoring the SP-shaped row
-    /// `(K ; V_in, chain_in, chain_out, q)`.
+    /// `(K, (V_in, chain_in, chain_out, q))`.
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Self::Proj;
     /// Blank a demand row's value where a lookup reads only its key, chain and `q`:
-    /// `(K ; V, chain, q) -> (K ; (), chain, q)`. A value can be large (a collected list), and a
+    /// `(K, (V, chain, q)) -> (K, ((), chain, q))`. A value can be large (a collected list), and a
     /// join would otherwise carry it to every match.
     fn blank_v(out_len: usize) -> Self::Proj;
 
@@ -88,44 +88,44 @@ pub trait RowModel {
 
     /// Pair re-key: apply the user `proj.key` to a pair row to compute
     /// `K_out`, carrying the input data through.
-    /// `(K_in ; V_in, chain_in) -> (K_out ; K_in, V_in, chain_in)`. `proj` reads
+    /// `(K_in, (V_in, chain_in)) -> (K_out, (K_in, V_in, chain_in))`. `proj` reads
     /// the pair row's slots, so the caller has rebuilt any read of the user's row.
     fn lossy_pair(proj: &Self::Proj, in_len: usize) -> Self::Proj;
     /// Reassemble after the join on `K_out`. Input:
     /// `[$0 = K_out, $1 = V_out ++ chain_out ++ q (dep), $2 = K_in ++ V_in ++ chain_in (pair)]`.
-    /// Output: `(K_in ; V_in, chain_in, chain_out, q)`.
+    /// Output: `(K_in, (V_in, chain_in, chain_out, q))`.
     fn lossy_reassemble(in_len: usize, out_len: usize) -> Self::Proj;
 
     // --- join lookup (two inputs; #758 filters both times before splitting) ---
 
     /// Forward-join the two pair tables on `K`, applying the user `proj`. Input:
     /// `[$0 = K, $1 = V_L ++ chain_L (left), $2 = V_R ++ chain_R (right)]`.
-    /// Output: `(K_out ; K, V_L, V_R, chain_L, chain_R, V_out)`, where
+    /// Output: `(K_out, (K, V_L, V_R, chain_L, chain_R, V_out))`, where
     /// `K_out`/`V_out` are `proj.key`/`proj.val` over `(K, V_L, V_R)`, reading the
     /// joined row's slots as for `lossy_pair`.
     fn join_forward(proj: &Self::Proj, l_len: usize, r_len: usize) -> Self::Proj;
     /// Reassemble after joining `dep` against the forward-join pair on `K_out`,
     /// into one wide row carrying everything both sides' filters and splits need.
     /// Input: `[$0 = K_out, $1 = V_out ++ chain_out ++ q (dep), $2 = pair row above]`.
-    /// Output: `(K ; V_L, V_R, chain_L, chain_R, chain_out, q, V_out_dep, V_out_pair)`.
+    /// Output: `(K, (V_L, V_R, chain_L, chain_R, chain_out, q, V_out_dep, V_out_pair))`.
     fn join_combined(l_len: usize, r_len: usize, out_len: usize) -> Self::Proj;
     /// Narrowing on the wide row: `chain_L ≤ chain_out` ∧ `chain_R ≤ chain_out`
     /// (both outer-aligned) ∧ `V_out_dep == V_out_pair`. Both sides' times are
     /// filtered here, before either side's chain is projected away (#758).
     fn join_filter(l_len: usize, r_len: usize, out_len: usize) -> Option<Self::Pred>;
     /// Project one side's contrib out of the filtered wide row. `left` selects
-    /// `(K ; V_L, chain_L, q)` vs `(K ; V_R, chain_R, q)`.
+    /// `(K, (V_L, chain_L, q))` vs `(K, (V_R, chain_R, q))`.
     fn join_split(left: bool, l_len: usize, r_len: usize, out_len: usize) -> Self::Proj;
 
     // --- the chain algebra, shared by SP / keyed / lossy ---
 
-    /// Soundness filter on a `(K ; V, chain_in, chain_out, q)` row: keep rows
+    /// Soundness filter on a `(K, (V, chain_in, chain_out, q))` row: keep rows
     /// with `chain_in ≤ chain_out`, compared outer-aligned (an input can only
     /// explain an output that came no earlier). `None` when the chains share no
     /// coordinate.
     fn time_le(in_len: usize, out_len: usize) -> Option<Self::Pred>;
     /// Strip `chain_out` and the inner `chain_in` coords past `keep` from a
-    /// `(K ; V, chain_in, chain_out, q)` row, leaving `(K ; V, chain_in[..keep], q)`.
+    /// `(K, (V, chain_in, chain_out, q))` row, leaving `(K, (V, chain_in[..keep], q))`.
     /// Kept coords are the *outer* ones, matching `time_le`'s alignment.
     fn strip(in_len: usize, out_len: usize, keep: usize) -> Self::Proj;
 
@@ -135,7 +135,7 @@ pub trait RowModel {
     /// demand has no body-side source).
     fn bind_filter() -> Option<Self::Pred>;
     /// Decrement the innermost chain coordinate by one, leaving everything else
-    /// intact: `(K ; V, chain, q) -> (K ; V, chain with chain[0]-1, q)`.
+    /// intact: `(K, (V, chain, q)) -> (K, (V, chain with chain[0]-1, q))`.
     /// `user_len` is the chain length.
     fn bind_decrement(user_len: usize) -> Self::Proj;
 }
@@ -272,7 +272,7 @@ mod mem {
 #[cfg(test)]
 mod value_contract {
     //! Executable contract for the reverse rules: by-example specs on rows in `Val`'s envelope
-    //! `(K ; V, chain, [q])`, run through the in-memory dataflow against `crate::explain::Val`.
+    //! `(K, (V, chain, [q]))`, run through the in-memory dataflow against `crate::explain::Val`.
 
     use super::*;
     use crate::explain::Val;

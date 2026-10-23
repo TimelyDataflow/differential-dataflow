@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn count_can_drop_values_but_distinct_keeps_them() {
-        let source = "let x = input 0 : (int ; (int, int)) | map((k, v) -> (k, v));\n";
+        let source = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));\n";
         let count = format!("{source}export \"out\" = x | count;\n");
         let distinct = format!("{source}export \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn an_unexported_inspect_still_reads_its_input() {
-        let text = "let x = input 0 : (int ; (int, int)) | map((k, v) -> (k, v));
+        let text = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));
                     let seen = x | inspect(seen);
                     export \"out\" = x | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn count_keeps_its_grouping_key() {
-        let text = "let x = input 0 : ((int, int) ; ()) | map((k, v) -> (k, v));
+        let text = "let x = input 0 : ((int, int), ()) | map((k, v) -> (k, v));
                     export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         // Count still groups by both key fields; the second is masked only
@@ -988,7 +988,7 @@ mod tests {
     #[test]
     fn distinct_projects_only_after_deduplicating_full_rows() {
         use crate::server::Server;
-        let text = "let x = input 0 : ((int, int) ; ())
+        let text = "let x = input 0 : ((int, int), ())
                     | map((row, ()) -> (row, ()));
                     export \"out\" = x | distinct
                     | map((row, ()) -> (row.0, ())) | count;";
@@ -1016,7 +1016,7 @@ mod tests {
 
     #[test]
     fn concat_projects_both_arms_of_a_feedback_loop() {
-        let text = "let source = input 0 : ((int, int) ; ());
+        let text = "let source = input 0 : ((int, int), ());
                     let initial = source | map((row, ()) -> ((row.0, row.1), ()));
                     toy: {
                         var state = (initial) + (state | filter((row, ()) -> 0));
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[test]
     fn flatmap_reads_only_the_list_it_explodes() {
-        let text = "let x = input 0 : (int ; (List(int), List(int)))
+        let text = "let x = input 0 : (int, (List(int), List(int)))
                     | map((k, v) -> (k, v));
                     export \"out\" = x | flatmap((k, v) -> v.0) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[test]
     fn lift_does_not_read_an_unused_value() {
-        let text = "let x = input 0 : (int ; (int, int))
+        let text = "let x = input 0 : (int, (int, int))
                     | map((k, v) -> (k, v));
                     export \"out\" = x | lift | map((k, (v, time)) -> (k, time));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
@@ -1050,9 +1050,9 @@ mod tests {
 
     #[test]
     fn half_join_reads_keys_and_time_without_unused_payloads() {
-        let text = "let a = input 0 : ((int, int) ; ())
+        let text = "let a = input 0 : ((int, int), ())
                     | map(((k, x), ()) -> (k, x));
-                    let b = input 1 : ((int, int, int) ; ())
+                    let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
@@ -1066,9 +1066,9 @@ mod tests {
     #[test]
     fn masked_half_join_matches_the_original_rows() {
         use crate::server::Server;
-        let text = "let a = input 0 : ((int, int) ; ())
+        let text = "let a = input 0 : ((int, int), ())
                     | map(((k, x), ()) -> (k, x));
-                    let b = input 1 : ((int, int, int) ; ())
+                    let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";

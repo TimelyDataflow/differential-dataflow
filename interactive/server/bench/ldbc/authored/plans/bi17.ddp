@@ -5,11 +5,11 @@
 -- Memberships are first restricted to forums that hold a tagged message, and each
 -- person's tagged posts in a forum are reduced to their earliest.
 
-let request = input 0 : ((int, List(int), int) ; ());         -- (rid, tag name, delta hours)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let tag     = import "ldbc.tag"    : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"   : ((int, int) ; ());
-let member  = import "ldbc.member" : ((int, int, int) ; ());
+let request = input 0 : ((int, List(int), int), ());         -- (rid, tag name, delta hours)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let tag     = import "ldbc.tag"    : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"   : ((int, int), ());
+let member  = import "ldbc.member" : ((int, int, int), ());
 
 -- Threads: every post roots its own thread; a comment joins its parent's thread.
 -- Rows are (message, root, forum of the root post).

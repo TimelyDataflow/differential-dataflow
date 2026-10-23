@@ -3,14 +3,14 @@
 -- top 100 by count. The search stops growing at `maximum` hops, and the class's
 -- messages are found first, then kept if their author qualifies.
 
-let request = input 0 : ((int, int, List(int), List(int), int, int) ; ());   -- (rid, person, country, class, minimum, maximum)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, country, class, minimum, maximum)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

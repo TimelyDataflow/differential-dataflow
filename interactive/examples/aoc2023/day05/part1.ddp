@@ -2,9 +2,9 @@
 -- input 0: seeds (seed)
 -- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 : ((int) ; ()) | map(((seed), _) -> ((0, seed), ()));
-let entries = input 1 : ((int, int, int, int) ; ()) | map(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
--- (stage ; dst, src, len)
+let seeds   = input 0 : ((int), ()) | map(((seed), _) -> ((0, seed), ()));
+let entries = input 1 : ((int, int, int, int), ()) | map(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
+-- (stage, (dst, src, len))
 
 chain: {
     let cur = active | filter(((stage, _), _) -> (stage, 6) le);
