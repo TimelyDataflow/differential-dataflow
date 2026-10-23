@@ -78,7 +78,9 @@ impl<'de> serde::Deserialize<'de> for Lambda {
 pub enum Reducer {
     Min,
     /// Each `(key, val)` whose accumulated diff is not zero, once: a collection read as a set of
-    /// records. A key's values are kept, and grouping stays by key, since equal records share one.
+    /// records. A key's values are kept. When they aren't `()`, rendering keys the reduction by the
+    /// whole record (see `backend::render_scope`), so a change at a key with many values touches
+    /// only its own records rather than all of the key's values.
     Distinct,
     /// The sum of a key's diffs, as an `Int`, when it is not zero. It may be negative, as DD's
     /// `count` is: a negative count is how a program finds a negative accumulation.

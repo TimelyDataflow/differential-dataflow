@@ -104,6 +104,16 @@ impl<'s, B: Backend> Rendered<'s, B> {
     }
 }
 
+/// `(k, v)` to `((k, v), ())`: the record as the key, for `distinct` over values that aren't `()`.
+fn record_key() -> Lambda {
+    Lambda::new("let (k, v) = input in ((k, v), ())".into(), &::corgi::Scope::default())
+}
+
+/// `((k, v), ())` back to `(k, v)`.
+fn record_unkey() -> Lambda {
+    Lambda::new("let (kv, _) = input in kv".into(), &::corgi::Scope::default())
+}
+
 /// A rendered scope item: an operator's value, or a child scope's surrendered
 /// exports (already returned to this scope's depth via `leave_dynamic`).
 enum RItem<'s, B: Backend> {
@@ -214,6 +224,16 @@ pub fn render_scope<'s, B: Backend>(
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
                         Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
+                    },
+                    st::Node::Reduce { input, reducer: Reducer::Distinct } if shape_of(input).1 != ::corgi::Shape::Unit => {
+                        // Distinct records, data-parallel by record: each record is its own key, so a
+                        // change at a key with many values touches only its own records.
+                        let (key, val) = shape_of(input);
+                        let c = resolve(&items, &imports, &var_cols, input).collection();
+                        let rekeyed = B::linear(c, vec![LinearOp::Project(record_key())], depth, (key.clone(), val.clone()));
+                        let record = ::corgi::Shape::Prod(vec![key, val]);
+                        let present = B::reduce(B::arrange(rekeyed), &Reducer::Distinct, (record.clone(), ::corgi::Shape::Unit));
+                        Rendered::Collection(B::linear(B::as_collection(present), vec![LinearOp::Project(record_unkey())], depth, (record, ::corgi::Shape::Unit)))
                     },
                     st::Node::Reduce { input, reducer } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
