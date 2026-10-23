@@ -3,18 +3,18 @@
 -- residue in [0,256)).
 -- input 0: (r, pos, code), 1-indexed
 
-let chars = input 0 : ((int, int, int) ; ()) | map(((r, pos, code), ()) -> ((r, pos), code));
-let lens = chars | map(((r, _), _) -> (r, ())) | count;   -- (r ; len)
+let chars = input 0 : ((int, int, int), ()) | map(((r, pos, code), ()) -> ((r, pos), code));
+let lens = chars | map(((r, _), _) -> (r, ())) | count;   -- (r, len)
 
 let ktab = chars | map(_ -> ((), ())) | distinct
     | flatmap(_ -> (0, 34) range)
     | map((_, (_, k)) -> ((), k));
--- (; k)
+-- ((), k)
 
 hash: {
     let t = st | map(((r, i, h), _) -> ((r, (i, 1) add), h))
         | join(chars, ((r, i), h, c) -> ((), (r, i, ((h, c) add, 17) mul)));
-    -- (; r, i, t)
+    -- ((), (r, i, t))
     let next = t | join(ktab, (_, (r, i, t), k) -> ((r, i, (t, (256, k) mul) sub), ()))
         | filter(((_, _, t), _) -> ((t, 0) ge, (t, 256) lt) all);
     var st = (lens | map((r, _) -> ((r, 0, 0), ()))) + next | distinct;

@@ -1,8 +1,8 @@
 -- IS3. A person's friends, with when each friendship was made, newest first.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist, with their dates.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

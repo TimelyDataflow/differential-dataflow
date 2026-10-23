@@ -3,8 +3,8 @@
 -- input 0: seed ranges (start, len)
 -- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 : ((int, int) ; ()) | map(((start, len), _) -> ((0, start, (start, len) add), ()));
-let entries = input 1 : ((int, int, int, int) ; ()) | map(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
+let seeds   = input 0 : ((int, int), ()) | map(((start, len), _) -> ((0, start, (start, len) add), ()));
+let entries = input 1 : ((int, int, int, int), ()) | map(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
 
 ranges: {
     let cur = active | filter(((stage, _, _), _) -> (stage, 6) le);
@@ -27,12 +27,12 @@ ranges: {
     -- key (stage, s, e, h)
 
     let csets = isect | map(((stage, s, e, cs, _, _, _), _) -> ((stage, s, e), cs));
-    -- (I ; cs)
+    -- (I, cs)
 
     let pairs = cand | map(((stage, s, e, h), _) -> ((stage, s, e), h))
         | join(csets, ((stage, s, e), h, cs) -> ((stage, s, e, h), cs))
         | filter(((_, _, _, h), cs) -> (cs, h) ge);
-    -- (I, h ; cs) for cs >= h
+    -- ((I, h), cs) for cs >= h
 
     let hend = pairs | min;
     let holes_bounded = hend | filter(((_, _, _, h), cs) -> (h, cs) lt) | map(((stage, _, _, h), cs) -> (((stage, 1) add, h, cs), ()));

@@ -2,7 +2,7 @@
 -- expansion (factor 1). '#' = 35.
 -- input 0: (row, col, code), 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, s), ()) -> ((r, c), s));
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, s), ()) -> ((r, c), s));
 let g = cells | filter((_, s) -> (s, 35) eq) | map((rc, _) -> (rc, ()));
 
 let all_rows = cells | map(((r, _), _) -> (r, ())) | distinct;

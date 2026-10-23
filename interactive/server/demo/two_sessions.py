@@ -23,7 +23,7 @@ from client import decode  # noqa: E402  (the binary frame decoder)
 PORT = 7981
 
 WORLD = """load world begin
-let claims = input 0 : ((int, int) ; (int, int));
+let claims = input 0 : ((int, int), (int, int));
 export "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
 export "claims" = claims;
 world end-load

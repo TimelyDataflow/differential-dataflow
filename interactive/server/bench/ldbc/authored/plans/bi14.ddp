@@ -2,12 +2,12 @@
 -- scored 4 if person1 replied to person2, 1 for the reverse, 10 if person1 liked a
 -- message of person2's, 1 for the reverse. The best pair per person1's city; top 100.
 
-let request = input 0 : ((int, List(int), List(int)) ; ());    -- (rid, country 1, country 2)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, List(int), List(int)), ());    -- (rid, country 1, country 2)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let likes   = import "ldbc.likes"   : ((int, int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

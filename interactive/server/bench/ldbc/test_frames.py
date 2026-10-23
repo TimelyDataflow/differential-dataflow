@@ -38,7 +38,7 @@ def main():
     diffs = [1, 3, -2, 1]
     with tempfile.TemporaryDirectory() as folder:
         with Server(args.server, Path(folder) / 'server.log', args.workers, 60, 4) as server:
-            program = f'export "framed" = input 0 : ({SHAPE} ; ());\nexport "texted" = input 1 : ({SHAPE} ; ());'
+            program = f'export "framed" = input 0 : ({SHAPE}, ());\nexport "texted" = input 1 : ({SHAPE}, ());'
             frame = encode_frame(shape, ROWS, diffs)
             body = '\n'.join(f'{text_row(row)} diff={diff}' for row, diff in zip(ROWS, diffs))
             server.commands([f'load feeds begin\n{program}\n{{rid}} end-load',

@@ -22,8 +22,8 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 }
 
 const COUNTER: &str = r#"
-    let seed = input 0 : ((int) ; ());
-    let feedback = input 1 : ((int) ; ());
+    let seed = input 0 : ((int), ());
+    let feedback = input 1 : ((int), ());
     let state = seed + feedback;
     export "count" = state;
     export "next" = (state | map(((n), ()) -> (((n, 1) add), ()))) + (seed | negate);

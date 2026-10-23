@@ -2,9 +2,9 @@
 -- Searched from both ends at once: each side stops growing once twice its
 -- distance reaches the best meeting found so far.
 
-let request = input 0 : ((int, int, int) ; ());               -- (rid, from, to)
-let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows   = import "ldbc.knows"  : ((int, int, int) ; ());
+let request = input 0 : ((int, int, int), ());               -- (rid, from, to)
+let person  = import "ldbc.person" : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows   = import "ldbc.knows"  : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

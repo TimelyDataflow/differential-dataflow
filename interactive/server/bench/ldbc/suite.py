@@ -45,7 +45,7 @@ def compile_queries(names):
 
 
 def graph_program():
-    return '\n'.join(f'export "ldbc.{name}" = input {i} : ({source_shape(schema)} ; ()) | arrange;'
+    return '\n'.join(f'export "ldbc.{name}" = input {i} : ({source_shape(schema)}, ()) | arrange;'
                      for i, (name, schema) in enumerate(data.SCHEMA.items())) + '\n'
 
 

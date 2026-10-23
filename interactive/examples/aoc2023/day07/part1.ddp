@@ -2,7 +2,7 @@
 -- Type from the pairwise-equality count: 5oak=10 4oak=6 FH=4 3oak=3 2p=2 p=1 hi=0.
 -- input 0: (id, c1..c5, bid) charcodes
 
-let hands = input 0 : ((int, int, int, int, int, int, int) ; ()) | map(((id, c1, c2, c3, c4, c5, bid), ()) ->
+let hands = input 0 : ((int, int, int, int, int, int, int), ()) | map(((id, c1, c2, c3, c4, c5, bid), ()) ->
     let t1 = (((c1, c2) eq, (c1, c3) eq) add, ((c1, c4) eq, (c1, c5) eq) add) add in
     let t2 = (((c2, c3) eq, (c2, c4) eq) add, (c2, c5) eq) add in
     let t3 = ((c3, c4) eq, (c3, c5) eq) add in
@@ -13,7 +13,7 @@ let hands = input 0 : ((int, int, int, int, int, int, int) ; ()) | map(((id, c1,
     let v4 = ((c4, 58) lt, (c4, 48) sub, ((c4, 84) eq, 10, ((c4, 74) eq, 11, ((c4, 81) eq, 12, ((c4, 75) eq, 13, 14) select) select) select) select) select in
     let v5 = ((c5, 58) lt, (c5, 48) sub, ((c5, 84) eq, 10, ((c5, 74) eq, 11, ((c5, 81) eq, 12, ((c5, 75) eq, 13, 14) select) select) select) select) select in
     ((), (id, t, v1, v2, v3, v4, v5, bid)));
--- (; id, t, v1..v5, bid)
+-- ((), (id, t, v1..v5, bid))
 
 let less = hands | join(hands, (_, (_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2, r3, r4, r5, r6, _)) -> ((
     ((l1, r1) lt, 1, ((l1, r1) gt, 0,
@@ -26,7 +26,7 @@ let less = hands | join(hands, (_, (_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2,
 -- key (left_is_less, right_id)
 
 let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> (id, ())) | count;
--- (id ; #smaller)
+-- (id, #smaller)
 
 let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 

@@ -2,7 +2,7 @@
 -- sum of the two numbers' product per gear.
 -- input 0: (row, col, charcode)
 
-let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | map(((r, col, c), _) -> ((r, col), c));
+let cells    = input 0 : ((int, int, int), ()) | filter(((_, _, c), _) -> (c, 46) ne) | map(((r, col, c), _) -> ((r, col), c));
 let numerals = cells | filter((_, c) -> ((c, 48) ge, (c, 57) le) all) | map((cell, c) -> (cell, (c, 48) sub));
 let gears    = cells | filter((_, c) -> (c, 42) eq);
 
@@ -18,7 +18,7 @@ let extendable = runs::run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
                            | join(numerals, ((r, e), (s, v), _) -> ((r, s, e, v), ()));
 let maximal = runs::run - extendable;
 let partvals = maximal | map(((r, s, _, v), _) -> ((r, s), v));
--- (row, start ; value)
+-- ((row, start), value)
 
 labels: {
     let ext = label | map(((r, col, s), _) -> ((r, (col, 1) add), s)) | join(numerals, ((r, col), s, _) -> ((r, col, s), ()));
@@ -29,7 +29,7 @@ let labelcells = labels::label | map(((r, col, s), _) -> ((r, col), s));
 let gearnbrs = gears
     | flatmap(_ -> [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)])
     | map(((r, col), (_, (dr, dc))) -> (((r, dr) add, (col, dc) add), (r, col)));
--- (nbr_cell ; gear)
+-- (nbr_cell, gear)
 
 let pairs = gearnbrs
     | join(labelcells, ((pr, _), (gr, gc), ps) -> ((gr, gc, pr, ps), ()))
@@ -39,7 +39,7 @@ let pairs = gearnbrs
 let gearvals = pairs
     | map(((gr, gc, pr, ps), _) -> ((pr, ps), (gr, gc)))
     | join(partvals, (_, gear, v) -> (gear, v));
--- (gear ; part value)
+-- (gear, part value)
 
 export "result" = gearvals
     | collect

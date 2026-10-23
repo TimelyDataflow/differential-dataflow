@@ -2,4 +2,4 @@
 -- demonstrate structured (ADT) values and time-scheduled input. Its rows are
 -- values of a declared sum type.
 type Node = Leaf int | Pair (int, int);
-export "out" = input 0 : (Node ; ()) | inspect(echo);
+export "out" = input 0 : (Node, ()) | inspect(echo);

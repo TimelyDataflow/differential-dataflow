@@ -2,7 +2,7 @@
 //! checked against oracles that need no reference implementation.
 //!
 //! **What a seed generates.** One case, the same every time for the same seed: a program over up
-//! to six declared inputs (int pairs, `(int ; int)`, a list key, a declared sum, floats), with a
+//! to six declared inputs (int pairs, `(int, int)`, a list key, a declared sum, floats), with a
 //! few `let`s of `map`, `value`, `filter`, `flatmap`, `join`, `negate`, concat and difference,
 //! `arrange`, the reductions (`distinct`, `count`, `min`, `collect`, `reduce` by a lambda),
 //! `delay` and `join_function`, and small iterative scopes (reachability or label propagation,
@@ -110,7 +110,7 @@ impl Sh {
 
 // ===== Programs =====
 
-/// A `let` (or `var`) whose value is `src` piped through `ops`, at shape `(key ; val)`.
+/// A `let` (or `var`) whose value is `src` piped through `ops`, at shape `(key, val)`.
 #[derive(Clone, Debug)]
 struct Let {
     name: String,
@@ -157,11 +157,22 @@ struct Case {
 impl Case {
     fn inputs(&self) -> Vec<(usize, Sh, Sh)> {
         if let Some(raw) = &self.raw {
-            // `input N : (K ; V)`: the index, and whether the value is unit (all `row_text` needs).
+            // `input N : (K, V)`: the index, and whether the value is unit (all `row_text` needs).
             return raw.match_indices("input ").filter_map(|(at, _)| {
                 let rest = &raw[at + "input ".len()..];
                 let (n, rest) = rest.split_once(" : (")?;
-                let val = rest.split_once(" ; ")?.1.split_once(");")?.0;
+                // The value follows the root separator: the `,` (or deprecated `;`) at depth zero.
+                let (mut depth, mut sep, mut end) = (0usize, None, None);
+                for (i, c) in rest.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' if depth == 0 => { end = Some(i); break; }
+                        ')' => depth -= 1,
+                        ',' | ';' if depth == 0 => sep = Some(i),
+                        _ => {}
+                    }
+                }
+                let val = &rest[sep? + 1..end?];
                 Some((n.trim().parse().ok()?, Sh::Int, if val.trim() == "()" { Sh::Unit } else { Sh::Int }))
             }).collect();
         }
@@ -211,7 +222,7 @@ fn render_stmts(stmts: &[Stmt], delta: bool, indent: &str, out: &mut String) {
         match stmt {
             Stmt::Raw(line) => writeln!(out, "{indent}{line}").unwrap(),
             Stmt::Input { name, input, key, val } => {
-                writeln!(out, "{indent}let {name} = input {input} : ({} ; {});", key.text(), val.text()).unwrap();
+                writeln!(out, "{indent}let {name} = input {input} : ({}, {});", key.text(), val.text()).unwrap();
             }
             Stmt::Let(l) => writeln!(out, "{}", render_let(l, delta, indent)).unwrap(),
             Stmt::Scope { name, body } => {
@@ -408,7 +419,7 @@ impl Gen {
         self.rng.pick(&options).clone()
     }
 
-    /// A collection of shape `(key ; _)` to join with, if any.
+    /// A collection of shape `(key, _)` to join with, if any.
     fn with_key(&mut self, key: &Sh) -> Option<Coll> {
         let matches: Vec<Coll> = self.colls.iter().filter(|c| c.key == *key).cloned().collect();
         if matches.is_empty() { None } else { Some(self.rng.pick(&matches).clone()) }
@@ -677,7 +688,7 @@ impl Gen {
         self.push_let(Let { name, var: false, src: format!("{scope}::x"), ops: vec![], key: seed.key, val: seed.val });
     }
 
-    /// The step of a loop over `x : (key ; ())`, defining `step`: `x` joined with `edge`, or with a
+    /// The step of a loop over `x : (key, ())`, defining `step`: `x` joined with `edge`, or with a
     /// collection derived inside the scope from a parent's (through a flatmap, say), then perhaps
     /// filtered, or exploded and re-keyed; sometimes all of it inside a loop nested in this one.
     /// Every op is monotone and keeps ints bounded, so the loops end.
@@ -1065,7 +1076,7 @@ fn bound(case: &Case) -> Option<(String, String, Vec<(String, usize)>, usize)> {
     let mut binds = Vec::new();
     for (input, (name, key, val)) in named.iter().enumerate() {
         writeln!(producer, "export \"shared_{name}\" = {name};").unwrap();
-        writeln!(consumer, "let {name} = input {input} : ({} ; {});", key.text(), val.text()).unwrap();
+        writeln!(consumer, "let {name} = input {input} : ({}, {});", key.text(), val.text()).unwrap();
         binds.push((format!("shared_{name}"), input));
     }
     render_stmts(after, false, "", &mut consumer);

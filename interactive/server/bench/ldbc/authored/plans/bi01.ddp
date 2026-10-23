@@ -3,8 +3,8 @@
 -- Per-day totals are kept for all requests; a request adds up the days before its
 -- date and reads only the messages from that date itself.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, end time in ms)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, end time in ms)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
 
 -- Length categories: under 40, under 80, under 160, longer.
 let classified = message | map(((_, kind, created, _, _, _, _, length, _, _, _, year, _, day), ()) ->

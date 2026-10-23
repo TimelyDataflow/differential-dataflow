@@ -1,9 +1,9 @@
 -- IS6. The forum holding a message's thread, and the forum's moderator.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, message)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let forum   = import "ldbc.forum"   : ((int, List(int), int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, message)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let forum   = import "ldbc.forum"   : ((int, List(int), int, int), ());
 
 -- Threads: every post roots its own thread; a comment joins its parent's thread.
 -- Rows are (message, root post, forum of the root post).

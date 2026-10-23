@@ -2,11 +2,11 @@
 -- once a month on average; scored by the share of likes on their messages that came
 -- from other zombies (likers created before the end date); top 100.
 
-let request = input 0 : ((int, List(int), int, int) ; ());    -- (rid, country, end, end month as year*12+month)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, List(int), int, int), ());    -- (rid, country, end, end month as year*12+month)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let likes   = import "ldbc.likes"   : ((int, int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
 
 -- Where people live: (person, (city id, city name, country name)).
 let parent = place | map(((id, _, _, up), ()) -> (id, up));

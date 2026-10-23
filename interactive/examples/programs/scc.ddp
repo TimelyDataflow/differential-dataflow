@@ -1,7 +1,7 @@
 -- Strongly Connected Components — pipe syntax
--- input 0: edges (src, dst ;)
+-- input 0: edges ((src, dst), ())
 
-let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));
+let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
 let trans = edges | map((src, dst) -> (dst, src));
 
 outer: {

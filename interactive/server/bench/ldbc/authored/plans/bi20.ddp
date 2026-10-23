@@ -2,12 +2,12 @@
 -- there), over friendships between classmates weighted by |year difference| + 1;
 -- those at the least distance, top 20 by distance then id.
 
-let request = input 0 : ((int, List(int), int) ; ());         -- (rid, company name, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let org     = import "ldbc.org"     : ((int, List(int), List(int), int) ; ());
-let study   = import "ldbc.study"   : ((int, int, int) ; ());
-let work    = import "ldbc.work"    : ((int, int, int) ; ());
+let request = input 0 : ((int, List(int), int), ());         -- (rid, company name, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let org     = import "ldbc.org"     : ((int, List(int), List(int), int), ());
+let study   = import "ldbc.study"   : ((int, int, int), ());
+let work    = import "ldbc.work"    : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

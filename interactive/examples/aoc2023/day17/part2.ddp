@@ -2,7 +2,7 @@
 -- (and the goal) require steps>=4.
 -- input 0: (row, col, cost) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, w), ()) -> ((r, c), w));
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, w), ()) -> ((r, c), w));
 let seeds = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 1, 0, 0), 0)))
           + (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0, 1, 0), 0)));
 

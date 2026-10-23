@@ -1,14 +1,14 @@
 -- UNNEST (flatmap) + NEST (collect): build a list per row, explode it to one
 -- row per element (with position), then collect it back. A list round-trip
--- through the relational layer. The harness feeds (a, b ;).
+-- through the relational layer. The harness feeds ((a, b), ()).
 
-let rows = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, (a enlist, b enlist, (a, b) add enlist) append));
--- rows: (a ; [a, b, a+b])
+let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, (a enlist, b enlist, (a, b) add enlist) append));
+-- rows: (a, [a, b, a+b])
 
 let exploded = rows | flatmap((_, l) -> l);
--- one row per element: (a ; (pos, elem))
+-- one row per element: (a, (pos, elem))
 
 let regrouped = exploded | collect;
--- (a ; [ (0,a), (1,b), (2,a+b) ])  -- value-sorted => position order
+-- (a, [ (0,a), (1,b), (2,a+b) ])  -- value-sorted => position order
 
 export "result" = regrouped | arrange | inspect(nest);

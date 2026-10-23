@@ -2,7 +2,7 @@
 -- codes: '-'=45 '|'=124 'F'=70 'L'=76 'J'=74 '7'=55 '.'=46 'S'=83
 -- input 0: (row, col, code), 1-indexed
 
-let symbols = input 0 : ((int, int, int) ; ()) | map(((r, c, s), ()) -> ((r, c), s));
+let symbols = input 0 : ((int, int, int), ()) | map(((r, c, s), ()) -> ((r, c), s));
 let pipes = symbols | filter((_, s) -> ((s, 46) ne, (s, 83) ne) all);
 
 let e1 = pipes | map(((r, c), s) -> ((r, c,
@@ -21,7 +21,7 @@ let s4 = (scell | map(((r, c), _) -> ((r, c, (r, 1) add, c), ())))
 
 let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, n) -> (n, 2) eq)
     | map(((r, c, r2, c2), _) -> ((r, c), (r2, c2)));
--- (r1, c1 ; r2, c2), mutual links only
+-- ((r1, c1), (r2, c2)), mutual links only
 
 reach: {
     let next = r | join(symm, (_, (), rc) -> (rc, ()));

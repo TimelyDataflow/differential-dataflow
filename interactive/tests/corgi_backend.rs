@@ -259,7 +259,7 @@ fn register_test_functions() {
 /// A filter predicate must be an `Int`: a tuple is rejected rather than keeping nothing.
 #[test]
 fn filter_requires_an_int_predicate() {
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter((k, ()) -> k);"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int), ()) | filter((k, ()) -> k);"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
@@ -271,7 +271,7 @@ fn filter_requires_an_int_predicate() {
 fn call_argument_shapes_are_checked() {
     register_test_functions();
     // `blend` takes a pair; pass it an Int.
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map(((n), ()) -> ((n), (n call blend)));"#
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int), ()) | map(((n), ()) -> ((n), (n call blend)));"#
 ));
     tree.optimize();
     let inputs = vec![rows(&[&[1], &[2]])];

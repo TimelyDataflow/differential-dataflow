@@ -3,9 +3,9 @@
 -- input 0: rules (state, prio, field, cmp, val, next)
 -- input 1: parts (x, m, a, s)
 
-let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | map(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
--- (state ; prio, field, cmp, val, next)
-let parts = input 1 : ((int, int, int, int) ; ()) | map(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
+let rulesbys = input 0 : ((int, int, int, int, int, int), ()) | map(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
+-- (state, (prio, field, cmp, val, next))
+let parts = input 1 : ((int, int, int, int), ()) | map(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
 
 move: {
     let mtch = mv | map(((st, x, m, a, s), ()) -> (st, (x, m, a, s)))
@@ -14,7 +14,7 @@ move: {
             ((st, x, m, a, s), (((cmp, 0) eq, (sel, v) lt, (sel, v) gt) select, prio, nx)))
         | filter((_, (hit, _, _)) -> (hit, 1) eq) | map((k, (_, prio, nx)) -> (k, (prio, nx)))
         | min;
-    -- (state,x,m,a,s ; first prio, next)
+    -- ((state,x,m,a,s), (first prio, next))
     let moved = mtch | map(((_, x, m, a, s), (_, nx)) -> ((nx, x, m, a, s), ()));
     var mv = parts + moved | distinct;
 }

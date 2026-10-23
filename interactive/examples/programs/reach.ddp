@@ -1,9 +1,9 @@
 -- Reachability — pipe syntax
--- input 0: edges (src, dst ;)
--- input 1: roots (node ;)
+-- input 0: edges ((src, dst), ())
+-- input 1: roots (node, ())
 
-let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));
-let roots = input 1 : ((int) ; ()) | map(((n), ()) -> (n, ()));
+let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
+let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

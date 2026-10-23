@@ -1,10 +1,10 @@
 -- BI19. The cheapest interaction-weighted paths from anyone in city 1 to anyone in
 -- city 2: every (person1, person2) pair at the least cost, ordered by the pair.
 
-let request = input 0 : ((int, int, int) ; ());               -- (rid, city 1, city 2)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
+let request = input 0 : ((int, int, int), ());               -- (rid, city 1, city 2)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

@@ -112,7 +112,7 @@ pub enum LinearOp {
     /// UNNEST: explode the `List` a lambda gives into one row per element, value
     /// `(pos, element)`. See `parse::Expr::FlatMap`.
     FlatMap(Lambda),
-    /// Pair each value with its whole time: `(key ; val)` becomes `(key ; (val, time))`.
+    /// Pair each value with its whole time: `(key, val)` becomes `(key, (val, time))`.
     /// The time is a tuple of `Int`s, the epoch and then every scope coordinate, so its
     /// width is one more than the op's scope depth. Time itself is unchanged.
     Lift,

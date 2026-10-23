@@ -3,7 +3,7 @@
 -- `match` on a sum (MapSum + Unwrap, incl. a tag no row carries).
 type Three = A int | B int | C int;
 
-let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let tagged = pairs
     | map((k, b) -> (k, let s = (b, 2) branch Three in (s, s match (A (_ -> 0), B (_ -> 0), C (_ -> 1)), s match (A (_ -> 0), B (_ -> 1), C (_ -> 0)))));
 

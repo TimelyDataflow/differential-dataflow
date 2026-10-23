@@ -171,7 +171,7 @@ fn assert_commands_replay() {
         &mut writer,
         &mut reader,
         "r0",
-        "r0 load world begin\nlet rows = input 0 : ((int) ; (int));\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
+        "r0 load world begin\nlet rows = input 0 : ((int), (int));\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
     );
     request(
         &mut writer,
@@ -231,7 +231,7 @@ fn assert_commands_replay() {
         &mut writer,
         &mut reader,
         "r10",
-        "r10 load counted begin\nlet rows = input 0 : ((int) ; ());\nexport \"counted\" = rows;\nr10 end-load\n",
+        "r10 load counted begin\nlet rows = input 0 : ((int), ());\nexport \"counted\" = rows;\nr10 end-load\n",
     );
     request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
@@ -255,8 +255,8 @@ fn commands_replay_on_four_workers_without_duplicating_input() {
 
 fn assert_typed_sources() {
     let (server, mut writer, mut reader) = start_server(4);
-    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.rows\" = rows | arrange;\ng end-load\n");
-    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.copy\" = rows;\nq end-load\n");
+    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))), ());\nexport \"typed.rows\" = rows | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))), ());\nexport \"typed.copy\" = rows;\nq end-load\n");
     // Neither a first empty list nor a never-populated sum lane can supply
     // its encoding by example. Both the producer and imported trace use the
     // declared shape, without sentinel rows or altered data.
@@ -287,7 +287,7 @@ fn assert_shared_import_requests(workers: usize) {
         &mut writer,
         &mut reader,
         "g",
-        "g load graph begin\nlet e = input 0 : ((int) ; (int));\nexport \"edges\" = e | arrange;\ng end-load\n",
+        "g load graph begin\nlet e = input 0 : ((int), (int));\nexport \"edges\" = e | arrange;\ng end-load\n",
     );
     for name in ["a", "b"] {
         request(
@@ -295,7 +295,7 @@ fn assert_shared_import_requests(workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0 : ((int, int) ; ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
+                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
 \n{name} end-load\n"
             ),
         );
@@ -415,7 +415,7 @@ fn assert_tail_frames_sum_to_peeks(workers: usize) {
     use interactive::corgi::frame;
     use std::collections::BTreeMap;
     let (server, mut writer, mut reader) = start_server(workers);
-    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)) ; Option(int));\nexport \"rows\" = rows | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)), Option(int));\nexport \"rows\" = rows | arrange;\ng end-load\n");
     request(&mut writer, &mut reader, "f", "f feed graph 0 begin\ntuple(1,list(2,3)) val=inject(1,7)\ntuple(2,list()) val=inject(0,tuple())\nf end-feed\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
     let mut frames = Vec::new();
@@ -474,7 +474,7 @@ fn framed(writer: &mut TcpStream, reader: &mut BufReader<TcpStream>, reqid: &str
     }
 }
 
-/// The shapes an input declares as `declaration`, say `((int) ; ())`.
+/// The shapes an input declares as `declaration`, say `((int), ())`.
 fn declared(declaration: &str) -> interactive::server::RowShape {
     let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&format!("export \"x\" = input 0 : {declaration};")));
     program.root.imports[0].shape.clone().expect("a declared input")
@@ -495,8 +495,8 @@ fn feed_frame(shape: &interactive::server::RowShape, rows: &[(&str, Option<&str>
 /// on past each.
 fn assert_framed_feeds(workers: usize) {
     let (server, mut writer, mut reader) = start_server(workers);
-    request(&mut writer, &mut reader, "r0", "r0 load fed begin\nlet rows = input 0 : ((int, List(int)) ; (int));\nexport \"fed\" = rows;\nr0 end-load\n");
-    let shape = declared("((int, List(int)) ; (int))");
+    request(&mut writer, &mut reader, "r0", "r0 load fed begin\nlet rows = input 0 : ((int, List(int)), (int));\nexport \"fed\" = rows;\nr0 end-load\n");
+    let shape = declared("((int, List(int)), (int))");
     let rows: Vec<(String, Option<String>, i64)> = (0..10).map(|i| (format!("tuple({i},list({}))", "7,".repeat(i as usize).trim_end_matches(',')), Some(format!("tuple({})", 300 * i - 1000)), i + 1)).collect();
     let rows: Vec<(&str, Option<&str>, i64)> = rows.iter().map(|(k, v, d)| (k.as_str(), v.as_deref(), *d)).collect();
     let bytes = feed_frame(&shape, &rows);
@@ -504,7 +504,7 @@ fn assert_framed_feeds(workers: usize) {
     request(&mut writer, &mut reader, "r2", "r2 tick\n");
     let fed = request(&mut writer, &mut reader, "r3", "r3 peek fed as corgi\n");
     // The same rows fed as text, to another program, are the reference.
-    request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)) ; (int));\nexport \"text\" = rows;\nr4 end-load\n");
+    request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)), (int));\nexport \"text\" = rows;\nr4 end-load\n");
     let body: String = rows.iter().map(|(k, v, d)| format!("{k} val={} diff={d}\n", v.unwrap())).collect();
     request(&mut writer, &mut reader, "r5", &format!("r5 feed text 0 begin\n{body}r5 end-feed\n"));
     request(&mut writer, &mut reader, "r6", "r6 tick\n");
@@ -513,7 +513,7 @@ fn assert_framed_feeds(workers: usize) {
     assert_eq!(fed, text);
 
     // Another shape: the value is not a one-field tuple.
-    let other = feed_frame(&declared("((int, List(int)) ; int)"), &[("tuple(1,list())", Some("5"), 1)]);
+    let other = feed_frame(&declared("((int, List(int)), int)"), &[("tuple(1,list())", Some("5"), 1)]);
     let error = framed(&mut writer, &mut reader, "r8", &format!("r8 feed fed 0 frame {}\n", other.len()), &other).unwrap_err();
     assert!(error.contains("shape"), "{error}");
     // Cut short: its header counts the bytes sent, but they are not a whole frame.

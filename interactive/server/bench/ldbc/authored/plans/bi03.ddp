@@ -1,14 +1,14 @@
 -- BI3. Forums moderated by someone in a country, ranked by how many of their messages
 -- carry a tag of the given class; top 20.
 
-let request = input 0 : ((int, List(int), List(int)) ; ());    -- (rid, class name, country name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let forum   = import "ldbc.forum"   : ((int, List(int), int, int) ; ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
+let request = input 0 : ((int, List(int), List(int)), ());    -- (rid, class name, country name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let forum   = import "ldbc.forum"   : ((int, List(int), int, int), ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
 
 -- Threads: every post roots its own thread; a comment joins its parent's thread.
 -- Rows are (message, root post, forum of the root post).

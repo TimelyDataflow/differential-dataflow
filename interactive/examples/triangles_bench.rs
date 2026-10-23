@@ -37,7 +37,7 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const EDGES: &str = r#"
-    let e = input 0 : ((int, int) ; ()) | map(((x, y), ()) -> (x, y));
+    let e = input 0 : ((int, int), ()) | map(((x, y), ()) -> (x, y));
     let r = e | map((x, y) -> (y, x));
     let s = e | map((x, y) -> ((x, y), ()));
 "#;

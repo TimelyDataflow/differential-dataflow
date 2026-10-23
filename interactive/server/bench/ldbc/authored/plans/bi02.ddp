@@ -2,11 +2,11 @@
 -- and in the 100 days after that; top 100 by the difference. Tagged messages are kept
 -- keyed by (class, day) for all requests, so a request reads only its 200 days.
 
-let request = input 0 : ((int, int, List(int)) ; ());         -- (rid, date, class name)
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let tagclass = import "ldbc.tagclass" : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let request = input 0 : ((int, int, List(int)), ());         -- (rid, date, class name)
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let tagclass = import "ldbc.tagclass" : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
 
 -- ((class, day), (tag name, created)) for every tagged message.
 let dated   = message | map(((id, _, created, _, _, _, _, _, _, _, _, _, _, day), ()) -> (id, (created, day)));

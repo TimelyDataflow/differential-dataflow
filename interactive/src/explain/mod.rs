@@ -300,7 +300,7 @@ fn projection(key: String, val: String, arity: usize) -> Lambda {
 /// A filter of explain's own, from the lambda text of its 0/1 mask.
 fn predicate(body: String) -> Lambda { slot(2, &[], |_| body) }
 
-/// A user row `(K ; V)` as an envelope row `(K ; (V))`, with an empty chain.
+/// A user row `(K, V)` as an envelope row `(K, (V))`, with an empty chain.
 fn envelope() -> Lambda { projection(var(0), tup(vec![var(1)]), 2) }
 
 /// Options for the explanation rewrite.
@@ -364,7 +364,7 @@ impl Sb {
             self.op(Node::Inspect { input, label });
         }
     }
-    /// The rows of `rows (K ; V)` that the set `set` holds, matched as whole rows, at `rows`' counts.
+    /// The rows of `rows (K, V)` that the set `set` holds, matched as whole rows, at `rows`' counts.
     fn restrict(&mut self, rows: Ref, set: Ref) -> Ref {
         let rows = self.project(rows, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
         let set = self.project(set, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
@@ -473,12 +473,12 @@ impl Sb {
         let joined = self.join(sourced, by_hash, projection(f(0, 0), tup(wide), 3));
         // Soundness: chain_in ≤ chain_out, on the coordinates they share.
         let filtered = match <Val as RowModel>::time_le(in_len, out_len) { Some(c) => self.filter(joined, c), None => joined };
-        // Reform the demanded input (k ; V_in, chain_in, q).
+        // Reform the demanded input (k, (V_in, chain_in, q)).
         self.project(filtered, <Val as RowModel>::strip(in_len, out_len, in_len))
     }
 }
 
-/// The `Value` data model for explain: a demand row is `(K ; (V, chain…, q))`
+/// The `Value` data model for explain: a demand row is `(K, (V, chain…, q))`
 /// — the user's key and value whole, then the loop-iteration chain
 /// (innermost-first), then the trailing query id, matching the host lift's
 /// `append_iter` on `(V)`. Every builder works in field positions of that tuple.
@@ -641,7 +641,7 @@ impl RowModel for Val {
     }
 }
 
-/// The shape of a query row against `p`'s first export, `(key ; (val, q))`,
+/// The shape of a query row against `p`'s first export, `(key, (val, q))`,
 /// when the export's shape follows from `p`'s declared sources.
 fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
     let (shapes, _) = crate::shapes::infer(p, &|_| None);
@@ -650,7 +650,7 @@ fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
 }
 
 /// The transform. The query arrives as one extra positional input appended
-/// after the original inputs, its rows `(key ; (val, q))`: a row of the first
+/// after the original inputs, its rows `(key, (val, q))`: a row of the first
 /// export, and a query id.
 pub fn explain(p: &Program) -> Program {
     explain_with(p, Options::default())
@@ -719,7 +719,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     let mut demand: BTreeMap<Addr, Ref> = BTreeMap::new();
     // A demand variable no query reaches is bound only to demand derived from itself, which says
     // nothing of its shape: it declares the shape of the variable's rows as demand,
-    // `(K ; (V, chain…, q))`, with a coordinate per scope enclosing it.
+    // `(K, (V, chain…, q))`, with a coordinate per scope enclosing it.
     let (shapes, _) = crate::shapes::infer(p, &|_| None);
     for a in &var_addrs {
         let dv = ex.variable(&format!("demand_var_{:?}_{:?}", a.path, a.site));

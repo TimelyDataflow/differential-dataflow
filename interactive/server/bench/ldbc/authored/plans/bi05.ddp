@@ -1,11 +1,11 @@
 -- BI5. Most active posters on a topic: for each author of a message with the tag,
 -- score = messages + 2 * replies to them + 10 * likes on them; top 100.
 
-let request = input 0 : ((int, List(int)) ; ());              -- (rid, tag name)
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+let request = input 0 : ((int, List(int)), ());              -- (rid, tag name)
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let likes   = import "ldbc.likes"   : ((int, int, int), ());
 
 -- The request's tagged messages and their authors: (message, (rid, author)).
 -- Tag names are unique and (message, tag) pairs are a set, so each message appears once.

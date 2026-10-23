@@ -2,13 +2,13 @@
 -- 21st of the given month and the 22nd of the next, scored by their posts: +1 for each
 -- post with a tag the person is interested in, -1 for each other post; top 10.
 
-let request = input 0 : ((int, int, int) ; ());               -- (rid, person, month)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let place   = import "ldbc.place"   : ((int, List(int), List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
-let interest = import "ldbc.interest" : ((int, int) ; ());
+let request = input 0 : ((int, int, int), ());               -- (rid, person, month)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let place   = import "ldbc.place"   : ((int, List(int), List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
+let interest = import "ldbc.interest" : ((int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

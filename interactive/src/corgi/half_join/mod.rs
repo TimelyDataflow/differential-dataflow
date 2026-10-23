@@ -4,10 +4,10 @@
 //! released updates with the arrangement's chunks, column at a time. Both plug into dogs3's
 //! `half_join_with_tactic`, which owns progress, capabilities, and yielding.
 //!
-//! An update is `(key ; (val, s))` at time `t`: `s` is a time as data, a `Prod` of `Int` lanes as
+//! An update is `(key, (val, s))` at time `t`: `s` is a time as data, a `Prod` of `Int` lanes as
 //! `lift` writes it, and `t` the update's own time. It meets each arranged row `(key, v1)` at time
 //! `t2` with `t2 < t` in the total order on times (`≤` unless strict), giving
-//! `(key' ; (val', s ∨ t2))` at time `t` with the product of the diffs, where `(key', val')` is the
+//! `(key', (val', s ∨ t2))` at time `t` with the product of the diffs, where `(key', val')` is the
 //! projection over `(key, val, v1)`. The total order is the lexicographic order of the time lanes,
 //! which is DD's `Ord` on these times.
 //!

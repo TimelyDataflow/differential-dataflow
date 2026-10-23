@@ -3,8 +3,8 @@
 -- contribute negative products (their oracle answer is negative too).
 -- input 0: rules (state, prio, field, cmp, val, next)
 
-let rules = input 0 : ((int, int, int, int, int, int) ; ()) | map(((st, prio, f, cmp, v, nx), ()) -> ((st, prio), (f, cmp, v, nx)));
--- (state, prio ; field, cmp, val, next)
+let rules = input 0 : ((int, int, int, int, int, int), ()) | map(((st, prio, f, cmp, v, nx), ()) -> ((st, prio), (f, cmp, v, nx)));
+-- ((state, prio), (field, cmp, val, next))
 
 flow: {
     let cur = reg | map(((st, prio, xl, xh, ml, mh, al, ah, sl, sh), ()) -> ((st, prio), (xl, xh, ml, mh, al, ah, sl, sh)));

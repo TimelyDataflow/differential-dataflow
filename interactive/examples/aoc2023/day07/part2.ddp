@@ -3,7 +3,7 @@
 -- (g1+j)(g1+j-1) - g1(g1-1). No scalar let: stage via successive maps.
 -- input 0: (id, c1..c5, bid) charcodes
 
-let stage = input 0 : ((int, int, int, int, int, int, int) ; ()) | map(((id, c1, c2, c3, c4, c5, bid), ()) ->
+let stage = input 0 : ((int, int, int, int, int, int, int), ()) | map(((id, c1, c2, c3, c4, c5, bid), ()) ->
     # doubled non-joker pair count
     let n1 = (c1, 74) ne in
     let n2 = (c2, 74) ne in
@@ -29,12 +29,12 @@ let stage = input 0 : ((int, int, int, int, int, int, int) ; ()) | map(((id, c1,
     let v4 = ((c4, 74) eq, 1, ((c4, 58) lt, (c4, 48) sub, ((c4, 84) eq, 10, ((c4, 81) eq, 12, ((c4, 75) eq, 13, 14) select) select) select) select) select in
     let v5 = ((c5, 74) eq, 1, ((c5, 58) lt, (c5, 48) sub, ((c5, 84) eq, 10, ((c5, 81) eq, 12, ((c5, 75) eq, 13, 14) select) select) select) select) select in
     ((), (id, pc2, j, g, v1, v2, v3, v4, v5, bid)));
--- (; id, pc2, j, g1, v1..v5, bid)
+-- ((), (id, pc2, j, g1, v1..v5, bid))
 
 let hands = stage | map((_, (id, pc2, j, g1, v1, v2, v3, v4, v5, bid)) ->
     let gj = (g1, j) add in
     ((), (id, ((pc2, (gj, (gj, 1) sub) mul) add, (g1, (g1, 1) sub) mul) sub, v1, v2, v3, v4, v5, bid)));
--- (; id, type2, v1..v5, bid)
+-- ((), (id, type2, v1..v5, bid))
 
 let less = hands | join(hands, (_, (_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2, r3, r4, r5, r6, _)) -> ((
     ((l1, r1) lt, 1, ((l1, r1) gt, 0,

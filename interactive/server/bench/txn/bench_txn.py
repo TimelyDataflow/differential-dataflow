@@ -39,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "ldbc"))
 from client import encode_frame  # noqa: E402
 
-# The intents input of every program here: `((txn, is_read, key) ; (value))`.
+# The intents input of every program here: `((txn, is_read, key), (value))`.
 INTENTS = (("prod", ["int", "int", "int"]), ("prod", ["int"]))
 DEFAULT_BINARY = ROOT / "target/release/ddir_server"
 
@@ -263,7 +263,7 @@ def parse_rollback(lines: Iterable[str]) -> set[int]:
 
 
 def parse_state(lines: Iterable[str]) -> dict[int, int]:
-    """`state` is ((k) ; (v)) and `store` is ((k) ; (wid, v)): the value is the last field."""
+    """`state` is ((k), (v)) and `store` is ((k), (wid, v)): the value is the last field."""
     result: dict[int, int] = {}
     for key, val, diff in parse_rows(lines):
         if diff != 1 or key[0] in result:

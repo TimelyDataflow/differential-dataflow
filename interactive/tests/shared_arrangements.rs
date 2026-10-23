@@ -83,7 +83,7 @@ fn assert_sharing_agrees(written: &str, shared: &str) {
 }
 
 const REACH: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst)) EDGES;
+    let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst)) EDGES;
     let roots = edges | map((src, _) -> (src, ())) | distinct | filter((n, ()) -> (n, 3) lt);
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

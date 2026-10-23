@@ -2,12 +2,12 @@
 -- carry a given tag, which other tags appear most often? Top 10.
 -- Starts from the tag's posts and keeps those by people in the circle.
 
-let request = input 0 : ((int, int, List(int)) ; ());           -- (rid, person, tag name)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows" : ((int, int, int) ; ());
-let tag     = import "ldbc.tag"   : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"  : ((int, int) ; ());
+let request = input 0 : ((int, int, List(int)), ());           -- (rid, person, tag name)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows" : ((int, int, int), ());
+let tag     = import "ldbc.tag"   : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"  : ((int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

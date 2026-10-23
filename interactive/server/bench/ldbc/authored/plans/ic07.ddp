@@ -1,11 +1,11 @@
 -- IC7. The people who most recently liked a person's messages: when, which message,
 -- how many minutes after it was posted, and whether they are not yet a friend.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let likes   = import "ldbc.likes"   : ((int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let likes   = import "ldbc.likes"   : ((int, int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

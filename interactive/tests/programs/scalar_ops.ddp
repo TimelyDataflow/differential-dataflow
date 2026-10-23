@@ -1,7 +1,7 @@
 -- Scalar unaries on the corgi compiled path, checked against their recorded answer:
 -- negation, `not` as a comparison with zero, and list `len` (along `collect`ed values).
 
-let pairs = input 0 : ((int, int, int) ; ()) | map(((k, a, b), ()) -> (k, (a, b)));
+let pairs = input 0 : ((int, int, int), ()) | map(((k, a, b), ()) -> (k, (a, b)));
 let mapped = pairs
     | map((k, (a, _)) -> (k, (a neg, ((a, 2) gt, 0) eq)))
     | filter((_, (n, _)) -> ((n, -5) eq, 0) eq);

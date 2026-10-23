@@ -80,7 +80,7 @@ the exchange places every row on its key's owner). A `random:` recipe with
 `churn=C` keeps the input changing: every later `tick` retracts the next `C`
 rows of its window and adds `C` fresh ones, which is the standing-change regime
 programs are benchmarked under. A file source is one row per line of
-whitespace-separated integers, each becoming `(Tuple[ints] ; ())`; the
+whitespace-separated integers, each becoming `(Tuple[ints], ())`; the
 `aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
 serves the small inputs (roots, queries).
 
@@ -88,7 +88,7 @@ serves the small inputs (roots, queries).
 optimization, treating every source without a declared shape as `arity` key
 fields with no value; the
 rewritten program has one extra input after its own — the query input, fed as
-`(key ; val ++ q)` — and exports one `demand:inputN` trace per source, which
+`(key, val ++ q)` — and exports one `demand:inputN` trace per source, which
 you `peek`. `,debug` taps every demand collection with an inspect.
 
 ## Generated (named) sources
@@ -100,7 +100,7 @@ let edges = import "random:nodes=8,edges=12";
 ```
 
 `random:nodes=N,edges=E[,arity=A][,seed=S]` is a deterministic random graph
-(rows `(Tuple[a,b] ; ())`, like a raw input). The first import **installs the
+(rows `(Tuple[a,b], ())`, like a raw input). The first import **installs the
 generator on demand** — no producer to set up first — and the source is
 *content-addressed*: two programs importing the same recipe (in any key order)
 share one generated source, generated once. It shows up in `list` tagged
@@ -145,8 +145,8 @@ log-work form is left for later.)
 - **`clock_watch.ddp`** — `inspect`s the `clock` source ticking.
 - **`arrange_idem.ddp`** — a minimal e-graph *in DDIR*: congruence closure plus
   one rewrite rule, arrange-idempotence (`arrange(x) ≡ x` when `x` is already
-  arranged). Reads a node graph `(id ; op, [children])` and maintains trace
-  `classes` `(id ; class-leader)`. Optimizing DDIR by feeding it DDIR's own
+  arranged). Reads a node graph `(id, (op, [children]))` and maintains trace
+  `classes` `(id, class-leader)`. Optimizing DDIR by feeding it DDIR's own
   e-nodes — eat-your-own-dogfood.
 
 ## The sessions — what to look for

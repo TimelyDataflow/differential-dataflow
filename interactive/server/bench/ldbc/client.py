@@ -99,9 +99,9 @@ def _encode_column(shape, values, out):
 
 def declared_inputs(program):
     """The declared shapes of a program's unit-valued inputs, by index, as `Server.feed` takes
-    them to send frames: `input N : (shape ; ())` becomes `{N: (parse_shape(shape), 'unit')}`."""
+    them to send frames: `input N : (shape, ())` becomes `{N: (parse_shape(shape), 'unit')}`."""
     return {int(n): (parse_shape(shape), 'unit')
-            for n, shape in re.findall(r'input (\d+) : \((.*) ; \(\)\)', program)}
+            for n, shape in re.findall(r'input (\d+) : \((.*)(?:,| ;) \(\)\)', program)}
 
 
 def encode_frame(shape, keys, diffs, vals=None):

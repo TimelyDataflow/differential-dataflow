@@ -2,11 +2,11 @@
 -- Copies are collection multiplicities; the cascade is a var fixpoint.
 -- input 0: (card, side, idx, value)
 
-let numbers = input 0 : ((int, int, int, int) ; ());
+let numbers = input 0 : ((int, int, int, int), ());
 let winners = numbers | filter(((_, side, _, _), _) -> (side, 0) eq) | map(((card, _, _, value), _) -> ((card, value), ()));
 let ours    = numbers | filter(((_, side, _, _), _) -> (side, 1) eq) | map(((card, _, _, value), _) -> ((card, value), ()));
 let matches = ours | join(winners, (k, _, _) -> (k, ())) | map(((card, _), _) -> (card, ())) | count;
--- (card ; m): number of matching (ours, winners) pairs
+-- (card, m): number of matching (ours, winners) pairs
 
 let cards = numbers | map(((card, _, _, _), _) -> (card, ())) | distinct;
 
@@ -18,7 +18,7 @@ wt: {
 }
 let wtflat = wt::t | map(((card, target), _) -> (card, target));
 
--- instances: multiplicity of (card ;) = copies of that card
+-- instances: multiplicity of (card, ()) = copies of that card
 insts: {
     let spawned = inst | join(wtflat, (_, _, target) -> (target, ()));
     var inst = cards + spawned | arrange;

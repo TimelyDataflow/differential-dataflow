@@ -1,12 +1,12 @@
 -- BI16. People who posted about tag A on day A and tag B on day B, and who know at most
 -- `maxknows` of the others posting about each; top 20 by messages on both days.
 
-let request = input 0 : ((int, List(int), int, List(int), int, int) ; ());   -- (rid, tag A, day A, tag B, day B, max knows)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
-let knows   = import "ldbc.knows"   : ((int, int, int) ; ());
-let tag     = import "ldbc.tag"     : ((int, List(int), int) ; ());
-let mtag    = import "ldbc.mtag"    : ((int, int) ; ());
+let request = input 0 : ((int, List(int), int, List(int), int, int), ());   -- (rid, tag A, day A, tag B, day B, max knows)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let knows   = import "ldbc.knows"   : ((int, int, int), ());
+let tag     = import "ldbc.tag"     : ((int, List(int), int), ());
+let mtag    = import "ldbc.mtag"    : ((int, int), ());
 
 -- Friendships in both directions, between people who exist.
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;

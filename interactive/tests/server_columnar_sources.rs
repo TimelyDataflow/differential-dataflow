@@ -23,25 +23,25 @@ const SOURCES: &str = r#"
 "#;
 
 const LOADED: &str = r#"
-    let triples = input 0 : ((int, int, int) ; ());
+    let triples = input 0 : ((int, int, int), ());
     export "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
 "#;
 
 /// A fed input, read through another program's import.
 const LOOSE: &str = r#"
-    export "loose" = input 0 : ((int) ; ());
+    export "loose" = input 0 : ((int), ());
 "#;
 
 /// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
-    let l = import "loose" : ((int) ; ());
+    let l = import "loose" : ((int), ());
     export "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;
 
 /// An input bound to "doubled", so it mirrors it one tick behind.
 const MIRROR: &str = r#"
-    export "mirror" = input 0 : ((int) ; ());
+    export "mirror" = input 0 : ((int), ());
 "#;
 
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.

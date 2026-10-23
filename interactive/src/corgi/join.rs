@@ -885,7 +885,7 @@ mod tests {
         Rc::new(ChunkBatch::new(vec![chunk]))
     }
 
-    /// A backend projecting `(key ; (val0, val1))` from inputs of these key and value shapes.
+    /// A backend projecting `(key, (val0, val1))` from inputs of these key and value shapes.
     fn backend(shapes: [Shape; 3]) -> CorgiJoinBackend<u64> {
         CorgiJoinBackend::new(&Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()), shapes)
     }

@@ -1,4 +1,4 @@
 -- The committed store for the one-off resolver (see resolve.ddp):
--- ((record key) ; (writing txn id, value)), one row per key.
-let store = input 0 : ((int) ; (int, int));
+-- ((record key), (writing txn id, value)), one row per key.
+let store = input 0 : ((int), (int, int));
 export "store" = store;

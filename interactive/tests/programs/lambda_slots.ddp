@@ -8,7 +8,7 @@ type Size = Small int | Big (int, int);
 type Inner = A int | B;
 type Outer = Wrap Inner | Opt Option(int) | Nums List(int);
 
-let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> ((a), (b)));
+let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
 
 export "value" = pairs | value(((a), (b)) -> ((b, 10) mul, a) add);
 export "filter" = pairs | filter(((a), (b)) -> (a, b) lt);

@@ -1,7 +1,7 @@
 -- Reductions written as lambdas, checked against vec: the lambda reads the key and a list of
 -- `(val, diff)`, and lists the output with diffs. Weighted sums and maxima fold the list; `vals`
 -- alone is the identity; an output diff need not be one, and may be negative.
-let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
 export "sum" = pairs | reduce((_, vals) -> ((0, vals) fold ((acc, (v, d)) -> (acc, (v, d) mul) add), 1) enlist);
 export "max" = pairs | reduce((_, vals) -> ((-1000000, vals) fold ((acc, (v, _)) -> ((v, acc) gt, v, acc) select), 1) enlist);

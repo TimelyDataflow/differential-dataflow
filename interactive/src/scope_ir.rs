@@ -118,10 +118,10 @@ pub enum Node {
     Arrange(Ref),
     /// `projection` is a lambda over `(key, left val, right val)` giving `(key', val')`.
     Join { left: Ref, right: Ref, projection: Lambda },
-    /// Each update of `stream`, `(key ; (val, time))` with `time` a time as data (as `lift` writes
+    /// Each update of `stream`, `(key, (val, time))` with `time` a time as data (as `lift` writes
     /// it), meets the rows of `arrangement` at its key whose times are less than the update's own
     /// in the total order on times, or less or equal unless `strict`. Each pair gives
-    /// `(key' ; (val', time ∨ t2))`: `projection` over `(key, val, arranged val)`, and the update's
+    /// `(key', (val', time ∨ t2))`: `projection` over `(key, val, arranged val)`, and the update's
     /// data time joined with the arranged row's. The output keeps the update's own time, and its
     /// diff is the product of the two. The arrangement's changes produce no output.
     HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },

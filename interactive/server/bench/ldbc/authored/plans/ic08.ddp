@@ -1,9 +1,9 @@
 -- IC8. The 20 most recent replies to a person's messages. Ranked on narrow rows; the
 -- text and the repliers' names are fetched only for the 20.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
 let names   = person | map(((id, first, last, _, _, _, _, _, _, _, _, _), ()) -> (id, (first, last)));
 
 let author  = message | map(((id, _, _, who, _, _, _, _, _, _, _, _, _, _), ()) -> (id, who));

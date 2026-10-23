@@ -1,9 +1,9 @@
 -- IS2. A person's 10 most recent messages, each with the post that started its
 -- thread and that post's author.
 
-let request = input 0 : ((int, int) ; ());                    -- (rid, person)
-let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int) ; ());
-let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int) ; ());
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person"  : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message = import "ldbc.message" : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
 
 -- Threads: every post is its own root; a comment inherits its parent's root.
 let roots   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)

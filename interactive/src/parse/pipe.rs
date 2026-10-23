@@ -6,7 +6,7 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N : (key_shape ; val_shape)` (positional input), `import "name"`
+//! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
 //! (named trace), `name` (a `let`/`var` in scope), `scope::field` (a child scope's
 //! export). An input declares its shape, using the shape syntax below, as a table
 //! declares its columns: the server refuses to install a program with an undeclared
@@ -30,14 +30,14 @@
 //!   element, value `(pos, element)`.
 //! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at((k, v) -> round)` ·
 //!   `| lift_iter`.
-//! - `| lift` — pair each value with its whole time, `(key ; (val, time))`, the time a tuple
+//! - `| lift` — pair each value with its whole time, `(key, (val, time))`, the time a tuple
 //!   of the epoch and every scope coordinate.
 //! - `| join_function((k, v) -> list)` — replace each row by the lambda's list of
 //!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
 //! - `| half_join(other, strict, (k, v, v1) -> (k', v'))` — each update of a lifted stream,
-//!   `(k ; (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
+//!   `(k, (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
 //!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
-//!   `(k' ; (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
+//!   `(k', (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
 //!   each row to at least the time the lambda gives.
 //! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
@@ -47,13 +47,19 @@
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
 //! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
 //! program output, root scope only). A `var` or `export` may declare its
-//! shape, `var x : (key_shape ; val_shape) = …;`, which installation checks
+//! shape, `var x : (key_shape, val_shape) = …;`, which installation checks
 //! against the shape inferred for its value. `type Name = V0 shape? | V1 shape? …;`
 //! declares a sum type, an enum of the program's lambdas (below); it emits no IR.
 //!
 //! A shape is `int`, `float`, `()`, `(a, b, …)`, `List(a)`, `Option(a)`, `Result(a, b)`, or a
 //! declared type's name. A variant's payload shape is `()` when omitted, and a type's payloads
 //! may name earlier types, never recursively.
+//!
+//! A collection's shape, as `input`, `import`, `var` and `export` declare it, is the pair
+//! `(key_shape, val_shape)`: its root has exactly two fields, the key and the value, as a slot's
+//! input `(key, val)` does. `((int, int), ())` is a two-field key with a unit value, and
+//! `(int, int)` keys by the first int with the second as the value. The older `(key ; val)` is
+//! still accepted, and deprecated.
 //!
 //! # Lambdas
 //!
@@ -458,15 +464,22 @@ impl Parser {
         }
     }
 
-    /// An optional `: (key ; val)` shape declaration.
+    /// An optional `: (key, val)` shape declaration: the root pair is the key and the value.
+    /// The older `(key ; val)` is accepted too, and deprecated.
     fn declared_shape(&mut self) -> Option<crate::scope_ir::RowShape> {
         if *self.peek() != Token::Colon { return None; }
         self.next();
         self.expect(&Token::LParen);
         let key = self.parse_shape();
-        self.expect(&Token::Semi);
+        match self.next() {
+            Token::Comma | Token::Semi => {}
+            other => panic!("a collection shape is (key, value), got {:?} after its key", other),
+        }
         let val = self.parse_shape();
-        self.expect(&Token::RParen);
+        if *self.peek() != Token::RParen {
+            panic!("a collection shape is (key, value), with exactly two fields; got {:?} after its value", self.peek());
+        }
+        self.next();
         Some((key, val))
     }
 
