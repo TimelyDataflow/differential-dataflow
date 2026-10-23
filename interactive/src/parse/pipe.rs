@@ -20,8 +20,8 @@
 //! - `| map((k, v) -> (k', v'))` — reshape each row to the `(key, val)` the lambda gives.
 //! - `| value((k, v) -> v')` — replace the value, keeping the key.
 //! - `| join(other, (k, v, v1) -> (k', v'))` — equijoin on the key.
-//! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
-//!   NEST (gather a key's values into a `List`).
+//! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `distinct` keeps each `(key, val)`
+//!   record once, and `collect` is NEST (gather a key's values into a `List`).
 //! - `| reduce((k, vals) -> out)` — reduce by a lambda: `vals` is the key's values with their
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
 //!   `List` of `(val, diff)`.

@@ -468,8 +468,8 @@ impl Gen {
                 }
                 55..=59 => same_shape("negate".into()),
                 60..=62 => same_shape("arrange".into()),
-                // `distinct` keeps each key once, with a unit value.
-                63..=69 => { let same = val == Sh::Unit; val = Sh::Unit; Op::Plain { text: "distinct".into(), same_shape: same } }
+                // `distinct` keeps each `(key, val)` record once.
+                63..=69 => same_shape("distinct".into()),
                 70..=73 => { let same = val == Sh::Int; val = Sh::Int; Op::Plain { text: "count".into(), same_shape: same } }
                 74..=78 => same_shape("min".into()),
                 79..=82 => {
@@ -610,7 +610,8 @@ impl Gen {
         let edge = self.rng.pick(&edges).clone();
         let scope = format!("s{}", self.next + 1);
         self.next += 1;
-        // `distinct` leaves a unit value, so it closes the loop only over unit-valued seeds.
+        // A loop over unit-valued seeds may close with `distinct`; one over values takes `min`, whose
+        // labels only fall, so the loop ends.
         let min = seed.val != Sh::Unit || self.rng.chance(40);
         let mut body = Vec::new();
         let mut env = Env::new();

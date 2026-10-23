@@ -312,20 +312,21 @@ where
                 (CValue::i64(sums), out_ends)
             }
             Reducer::Distinct => {
-                // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
-                // presents every value whose accumulation is non-zero, negatives included. A
-                // `> 0` test here silently drops a key whose values all accumulate negative, which
-                // is exactly what a negated collection produces. Output value is unit (a `Unit` column).
-                let mut present = 0usize;
+                // Distinct records: each of a key's values whose net is NON-ZERO, once -- the sign
+                // does not matter. DD's `reduce` presents every value whose accumulation is
+                // non-zero, negatives included. A `> 0` test here silently drops a value that
+                // accumulates negative, which is exactly what a negated collection produces.
+                let mut reps = Vec::new();
                 let mut start = 0;
                 for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        present += 1;
-                    }
-                    out_ends.push(present);
+                    reps.extend(input[start..end].iter().filter(|&&(_, d)| d != 0).map(|&(id, _)| id));
+                    out_ends.push(reps.len());
                     start = end;
                 }
-                (CValue::Unit(present), out_ends)
+                if reps.is_empty() {
+                    return (CValue::Unit(0), out_ends);
+                }
+                (self.input.gather(&reps), out_ends)
             }
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select

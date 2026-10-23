@@ -1,0 +1,17 @@
+-- Connected components by label propagation over `(src ; dst)` edges. `distinct` keeps each
+-- record once, so the symmetrized edges stay keyed by source, with their destinations.
+
+let raw   = input 0 : (int ; int);
+
+-- symmetrize the edges, and name the nodes
+let edges = (raw | map((a, b) -> (b, a))) + raw | distinct;
+let nodes = edges | map((a, _) -> (a, ())) | distinct;
+
+-- each node starts with its own name as a label and keeps the least label it has seen
+cc: {
+    let props  = labels | join(edges, (_, lbl, dst) -> (dst, lbl));
+    var labels = (nodes | map((n, _) -> (n, n))) + props | min;
+}
+
+-- the labels now name the components
+export "parts" = cc::labels | map((_, label) -> (label, ())) | arrange | inspect(total);
