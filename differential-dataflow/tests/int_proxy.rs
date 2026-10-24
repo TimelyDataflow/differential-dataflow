@@ -582,3 +582,29 @@ fn reduce_single_seed_with_incomparable_record() {
         "including the incomparable value at the seed, or skipping the join, is incorrect");
     assert!(pending.is_empty());
 }
+
+/// With partially ordered times, advancing a prior record to `lower` can move it past a novel
+/// record of the same value: prior `(0, 5)` advances to `(1, 5)`, after novel `(1, 0)`. The input
+/// must still be presented sorted by `(id, time)`, and the prior record must net against the
+/// novel retraction at `(1, 5)`.
+#[test]
+fn reduce_prior_advanced_past_novel() {
+    let time = Product::<u64, u64>::new;
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+    let prior = hbatch(vec![((7u64, 3u64), time(0, 5), 1i64)], time(0, 0), time(1, 0));
+    let (first, _) = tactic.retire(
+        vec![], vec![], vec![prior.clone()],
+        &Antichain::from_elem(time(0, 0)), &Antichain::from_elem(time(1, 0)), &Antichain::from_elem(time(0, 0)),
+    );
+    let outputs: Vec<_> = first.into_iter().filter_map(|s| s.inner).collect();
+    assert_eq!(hread(&outputs), vec![((7, 3), time(0, 5), 1)]);
+
+    let input = hbatch(vec![((7u64, 3u64), time(1, 0), 1i64), ((7, 3), time(1, 5), -1)], time(1, 0), time(2, 0));
+    let (second, pending) = tactic.retire(
+        vec![prior], outputs, vec![input],
+        &Antichain::from_elem(time(1, 0)), &Antichain::from_elem(time(2, 0)), &Antichain::from_elem(time(1, 0)),
+    );
+    let outputs: Vec<_> = second.into_iter().filter_map(|s| s.inner).collect();
+    assert_eq!(hread(&outputs), vec![((7, 3), time(1, 0), 1), ((7, 3), time(1, 5), -1)]);
+    assert!(pending.is_empty());
+}
