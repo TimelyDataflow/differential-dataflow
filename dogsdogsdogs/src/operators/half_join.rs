@@ -37,6 +37,7 @@ use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Nav
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::operators::int_proxy::{ProxyHalfJoinBackend, ProxyHalfJoinTactic};
 
 use timely::dataflow::operators::CapabilitySet;
 
@@ -163,6 +164,27 @@ where
             if frontier1.is_empty() && caps.is_empty() && todo.is_empty() { arrangement_trace = None; }
         }
     })
+}
+
+/// The proxy half-join tactic of differential's `int_proxy` framework, as a [`HalfJoinTactic`].
+///
+/// The tactic owns the time logic and the backend the data; see
+/// [`differential_dataflow::operators::int_proxy::half_join`].
+impl<T, B, C0, Bk> HalfJoinTactic<T, B, C0, Bk::Output> for ProxyHalfJoinTactic<B, C0, Bk>
+where
+    T: Timestamp + Lattice + 'static,
+    B: 'static,
+    C0: 'static,
+    Bk: ProxyHalfJoinBackend<T, B, C0> + 'static,
+    Bk::Output: 'static,
+    Bk::Key: 'static,
+    Bk::V0: 'static,
+    Bk::V1: 'static,
+    Bk::Stream: 'static,
+{
+    fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<T>) -> Box<dyn Iterator<Item = Bk::Output>> {
+        self.prepare(chunks, batches, lower)
+    }
 }
 
 /// Cursor-based half join: the conventional [`HalfJoinTactic`] implementation, its worker, and the
@@ -456,7 +478,16 @@ pub mod cursors {
         }
     }
 
-    struct BlobList<D, T: Timestamp, R> {
+    /// The conventional half-join [`Batcher`]: staged updates wait in time order, and an update
+    /// is released once no arrangement time can still precede it in the total order.
+    ///
+    /// Every [`HalfJoinTactic`] needs a batcher that agrees with it on when an update is
+    /// released, and this is the generic one, for `Vec` containers of `(data, time, diff)`
+    /// rows: the cursor tactic uses it, and so can the proxy tactic over any backend whose
+    /// released containers are such vectors. A backend with its own container type writes its
+    /// own, as DDIR's columnar one does; the release rule it must implement is the one in
+    /// [`extract`](Batcher::extract) below.
+    pub struct BlobList<D, T: Timestamp, R> {
         stage: Vec<(T, D, R)>,
         blobs: Vec<VecDeque<(T, D, R)>>,
         lower: MutableAntichain<T>,
@@ -466,7 +497,7 @@ pub mod cursors {
 
     impl<D, T: Timestamp, R> BlobList<D, T, R> {
         /// Allocates an empty list that releases updates under the `strict` comparison.
-        fn new(strict: bool) -> Self {
+        pub fn new(strict: bool) -> Self {
             BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
         }
     }
