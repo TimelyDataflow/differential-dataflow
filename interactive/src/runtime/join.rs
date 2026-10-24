@@ -52,7 +52,7 @@ type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 /// Matches per output container cut by `cross` (mirrors the chunk grading `TARGET`).
 const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
-const COORD_BITS: u32 = 48;
+pub(super) const COORD_BITS: u32 = 48;
 
 /// The corgi [`ProxyJoinBackend`]: holds the projection, a lambda over `(key, val0, val1)`,
 /// compiled at the shapes of the columns it meets.
@@ -243,7 +243,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
 }
 
 /// Coordinates remain necessary for structured keys, including collision validation.
-fn primitive_values<T: ColTime>(chunk: &CorgiChunk<T, Diff>) -> bool {
+pub(super) fn primitive_values<T: ColTime>(chunk: &CorgiChunk<T, Diff>) -> bool {
     !key_is_hashed(chunk.keys()) && int_lane(chunk.vals()).is_some()
 }
 
@@ -279,7 +279,7 @@ fn leaf_lanes(col: &CValue) -> Option<Vec<&[i64]>> {
 }
 
 /// Whether to borrow comparison lanes. Primitive tokens read their source lane directly.
-fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
+pub(super) fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
     !primitive_values(chunks[0])
         && chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
 }
@@ -287,12 +287,12 @@ fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
 /// One key's records in one chunk: absolute rows `[s, e)`. When the vals are leaf-laned,
 /// `vals` borrows the chunk's full leaf lanes, indexed by absolute row; `None`
 /// falls back to structural compares against the chunk itself.
-struct RunRef<'a, T: ColTime> {
-    chunk: &'a CorgiChunk<T, Diff>,
-    cid: usize,
-    s: usize,
-    e: usize,
-    vals: Option<&'a [&'a [i64]]>,
+pub(super) struct RunRef<'a, T: ColTime> {
+    pub(super) chunk: &'a CorgiChunk<T, Diff>,
+    pub(super) cid: usize,
+    pub(super) s: usize,
+    pub(super) e: usize,
+    pub(super) vals: Option<&'a [&'a [i64]]>,
 }
 
 impl<'a, T: ColTime> RunRef<'a, T> {
@@ -318,8 +318,8 @@ impl<'a, T: ColTime> RunRef<'a, T> {
 
 /// Per-key staging for one side: consolidated `(token, time, diff)` entries, built in scratch
 /// so a side that nets to zero suppresses the key before anything reaches the bridges.
-struct SideScratch<T> {
-    entries: Vec<(u64, T, Diff)>,
+pub(super) struct SideScratch<T> {
+    pub(super) entries: Vec<(u64, T, Diff)>,
     /// `(time, diff)` scratch for one value's cross-chunk merge.
     tds: Vec<(T, Diff)>,
     /// Cross-chunk value-merge heads, reused across keys.
@@ -327,7 +327,7 @@ struct SideScratch<T> {
 }
 
 impl<T: ColTime> SideScratch<T> {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new() }
     }
 
@@ -342,7 +342,7 @@ impl<T: ColTime> SideScratch<T> {
     /// primitive values identify themselves; other values share their least occurrence's
     /// coordinate across chunks. Times are advanced by `lower`, consolidated, zeros dropped.
     /// Entries end sorted by `(token, time)`.
-    fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
+    pub(super) fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
         self.entries.clear();
         if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
             for run in runs {
@@ -418,7 +418,7 @@ impl<T: ColTime> SideScratch<T> {
     }
 
     /// Move the staged entries into `bridge` under group token `k`.
-    fn emit(&mut self, k: i64, bridge: &mut ProxyBridge<T, Diff, i64>) -> usize {
+    pub(super) fn emit(&mut self, k: i64, bridge: &mut ProxyBridge<T, Diff, i64>) -> usize {
         let n = self.entries.len();
         bridge.extend(self.entries.drain(..).map(|(coord, t, d)| ((k, coord), t, d)));
         n
@@ -533,16 +533,16 @@ impl<'a, T: ColTime> LeafView<'a, T> {
 /// The batched probe of one PROBEE-side chunk: per driver key, its equal-range in the
 /// chunk, borrowing its full value lanes when leaf-shaped. Matched rows index the
 /// original lanes directly, without a gather or an index buffer.
-struct Probe<'a, T: ColTime> {
-    chunk: &'a CorgiChunk<T, Diff>,
-    cid: usize,
-    lo: Vec<usize>,
-    hi: Vec<usize>,
+pub(super) struct Probe<'a, T: ColTime> {
+    pub(super) chunk: &'a CorgiChunk<T, Diff>,
+    pub(super) cid: usize,
+    pub(super) lo: Vec<usize>,
+    pub(super) hi: Vec<usize>,
     vals: Option<Vec<&'a [i64]>>,
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
-    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[i64], leaf_vals: bool) -> Self {
+    pub(super) fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[i64], leaf_vals: bool) -> Self {
         let keys = ident(chunk);
         let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
         let mut found = Vec::new();
@@ -555,7 +555,7 @@ impl<'a, T: ColTime> Probe<'a, T> {
         Probe { chunk, cid, lo, hi, vals }
     }
     /// The run of driver key `j` in this chunk, if any.
-    fn run_ref(&self, j: usize) -> Option<RunRef<'_, T>> {
+    pub(super) fn run_ref(&self, j: usize) -> Option<RunRef<'_, T>> {
         let (s, e) = (self.lo[j], self.hi[j]);
         if s == e { return None; }
         Some(RunRef {
@@ -571,7 +571,7 @@ impl<'a, T: ColTime> Probe<'a, T> {
 /// Stage a colliding identifier without allowing equal values from different real keys to
 /// consolidate together. Each real key is staged independently, but all retain the identifier as
 /// their proxy token; `cross` uses the coordinates to discard unequal-key pairs afterward.
-fn stage_collision<T: ColTime>(
+pub(super) fn stage_collision<T: ColTime>(
     runs: &[RunRef<'_, T>],
     lower: &T,
     token: i64,

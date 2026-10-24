@@ -1,8 +1,10 @@
 //! The corgi half join: a [`Batcher`](differential_dataflow::batcher::Batcher) that releases a
 //! lifted stream's updates once the arrangement can no longer gain rows that precede them, and a
-//! [`HalfJoinTactic`](differential_dogs3::operators::half_join::HalfJoinTactic) that meets
-//! released updates with the arrangement's chunks, column at a time. Both plug into dogs3's
-//! `half_join_with_tactic`, which owns progress, capabilities, and yielding.
+//! [`ProxyHalfJoinBackend`](differential_dogs3::operators::half_join::proxy::ProxyHalfJoinBackend)
+//! that presents released updates and the arrangement's chunks to dogs3's proxy half-join tactic,
+//! column at a time, and projects the pairs the tactic matches. Both plug into dogs3's
+//! `half_join_with_tactic`, which owns progress, capabilities, and yielding; the tactic owns which
+//! pairs meet and at what times.
 //!
 //! An update is `(key, (val, s))` at time `t`: `s` is a time as data, a `Prod` of `Int` lanes as
 //! `lift` writes it, and `t` the update's own time. It meets each arranged row `(key, v1)` at time
@@ -12,8 +14,8 @@
 //! which is DD's `Ord` on these times.
 //!
 //! The batcher keeps arrivals in time order and releases them as runs in identifier order; the
-//! tactic merges a unit's runs and meets them with the arrangement a block at a time. A [`Run`] is
-//! what passes between them.
+//! backend reads a unit's runs by identifier a block at a time. A [`Run`] is what passes between
+//! them.
 
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -28,11 +30,11 @@ use crate::runtime::col_times::ColTimes;
 use crate::runtime::container::CorgiContainer;
 use crate::ir::{Diff, Time};
 
+mod backend;
 mod batcher;
-mod tactic;
 
+pub(crate) use backend::CorgiHalfJoinBackend;
 pub(crate) use batcher::HalfJoinBatcher;
-pub(crate) use tactic::CorgiHalfJoin;
 
 type CC = CorgiContainer<Time, Diff>;
 type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
