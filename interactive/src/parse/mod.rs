@@ -26,6 +26,8 @@ pub enum Expr {
     Join(Box<Expr>, Box<Expr>, Lambda),
     /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
     HalfJoin(Box<Expr>, Box<Expr>, bool, Lambda),
+    /// `stream | count(arrangement, projection)`: see `scope_ir::Node::Count`.
+    Count(Box<Expr>, Box<Expr>, Lambda),
     Reduce(Box<Expr>, Reducer),
     Filter(Box<Expr>, Lambda),
     Negate(Box<Expr>),

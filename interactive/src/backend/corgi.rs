@@ -30,7 +30,7 @@ use crate::runtime::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::runtime::col_times::ColTime;
 use crate::runtime::container::CorgiContainer;
 use crate::runtime::exchange::CorgiPact;
-use crate::runtime::half_join::{CorgiHalfJoinBackend, HalfJoinBatcher};
+use crate::runtime::half_join::{CorgiCountTactic, CorgiHalfJoinBackend, HalfJoinBatcher};
 use crate::runtime::join::CorgiJoinBackend;
 use differential_dogs3::operators::half_join::half_join_with_tactic;
 use crate::runtime::reduce::CorgiReduceBackend;
@@ -396,6 +396,19 @@ impl Backend for CorgiBackend {
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
         half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
     }
+
+    fn count<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, projection: &Lambda, level: usize, ((k, v), _): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
+        // The half join's driver and batcher, with a tactic that counts instead of matching: an
+        // update is answered once the arrangement's frontier has passed its time, so a key with no
+        // updates then is one no half join against the arrangement would match. The count reads no
+        // times, so the import's `since` does not matter, and the arrangement may compact fully,
+        // which only nets its retractions out of the count.
+        let Arr { arranged, .. } = arrangement;
+        let tactic = CorgiCountTactic::new(projection, [k, v]);
+        let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
+        half_join_with_tactic(stream.inner, arranged, CorgiPact, |t: &Time, out: &mut Antichain<Time>| { out.insert(t.clone()); }, yielding, HalfJoinBatcher::new(false, level + 1), tactic).as_collection()
+    }
+
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
         let backend = CorgiReduceBackend::new(reducer.clone(), shape);

@@ -3,7 +3,7 @@
 //! The tree walk — scopes as timely regions, feedback variables, item-order
 //! rendering — lives once in `render_tree`, generic over a `Backend`. A
 //! backend fixes the differential container and supplies the substrate leaf
-//! operators (`linear`/`join`/`reduce`/`arrange`/`inspect`/`leave_dynamic`);
+//! operators (`linear`/`join`/`half_join`/`count`/`reduce`/`arrange`/`inspect`/`leave_dynamic`);
 //! everything else (enter/leave/concat/feedback) is DD's own container-generic
 //! machinery. Time is always `ir::Time`; only the container varies.
 //!
@@ -52,6 +52,9 @@ pub(crate) trait Backend {
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
     fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    /// See `scope_ir::Node::Count`. `level` is the scope depth; `shapes` are the stream's and the
+    /// arrangement's row shapes, and the projection is typed at `(key, val, Int)`.
+    fn count<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
@@ -162,7 +165,7 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
     let is_k = |r: &st::Ref| matches!(r, st::Ref::Import(i) if *i == k);
     s.items.iter().any(|item| match item {
         st::Item::Op(st::Node::Linear { input, .. } | st::Node::Inspect { input, .. }) => is_k(input),
-        st::Item::Op(st::Node::HalfJoin { stream, .. }) => is_k(stream),
+        st::Item::Op(st::Node::HalfJoin { stream, .. } | st::Node::Count { stream, .. }) => is_k(stream),
         st::Item::Op(st::Node::Concat(refs)) => refs.iter().any(is_k),
         st::Item::Op(st::Node::Arrange(_) | st::Node::Join { .. } | st::Node::Reduce { .. }) => false,
         st::Item::Sub(_) => false,
@@ -242,6 +245,11 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
                         Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
+                    },
+                    st::Node::Count { stream, arrangement, projection } => {
+                        let c = resolve(&items, &imports, &var_cols, stream).collection();
+                        let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
+                        Rendered::Collection(B::count(c, a, projection, depth, (shape_of(stream), shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer: Reducer::Distinct } if shape_of(input).1 != ::corgi::Shape::Unit => {
                         // Distinct records, data-parallel by record: each record is its own key, so a

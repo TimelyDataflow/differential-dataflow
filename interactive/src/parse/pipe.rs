@@ -40,6 +40,11 @@
 //!   `(k', (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
 //!   each row to at least the time the lambda gives.
+//! - `| count(other, (k, v, n) -> (k', v'))` — each row, at its own time and diff, with `n` the
+//!   number of updates `other` holds at its key: the work a half join against `other` would do
+//!   there, as an `Int`. A row at a key `other` holds no updates for is dropped; that drop is the
+//!   stage's one exact promise, and `n` only steers (a worst-case optimal join routes each row to
+//!   the atom with the fewest). `other`'s changes produce nothing. The lambda does not see times.
 //! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
 //!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
@@ -492,7 +497,16 @@ impl Parser {
             Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_pipe_expr(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
-            Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
+            // `count` alone reduces; `count(other, λ)` counts `other`'s updates at each row's key.
+            Token::Count => {
+                self.next();
+                if *self.peek() != Token::LParen { return Expr::Reduce(Box::new(lhs), Reducer::Count); }
+                self.expect(&Token::LParen);
+                let r = self.parse_pipe_expr(); self.expect(&Token::Comma);
+                let p = self.lambda();
+                self.expect(&Token::RParen);
+                Expr::Count(Box::new(lhs), Box::new(r), p)
+            },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
             Token::Ident(name) if name == "reduce" => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Expr(self.slot())) },
             Token::FlatMap => { self.next(); Expr::FlatMap(Box::new(lhs), self.slot()) },

@@ -125,6 +125,16 @@ pub enum Node {
     /// data time joined with the arranged row's. The output keeps the update's own time, and its
     /// diff is the product of the two. The arrangement's changes produce no output.
     HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
+    /// Each row of `stream`, `(key, val)`, at its own time and diff, as `projection` over
+    /// `(key, val, n)`, with `n` the number of updates `arrangement` holds at the key: the work a
+    /// half join against it would do for the row, as an `Int`. A row at a key the arrangement holds
+    /// no updates for is dropped. That drop is the node's one exact promise, and it holds because
+    /// the row is answered only once every arranged update that could precede it in the total
+    /// order on times has arrived. `n` only steers: a worst-case optimal join counts each atom and
+    /// routes the row to the one with the fewest, and every route gives the same rows. `n` counts
+    /// updates, not values: retractions pending compaction, and other keys under a colliding
+    /// identifier, are in it. The arrangement's changes produce no output.
+    Count { stream: Ref, arrangement: Ref, projection: Lambda },
     Reduce { input: Ref, reducer: Reducer },
     Inspect { input: Ref, label: String },
 }
@@ -221,7 +231,7 @@ impl Scope {
                     Node::Linear { input, .. } | Node::Arrange(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
                     Node::Join { left, right, .. } => { f(left); f(right); },
-                    Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
+                    Node::HalfJoin { stream, arrangement, .. } | Node::Count { stream, arrangement, .. } => { f(stream); f(arrangement); },
                     Node::Concat(refs) => for r in refs { f(r); },
                 },
                 Item::Sub(child) => for imp in child.imports.iter_mut() {
@@ -253,7 +263,7 @@ impl Scope {
                     Node::Linear { input, .. } | Node::Arrange(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
                     Node::Join { left, right, .. } => { tally(left); tally(right); },
-                    Node::HalfJoin { stream, arrangement, .. } => { tally(stream); tally(arrangement); },
+                    Node::HalfJoin { stream, arrangement, .. } | Node::Count { stream, arrangement, .. } => { tally(stream); tally(arrangement); },
                     Node::Concat(refs) => for r in refs { tally(r); },
                 },
                 Item::Sub(child) => for imp in &child.imports {
@@ -407,6 +417,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
+                    Node::Count { stream, arrangement, .. } => format!("{} | count({})", fmt_ref(stream), fmt_ref(arrangement)),
                     Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };

@@ -307,6 +307,31 @@ impl Builder {
         }
         Ok(())
     }
+
+    fn count(&mut self, from: &Site, stream: &Site, arrangement: &Site, lambda: &Lambda) {
+        self.presence(from, stream);
+        self.presence(from, arrangement);
+        // Keys decide which arranged updates are counted, and whether the row survives at all.
+        for id in from.all() {
+            for &key in stream.key.iter().chain(&arrangement.key) {
+                self.edge(id, key);
+            }
+        }
+        // The lambda's third slot is the count, an `Int` no field supplies.
+        let shapes = [stream.shape.0.clone(), stream.shape.1.clone(), Shape::Int];
+        for (output_id, path) in from.field_paths() {
+            for (slot, field) in graph_fields(lambda, &shapes, &path) {
+                let source = match slot {
+                    0 => stream.key.get(field),
+                    1 => stream.val.get(field),
+                    _ => None,
+                };
+                if let Some(&source) = source {
+                    self.edge(output_id, source);
+                }
+            }
+        }
+    }
 }
 
 fn slot_fields<'a>(inputs: &'a [&Site], slot: usize) -> Option<&'a [usize]> {
@@ -562,6 +587,18 @@ fn build_scope(
                             projection,
                         )?;
                     }
+                    Node::Count {
+                        stream,
+                        arrangement,
+                        projection,
+                    } => {
+                        builder.count(
+                            &output,
+                            plan.at(stream)?,
+                            plan.at(arrangement)?,
+                            projection,
+                        );
+                    }
                     Node::Reduce { input, reducer } => {
                         let input = plan.at(input)?;
                         match reducer {
@@ -755,6 +792,17 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
+            (Item::Op(Node::Count { projection, .. }), PlannedItem::Op { output, .. }) => {
+                if let Some(new) = mask_site_lambda(projection, output, live) {
+                    masked += output
+                        .key
+                        .iter()
+                        .chain(&output.val)
+                        .filter(|&&id| !live[id])
+                        .count();
+                    *projection = new;
+                }
+            }
             (Item::Op(Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
                 if let Some(new) = mask_half_join(projection, output, live) {
                     masked += output.key.iter().filter(|&&id| !live[id]).count();
@@ -778,6 +826,11 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     remap_ref(right, &remap);
                 }
                 Node::HalfJoin {
+                    stream,
+                    arrangement,
+                    ..
+                }
+                | Node::Count {
                     stream,
                     arrangement,
                     ..
