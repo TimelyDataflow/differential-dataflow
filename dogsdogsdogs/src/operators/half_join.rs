@@ -165,6 +165,11 @@ where
     })
 }
 
+/// The proxy half-join tactic and backend trait, built over differential's `int_proxy` surface.
+pub mod proxy;
+/// The reference `Vec` backend for the proxy half-join tactic.
+pub mod vec_backend;
+
 /// Cursor-based half join: the conventional [`HalfJoinTactic`] implementation, its worker, and the
 /// `half_join` entry points built on them.
 pub mod cursors {
@@ -456,7 +461,16 @@ pub mod cursors {
         }
     }
 
-    struct BlobList<D, T: Timestamp, R> {
+    /// The conventional half-join [`Batcher`]: staged updates wait in time order, and an update
+    /// is released once no arrangement time can still precede it in the total order.
+    ///
+    /// Every [`HalfJoinTactic`] needs a batcher that agrees with it on when an update is
+    /// released, and this is the generic one, for `Vec` containers of `(data, time, diff)`
+    /// rows: the cursor tactic uses it, and so can the proxy tactic over any backend whose
+    /// released containers are such vectors. A backend with its own container type writes its
+    /// own, as DDIR's columnar one does; the release rule it must implement is the one in
+    /// [`extract`](Batcher::extract) below.
+    pub struct BlobList<D, T: Timestamp, R> {
         stage: Vec<(T, D, R)>,
         blobs: Vec<VecDeque<(T, D, R)>>,
         lower: MutableAntichain<T>,
@@ -466,7 +480,7 @@ pub mod cursors {
 
     impl<D, T: Timestamp, R> BlobList<D, T, R> {
         /// Allocates an empty list that releases updates under the `strict` comparison.
-        fn new(strict: bool) -> Self {
+        pub fn new(strict: bool) -> Self {
             BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
         }
     }
