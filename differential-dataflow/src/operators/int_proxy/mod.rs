@@ -48,6 +48,7 @@ mod history;
 
 pub mod join;
 pub mod reduce;
+pub mod half_join;
 mod pending;
 pub mod vec_backend;
 
@@ -69,6 +70,7 @@ pub(crate) fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
+pub use half_join::{data_time, HalfJoinInstance, HalfJoinMatches, HalfJoinStream, Lifted, ProxyHalfJoinBackend, ProxyHalfJoinTactic};
 
 /// A position between windows of an ordered key space.
 /// No minimum key or successor operation is required.

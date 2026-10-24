@@ -608,3 +608,57 @@ fn reduce_prior_advanced_past_novel() {
     assert_eq!(hread(&outputs), vec![((7, 3), time(1, 0), 1), ((7, 3), time(1, 5), -1)]);
     assert!(pending.is_empty());
 }
+
+/// The proxy half-join tactic over the vec backend, against the definition: an update meets the
+/// arranged rows of its key whose time precedes its own in the total (lexicographic) order on
+/// product times, strictly or not, and carries its data time joined with the arranged time. Over
+/// several block sizes, keys whose rows are many enough for the sorted path, and colliding hashes.
+#[test]
+fn half_join_meets_what_the_definition_meets() {
+    use differential_dataflow::operators::int_proxy::half_join::ProxyHalfJoinTactic;
+    use differential_dataflow::operators::int_proxy::vec_backend::VecHalfJoinBackend;
+    type T = Product<u64, u64>;
+    let time = T::new;
+    let mut random = 7u64;
+    let mut next = move |n: u64| { random = random.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (random >> 33) % n };
+    for seed in 0..30 {
+        // Keys below 6 collide pairwise through `Collide`; key 6 is dense enough for the sorted path.
+        let key = |k: u64| Collide(k);
+        let n_arr = 1 + next(40) as usize + if seed % 3 == 0 { 40 } else { 0 };
+        let arranged: Vec<((Collide, u64), T, i64)> = (0..n_arr).map(|i| {
+            let k = if seed % 3 == 0 && i >= n_arr - 40 { 6 } else { next(6) };
+            ((key(k), next(100)), time(next(4), next(3)), if next(3) == 0 { -1 } else { 1 })
+        }).collect();
+        let n_str = 1 + next(40) as usize + if seed % 3 == 0 { 30 } else { 0 };
+        let stream: Vec<((Collide, u64, T), T, i64)> = (0..n_str).map(|i| {
+            let k = if seed % 3 == 0 && i >= n_str - 30 { 6 } else { next(8) };
+            let t = time(next(4), next(3));
+            let data = t.join(&time(next(4), next(3)));
+            ((key(k), next(10), data), t, if next(3) == 0 { -1 } else { 1 })
+        }).collect();
+        // The batches: the arranged rows split in three, hash-keyed.
+        let batches: Vec<_> = arranged.chunks(1 + n_arr / 3).map(|rows| hbatch(rows.to_vec(), time(0, 0), time(9, 9))).collect();
+        // The released containers: the stream split in a few.
+        let chunks: Vec<Vec<_>> = stream.chunks(1 + n_str / 4).map(|rows| rows.to_vec()).collect();
+        let lower: Antichain<T> = stream.iter().map(|u| u.1).collect();
+        for strict in [false, true] {
+            let mut expected: Vec<(((Collide, u64, u64), T), T, i64)> = Vec::new();
+            for ((k, v, data), t, d) in &stream {
+                for ((k2, v2), t2, d2) in &arranged {
+                    if k != k2 { continue; }
+                    if !(t2 < t || (!strict && t2 == t)) { continue; }
+                    expected.push((((k.clone(), *v, *v2), data.join(t2)), *t, d * d2));
+                }
+            }
+            consolidate_updates(&mut expected);
+            for window in [1, 3, usize::MAX] {
+                let backend = VecHalfJoinBackend::with_window(|k: &Collide, v: &u64, v2: &u64| (k.clone(), *v, *v2), window);
+                let mut tactic = ProxyHalfJoinTactic::new(backend, strict);
+                let mut got: Vec<_> = tactic.prepare(chunks.clone(), batches.clone(), lower.clone()).flatten().collect();
+                assert!(got.iter().all(|(_, t, _)| lower.less_equal(t)), "every output is covered by lower");
+                consolidate_updates(&mut got);
+                assert_eq!(got, expected, "seed {seed}, strict {strict}, window {window}");
+            }
+        }
+    }
+}
