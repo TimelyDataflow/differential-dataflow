@@ -20,16 +20,40 @@ let weighted = talks | count
                      | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
                            ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
 
--- Bellman-Ford rounds: the least (cost, path) to each node, starting from `from`.
-let starts = request | map(((rid, from, _), ()) -> ((rid, from, 0, from enlist), ()));
-search: {
-    let grow   = search | map(((rid, node, cost, path), ()) -> (node, (rid, cost, path)))
-                        | join(weighted, (_, (rid, cost, path), (next, w)) -> ((rid, next, (cost, w) add, (path, next enlist) append), ()));
-    var search = (starts + grow) | map(((rid, node, cost, path), ()) -> ((rid, node), (cost, path))) | min
-                                 | map(((rid, node), (cost, path)) -> ((rid, node, cost, path), ()));
+-- Bellman-Ford rounds over costs alone: the least cost to each node from `from`.
+let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
+dist: {
+    let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)))
+                    | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
+    var dist = (starts + grow) | min | map(((rid, node), cost) -> ((rid, node, cost), ()));
+}
+let best = dist::dist | map(((rid, node, cost), ()) -> ((rid, node), cost));
+
+-- Every predecessor that achieves a node's least cost (all of them, so ties survive).
+let pred = dist::dist | map(((rid, u, cost), ()) -> (u, (rid, cost)))
+                      | join(weighted, (u, (rid, cost), (v, w)) -> ((rid, v), (u, (cost, w) add)))
+                      | join(best, ((rid, v), (u, via), least) -> ((rid, v), (u, via, least)))
+                      | filter((_, (_, via, least)) -> (via, least) eq)
+                      | map((key, (u, _, _)) -> (key, u));
+
+-- The nodes on some cheapest path to `to`: walk the predecessors back from it.
+let targets = request | map(((rid, _, to), ()) -> ((rid, to), ())) | join(best, (key, (), _) -> (key, ()));
+back: {
+    let up = back | join(pred, ((rid, _), (), u) -> ((rid, u), ()));
+    var back = (targets + up) | distinct;
+}
+-- From `from`, the smallest next node that is still on a cheapest path: the
+-- lexicographically smallest of the cheapest paths.
+let next = pred | join(back::back, ((rid, v), u, ()) -> ((rid, u), v)) | min;
+let first = request | map(((rid, from, _), ()) -> ((rid, from), ())) | join(back::back, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
+walk: {
+    let step = walk | map(((rid, node, path), ()) -> ((rid, node), path))
+                    | join(next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
+    var walk = first + step;
 }
 
-let answer = search::search | map(((rid, node, cost, path), ()) -> ((rid, node), (cost, path)))
-                            | join(request | map(((rid, _, to), ()) -> ((rid, to), ())), ((rid, _), (cost, path), ()) -> ((rid, 0), (path, cost)));
+let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path))
+                        | join(targets, ((rid, node), path, ()) -> ((rid, node), path))
+                        | join(best, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
 
 export "ic14.answer" = answer | arrange;
