@@ -170,7 +170,6 @@ class ServerProcess:
             DDIR_DIAGNOSTICS=os.environ.get("DDIR_DIAGNOSTICS", "0"),
             DDIR_BIND=f"127.0.0.1:{ports[0]}",
             DDIR_WS_BIND=f"127.0.0.1:{ports[1]}",
-            DDIR_DIAG_PORT=str(ports[2]),
         )
         self.process = subprocess.Popen(
             [*wrap, str(binary)],
