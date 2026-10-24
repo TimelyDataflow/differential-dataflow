@@ -5,23 +5,25 @@
 //!
 //! What the rest of DDIR relies on, and nothing more:
 //! - **A slot is a [`Lambda`]:** text as written, and what it parses to in its program's scope
-//!   ([`Lambda::new`]). The parser (`crate::parse`) builds one per slot; the IR (`crate::ir`) holds
+//!   (`Lambda::new`). The parser (`crate::parse`) builds one per slot; the IR (`crate::ir`) holds
 //!   them; a parse error is kept and reported where the program is compiled.
-//! - **The scope a program's lambdas are parsed in** ([`base_scope`], plus [`function_word`] for
+//! - **The scope a program's lambdas are parsed in** (`base_scope`, plus `function_word` for
 //!   each [registered function](register) and the program's declared types).
-//! - **Typing a slot** at the shapes of the rows it reads ([`slot_shape`]), which is how
+//! - **Typing a slot** at the shapes of the rows it reads (`slot_shape`), which is how
 //!   `crate::shapes` infers every collection's shape. Shapes are static: every input declares its
 //!   shape, every other collection's follows from its operator's slot, and all are fixed at
-//!   install, never re-derived from data. The typer is corgi's: [`slot_shape`] asks
+//!   install, never re-derived from data. The typer is corgi's: `slot_shape` asks
 //!   `corgi::shape_of` (its evaluator on zero rows) for the shape a slot gives, so every shape rule
 //!   is the one the kernels enforce, and a program that types is a program that runs. `Err` is a
 //!   type error, reported with corgi's message.
 //! - **Compiling a slot** for the runtime to evaluate, one function per operator kind
-//!   ([`compile_projection`], [`compile_predicate`], [`compile_flatmap`], [`compile_reduce`],
-//!   [`compile_join_function`], [`compile_scalar`]).
-//! - **Composing lambdas** ([`Lambda::compose`]), which explain and the projection pass use to
+//!   (`compile_projection`, `compile_predicate`, `compile_flatmap`, `compile_reduce`,
+//!   `compile_join_function`, `compile_scalar`).
+//! - **Composing lambdas** (`Lambda::compose`), which explain and the projection pass use to
 //!   write new slots from existing ones.
 //! - **Registered functions** ([`register`]): how an embedding program extends the language.
+//!
+//! Outside the crate, only [`Lambda`], [`Function`], [`register`] and [`lookup`] are public.
 //!
 //! Corgi's types (`corgi::Shape` for shapes, `corgi::Graph` for compiled slots, `corgi::Value` for
 //! columns) still appear outside this module, in the shapes pass and the runtime; this module is
@@ -40,15 +42,15 @@ use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Valu
 /// deserialization reparses it in the empty scope.
 #[derive(Clone)]
 pub struct Lambda {
-    pub src: String,
-    pub graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
+    pub(crate) src: String,
+    pub(crate) graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
 }
 
 impl Lambda {
     /// `src` parsed in `scope`. The graph is as written: it is optimized only once it types at the
     /// shapes of the rows it reads ([`slot_graph`]), as optimizing first could drop or trip on
     /// a type error.
-    pub fn new(src: String, scope: &corgi::Scope) -> Self {
+    pub(crate) fn new(src: String, scope: &corgi::Scope) -> Self {
         let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
         Lambda { src, graph }
     }
@@ -58,7 +60,7 @@ impl Lambda {
     /// is never parsed again and its program's scope is not needed; the readable source writes the
     /// lambda's own text in its place. Only `pattern`, the arguments and `body` are parsed, in the
     /// empty scope.
-    pub fn compose(pattern: &str, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Self {
+    pub(crate) fn compose(pattern: &str, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Self {
         let mut scope = corgi::Scope::default();
         let (mut code, mut src, mut names, mut error) = (String::new(), String::new(), Vec::new(), None);
         for (i, (lambda, arg)) in calls.iter().enumerate() {
@@ -78,7 +80,7 @@ impl Lambda {
         lambda
     }
     /// The graph, or the parse error naming the program.
-    pub fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
+    pub(crate) fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
         self.graph.as_ref().map_err(|e| format!("corgi program `{}`: {e}", self.src))
     }
 }
@@ -124,7 +126,7 @@ pub fn register(f: Function) {
 }
 
 /// Every registered function.
-pub fn registered() -> Vec<Function> {
+pub(crate) fn registered() -> Vec<Function> {
     functions().read().unwrap().values().cloned().collect()
 }
 
@@ -231,7 +233,7 @@ fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, zero: usize) -> usize {
 }
 
 /// The shape a slot gives over rows of `shapes`: corgi's typer, on its graph's input `Prod(shapes)`.
-pub fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
+pub(crate) fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
     corgi::shape_of(lambda.graph()?, &Shape::Prod(shapes.to_vec()))
 }
 
@@ -246,7 +248,7 @@ fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
 
 /// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is
 /// not list-shaped is the type error: the backend explodes the column structurally.
-pub fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(list, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::List(_)) => Ok(k),
         (_, other) => Err(format!("flatmap over a non-list: {other}")),
@@ -255,7 +257,7 @@ pub fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Gra
 
 /// Compile a `reduce` lambda over `(key, vals)`, `vals` a list of `(val, diff)` (`vshape` the
 /// values') → a corgi `List` column of `(val, diff)`, one list per key.
-pub fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     let list = Shape::List(Box::new(Shape::Prod(vec![vshape.clone(), Shape::Int])));
     match slot_graph(lambda, &[kshape.clone(), list])? {
         (g, Shape::List(e)) if matches!(&*e, Shape::Prod(fs) if fs.len() == 2 && fs[1] == Shape::Int) => Ok(g),
@@ -266,7 +268,7 @@ pub fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Gr
 /// Compile a `JoinFunction`'s lambda → a `List` column of `((key, val), time, diff)`, one list per
 /// input row, with `time` a tuple of `width` `Int`s. Any other shape is the type error: the backend
 /// explodes the column structurally and joins the time lanes into the rows' times.
-pub fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
     let (g, out) = slot_graph(lambda, &[kshape.clone(), vshape.clone()])?;
     if let Shape::List(elem) = &out {
         if let Shape::Prod(fs) = &**elem {
@@ -281,7 +283,7 @@ pub fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Shape, wi
 
 /// Compile an `EnterAt`'s lambda → an `Int` column; a non-integer is the type error (the round is
 /// read as one integer per row).
-pub fn compile_scalar(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_scalar(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(lambda, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
@@ -290,7 +292,7 @@ pub fn compile_scalar(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Gr
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
 /// `Int`; any other shape is a type error.
-pub fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(cond, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
@@ -299,7 +301,7 @@ pub fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<G
 
 /// Compile a projection over `rows`, the shapes of `(key, val)` or `(key, val0, val1)`: input
 /// `Prod(rows)`, output `Prod([newkey, newval])`.
-pub fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> {
+pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> {
     match slot_graph(lambda, rows)? {
         (g, Shape::Prod(fs)) if fs.len() == 2 => Ok(g),
         (_, other) => Err(format!("a projection gives (key, val), not {other}")),
@@ -311,7 +313,7 @@ pub fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> 
 /// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
 /// payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its
 /// payload's shape, and `branch`, `map_variant` and `match` read only their tags.
-pub fn base_scope() -> corgi::Scope {
+pub(crate) fn base_scope() -> corgi::Scope {
     static BASE: std::sync::OnceLock<corgi::Scope> = std::sync::OnceLock::new();
     BASE.get_or_init(|| {
         let mut scope = corgi::Scope::default();
@@ -329,11 +331,11 @@ pub fn base_scope() -> corgi::Scope {
 
 /// Whether `name` is one of the words every lambda's scope starts with (a registered function may
 /// not take its name).
-pub fn is_base_word(name: &str) -> bool { FloatWord::all().any(|(word, _)| word == name) }
+fn is_base_word(name: &str) -> bool { FloatWord::all().any(|(word, _)| word == name) }
 
 /// The registered function `f` as a word: one host-kernel node over the call's input, which is its
 /// argument when it takes one, and the tuple of its arguments (or `()`) otherwise.
-pub fn function_word(f: &Function) -> Graph<NumOp> {
+pub(crate) fn function_word(f: &Function) -> Graph<NumOp> {
     let mut b = Builder::<NumOp>::default();
     let x = b.input();
     let input = if matches!(f.input(), Shape::Prod(args) if args.len() == 1) { b.tuple(vec![x]) } else { x };
@@ -382,7 +384,7 @@ mod float_kernels {
     use super::F64Fn;
 
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
+    pub(super) enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
 
     struct Kernel { name: String, op: FloatOp, input: Shape, output: Shape }
     impl HostKernel for Kernel {
@@ -409,7 +411,7 @@ mod float_kernels {
     }
 
     /// The host op for `op`: one `Arc` per function for the life of the process.
-    pub fn op(op: FloatOp) -> HostOp {
+    pub(super) fn op(op: FloatOp) -> HostOp {
         static KERNELS: OnceLock<std::sync::Mutex<std::collections::HashMap<FloatOp, Arc<dyn HostKernel>>>> = OnceLock::new();
         let mut map = KERNELS.get_or_init(Default::default).lock().unwrap();
         let k = map.entry(op).or_insert_with(|| {

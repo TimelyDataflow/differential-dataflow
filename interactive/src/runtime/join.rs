@@ -56,7 +56,7 @@ const COORD_BITS: u32 = 48;
 
 /// The corgi [`ProxyJoinBackend`]: holds the projection, a lambda over `(key, val0, val1)`,
 /// compiled at the shapes of the columns it meets.
-pub struct CorgiJoinBackend<T: ColTime> {
+pub(crate) struct CorgiJoinBackend<T: ColTime> {
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
@@ -69,7 +69,7 @@ pub struct CorgiJoinBackend<T: ColTime> {
 impl<T: ColTime> CorgiJoinBackend<T> {
     /// The projection over inputs of the key's and both values' shapes. A type error is a panic
     /// with corgi's message: install type-checked the program, so it is not reached.
-    pub fn new(projection: &Lambda, [k, v0, v1]: [Shape; 3]) -> Self {
+    pub(crate) fn new(projection: &Lambda, [k, v0, v1]: [Shape; 3]) -> Self {
         let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("join projection: type error at shapes ({k}, {v0}, {v1}): {e}"));
         CorgiJoinBackend { colliding: Vec::new(), projection: ([k, v0, v1], g), _t: PhantomData }

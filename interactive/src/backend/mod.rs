@@ -1,16 +1,16 @@
 //! Scope-tree rendering, generic over the substrate.
 //!
 //! The tree walk — scopes as timely regions, feedback variables, item-order
-//! rendering — lives once in [`render_tree`], generic over a [`Backend`]. A
+//! rendering — lives once in `render_tree`, generic over a `Backend`. A
 //! backend fixes the differential container and supplies the substrate leaf
 //! operators (`linear`/`join`/`reduce`/`arrange`/`inspect`/`leave_dynamic`);
 //! everything else (enter/leave/concat/feedback) is DD's own container-generic
 //! machinery. Time is always `ir::Time`; only the container varies.
 //!
-//! The server is a thin driver: it picks a backend and calls [`render_tree`].
+//! The server is a thin driver: it picks a backend and calls `render_tree`.
 
 
-pub mod corgi;
+pub(crate) mod corgi;
 
 use timely::Container;
 use timely::order::Product;
@@ -30,7 +30,7 @@ use crate::shapes::{ItemShapes, ScopeShapes};
 /// it. Collections are the plain container-generic `Collection<'s, Time, C>`;
 /// only the arrangement type (`Arr`) is substrate-specific, and the walk only
 /// ever clones it, so the bound is just `Clone`.
-pub trait Backend {
+pub(crate) trait Backend {
     /// The differential update container. Region enter/leave (same timestamp)
     /// must be the identity on it, so the walk can recurse into child scopes.
     type Container: Container + Clone
@@ -60,7 +60,7 @@ pub trait Backend {
 
 /// Which statement built which operators: every operator whose worker-unique identifier is in
 /// `first .. end` was rendered from a scope item labelled `label` (see `scope_ir::Scope::labels`).
-/// [`render_tree`] logs one per item to the logger registered as `"ddir/labels"`, if any. A child
+/// Rendering logs one per item to the logger registered as `"ddir/labels"`, if any. A child
 /// scope's items log before the scope's own event, so the first label an operator gets is the
 /// most specific.
 #[derive(Clone, Debug)]
@@ -77,7 +77,7 @@ pub type LabelEventBuilder = timely::container::CapacityContainerBuilder<Vec<(st
 ///
 /// Imports are rendered values too, so a driver can hand a scope an arrangement it already
 /// maintains (a published trace) and the scope's `arrange`s and joins of it reuse it as is.
-pub enum Rendered<'s, B: Backend> {
+pub(crate) enum Rendered<'s, B: Backend> {
     Collection(Collection<'s, Time, B::Container>),
     Arrangement(B::Arr<'s>),
     /// An imported arrangement that the scope also reads as rows: both forms, so the rows
@@ -105,13 +105,13 @@ impl<'s, B: Backend> Rendered<'s, B> {
             Rendered::Both(a, c) => Rendered::Both(B::enter_region(a.clone(), region), c.clone().enter(region)),
         }
     }
-    pub fn collection(&self) -> Collection<'s, Time, B::Container> {
+    pub(crate) fn collection(&self) -> Collection<'s, Time, B::Container> {
         match self {
             Rendered::Collection(c) | Rendered::Both(_, c) => c.clone(),
             Rendered::Arrangement(a) => B::as_collection(a.clone()),
         }
     }
-    pub fn arrange(&self) -> B::Arr<'s> {
+    pub(crate) fn arrange(&self) -> B::Arr<'s> {
         match self {
             Rendered::Arrangement(a) | Rendered::Both(a, _) => a.clone(),
             Rendered::Collection(c) => B::arrange(c.clone()),
@@ -175,7 +175,7 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
 /// popping the coordinate (`leave_dynamic`) is the caller's job. `shapes` are the
 /// scope's collections' shapes, which install inferred, all of them known: the
 /// operators compile against them before any data arrives.
-pub fn render_tree<'s, B: Backend>(
+pub(crate) fn render_tree<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,
@@ -187,7 +187,7 @@ pub fn render_tree<'s, B: Backend>(
 
 /// [`render_tree`], with each export as it was rendered: an exported arrangement stays one, so
 /// a driver can publish it as it is.
-pub fn render_scope<'s, B: Backend>(
+pub(crate) fn render_scope<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,

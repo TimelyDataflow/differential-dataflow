@@ -208,7 +208,7 @@ impl Col {
 /// Row `row` of `v` written as a feed writes it, with every wrapper: `tuple(1,list(2,3))`,
 /// `tuple()`, `inject(1,7)`. A float is written as Rust writes it, so `NaN` and `inf` do not read
 /// back.
-pub fn print(v: &CValue, row: usize) -> String {
+pub(crate) fn print(v: &CValue, row: usize) -> String {
     let mut out = String::new();
     write(v, row, &mut out);
     out

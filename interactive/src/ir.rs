@@ -3,7 +3,7 @@
 //! keywords. The program structure lives in `scope_ir`.
 
 pub type Diff = i64;
-pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
+pub(crate) type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
 
 /// A slot of the IR: a lambda of the expression language (see `crate::lambda`).
 pub use crate::lambda::Lambda;
@@ -11,7 +11,7 @@ pub use crate::lambda::Lambda;
 /// The program syntax's keywords. The lexer claims them before a lambda's text is read, so a
 /// registered function may not take one as its name (`crate::lambda::register`). The lexer's own
 /// table (`parse::pipe`) must agree, which its tests check.
-pub const KEYWORDS: &[&str] = &[
+pub(crate) const KEYWORDS: &[&str] = &[
     "let", "var", "export", "type", "input", "import", "map", "join", "min", "distinct", "count",
     "collect", "flatmap", "arrange", "negate", "filter", "enter_at", "inspect", "lift_iter",
 ];

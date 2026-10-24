@@ -27,13 +27,13 @@ use crate::scope_ir::{Bind, Export, Import, Item, Node, Program, Ref, Scope, Sou
 /// indices from the root, then the site within that scope. Sites are ops and
 /// feedback variables; imports are substituted, not sites.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Addr {
-    pub path: Vec<usize>,
-    pub site: Site,
+struct Addr {
+    path: Vec<usize>,
+    site: Site,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Site {
+pub(crate) enum Site {
     Op(usize),
     Var(usize),
 }
@@ -44,7 +44,7 @@ pub enum Site {
 /// keep meaning); nested scopes gain lifted `$host:` exports after them.
 /// Returns the host-visible ref at the `out` level for every site in the
 /// subtree.
-pub fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, Ref)> {
+fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, Ref)> {
     clone_rec(orig, out, import_map, &[])
 }
 

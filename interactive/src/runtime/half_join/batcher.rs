@@ -29,7 +29,7 @@ const TIME_TARGET: usize = if cfg!(test) { 5 } else { 1 << 16 };
 /// Updates in the total order on their times: rows `(t, key, val)`, where `t` is the update's own
 /// time as a `Prod` of `Int` lanes, sorted in corgi's structural order and consolidated. The
 /// structural order on the lanes is lexicographic, which is the total order on times.
-pub struct TimeChunk {
+pub(super) struct TimeChunk {
     /// `Prod([t, key, val])`.
     rows: CValue,
     diffs: Vec<Diff>,
@@ -159,7 +159,7 @@ fn live_rows(chunks: &[TimeChunk]) -> (CValue, Vec<Diff>) {
 
 /// Merges chains of [`TimeChunk`]s, consolidating equal rows.
 #[derive(Default)]
-pub struct TimeMerger;
+pub(super) struct TimeMerger;
 
 impl Merger for TimeMerger {
     type Chunk = TimeChunk;
@@ -210,7 +210,7 @@ impl Merger for TimeMerger {
 /// chain is a prefix: whole chunks from its front, and part of at most one more. Arrivals the
 /// frontier already unblocks skip the ladder. What one extraction releases is put in identifier
 /// order, ready to meet the arrangement in its order.
-pub struct HalfJoinBatcher {
+pub(crate) struct HalfJoinBatcher {
     strict: bool,
     /// The number of lanes in a time: the scope depth, plus one.
     width: usize,
@@ -222,7 +222,7 @@ pub struct HalfJoinBatcher {
 }
 
 impl HalfJoinBatcher {
-    pub fn new(strict: bool, width: usize) -> Self {
+    pub(crate) fn new(strict: bool, width: usize) -> Self {
         HalfJoinBatcher { strict, width, stage: Vec::new(), ladder: MergeLadder::new(None, 0), lower: Antichain::new() }
     }
 }

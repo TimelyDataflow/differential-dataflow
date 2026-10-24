@@ -5,7 +5,7 @@ use super::*;
 impl Server {
     /// This worker's share of trace `name`, consolidated as of the current epoch, read from its
     /// batches without a dataflow. Unlike [`Server::snapshot`], nothing moves between workers.
-    pub fn snapshot_local(&mut self, name: &str) -> Result<Updates, String> {
+    pub(crate) fn snapshot_local(&self, name: &str) -> Result<Updates, String> {
         use differential_dataflow::trace::TraceReader;
         let name = canonical_source_name(name);
         let epoch = self.epoch;

@@ -29,7 +29,7 @@ const BLOCK: usize = if cfg!(test) { 3 } else { 1 << 14 };
 
 /// Meets released updates with an arrangement's chunks. The projection is compiled once, at the
 /// shapes it reads, and shared by every unit of work.
-pub struct CorgiHalfJoin {
+pub(crate) struct CorgiHalfJoin {
     strict: bool,
     /// The number of lanes in a time as data: the scope depth, plus one.
     width: usize,
@@ -41,7 +41,7 @@ impl CorgiHalfJoin {
     /// The projection over a key, an update's value, and an arranged value of these shapes. A
     /// type error is a panic with corgi's message: install type-checked the program, so it is not
     /// reached.
-    pub fn new(projection: &Lambda, strict: bool, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
+    pub(crate) fn new(projection: &Lambda, strict: bool, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
         let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("half_join: type error at shapes ({k}, {v0}, {v1}): {e}"));
         CorgiHalfJoin { strict, width, projection: Rc::new(([k, v0, v1], g)) }

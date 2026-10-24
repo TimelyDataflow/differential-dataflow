@@ -5,7 +5,7 @@
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
-//! [`bytes`](crate::runtime::bytes)) for crossing a process boundary. Splitting one of these across
+//! `bytes`) for crossing a process boundary. Splitting one of these across
 //! workers is [`exchange`](crate::runtime::exchange)'s job.
 
 use timely::Accountable;
@@ -90,7 +90,7 @@ pub struct Updates {
 
 impl Updates {
     /// No updates, at these shapes.
-    pub fn empty((k, v): &(corgi::Shape, corgi::Shape)) -> Self {
+    pub(crate) fn empty((k, v): &(corgi::Shape, corgi::Shape)) -> Self {
         Updates { keys: corgi::Value::empty(k), vals: corgi::Value::empty(v), diffs: Vec::new() }
     }
 

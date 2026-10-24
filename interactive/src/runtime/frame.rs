@@ -8,7 +8,7 @@
 //! self-describing encoding ([`corgi::bytes`]), so a decoder reads their shapes from the bytes.
 //! The times are `lanes` columns of `rows` words, one after the other: a `peek`'s frame holds the
 //! consolidated contents and no times, and a `tail`'s frames hold changes, each at its time, one
-//! lane; a frame holds no more ([`MAX_LANES`]). Every section is a whole number of 64-bit words.
+//! lane; a frame holds no more (`MAX_LANES`). Every section is a whole number of 64-bit words.
 
 use corgi::Shape;
 
@@ -16,7 +16,7 @@ use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The most time lanes a frame holds: a server's frames carry host times, one lane, or none.
-pub const MAX_LANES: u64 = 1;
+const MAX_LANES: u64 = 1;
 
 /// `updates`, each at its time in `lanes` (one column per time coordinate; none for no times), as
 /// a frame's payload.
