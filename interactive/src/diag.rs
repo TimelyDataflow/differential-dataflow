@@ -32,7 +32,7 @@ use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
 use timely::worker::Worker;
 
 use crate::backend::LabelEventBuilder;
-use crate::corgi::container::Updates;
+use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The diagnostics sources, by the name a program imports.

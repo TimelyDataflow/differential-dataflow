@@ -10,7 +10,7 @@
 //! * `keys` / `vals` go through [`corgi::bytes`], which writes each leaf column as one contiguous
 //!   run of its stored bytes. A batch of a million `(u64, u64)` keys is two headers and two 8 MB
 //!   writes — no per-row framing, no per-row dispatch.
-//! * `times` are a lane column ([`ColTimes`](crate::corgi::col_times::ColTimes)): the section is
+//! * `times` are a lane column ([`ColTimes`](crate::runtime::col_times::ColTimes)): the section is
 //!   its lane count, its row count, and then each lane's words in turn.
 //! * `diffs` go through `columnar`'s [`Stash`], the same encoder DD's own columnar updates use.
 //!
@@ -34,8 +34,8 @@ use columnar::bytes::stash::Stash;
 use timely::bytes::arc::Bytes;
 use timely::dataflow::channels::ContainerBytes;
 
-use crate::corgi::col_times::ColTimes;
-use crate::corgi::container::CorgiContainer;
+use crate::runtime::col_times::ColTimes;
+use crate::runtime::container::CorgiContainer;
 
 /// A columnar column of `T` backed either by an owned container or by received bytes.
 type ColStash<T> = Stash<<T as Columnar>::Container, Bytes>;
@@ -140,7 +140,7 @@ impl<T, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
 mod test {
     use timely::dataflow::channels::ContainerBytes;
 
-    use crate::corgi::container::CorgiContainer;
+    use crate::runtime::container::CorgiContainer;
     use crate::ir::{Diff, Time};
 
     type Update = ((String, String), Time, Diff);

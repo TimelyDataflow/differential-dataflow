@@ -15,7 +15,7 @@
 
 use corgi::{Shape, Value as CValue};
 
-use crate::corgi::container::Updates;
+use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// Rows of an input's key and value shapes, read from text into columns.

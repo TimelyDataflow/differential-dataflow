@@ -13,8 +13,8 @@ use differential_dataflow::batcher::merge::{MergeLadder, Merger};
 use corgi::arrange::{gather, gather_lanes, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
-use crate::corgi::chunk::concat_blocks;
-use crate::corgi::col_times::{ColTimes, Lanes};
+use crate::runtime::chunk::concat_blocks;
+use crate::runtime::col_times::{ColTimes, Lanes};
 use crate::ir::{Diff, Time};
 
 use super::{gather_rows, Part, PartTimes, Run, CC};
@@ -305,8 +305,8 @@ fn into_runs(released: Vec<TimeChunk>, staged: Vec<CC>, width: usize) -> Vec<Run
 mod tests {
     use super::*;
     use super::super::test_util::*;
-    use crate::corgi::chunk::{ident, recover_key};
-    use crate::corgi::container::CorgiContainer;
+    use crate::runtime::chunk::{ident, recover_key};
+    use crate::runtime::container::CorgiContainer;
 
     /// The batcher releases what the frontier's least element unblocks, and bounds what it keeps.
     #[test]

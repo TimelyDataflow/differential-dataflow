@@ -20,13 +20,13 @@
 //! 3. Per destination, `gather` the key and value columns through its run.
 //!
 //! The output of step 3 is a freshly allocated, contiguous column per destination — which is
-//! exactly what the [wire format](crate::corgi::bytes) wants to write, one `memcpy` per leaf. The
+//! exactly what the [wire format](crate::runtime::bytes) wants to write, one `memcpy` per leaf. The
 //! sort is stable, so rows keep their relative order within a destination.
 //!
 //! # The hash
 //!
 //! Routing uses [`corgi::hash`] — the same structural content hash that
-//! [`present_key`](crate::corgi::chunk::present_key) prepends as a compound key's identifier
+//! [`present_key`](crate::runtime::chunk::present_key) prepends as a compound key's identifier
 //! lane. Any deterministic function of the key would be correct here; this one is seed-free and
 //! structural, so it agrees across processes and runs, and its low bits are mixed — a raw key
 //! column would route a strided identifier space onto a fraction of the workers.
@@ -41,7 +41,7 @@ use timely::worker::Worker;
 
 use corgi::arrange::gather;
 
-use crate::corgi::container::CorgiContainer;
+use crate::runtime::container::CorgiContainer;
 
 /// Partitions a [`CorgiContainer`] across workers by the structural hash of each row's key.
 ///
@@ -249,7 +249,7 @@ mod test {
     use timely::dataflow::channels::pushers::exchange::Distributor;
 
     use super::CorgiDistributor;
-    use crate::corgi::container::CorgiContainer;
+    use crate::runtime::container::CorgiContainer;
     use crate::ir::{Diff, Time};
     use corgi::Shape;
 

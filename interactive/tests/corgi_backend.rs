@@ -147,7 +147,7 @@ fn same_answer(got: &str, want: &str) -> bool {
 
 /// A program's output as text, one row per line: the export's name, then the row's key, value
 /// and diff, as a feed writes them.
-fn render(out: &std::collections::BTreeMap<String, interactive::corgi::container::Updates>) -> String {
+fn render(out: &std::collections::BTreeMap<String, interactive::runtime::container::Updates>) -> String {
     out.iter()
         .flat_map(|(name, updates)| updates.rows().into_iter().map(move |(k, v, d)| format!("{name} {k} {v} {d}")))
         .collect::<Vec<_>>()
