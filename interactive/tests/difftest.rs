@@ -15,6 +15,8 @@
 //! - `scratch`: the accumulated input evaluated in one go, against the incremental run.
 //! - `optimize`: the program unoptimized.
 //! - `delta`: every `join` written as a delta join (two `half_join`s, delayed to their data times).
+//! - `asof`: the delta form, installed after its input traces have history, with and without
+//!   dropping dead as-of updates.
 //! - `ahead`: every epoch's rows fed up front, each at its future time.
 //! - `split`: the program cut in two, a producer publishing what a consumer imports, as containers
 //!   or arrangements.
@@ -901,10 +903,22 @@ fn run_programs(programs: &[(String, Program, usize)], workers: usize, case: &Ca
     run_bound(programs, &[], workers, case, arranged, ahead, None)
 }
 
+struct RunOptions {
+    arranged: bool,
+    ahead: bool,
+    cycle: Option<(usize, usize)>,
+    as_of_drop: bool,
+}
+
 /// [`run_programs`], and once the last program is installed, each `(trace, input)` of `binds`
 /// bound to that input of it. With `cycle`, `(d, r)`, the last program is dropped before epoch `d`
 /// and installed again before epoch `r`.
 fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, arranged: bool, ahead: bool, cycle: Option<(usize, usize)>) -> Result<Vec<Exports>, String> {
+    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, as_of_drop: true })
+}
+
+fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, options: RunOptions) -> Result<Vec<Exports>, String> {
+    let RunOptions { arranged, ahead, cycle, as_of_drop } = options;
     let programs = programs.to_vec();
     let binds = binds.to_vec();
     let epochs = case.epochs.clone();
@@ -912,6 +926,7 @@ fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], w
     let guards = timely::execute(timely::Config::process(workers), move |worker| -> Result<Vec<Exports>, String> {
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
+        server.set_as_of_drop(as_of_drop);
         // On one worker, every export's tapped changes are checked against its contents.
         let single = worker.peers() == 1;
         server.set_export_taps(single);
@@ -1066,6 +1081,28 @@ fn split(case: &Case) -> Option<(String, String, bool, usize)> {
     Some((producer, consumer, rng.chance(50), late))
 }
 
+/// Publish the inputs first, then install the whole delta form after at least two epochs.
+fn asof_programs(case: &Case) -> Result<Vec<(String, Program, usize)>, String> {
+    let mut producer = String::new();
+    let mut consumer = String::new();
+    for stmt in &case.stmts {
+        match stmt {
+            Stmt::Raw(_) => {
+                render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
+                render_stmts(std::slice::from_ref(stmt), false, "", &mut consumer);
+            }
+            Stmt::Input { name, .. } => {
+                render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
+                writeln!(producer, "export \"shared_{name}\" = {name};").unwrap();
+                writeln!(consumer, "let {name} = import \"shared_{name}\";").unwrap();
+            }
+            _ => render_stmts(std::slice::from_ref(stmt), true, "", &mut consumer),
+        }
+    }
+    let late = 2 + (case.seed as usize % (case.epochs.len() - 2));
+    Ok(vec![("producer".into(), program(&producer, true)?, 0), ("consumer".into(), program(&consumer, true)?, late)])
+}
+
 /// [`split`], but the consumer reads the producer's collections through its own inputs, each bound
 /// to the trace the producer publishes; and the bindings.
 fn bound(case: &Case) -> Option<(String, String, Vec<(String, usize)>, usize)> {
@@ -1104,13 +1141,13 @@ fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Delta, Explain, Split, Ahead, Bind, Reinstall }
+enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
 
 impl Oracle {
     /// The oracles, by the names `DIFFTEST_ORACLES` takes.
-    const NAMED: [(&'static str, Oracle); 9] = [
+    const NAMED: [(&'static str, Oracle); 10] = [
         ("workers", Oracle::Workers), ("scratch", Oracle::Scratch), ("optimize", Oracle::Optimize),
-        ("delta", Oracle::Delta), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
+        ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
         ("bind", Oracle::Bind), ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
     ];
     fn all() -> Vec<Oracle> { Self::NAMED.iter().map(|(_, o)| *o).collect() }
@@ -1204,6 +1241,17 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
             Oracle::Delta => {
                 if !case.has_joins() { continue; }
                 program(&case.render(true), true).and_then(|p| run(&p, 1, case))
+            }
+            Oracle::AsOf => {
+                if case.raw.is_some() { continue; }
+                asof_programs(case).and_then(|programs| {
+                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: true })?;
+                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: false })?;
+                    match differ(&on, &off) {
+                        Some(d) => Err(format!("with versus without as-of rewrite: {d}")),
+                        None => Ok(base.clone()),
+                    }
+                })
             }
             Oracle::Explain if !case.explainable => continue,
             Oracle::Explain => match explain_check(case, &opt, &base) {

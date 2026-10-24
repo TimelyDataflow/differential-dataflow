@@ -113,7 +113,8 @@ impl Server {
         // so the shapes are inferred again, and a candidate that fails that is not used.
         let as_of = self.import_as_of();
         let mut dropped = prog.clone();
-        let dropped = if crate::as_of::drop_dead_as_of(&mut dropped, &as_of) > 0 {
+        let inserted = if self.as_of_drop { crate::as_of::drop_dead_as_of(&mut dropped, &as_of) } else { 0 };
+        let dropped = if inserted > 0 {
             match self.check_shapes(name, &dropped) {
                 Ok((shapes, exports)) if exports == export_shapes => {
                     scope_shapes = shapes;
