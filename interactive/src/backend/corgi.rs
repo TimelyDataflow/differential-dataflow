@@ -30,11 +30,12 @@ use crate::runtime::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::runtime::col_times::ColTime;
 use crate::runtime::container::CorgiContainer;
 use crate::runtime::exchange::CorgiPact;
-use crate::runtime::half_join::{CorgiHalfJoin, HalfJoinBatcher};
+use crate::runtime::half_join::{CorgiHalfJoinBackend, HalfJoinBatcher};
 use crate::runtime::join::CorgiJoinBackend;
 use differential_dogs3::operators::half_join::half_join_with_tactic;
 use crate::runtime::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
+use differential_dogs3::operators::half_join::proxy::ProxyHalfJoinTactic;
 use crate::lambda::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
 use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, Lambda, LinearOp, Reducer, Time};
@@ -337,13 +338,15 @@ impl Backend for CorgiBackend {
 
     fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
         // dogs3's driver owns progress and yielding; corgi supplies when an update is unblocked
-        // (`HalfJoinBatcher`) and how released updates meet the arrangement (`CorgiHalfJoin`).
+        // (`HalfJoinBatcher`) and the data of released updates and arranged rows
+        // (`CorgiHalfJoinBackend`); dogs3's proxy half-join tactic decides which pairs meet.
         // `CorgiPact` places each update on the worker holding its key, as `arrange` placed the rows.
         // The stream's value is `(val, time)`, as `lift` makes it; the projection reads the val.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
-        let half_join = CorgiHalfJoin::new(projection, strict, level + 1, [k, v0.swap_remove(0), v1]);
+        let backend = CorgiHalfJoinBackend::new(projection, level + 1, [k, v0.swap_remove(0), v1]);
+        let tactic = ProxyHalfJoinTactic::new(backend, strict);
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
-        half_join_with_tactic(stream.inner, arrangement, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), half_join).as_collection()
+        half_join_with_tactic(stream.inner, arrangement, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic).as_collection()
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
