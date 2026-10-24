@@ -200,3 +200,74 @@ fn late_arranged_importers_converge() {
     assert_eq!(early.0.len(), 1, "key 1, at the least value 0: {:?}", early.0);
     assert_eq!(late, early);
 }
+
+/// Three imports, each keyed by an int, whose histories add and retract rows.
+const TRIPLE_PRODUCER: &str = r#"
+    export "a" = input 0 : (int, int);
+    export "b" = input 1 : (int, int);
+    export "c" = input 2 : (int, int);
+"#;
+
+const TRIPLE_FEEDS: &[(u64, usize, &str)] = &[
+    (0, 0, "1 val=10\n2 val=20\n3 val=30"),
+    (0, 1, "1 val=11\n2 val=21"),
+    (1, 2, "1 val=12\n2 val=22\n3 val=32"),
+    (2, 1, "3 val=31\n1 val=11 diff=-1"),
+    (3, 0, "1 val=13\n2 val=20 diff=-1"),
+    (4, 2, "1 val=14\n3 val=32 diff=-1\n3 val=33"),
+    (5, 1, "1 val=11\n2 val=23"),
+    (6, 0, "3 val=30 diff=-1\n3 val=34 diff=2"),
+    (8, 2, "2 val=22 diff=-1\n2 val=24"),
+    (9, 1, "3 val=31 diff=-1"),
+    (11, 0, "2 val=25\n1 val=10 diff=-1"),
+];
+
+/// The three-way join of the imports, as joins.
+const TRIPLE_JOIN: &str = r#"
+    let a = import "a";
+    let b = import "b";
+    let c = import "c";
+    export "r" = a | join(b, (k, x, y) -> (k, (x, y))) | join(c, (k, (x, y), z) -> (k, (x, y, z)));
+"#;
+
+/// The same join as a delta join: one path per import, each strict against the imports before it.
+/// Read as of a late install, `b`'s and `c`'s paths carry their history at the as-of time to a
+/// strict half join, which meets nothing there, so the install drops it where they are lifted.
+const TRIPLE_DELTA: &str = r#"
+    let a = import "a";
+    let b = import "b";
+    let c = import "c";
+    let pa = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
+    let pb = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
+    let pc = c | lift | half_join(a, 1, (k, z, x) -> (k, (x, z))) | half_join(b, 1, (k, (x, z), y) -> (k, (x, y, z)));
+    export "r" = (pa + pb + pc) | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v));
+"#;
+
+/// The consumer's `r` after the last epoch, installed before epoch `late`.
+fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String, String, i64)> {
+    timely::execute_directly(move |worker| {
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let mut server = Server::new();
+        server.set_arranged_imports(arranged);
+        server.install(worker, "producer", &program(TRIPLE_PRODUCER)).unwrap();
+        for epoch in 0..13 {
+            if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
+            for (_, input, rows) in TRIPLE_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
+                server.feed("producer", *input, rows, None).unwrap();
+            }
+            server.tick(worker);
+        }
+        server.snapshot(worker, "r").unwrap().rows()
+    })
+}
+
+/// A three-way delta join installed late, whose later paths drop the imports' history at the
+/// as-of time, agrees with the join installed early.
+#[test]
+fn late_three_way_delta_join_agrees_with_the_join() {
+    let join = run_triple(TRIPLE_JOIN, 0, false);
+    assert!(!join.is_empty());
+    for (late, arranged) in [(0, false), (7, false), (7, true), (12, true)] {
+        assert_eq!(run_triple(TRIPLE_DELTA, late, arranged), join, "the delta join installed before epoch {late}, arranged imports {arranged}");
+    }
+}
