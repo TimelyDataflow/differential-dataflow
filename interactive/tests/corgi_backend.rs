@@ -212,10 +212,10 @@ impl corgi::HostKernel for Kernel {
 }
 
 /// Register the function `name` of arguments `args`: its input is `()`, or the tuple of them.
-fn register(name: &'static str, args: Vec<corgi::Shape>, output: corgi::Shape, body: fn(corgi::Value) -> Result<corgi::Value, String>) -> interactive::ir::Function {
+fn register(name: &'static str, args: Vec<corgi::Shape>, output: corgi::Shape, body: fn(corgi::Value) -> Result<corgi::Value, String>) -> interactive::lambda::Function {
     let input = if args.is_empty() { corgi::Shape::Unit } else { corgi::Shape::Prod(args) };
-    let f: interactive::ir::Function = std::sync::Arc::new(Kernel { name, input, output, body });
-    interactive::ir::register(std::sync::Arc::clone(&f));
+    let f: interactive::lambda::Function = std::sync::Arc::new(Kernel { name, input, output, body });
+    interactive::lambda::register(std::sync::Arc::clone(&f));
     f
 }
 
@@ -285,8 +285,8 @@ fn call_argument_shapes_are_checked() {
 fn reregistering_a_function_replaces_it() {
     let one = || register("reregistered", vec![corgi::Shape::Int], corgi::Shape::Int, Ok);
     let first = one();
-    assert!(std::sync::Arc::ptr_eq(&first, &interactive::ir::lookup("reregistered").unwrap()));
+    assert!(std::sync::Arc::ptr_eq(&first, &interactive::lambda::lookup("reregistered").unwrap()));
     let second = one();
-    assert!(std::sync::Arc::ptr_eq(&second, &interactive::ir::lookup("reregistered").unwrap()));
+    assert!(std::sync::Arc::ptr_eq(&second, &interactive::lambda::lookup("reregistered").unwrap()));
     assert!(std::panic::catch_unwind(|| register("min", vec![], corgi::Shape::Int, Ok)).is_err());
 }

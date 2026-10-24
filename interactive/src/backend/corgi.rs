@@ -35,7 +35,7 @@ use crate::corgi::join::CorgiJoinBackend;
 use differential_dogs3::operators::half_join::half_join_with_tactic;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
+use crate::lambda::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
 use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, Lambda, LinearOp, Reducer, Time};
 use crate::scope_ir as st;

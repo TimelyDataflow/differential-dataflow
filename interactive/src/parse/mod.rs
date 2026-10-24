@@ -61,9 +61,3 @@ pub enum Stmt {
     /// an optional declared shape as for `var`. Only valid at the root scope.
     Export(String, Option<crate::scope_ir::RowShape>, Expr),
 }
-
-/// Whether `name` is a word every lambda's scope starts with, or a keyword (registered functions
-/// may not take one).
-pub fn is_builtin(name: &str) -> bool {
-    crate::corgi::logic::is_base_word(name) || pipe::is_keyword(name)
-}
