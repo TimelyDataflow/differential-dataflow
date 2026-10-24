@@ -18,7 +18,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BIN = os.path.join(HERE, "..", "..", "..", "target", "release", "ddir_server")
-sys.path.insert(0, os.path.join(HERE, "..", "bench", "ldbc"))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "bench", "ldbc"))
 from client import decode  # noqa: E402  (the binary frame decoder)
 PORT = 7981
 

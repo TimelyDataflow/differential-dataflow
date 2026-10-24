@@ -17,7 +17,7 @@ From the repository root, with Python 3.9+ and `ps`:
 
 ```sh
 cargo build --release -p ddir-server
-python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server
+python3 interactive/bench/ldbc/suite.py --server target/release/ddir_server
 ```
 
 The default starts a private real TCP server, installs all 41
@@ -35,16 +35,16 @@ saves the emitted `.ddp` plans and a catalogue of parameters/output fields. To
 inspect them without starting a server:
 
 ```sh
-python3 interactive/server/bench/ldbc/suite.py --list
-python3 interactive/server/bench/ldbc/suite.py --emit --output /tmp/snb-plans
+python3 interactive/bench/ldbc/suite.py --list
+python3 interactive/bench/ldbc/suite.py --emit --output /tmp/snb-plans
 ```
 
 Use a subset or a different lifecycle without editing query definitions:
 
 ```sh
-python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/suite.py --server target/release/ddir_server \
   --queries ic1 ic6 ic14 bi1 bi15 --workers 4 --rounds 10
-python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/suite.py --server target/release/ddir_server \
   --queries bi --mode maintained --isolated
 ```
 
@@ -58,7 +58,7 @@ empty or new. Server logs and a JSON report survive failures.
 To use existing generated data:
 
 ```sh
-python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/suite.py --server target/release/ddir_server \
   --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \
   --workers 4 --batch-size 3 --rounds 5
 ```
@@ -166,7 +166,7 @@ sampled server RSS, and a copy/hash of the available Cargo lockfile. Compare
 matching reports using the same `compare.py` as the four-query panel:
 
 ```sh
-python3 interactive/server/bench/ldbc/compare.py /tmp/snb-before/report.json /tmp/snb-after/report.json
+python3 interactive/bench/ldbc/compare.py /tmp/snb-before/report.json /tmp/snb-after/report.json
 ```
 
 Changed logical/DDP plans are permitted but called out; returned answers and
@@ -201,10 +201,10 @@ fixture: mixed at one/four workers and maintained at four workers. It asserts
 answers, not timing thresholds, and does not fetch data. The local equivalent is:
 
 ```sh
-python3 interactive/server/bench/ldbc/test_snb.py
-python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
+python3 interactive/bench/ldbc/test_snb.py
+python3 interactive/bench/ldbc/suite.py --server target/debug/ddir_server \
   --workers 4 --rounds 1 --warmup 0
-python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
+python3 interactive/bench/ldbc/suite.py --server target/debug/ddir_server \
   --mode maintained --workers 4 --rounds 1 --warmup 0
 ```
 

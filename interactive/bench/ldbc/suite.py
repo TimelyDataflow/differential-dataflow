@@ -217,7 +217,7 @@ def main():
     (args.output / 'catalogue.json').write_text(json.dumps(catalogue, indent=2) + '\n')
     if args.emit:
         return
-    repo = HERE.parents[3]
+    repo = HERE.parents[2]
     def git(*command):
         return subprocess.run(['git', '-C', str(repo), *command], capture_output=True, text=True, check=False).stdout.strip()
     report = dict(format_version='snb-suite-2', status='running', spec_commit=SPEC, catalogue=catalogue,

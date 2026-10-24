@@ -11,8 +11,8 @@ Run from the repository root with Python 3.9+, `ps`, and a server binary:
 
 ```sh
 CARGO_TARGET_DIR=/tmp/ldbc-target cargo build --release -p ddir-server
-python3 interactive/server/bench/ldbc/test_updates.py
-python3 interactive/server/bench/ldbc/test_update_stream.py \
+python3 interactive/bench/ldbc/test_updates.py
+python3 interactive/bench/ldbc/test_update_stream.py \
   --server /tmp/ldbc-target/release/ddir_server --workers 1 \
   --output /tmp/ldbc-update-fixture
 ```
@@ -31,7 +31,7 @@ Supply an existing SNB BI CSV `composite-merged-fk` export with
 runner reads existing files; it does not download or modify the dataset.
 
 ```sh
-python3 interactive/server/bench/ldbc/update_stream.py \
+python3 interactive/bench/ldbc/update_stream.py \
   --data /path/to/graphs/csv/bi/composite-merged-fk \
   --prepare-only --output /tmp/ldbc-prepared
 ```
@@ -63,12 +63,12 @@ the graph and its cascades. Every output directory must be empty or new.
 ## Run and check one query
 
 ```sh
-python3 interactive/server/bench/ldbc/update_stream.py \
+python3 interactive/bench/ldbc/update_stream.py \
   --prepared /tmp/ldbc-prepared/journal \
   --server /tmp/ldbc-target/release/ddir_server --queries ic3 --workers 1 \
   --check-mode replay --check-every 128 --no-check-first-class \
   --output /tmp/ldbc-ic3
-python3 interactive/server/bench/ldbc/summarize_updates.py /tmp/ldbc-ic3 \
+python3 interactive/bench/ldbc/summarize_updates.py /tmp/ldbc-ic3 \
   --query ic3
 ```
 
@@ -119,10 +119,10 @@ dataset, then add the corresponding file to the run command above:
 
 ```sh
 # SF0.1: start with a ten-epoch prefix and fresh initial/final Python checks.
-python3 interactive/server/bench/ldbc/update_stream.py \
+python3 interactive/bench/ldbc/update_stream.py \
   --prepared /tmp/ldbc-prepared/journal \
   --server /tmp/ldbc-target/release/ddir_server --queries ic3 --workers 1 \
-  --parameters interactive/server/bench/ldbc/bindings/ic3-sf01.json \
+  --parameters interactive/bench/ldbc/bindings/ic3-sf01.json \
   --batch-limit 10 --check-mode replay --check-every 0 --no-check-first-class \
   --output /tmp/ldbc-ic3-prefix
 ```
@@ -173,7 +173,7 @@ changes. IC9 hashes the full sort value. Other finite rankings use one stage.
 The normal suite, update runner and memory profiler all use these defaults:
 
 ```sh
-python3 interactive/server/bench/ldbc/update_stream.py \
+python3 interactive/bench/ldbc/update_stream.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
   --queries ic9 --check-mode replay --check-every 0 --no-check-first-class \
   --output /tmp/ic9-bounded
@@ -183,9 +183,9 @@ python3 interactive/server/bench/ldbc/update_stream.py \
 using the same compiler and reducer. For example, try a flat IC9 plan:
 
 ```sh
-python3 interactive/server/bench/ldbc/bounded_topk.py --query ic9 \
+python3 interactive/bench/ldbc/bounded_topk.py --query ic9 \
   --buckets 1 --hash-key value --output /tmp/ic9-flat.ddp
-python3 interactive/server/bench/ldbc/update_stream.py \
+python3 interactive/bench/ldbc/update_stream.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
   --queries ic9 --plan /tmp/ic9-flat.ddp --check-mode replay \
   --check-every 0 --no-check-first-class --output /tmp/ic9-flat
@@ -209,11 +209,11 @@ retirement can expose a later compaction peak that an immediately exiting server
 would miss.
 
 ```sh
-python3 interactive/server/bench/ldbc/profile_memory.py \
+python3 interactive/bench/ldbc/profile_memory.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
-  --parameters interactive/server/bench/ldbc/bindings/sf1-memory.json \
+  --parameters interactive/bench/ldbc/bindings/sf1-memory.json \
   --output /tmp/ldbc-memory
-python3 interactive/server/bench/ldbc/summarize_memory.py /tmp/ldbc-memory
+python3 interactive/bench/ldbc/summarize_memory.py /tmp/ldbc-memory
 ```
 
 The parameter file pins the observed SF1 smoke requests, not official LDBC

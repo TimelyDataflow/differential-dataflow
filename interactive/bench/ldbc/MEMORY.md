@@ -45,9 +45,9 @@ SF1 initial snapshot and insert/delete batches. The profiler verifies journal
 and adapter hashes before starting. Then run:
 
 ```sh
-python3 interactive/server/bench/ldbc/profile_memory.py \
+python3 interactive/bench/ldbc/profile_memory.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
-  --parameters interactive/server/bench/ldbc/bindings/sf1-memory.json \
+  --parameters interactive/bench/ldbc/bindings/sf1-memory.json \
   --output /tmp/ldbc-memory
 ```
 

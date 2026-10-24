@@ -30,7 +30,7 @@ From the repository root:
 
 ```sh
 cargo build --release -p ddir-server
-python3 interactive/server/bench/ldbc/run.py --server target/release/ddir_server
+python3 interactive/bench/ldbc/run.py --server target/release/ddir_server
 ```
 
 The default uses the 50-row hand-authored fixture, one worker, one warmup round
@@ -41,7 +41,7 @@ is for correctness and overhead, not evidence of columnar throughput.
 Use an existing SNB BI **CSV composite-merged-fk** initial snapshot for timing:
 
 ```sh
-python3 interactive/server/bench/ldbc/run.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/run.py --server target/release/ddir_server \
   --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \
   --workers 4 --rounds 10 --batch-size 8 --changes 32 \
   --output /tmp/ldbc-baseline
@@ -162,7 +162,7 @@ used; no patch to an external Corgi checkout is required.
 After running a candidate binary with the same arguments, compare the reports:
 
 ```sh
-python3 interactive/server/bench/ldbc/compare.py \
+python3 interactive/bench/ldbc/compare.py \
   /tmp/ldbc-baseline/report.json /tmp/ldbc-candidate/report.json
 ```
 
@@ -185,7 +185,7 @@ parameter bank. It asserts answers, not timing thresholds, and uses this runner
 rather than a separate simulation. The equivalent local command is:
 
 ```sh
-python3 interactive/server/bench/ldbc/run.py --server target/debug/ddir_server \
+python3 interactive/bench/ldbc/run.py --server target/debug/ddir_server \
   --workers 4 --rounds 1 --warmup 0 --batch-size 9 --changes 1
 ```
 

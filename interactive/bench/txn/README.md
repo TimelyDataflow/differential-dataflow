@@ -244,19 +244,19 @@ each group's values, and the int-proxy bookkeeping).
 cargo build --release -p ddir-server
 
 # Sparse keys, both modes.
-python3 interactive/server/bench/txn/bench_txn.py \
+python3 interactive/bench/txn/bench_txn.py \
   --workers 4,8 --batch-sizes 10000,50000,200000 \
   --keys 10000000 --rounds 5 --warmup 2
 
 # Exactly as many populated keys as commands.
-python3 interactive/server/bench/txn/bench_txn.py \
+python3 interactive/bench/txn/bench_txn.py \
   --workers 4,8 --batch-sizes 100,1000,10000,100000 \
   --keys-from-batch --key-pattern round-robin --rounds 5 --warmup 2
 
 # The post's workload, and refreshing N objects.
-python3 interactive/server/bench/txn/bench_txn.py --shape blog \
+python3 interactive/bench/txn/bench_txn.py --shape blog \
   --workers 4 --batch-sizes 1000,10000,100000 --keys 10000 --rounds 5 --warmup 2
-DDIR_MAX_FEED_BYTES=268435456 python3 interactive/server/bench/txn/bench_txn.py \
+DDIR_MAX_FEED_BYTES=268435456 python3 interactive/bench/txn/bench_txn.py \
   --shape blog --keys-from-batch --workers 4,8 \
   --batch-sizes 1000,3000,10000,30000,100000,300000 --rounds 5 --warmup 2
 ```

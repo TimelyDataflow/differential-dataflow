@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass
 from typing import Iterable
 
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 # The LDBC client's frame encoder writes `feed … frame` payloads.
 sys.path.insert(0, str(HERE.parent / "ldbc"))
