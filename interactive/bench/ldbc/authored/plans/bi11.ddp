@@ -21,14 +21,13 @@ let inside = residents | join(friend, (a, (rid, start, end), (b, t)) -> ((rid, a
                        | map(((rid, a, b, _, _, _), ()) -> ((rid, b), a))
                        | join(member, ((rid, b), a, ()) -> ((rid, a, b), ()));
 
--- Triangles a < b < c: the path a-b-c closed by the friendship c-a.
-let by_first  = inside | map(((rid, a, b), ()) -> ((rid, a), b));
-let by_second = inside | map(((rid, a, b), ()) -> ((rid, b), a));
-let closing   = inside;              -- already a set: one row per friendship
-let triangles = by_second | join(by_first, ((rid, b), a, c) -> ((rid, a, b, c), ()))
-                          | filter(((_, a, b, c), ()) -> ((a, b) lt, (b, c) lt) all)
-                          | map(((rid, a, _, c), ()) -> ((rid, c, a), ()))
-                          | join(closing, ((rid, _, _), (), ()) -> (rid, ()));
+-- Triangles a < b < c: each friendship oriented a < b, so the path a-b-c is built
+-- only in increasing order, and closed by the friendship a-c.
+let oriented  = inside | filter(((_, a, b), ()) -> (a, b) lt);
+let by_first  = oriented | map(((rid, a, b), ()) -> ((rid, a), b));
+let by_second = oriented | map(((rid, a, b), ()) -> ((rid, b), a));
+let triangles = by_second | join(by_first, ((rid, b), a, c) -> ((rid, a, c), b))
+                          | join(oriented, ((rid, _, _), _, ()) -> (rid, ()));
 
 -- One row per request, zero when there are no triangles.
 let counted = triangles | count;
