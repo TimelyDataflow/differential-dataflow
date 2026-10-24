@@ -104,8 +104,8 @@ let edges = import "random:nodes=8,edges=12";
 generator on demand** — no producer to set up first — and the source is
 *content-addressed*: two programs importing the same recipe (in any key order)
 share one generated source, generated once. It shows up in `list` tagged
-`[generated]`, is not writable (`feed` is refused), and is dropped like any
-program once nothing imports it. This is a first step toward unifying `input`
+`[generated]`, is not writable (`feed` is refused), and is reclaimed
+automatically once nothing imports it. This is a first step toward unifying `input`
 and `import`: a generated source is just an `import` whose data is computed.
 
 Two more primitives let you derive sources *in the language* rather than baking

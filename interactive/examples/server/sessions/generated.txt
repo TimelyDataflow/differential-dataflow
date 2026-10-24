@@ -16,10 +16,8 @@ peek random:nodes=8,edges=12
 peek result
 peek edge_count
 
-# Dropping both consumers releases the source (importers -> 0); then it drops.
+# Dropping both consumers reclaims the source too: it goes once nothing imports it.
 drop reach
 drop counter
-list
-drop random:nodes=8,edges=12
 list
 exit
