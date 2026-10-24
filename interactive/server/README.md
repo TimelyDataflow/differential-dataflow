@@ -5,8 +5,8 @@ load-run-drop lifecycle. Programs share results by name — each may import
 collections that others export — and clients follow along over TCP, WebSocket,
 or stdin.
 
-Run `cargo run -p ddir-server`, then open `interactive/server/console.html` or
-connect a line-oriented client to TCP port 7777. The same protocol is available
+Run `cargo run -p ddir-server`, then connect a line-oriented client to TCP port
+7777. The same protocol is available
 over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
 defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
 becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
