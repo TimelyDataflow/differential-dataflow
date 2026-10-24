@@ -1,7 +1,7 @@
 //! Export taps hand over each export's changes as columns, once, each at the epoch it happened:
 //! summed over every tick, they are the export's contents, inserts and retractions of nested rows
 //! alike.
-use interactive::corgi::container::Updates;
+use interactive::runtime::container::Updates;
 use interactive::server::Server;
 use interactive::{lower, parse};
 

@@ -14,11 +14,11 @@ use differential_dogs3::operators::half_join::HalfJoinTactic;
 use corgi::arrange::{equal_idx, gather_lanes};
 use corgi::{Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
-use crate::corgi::col_times::ColTimes;
-use crate::corgi::container::CorgiContainer;
+use crate::runtime::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
+use crate::runtime::col_times::ColTimes;
+use crate::runtime::container::CorgiContainer;
 use crate::lambda::compile_projection;
-use crate::corgi::search::matching_ranges;
+use crate::runtime::search::matching_ranges;
 use crate::ir::{Diff, Lambda, Time};
 
 use super::{NativeBatch, Run, CC};
@@ -252,7 +252,7 @@ fn keep_equal_keys(key: &CValue, chunk_key: &CValue, start: usize, pairs: &mut (
 mod tests {
     use super::*;
     use super::super::test_util::*;
-    use crate::corgi::chunk::{columns_to_batch, present_key};
+    use crate::runtime::chunk::{columns_to_batch, present_key};
 
     /// The projection `(k, (v0, v1))`.
     fn pairing() -> Lambda { Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()) }

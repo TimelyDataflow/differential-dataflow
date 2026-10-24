@@ -13,7 +13,7 @@
 //!
 //! `feed <prog> <in#> frame <nbytes>` is followed by exactly `nbytes` bytes: the
 //! updates as columns, in the binary frame format `peek … as corgi` answers with
-//! (`interactive::corgi::frame`), with no time lanes. On WebSocket the header
+//! (`interactive::runtime::frame`), with no time lanes. On WebSocket the header
 //! line and its bytes are one binary message.
 
 use std::any::{type_name_of_val, Any};
@@ -22,8 +22,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use interactive::corgi::container::Updates;
-use interactive::corgi::feed::FeedDecoder;
+use interactive::runtime::container::Updates;
+use interactive::runtime::feed::FeedDecoder;
 use interactive::ir::Diff;
 use interactive::scope_ir::{Program, Source};
 use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
@@ -577,7 +577,7 @@ impl LineParser {
             if payload.len() != frame.nbytes {
                 return Err(format!("feed: a frame of {} bytes, but {} arrived", frame.nbytes, payload.len()));
             }
-            interactive::corgi::frame::decode_feed(payload, &shape, self.max_feed_bytes as u64).map_err(|error| format!("feed: {error}"))
+            interactive::runtime::frame::decode_feed(payload, &shape, self.max_feed_bytes as u64).map_err(|error| format!("feed: {error}"))
         });
         let (prog, input) = (frame.prog, frame.input);
         Some((frame.reqid, columns.map(|columns| Cmd::FeedColumns { prog, input, columns })))
@@ -715,7 +715,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
             // A `<v>`/`<key>` is a value of the input's declared shape, written
-            // without spaces (see `interactive::corgi::feed`).
+            // without spaces (see `interactive::runtime::feed`).
             if args.len() < 3 {
                 return ParseOutcome::Err(
                     "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
@@ -865,7 +865,7 @@ mod tests {
         rows.push("tuple(1,2)", None, 1).unwrap();
         rows.push("tuple(3,-4)", None, 2).unwrap();
         let columns = rows.finish();
-        let bytes = interactive::corgi::frame::encode(&columns, &[]);
+        let bytes = interactive::runtime::frame::encode(&columns, &[]);
         assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
         assert_eq!(p.frame_bytes(), Some((bytes.len(), true)));
         match p.frame(&bytes) {

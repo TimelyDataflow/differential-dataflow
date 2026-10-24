@@ -78,7 +78,7 @@ A program moves through four parts, each using only the ones before it.
    own outputs. `projection.rs`, on with `DDIR_PROJECTION`, replaces fields that nothing reads
    by `()`.
 3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
-   trait and `render_tree`, which turns the scope tree into operators. `corgi/` is today's
+   trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's
    backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
    and frame formats.
 4. **The host.** `server/` is the in-process registry: install, feed, tick, publish and peek,

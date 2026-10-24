@@ -31,7 +31,7 @@ use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use corgi::arrange::{equal_idx, gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
-use crate::corgi::col_times::{ColTime, ColTimes};
+use crate::runtime::col_times::{ColTime, ColTimes};
 
 use std::cmp::Ordering;
 
@@ -51,7 +51,7 @@ const INGEST: usize = 1 << 24;
 
 /// Shared, immutable chunk contents. `Clone` of a `CorgiChunk` is an `Rc` bump.
 ///
-/// Same payload as [`CorgiContainer`](crate::corgi::container::CorgiContainer), and the two
+/// Same payload as [`CorgiContainer`](crate::runtime::container::CorgiContainer), and the two
 /// should eventually be ONE type: both hold times as a `ColTimes`, and they differ only in
 /// invariants (sorted+consolidated+shared here, raw+owned there).
 struct Inner<T, R> {
@@ -707,12 +707,12 @@ where
     }
 }
 
-impl<T, R> timely::container::PushInto<&mut crate::corgi::container::CorgiContainer<T, R>> for CorgiChunker<T, R>
+impl<T, R> timely::container::PushInto<&mut crate::runtime::container::CorgiContainer<T, R>> for CorgiChunker<T, R>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
 {
-    fn push_into(&mut self, c: &mut crate::corgi::container::CorgiContainer<T, R>) {
+    fn push_into(&mut self, c: &mut crate::runtime::container::CorgiContainer<T, R>) {
         if c.times.is_empty() {
             return;
         }
@@ -826,7 +826,7 @@ mod test {
     fn chunker_owned_lanes_match_scalar_across_flushes() {
         use differential_dataflow::dynamic::pointstamp::PointStamp;
         use timely::container::{ContainerBuilder, PushInto};
-        use crate::corgi::container::CorgiContainer;
+        use crate::runtime::container::CorgiContainer;
         let mut builder = CorgiChunker::<PointStamp<u64>, i64>::default();
         let mut source = CorgiContainer::default();
         let mut seed = 731;

@@ -39,9 +39,9 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
 use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::col_times::{ColTime, ColTimes};
-use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
+use crate::runtime::col_times::{ColTime, ColTimes};
+use crate::runtime::search::matching_ranges;
+use crate::runtime::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::lambda::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -727,7 +727,7 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
     use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use crate::corgi::chunk::present_key;
+    use crate::runtime::chunk::present_key;
     use crate::ir::Time;
 
     /// The rows of a column of `Int` leaves, products of them, or units, as vectors.
@@ -948,8 +948,8 @@ mod tests {
         use timely::progress::{Antichain, Timestamp};
         use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
         use differential_dataflow::operators::reduce::ReduceTactic;
-        use crate::corgi::chunk::recover_key;
-        use crate::corgi::feed::print;
+        use crate::runtime::chunk::recover_key;
+        use crate::runtime::feed::print;
         use corgi::Shape;
 
         let pairs = |rows: &[(u64, (u64, u64), Time, Diff)], pair: fn(&(u64, (u64, u64), Time, Diff)) -> (u64, u64)| {

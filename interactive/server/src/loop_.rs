@@ -10,9 +10,9 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
-use interactive::corgi::container::Updates;
-use interactive::corgi::exchange::GatherPact;
-use interactive::corgi::frame;
+use interactive::runtime::container::Updates;
+use interactive::runtime::exchange::GatherPact;
+use interactive::runtime::frame;
 use interactive::server::{host_time, Command as ServerCommand, HostContainer, HostTime, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;

@@ -7,13 +7,13 @@ impl Server {
     /// Stage rows written as text into positional input `input` of installed program `prog`, at
     /// `time` (default the current epoch), which must not be in the closed past. Each line of
     /// `rows` is one row, `<key> [val=<v>] [diff=<d>]`, its values read at the input's declared
-    /// shapes as a feed reads them ([`crate::corgi::feed`]); blank lines and `#` comments are
+    /// shapes as a feed reads them ([`crate::runtime::feed`]); blank lines and `#` comments are
     /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once a
     /// `tick` advances the input past `time`.
     pub fn feed(&mut self, prog: &str, input: usize, rows: &str, time: Option<OuterTime>) -> Result<(), String> {
         self.validate_feed(prog, input, time.unwrap_or(self.epoch))?;
         let (key, val) = &self.programs[&canonical_source_name(prog)].inputs[&input].shape;
-        let mut decoder = crate::corgi::feed::FeedDecoder::new(key, val);
+        let mut decoder = crate::runtime::feed::FeedDecoder::new(key, val);
         for (number, line) in rows.lines().map(str::trim).enumerate() {
             if !line.is_empty() && !line.starts_with('#') {
                 decoder.push_line(line).map_err(|error| format!("row {}: {error}", number + 1))?;
@@ -102,7 +102,7 @@ impl Server {
                 // "loaded" over partial data. Only this worker's lines are
                 // kept; the others are read into a scratch decoder, emptied
                 // as it fills, so that holding them does not grow with the file.
-                use crate::corgi::feed::FeedDecoder;
+                use crate::runtime::feed::FeedDecoder;
                 let (key, val) = &target.shape;
                 let (mut rows, mut others) = (FeedDecoder::new(key, val), FeedDecoder::new(key, val));
                 let mut total = 0;

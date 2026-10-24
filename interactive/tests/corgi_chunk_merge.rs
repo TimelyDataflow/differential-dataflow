@@ -2,7 +2,7 @@
 use corgi::Value;
 use differential_dataflow::batcher::merge::Merger;
 use differential_dataflow::trace::chunk::{Chunk, ChunkMerger};
-use interactive::corgi::chunk::CorgiChunk;
+use interactive::runtime::chunk::CorgiChunk;
 
 fn chunk(times: &[u64]) -> CorgiChunk<u64, i64> {
     CorgiChunk::from_columns(

@@ -74,7 +74,7 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
-use crate::corgi::container::Updates;
+use crate::runtime::container::Updates;
 use crate::ir::Diff;
 use crate::scope_ir as st;
 
@@ -117,7 +117,7 @@ impl Published {
 pub type RowShape = (corgi::Shape, corgi::Shape);
 
 /// A container of corgi columns at the program time, as a published trace's readers see them.
-pub type HostContainer = crate::corgi::container::CorgiContainer<HostTime, Diff>;
+pub type HostContainer = crate::runtime::container::CorgiContainer<HostTime, Diff>;
 
 /// Where an installed entry came from. Only `Program` is writable by `feed`;
 /// `Clock` additionally has its single row advanced each `tick`.

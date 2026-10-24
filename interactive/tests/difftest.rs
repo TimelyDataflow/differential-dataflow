@@ -915,7 +915,7 @@ fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], w
         // On one worker, every export's tapped changes are checked against its contents.
         let single = worker.peers() == 1;
         server.set_export_taps(single);
-        let mut tapped: BTreeMap<String, Vec<interactive::corgi::container::Updates>> = BTreeMap::new();
+        let mut tapped: BTreeMap<String, Vec<interactive::runtime::container::Updates>> = BTreeMap::new();
         let fed = programs[0].0.clone();
         let mut installed = 0;
         let mut seen = Vec::new();
@@ -962,9 +962,9 @@ fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], w
                     // The changes taken so far sum to the contents, and a peek at a key is the
                     // contents at that key.
                     let taken = tapped.entry(name.clone()).or_default();
-                    taken.extend(server.take_changes(name).into_iter().map(|c| interactive::corgi::container::Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
+                    taken.extend(server.take_changes(name).into_iter().map(|c| interactive::runtime::container::Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
                     let shape = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
-                    let summed = interactive::corgi::container::Updates::consolidate(taken.clone(), &shape);
+                    let summed = interactive::runtime::container::Updates::consolidate(taken.clone(), &shape);
                     if sorted(summed.clone().rows()) != sorted(updates.clone().rows()) {
                         return Err(format!("round trip of {name:?}: taps sum to {:?}, not the contents {:?}", summed.rows(), updates.clone().rows()));
                     }
@@ -1012,15 +1012,15 @@ fn sorted(mut rows: Rows) -> Rows { rows.sort(); rows }
 fn finite(v: &str) -> bool { !v.contains("NaN") && !v.contains("inf") }
 
 /// A snapshot survives a binary frame, and its rows written as feed text read back at its shapes.
-fn round_trips(updates: &interactive::corgi::container::Updates) -> Result<(), String> {
+fn round_trips(updates: &interactive::runtime::container::Updates) -> Result<(), String> {
     let lanes = vec![vec![7u64; updates.len()]];
-    let (back, times) = interactive::corgi::frame::decode(&interactive::corgi::frame::encode(updates, &lanes))?;
+    let (back, times) = interactive::runtime::frame::decode(&interactive::runtime::frame::encode(updates, &lanes))?;
     if back != *updates || times != lanes { return Err(format!("frame: {updates:?} came back as {back:?}")); }
     let rows = updates.clone().rows();
     // Feed text writes no NaN or infinity.
     if !rows.iter().all(|(k, v, _)| finite(k) && finite(v)) { return Ok(()); }
     let (keys, vals) = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
-    let mut decoder = interactive::corgi::feed::FeedDecoder::new(&keys, &vals);
+    let mut decoder = interactive::runtime::feed::FeedDecoder::new(&keys, &vals);
     for (k, v, d) in &rows {
         decoder.push(k, Some(v), *d)?;
     }

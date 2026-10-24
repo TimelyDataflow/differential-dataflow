@@ -78,8 +78,8 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, src: &str) 
 }
 
 /// Feed text read into columns at `key` and unit values, as the intake reads it.
-fn decoded(key: &corgi::Shape, rows: &[&str]) -> interactive::corgi::container::Updates {
-    let mut decoder = interactive::corgi::feed::FeedDecoder::new(key, &corgi::Shape::Unit);
+fn decoded(key: &corgi::Shape, rows: &[&str]) -> interactive::runtime::container::Updates {
+    let mut decoder = interactive::runtime::feed::FeedDecoder::new(key, &corgi::Shape::Unit);
     for row in rows {
         decoder.push(row, None, 1).unwrap();
     }

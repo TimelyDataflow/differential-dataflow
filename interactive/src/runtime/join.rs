@@ -38,12 +38,12 @@ use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, equal_idx, gather_lanes};
-use crate::corgi::search::matching_ranges;
+use crate::runtime::search::matching_ranges;
 use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
-use crate::corgi::col_times::ColTime;
-use crate::corgi::container::CorgiContainer;
+use crate::runtime::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
+use crate::runtime::col_times::ColTime;
+use crate::runtime::container::CorgiContainer;
 use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda};
 
@@ -442,10 +442,10 @@ fn stage_pair<T: ColTime>(
 }
 
 /// The identifier column of a chunk's keys, as a sorted `i64` slice. Every arrangement key
-/// leads with its identifier ([`present_key`](crate::corgi::chunk::present_key)), so this is
+/// leads with its identifier ([`present_key`](crate::runtime::chunk::present_key)), so this is
 /// always available and always ordered — no gather, no copy.
 fn ident<'a, T: ColTime>(chunk: &'a CorgiChunk<T, Diff>) -> &'a [i64] {
-    crate::corgi::chunk::ident(chunk.keys())
+    crate::runtime::chunk::ident(chunk.keys())
 }
 
 /// The block's exclusive identifier bound: for each chunk with more than `budget` rows left,

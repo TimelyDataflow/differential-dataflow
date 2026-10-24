@@ -23,9 +23,9 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
-use crate::corgi::chunk::{ident, present_key, CorgiChunk};
-use crate::corgi::col_times::ColTimes;
-use crate::corgi::container::CorgiContainer;
+use crate::runtime::chunk::{ident, present_key, CorgiChunk};
+use crate::runtime::col_times::ColTimes;
+use crate::runtime::container::CorgiContainer;
 use crate::ir::{Diff, Time};
 
 mod batcher;

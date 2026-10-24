@@ -4,7 +4,7 @@
 use super::*;
 
 /// A container of corgi columns at an epoch, as an input takes them.
-pub(super) type InputContainer = crate::corgi::container::CorgiContainer<OuterTime, Diff>;
+pub(super) type InputContainer = crate::runtime::container::CorgiContainer<OuterTime, Diff>;
 
 /// The number of rows an input converts to columns at once, and a generator emits at once.
 pub(super) const COLUMN_BATCH: usize = 1 << 16;
@@ -44,7 +44,7 @@ impl ServerInput {
         }
         let Updates { keys, vals, diffs } = columns;
         let n = diffs.len();
-        let times = crate::corgi::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
+        let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
         self.give(InputContainer { keys, vals, times, diffs });
         Ok(())
     }
@@ -53,7 +53,7 @@ impl ServerInput {
     pub(super) fn give_at(&mut self, container: HostContainer, time: OuterTime) {
         let HostContainer { keys, vals, times, diffs } = container;
         let n = times.len();
-        let times = crate::corgi::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
+        let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
         self.give(InputContainer { keys, vals, times, diffs });
     }
 
@@ -195,7 +195,7 @@ impl Recipe {
         InputContainer {
             keys,
             vals: CValue::Unit(n),
-            times: crate::corgi::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n),
+            times: crate::runtime::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n),
             diffs: vec![diff; n],
         }
     }

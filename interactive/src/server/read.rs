@@ -53,7 +53,7 @@ impl Server {
             let (arranged, _shutdown) = trace.import_core(scope.clone(), "SnapshotImport");
             crate::backend::corgi::export_containers(arranged)
                 .inner
-                .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::corgi::exchange::GatherPact, "Snapshot", move |_, _| {
+                .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::runtime::exchange::GatherPact, "Snapshot", move |_, _| {
                     move |input, _output| {
                         input.for_each(|_cap, data| {
                             let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
@@ -80,7 +80,7 @@ impl Server {
         let updates = self.snapshot(worker, name)?;
         let Some(text) = key else { return Ok(updates) };
         let (kshape, _) = self.shapes[&canonical_source_name(name)].clone();
-        let mut decoder = crate::corgi::feed::FeedDecoder::new(&kshape, &corgi::Shape::Unit);
+        let mut decoder = crate::runtime::feed::FeedDecoder::new(&kshape, &corgi::Shape::Unit);
         decoder.push(text, None, 1)?;
         let wanted = decoder.finish().keys;
         let rows: Vec<usize> = (0..updates.len()).collect();

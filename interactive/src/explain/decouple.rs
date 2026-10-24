@@ -294,7 +294,7 @@ mod value_contract {
         SideInfo { witness, forward: vec![], user_len }
     }
     fn sorted(mut c: Coll) -> Coll {
-        c.sort_by_key(|(k, v)| (crate::corgi::feed::print(k, 0), crate::corgi::feed::print(v, 0)));
+        c.sort_by_key(|(k, v)| (crate::runtime::feed::print(k, 0), crate::runtime::feed::print(v, 0)));
         c
     }
     /// A projection over explain's rows, whose values are envelopes.

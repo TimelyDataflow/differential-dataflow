@@ -106,7 +106,7 @@ def declared_inputs(program):
 
 def encode_frame(shape, keys, diffs, vals=None):
     """A `data` frame of updates, as `feed … frame` reads it: `rows | 0 | keys | vals | diffs`,
-    with no time lanes (see `interactive::corgi::frame`). `shape` is the input's declared
+    with no time lanes (see `interactive::runtime::frame`). `shape` is the input's declared
     `(key, val)` shapes, parsed; `vals` defaults to units."""
     key_shape, val_shape = shape
     out = bytearray(struct.pack('<2Q', len(diffs), 0))
@@ -180,7 +180,7 @@ class _Words:
 
 def decode(frames):
     """The rows of a binary peek's `data` frames: `[key, val, diff]`, by key. A frame is
-    `rows | lanes | keys | vals | diffs | times` (see `interactive::corgi::frame`)."""
+    `rows | lanes | keys | vals | diffs | times` (see `interactive::runtime::frame`)."""
     result = []
     for kind, payload in frames:
         if kind != 'data':

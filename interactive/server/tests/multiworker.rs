@@ -56,7 +56,7 @@ fn request(
 
 /// The updates of a binary `data` frame, each as a line: `[time=<t> ]diff=<d> key=<k> val=<v>`.
 fn frame_rows(bytes: &[u8]) -> Vec<String> {
-    let (updates, lanes) = interactive::corgi::frame::decode(bytes).unwrap();
+    let (updates, lanes) = interactive::runtime::frame::decode(bytes).unwrap();
     updates.rows().into_iter().enumerate().map(|(i, (key, val, diff))| {
         let time = lanes.first().map_or(String::new(), |lane| format!("time={} ", lane[i]));
         format!("{time}diff={diff} key={key} val={val}")
@@ -411,7 +411,7 @@ fn keep_frame(frames: &mut Vec<(String, Vec<u8>)>, reqid: &str, line: &str, payl
 /// the replay on, are a binary peek's answer after each tick. Its `progress` frames say how far
 /// it has sent. Lists and sums included.
 fn assert_tail_frames_sum_to_peeks(workers: usize) {
-    use interactive::corgi::frame;
+    use interactive::runtime::frame;
     use std::collections::BTreeMap;
     let (server, mut writer, mut reader) = start_server(workers);
     request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)), Option(int));\nexport \"rows\" = rows | arrange;\ng end-load\n");
@@ -482,11 +482,11 @@ fn declared(declaration: &str) -> interactive::server::RowShape {
 /// A feed as a binary frame: the columns of `rows`, read at `shape` (text rows, as `feed … begin`
 /// reads them), in the frame format a peek answers with.
 fn feed_frame(shape: &interactive::server::RowShape, rows: &[(&str, Option<&str>, i64)]) -> Vec<u8> {
-    let mut decoder = interactive::corgi::feed::FeedDecoder::new(&shape.0, &shape.1);
+    let mut decoder = interactive::runtime::feed::FeedDecoder::new(&shape.0, &shape.1);
     for (key, val, diff) in rows {
         decoder.push(key, *val, *diff).unwrap();
     }
-    interactive::corgi::frame::encode(&decoder.finish(), &[])
+    interactive::runtime::frame::encode(&decoder.finish(), &[])
 }
 
 /// `feed … frame` stages columns, each row once however many workers there are; a frame of

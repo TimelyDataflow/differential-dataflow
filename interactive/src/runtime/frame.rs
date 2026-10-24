@@ -12,7 +12,7 @@
 
 use corgi::Shape;
 
-use crate::corgi::container::Updates;
+use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The most time lanes a frame holds: a server's frames carry host times, one lane, or none.
@@ -92,7 +92,7 @@ pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::corgi::feed::FeedDecoder;
+    use crate::runtime::feed::FeedDecoder;
 
     /// A frame decodes to the updates and times it was made from.
     #[test]

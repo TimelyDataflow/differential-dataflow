@@ -5,8 +5,8 @@
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
-//! [`bytes`](crate::corgi::bytes)) for crossing a process boundary. Splitting one of these across
-//! workers is [`exchange`](crate::corgi::exchange)'s job.
+//! [`bytes`](crate::runtime::bytes)) for crossing a process boundary. Splitting one of these across
+//! workers is [`exchange`](crate::runtime::exchange)'s job.
 
 use timely::Accountable;
 use timely::progress::Timestamp;
@@ -14,12 +14,12 @@ use timely::progress::Timestamp;
 use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
 use differential_dataflow::difference::Abelian;
 
-use crate::corgi::col_times::{ColTimes, LaneSummary, Lanes};
-use crate::corgi::feed::print;
+use crate::runtime::col_times::{ColTimes, LaneSummary, Lanes};
+use crate::runtime::feed::print;
 
 /// A batch of `(key, val, time, diff)` updates: payload columnar (corgi), times as lanes, diffs native Rust.
 ///
-/// Same payload as the chunk contents in [`chunk`](crate::corgi::chunk), and the two should
+/// Same payload as the chunk contents in [`chunk`](crate::runtime::chunk), and the two should
 /// eventually be ONE type — see the note on the chunk's `Inner`. They now share their time
 /// storage, and differ in invariants (sorted+consolidated+shared there, raw+owned here).
 pub struct CorgiContainer<T, R> {
@@ -59,7 +59,7 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     /// writes them, at the collection's shapes.
     #[cfg(test)]
     pub(crate) fn from_updates(updates: Vec<((String, String), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
-        let mut decoder = crate::corgi::feed::FeedDecoder::new(kshape, vshape);
+        let mut decoder = crate::runtime::feed::FeedDecoder::new(kshape, vshape);
         let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(updates.len()));
         for ((key, val), time, diff) in updates {
             decoder.push(&key, Some(&val), 1).unwrap();

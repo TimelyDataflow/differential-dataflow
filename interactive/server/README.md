@@ -97,7 +97,7 @@ A `data` payload is `u64 rows | u64 lanes | keys | vals | i64*rows diffs |
 u64*rows*lanes times`, all little-endian. `keys` and `vals` are each one column in
 Corgi's self-describing byte encoding (`corgi::bytes`), so a client reads their
 shapes from the bytes. A `peek` frame has no times (`lanes` is 0); a `tail` frame
-has one lane, each change's epoch. `interactive::corgi::frame` decodes a payload,
+has one lane, each change's epoch. `interactive::runtime::frame` decodes a payload,
 and `../bench/ldbc/client.py` has a Python decoder. A `tail` whose client falls more
 than 256 MiB of frames behind gets `err client too slow` and `end`, and stops
 sending.
