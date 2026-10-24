@@ -88,7 +88,7 @@ fn assert_matches_expected(prog: &str) {
         format!("{}/examples/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"))
     };
     register_test_functions();
-    let src = interactive::load_program(&path);
+    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
     let inputs = inputs_for(prog);
@@ -190,7 +190,7 @@ fn serializing(n: usize) -> timely::Config {
     // number from 1 to 39 (grow stops at 20, so its last children are 38 and 39), and
     // -4 has no children.
     register_test_functions();
-    let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
+    let src = std::fs::read_to_string(format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let tree = lower::lower_tree(parse::pipe::parse(&src));
     let out = evaluate(timely::Config::process(2), &tree, &inputs_for("registered"));
     let mut cells: Vec<i64> = out["cells"].rows().iter().map(|(k, _, _)| k.parse().unwrap()).collect();

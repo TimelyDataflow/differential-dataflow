@@ -88,7 +88,7 @@ fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
 fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges)
         .map(|e| seed.wrapping_mul(1_000_003).wrapping_add(e))
-        .map(|e| (row(&[0, 1].map(|col| interactive::gen_field_seeded(0, e, nodes, col))), unit()))
+        .map(|e| (row(&[0, 1].map(|col| interactive::server::gen_field_seeded(0, e, nodes, col))), unit()))
         .collect()
 }
 

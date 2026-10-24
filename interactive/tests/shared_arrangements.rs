@@ -99,7 +99,7 @@ fn reach() {
 
 #[test]
 fn scc() {
-    let src = interactive::load_program(&format!("{}/examples/programs/scc.ddp", env!("CARGO_MANIFEST_DIR")));
+    let src = std::fs::read_to_string(format!("{}/examples/programs/scc.ddp", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let src = src.replace(r#"export "result" = outer::scc | map(_ -> ((), ())) | arrange | inspect(total);"#, r#"export "result" = outer::scc;"#);
     let shared = src
         .replace("| map(((src, dst), ()) -> (src, dst));", "| map(((src, dst), ()) -> (src, dst)) | arrange;")

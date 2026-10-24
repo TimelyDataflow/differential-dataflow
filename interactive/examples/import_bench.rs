@@ -100,7 +100,7 @@ fn main() {
             let installed = Instant::now();
             install(&mut server, worker, &name, &src);
             for r in 0..roots {
-                let root = (interactive::hash_u64(c * 1000 + r) % nodes) as i64;
+                let root = (interactive::server::hash_u64(c * 1000 + r) % nodes) as i64;
                 server.feed(&name, 0, &root.to_string(), None).unwrap();
             }
             server.tick(worker);
