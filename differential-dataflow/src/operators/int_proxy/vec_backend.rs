@@ -11,7 +11,8 @@
 //! The wiring arranges `coll.map(|(k, v)| (k.hashed(), (k, v)))` into a `ChunkSpine` whose key is
 //! the `u64` key hash and whose value is the full `(key, val)` pair.
 //!
-//! Per window, the backend presents three proxy bridges — novel input, prior input, and prior output.
+//! Per window, the backend presents the input (the novel batches and the prior history, merged), the
+//! times of the novel records as seeds, and the prior output.
 //! Identifiers are ordinal positions minted by a single [`MergedWalk`] over the novel batches and the
 //! prior ones together, so a value carries ONE identifier whichever run it appears in and a novel
 //! retraction cancels against its own history. They are minted after the walk consolidates, so a value
@@ -120,7 +121,7 @@ where
     ) {
         let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
 
-        // Populating the novel and prior input bridges.
+        // Populating the input bridge and the seeds.
         self.in_pool.clear();
         self.keys_cache.clear();
         self.collisions.clear();
@@ -133,7 +134,6 @@ where
             instance.lower,
         );
         let mut drawn: Vec<Drawn<(K, V), T, R>> = Vec::new();
-        let mut seed_scratch: Vec<T> = Vec::new();
         let mut budget = self.window_size;
         while let Some(key) = walk.advance(&mut drawn) {
             self.keys_cache.push(key);
@@ -141,8 +141,7 @@ where
             let rep = self.in_pool.len() as u64;
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, V)> = None;
-            seed_scratch.clear();
-            for ((data, novel, time), diff) in drawn.drain(..) {
+            for ((data, time), diff) in drawn.drain(..) {
                 if last != Some(data) {
                     match single {
                         None => single = Some(&data.0),
@@ -152,29 +151,9 @@ where
                     last = Some(data);
                 }
                 let id = (self.in_pool.len() - 1) as u64;
-                // The novel time support seeds interest, recorded RAW before any netting: a record
-                // that cancels below must still seed. (Novel records are drawn unadvanced; only
-                // prior records are advanced to the compaction frontier.)
-                if novel {
-                    seed_scratch.push(time.clone());
-                }
-                // Novel and prior share the id space and arrive (id, time)-adjacent, so an exactly
-                // cancelling pair meets here and nets away; its time survives in the seeds.
-                if let Some(((k2, i2), t2, d2)) = window.input.last_mut() {
-                    if *k2 == key && *i2 == id && *t2 == time {
-                        d2.plus_equals(&diff);
-                        if d2.is_zero() {
-                            window.input.pop();
-                        }
-                        continue;
-                    }
-                }
                 window.input.push(((key, id), time, diff));
             }
-            // Per key, seeds arrive in (value, time) order; the contract wants (key, time) order.
-            seed_scratch.sort();
-            seed_scratch.dedup();
-            window.seeds.extend(seed_scratch.drain(..).map(|t| (key, t)));
+            window.seeds.extend(walk.seeds.drain(..).map(|t| (key, t)));
             self.reps.push(single.map(|_| rep));
             if collides { self.collisions.push(key); }
             if budget == 0 { break; }
@@ -197,7 +176,7 @@ where
             debug_assert_eq!(self.keys_cache.get(index), Some(&key), "the output pass replays the input pass's keys");
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, W)> = None;
-            for ((data, _, time), diff) in odrawn.drain(..) {
+            for ((data, time), diff) in odrawn.drain(..) {
                 if last != Some(data) {
                     match single {
                         None => single = Some(&data.0),
@@ -333,11 +312,10 @@ where
 
 /// One record drawn by [`MergedWalk::advance`], keyed for consolidation.
 ///
-/// The key is `(data, novel, time)`: grouping by data is what mints one identifier per distinct
-/// value, and the `novel` flag separates the two roles *within* a value so that consolidation
-/// never cancels a novel update against a prior one. The data is borrowed from the batch — it is
-/// cloned once per surviving value, when its identifier is minted, and never per record.
-type Drawn<'a, D, T, R> = ((&'a D, bool, T), R);
+/// The key is `(data, time)`: grouping by data is what mints one identifier per distinct value.
+/// The data is borrowed from the batch — it is cloned once per surviving value, when its
+/// identifier is minted, and never per record.
+type Drawn<'a, D, T, R> = ((&'a D, T), R);
 
 /// The length of `slice`'s prefix of records whose hash is `key`, which must be non-empty.
 ///
@@ -384,6 +362,10 @@ struct MergedWalk<'a, D: Ord + Clone + 'static, T: Lattice + Timestamp, R: Semig
     /// record per value: advancement is only useful because something merges the collisions it
     /// creates. An empty frontier advances nothing.
     frontier: AntichainRef<'a, T>,
+    /// The times of the novel records of the key last drawn, sorted and deduplicated: the
+    /// interesting-time seeds. They are recorded as drawn, before consolidation can net a novel
+    /// record against the history it changes.
+    seeds: Vec<T>,
 }
 
 impl<'a, D, T, R> MergedWalk<'a, D, T, R>
@@ -409,6 +391,7 @@ where
             pos: vec![(0, 0); count],
             due: None,
             frontier,
+            seeds: Vec::new(),
         };
         for b in 0..count {
             walk.seek_to(b, from);
@@ -483,13 +466,18 @@ where
             // one comparison rather than a search.
             if slice.get(start).is_none_or(|r| r.0.0 != key) { return; }
             let end = start + run_len(&slice[start..], key);
-            into.extend(slice[start..end].iter().map(|record| {
-                let mut time = record.1.clone();
-                // Novel times are the interesting-time seeds the tactic's schedule is stated over,
-                // so they are drawn unadvanced; only the prior history is lifted.
-                if !novel { time.advance_by(self.frontier); }
-                ((&record.0.1, novel, time), record.2.clone())
-            }));
+            let run = &slice[start..end];
+            // Novel records are at or beyond the frontier, so only the prior history is advanced.
+            if novel {
+                self.seeds.extend(run.iter().map(|record| record.1.clone()));
+                into.extend(run.iter().map(|record| ((&record.0.1, record.1.clone()), record.2.clone())));
+            } else {
+                into.extend(run.iter().map(|record| {
+                    let mut time = record.1.clone();
+                    time.advance_by(self.frontier);
+                    ((&record.0.1, time), record.2.clone())
+                }));
+            }
             if end < slice.len() {
                 self.pos[b].1 = end;
                 return;
@@ -501,16 +489,20 @@ where
     /// Draw every record of the next active key, and advance to the one after it.
     ///
     /// Returns the key drawn, or `None` once the key space is spent. `into` is left sorted by
-    /// `(data, novel, time)` and consolidated, so a value whose records all cancel is gone before
-    /// the caller ever sees it — and so never spends an identifier.
+    /// `(data, time)` and consolidated, so a value whose records all cancel is gone before the
+    /// caller ever sees it — and so never spends an identifier. The key's seeds are left in
+    /// [`seeds`](Self::seeds).
     fn advance(&mut self, into: &mut Vec<Drawn<'a, D, T, R>>) -> Option<u64> {
         let key = self.due?;
         into.clear();
+        self.seeds.clear();
         for b in 0..self.count() {
             self.seek_to(b, key);
             self.take_run(b, key, into);
         }
         consolidate(into);
+        self.seeds.sort();
+        self.seeds.dedup();
         if self.changed.get(self.ci) == Some(&key) { self.ci += 1; }
         self.refresh();
         Some(key)
