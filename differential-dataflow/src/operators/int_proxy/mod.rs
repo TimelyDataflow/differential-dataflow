@@ -49,6 +49,7 @@ mod history;
 pub mod join;
 pub mod reduce;
 mod pending;
+pub mod frontier;
 pub mod vec_backend;
 
 /// A consolidated collection of `[((key, val), time, diff)]` proxies.
@@ -69,6 +70,7 @@ pub(crate) fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
+pub use frontier::BackendFrontier;
 
 /// A position between windows of an ordered key space.
 /// No minimum key or successor operation is required.
