@@ -26,6 +26,8 @@ pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: Exchang
         ;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
+    /// A key whose count is zero is absent: `thresh` is not called for it, and it contributes nothing.
+    ///
     /// # Examples
     ///
     /// ```
@@ -41,9 +43,11 @@ pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: Exchang
     /// ```
     fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<'scope, T, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
-            let mut new = thresh(key, new);
+            // A zero count is an absent key, which contributes nothing.
+            let mut thresh = |count: &R| if count.is_zero() { R2::zero() } else { thresh(key, count) };
+            let mut new = thresh(new);
             if let Some(old) = old {
-                let mut add = thresh(key, old);
+                let mut add = thresh(old);
                 add.negate();
                 new.plus_equals(&add);
             }
