@@ -477,7 +477,7 @@ fn start_tail(
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
     let shutdown = interactive::server::host_dataflow(worker, |_, scope| {
-        let (containers, shutdown) = trace.import_containers(scope.clone(), "TailImport");
+        let (containers, shutdown) = trace.import_containers(scope, "TailImport", server.import_as_of());
         let pending = Arc::new(AtomicUsize::new(0));
         let (mut upper, mut dropped) = (None::<OuterTime>, false);
         containers

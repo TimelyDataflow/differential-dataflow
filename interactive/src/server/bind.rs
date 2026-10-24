@@ -97,11 +97,12 @@ impl Server {
         // Capture the trace's containers, never forming rows.
         let buffer: Captured = Rc::new(RefCell::new(Vec::new()));
         let buffer_in = buffer.clone();
-        let Published(mut trace) = self.published(&source).expect("checked above");
+        let mut published = self.published(&source).expect("checked above");
+        let as_of = self.import_as_of();
         let shutdown = host_dataflow(worker, |_, scope| {
             use timely::dataflow::operators::{Inspect, Probe};
-            let (arranged, shutdown) = trace.import_core(scope.clone(), "BindImport");
-            crate::backend::corgi::export_containers(arranged)
+            let (containers, shutdown) = published.import_containers(scope, "BindImport", as_of);
+            containers
                 .inner
                 .inspect_core(move |event| {
                     if let Ok((_, container)) = event {
