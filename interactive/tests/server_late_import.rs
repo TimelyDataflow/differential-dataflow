@@ -139,6 +139,57 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
     })
 }
 
+/// As the arranged consumer, with `r` written as a delta join: two half joins of the imported
+/// `pairs` with itself, delayed to their data times. A half join reads its arrangement as of the
+/// install time too, and must: the same import's rows reach it once arranged and once lifted as
+/// a stream read as of that time, and the pair meets exactly once only if both paths compare the
+/// same times.
+const DELTA_CONSUMER: &str = r#"
+    let pairs = import "pairs";
+    let weights = import "weights";
+    let r = ((pairs | lift | half_join(pairs, 0, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)))
+           + (pairs | lift | half_join(pairs, 1, ((a, b), (), _) -> ((b, (a, b) min) eq, 0))))
+          | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
+    s: {
+        let step = x | join(weights, (k, v, _) -> (k, v));
+        var x = (r + step) | min;
+    }
+    export "result" = s::x;
+    export "least" = weights | min;
+"#;
+
+/// A consumer's exports after the last epoch, installed before epoch `late`, imports arranged.
+fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, i64)>) {
+    timely::execute_directly(move |worker| {
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let mut server = Server::new();
+        server.set_arranged_imports(true);
+        server.install(worker, "producer", &program(ARRANGED_PRODUCER)).unwrap();
+        for epoch in 0..27 {
+            if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
+            for (_, input, rows) in ARRANGED_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
+                server.feed("producer", *input, rows, None).unwrap();
+            }
+            server.tick(worker);
+        }
+        (server.snapshot(worker, "result").unwrap().rows(), server.snapshot(worker, "least").unwrap().rows())
+    })
+}
+
+/// A late-installed delta join over imports agrees with the join over the same imports, installed
+/// early or late.
+#[test]
+fn late_delta_join_over_imports_converges() {
+    let (send, recv) = mpsc::channel();
+    std::thread::spawn(move || {
+        send.send((run_consumer(ARRANGED_CONSUMER, 0), run_consumer(DELTA_CONSUMER, 0), run_consumer(DELTA_CONSUMER, 25))).unwrap();
+    });
+    let (join, early, late) = recv.recv_timeout(Duration::from_secs(60)).expect("the late importer did not converge");
+    assert_eq!(join.0.len(), 1, "key 1, at the least value 0: {:?}", join.0);
+    assert_eq!(early, join, "the delta join, installed early");
+    assert_eq!(late, join, "the delta join, installed late");
+}
+
 #[test]
 fn late_arranged_importers_converge() {
     let (send, recv) = mpsc::channel();

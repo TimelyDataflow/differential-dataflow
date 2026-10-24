@@ -167,6 +167,8 @@ where
 
 /// The proxy half-join tactic and backend trait, built over differential's `int_proxy` surface.
 pub mod proxy;
+/// Differential's `BackendFrontier` as a proxy half-join backend: the arrangement read as of a frontier.
+pub mod frontier;
 /// The reference `Vec` backend for the proxy half-join tactic.
 pub mod vec_backend;
 

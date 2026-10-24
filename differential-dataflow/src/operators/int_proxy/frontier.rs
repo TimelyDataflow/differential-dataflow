@@ -91,12 +91,18 @@ impl<B, T> BackendFrontier<B, T> {
     pub fn since(&self) -> &Antichain<T> { &self.since }
     /// The wrapped backend.
     pub fn inner(&self) -> &B { &self.inner }
+    /// The wrapped backend, mutably: a wrapper implementing a backend trait defined outside this
+    /// crate, such as dogs3's half-join backend, drives the inner backend through this.
+    pub fn inner_mut(&mut self) -> &mut B { &mut self.inner }
 }
 
 /// Read `bridge` as of `since`: times advanced by it, and the bridge consolidated if any moved,
 /// as advancing can make records coincide. Returns whether any did; if none, the bridge is as
 /// presented, still sorted and consolidated.
-fn read_as_of<T, R, K, V>(bridge: &mut ProxyBridge<T, R, K, V>, since: &Antichain<T>) -> bool
+///
+/// Public so that a wrapper for a backend trait defined outside this crate reads its bridges the
+/// one way: dogs3's half-join wrapper reads the arranged side with it.
+pub fn read_as_of<T, R, K, V>(bridge: &mut ProxyBridge<T, R, K, V>, since: &Antichain<T>) -> bool
 where
     T: Timestamp + Lattice,
     R: Semigroup,
