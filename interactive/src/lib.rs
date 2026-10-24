@@ -30,6 +30,8 @@ pub mod shapes;
 pub mod explain;
 // `pushdown`, the optional field-demand pass, and `demand_graph` (`DemandGraph`).
 pub mod projection;
+// Crate-only: the rewrite install makes once it knows the program's as-of time.
+mod as_of;
 
 // The runtime: rendering a scope tree onto differential dataflow.
 // Only the statement labels escape (`LabelEvent`, `LabelEventBuilder`), for a logger to read;

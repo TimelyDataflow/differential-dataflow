@@ -214,7 +214,7 @@ impl Scope {
 
     /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
     /// import edges, binds, and exports.
-    fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
         for item in self.items.iter_mut() {
             match item {
                 Item::Op(node) => match node {

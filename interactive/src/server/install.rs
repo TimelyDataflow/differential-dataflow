@@ -108,6 +108,24 @@ impl Server {
         };
         let prog = projected.as_ref().unwrap_or(prog);
 
+        // Updates at the as-of time that only paths through a strict half join read produce
+        // nothing there (see `as_of`); drop them where they are lifted. The rewrite adds filters,
+        // so the shapes are inferred again, and a candidate that fails that is not used.
+        let as_of = self.import_as_of();
+        let mut dropped = prog.clone();
+        let dropped = if crate::as_of::drop_dead_as_of(&mut dropped, &as_of) > 0 {
+            match self.check_shapes(name, &dropped) {
+                Ok((shapes, exports)) if exports == export_shapes => {
+                    scope_shapes = shapes;
+                    Some(dropped)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let prog = dropped.as_ref().unwrap_or(prog);
+
         let import_names: Vec<String> = prog
             .root
             .imports
@@ -123,7 +141,6 @@ impl Server {
         let root = &prog.root;
         let arranged_imports = self.arranged_imports;
         let tapped = self.export_taps;
-        let as_of = self.import_as_of();
         let traces = &mut self.traces;
 
         // The id this dataflow will get; captured so `drop` can remove it.
