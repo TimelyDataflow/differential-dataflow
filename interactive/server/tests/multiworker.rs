@@ -122,7 +122,6 @@ fn start_server(workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStrea
         // Probing a free port and dropping its listener races other tests.
         .env("DDIR_BIND", "127.0.0.1:0")
         .env("DDIR_WS_BIND", "127.0.0.1:0")
-        .env("DDIR_DIAG_PORT", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

@@ -87,6 +87,10 @@ jobs:
           python3 interactive/server/bench/ldbc/test_update_stream.py \
             --server target/release/ddir_server --workers 4 --check-mode replay \
             --output /tmp/ldbc-update-stream-replay
+      - name: Authored LDBC plans agree with the generated plans
+        run: |
+          python3 interactive/server/bench/ldbc/authored/check.py --server target/release/ddir_server \
+            --fixture --workers 4 --reps 1 --warmup 0 --output /tmp/ldbc-authored-check
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
       # report is skipped (it prints, it does not assert).

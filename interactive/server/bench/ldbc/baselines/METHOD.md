@@ -1,8 +1,7 @@
 # SNB reads on DuckDB and Umbra: method
 
 This directory holds two SQL baselines for the 41 SNB reads in `../snb/queries.py`, and
-the method used to compare them with DDIR on one machine. The numbers from one run are
-in [RESULTS.md](RESULTS.md). It is written so that the same study can be repeated on
+the method used to compare them with DDIR on one machine. It is written so that the same study can be repeated on
 another system, such as Materialize, and the comparison kept honest.
 
 ## What is compared

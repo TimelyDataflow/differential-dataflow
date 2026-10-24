@@ -11,7 +11,7 @@ use interactive::{lower, parse};
 fn main() {
     let path = std::env::args().nth(1).expect("usage: dump_explain <program>");
 
-    let source = interactive::load_program(&path);
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let original = lower::lower_tree(parse::pipe::parse(&source));
 
     println!("-- ====================================================");

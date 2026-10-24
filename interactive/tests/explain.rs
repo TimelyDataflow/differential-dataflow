@@ -19,7 +19,9 @@ use interactive::{explain, lower, parse};
 
 /// SCC with the scc edge-set itself as the result, so individual output
 /// edges are queryable. Mirrors `examples/programs/scc.ddp` minus the final
-/// aggregation, with its nodes as one-field tuples.
+/// aggregation, with its nodes as one-field tuples. It stays a copy rather than an
+/// `include_str!`: the tests query result edges by one-field keys (`row(&[773])`),
+/// where `scc.ddp` keys bare integers and counts its result.
 const SCC_ROW: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
     let trans = edges | map((src, dst) -> (dst, src));
@@ -88,7 +90,7 @@ fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
 fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges)
         .map(|e| seed.wrapping_mul(1_000_003).wrapping_add(e))
-        .map(|e| (row(&[0, 1].map(|col| interactive::gen_field_seeded(0, e, nodes, col))), unit()))
+        .map(|e| (row(&[0, 1].map(|col| interactive::server::gen_field_seeded(0, e, nodes, col))), unit()))
         .collect()
 }
 

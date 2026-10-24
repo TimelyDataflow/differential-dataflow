@@ -67,18 +67,30 @@ I don't know much about designing languages, so I may have gotten this wrong.
 
 ## Architecture
 
-The architecture is fairly standard, and where it isn't it probably should become more standard.
-A program moves through these parts:
+A program moves through four parts, each using only the ones before it.
 
-1. `parse/` is the concrete syntax: one front-end, the pipe parser for `.ddp` files.
-2. `lower.rs` translates its AST into the scope-tree IR.
-3. `scope_ir.rs` is that IR — scopes, items, exports — and its optimizations; `ir.rs` is the
-   vocabulary they are written over: corgi lambdas, operator steps, and registered functions.
-4. `backend/` renders a program against a substrate — `vec` (the row reference) or `corgi`
-   (columnar), whose kernels live in `corgi/`.
-5. `explain/` rewrites a program into one that explains its own outputs.
-6. `server.rs` is the in-process registry and lifecycle; the `ddir-server` crate in `server/`
-   is the executable that drives it.
+1. **The language.** `parse/` reads `.ddp` text. `lower.rs` turns it into the scope-tree IR of
+   `scope_ir.rs`: scopes, items, exports, and the IR's own optimizations. `shapes.rs` infers the
+   shape of every collection. `ir.rs` is the vocabulary all of these are written in: lambdas,
+   operator steps, reducers, and registered functions.
+2. **Analyses** rewrite a program into another program. `explain/` produces one that explains its
+   own outputs. `projection.rs`, on with `DDIR_PROJECTION`, replaces fields that nothing reads
+   by `()`.
+3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
+   trait and `render_tree`, which turns the scope tree into operators. `corgi/` is today's
+   backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
+   and frame formats.
+4. **The host.** `server.rs` is the in-process registry: install, feed, tick, publish and peek.
+   `diag.rs` turns the server's own logging into the `diag.*` collections. The `ddir-server`
+   crate in `server/` is the executable that drives it all.
+
+The stack aims to stay generic over two things: the expression language and the backend.
+- **The expression language** is corgi today. Slots are corgi lambdas, typed and compiled to corgi
+  graphs at the point where the language meets corgi.
+- **The backend** is the columnar runtime today, plugged in through `backend/`'s `Backend` trait.
+
+Another expression language or backend should plug in at those two places, without the rest of
+the stack depending on it.
 
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
 The one executable is the server (the `ddir-server` crate in `server/`, documented in

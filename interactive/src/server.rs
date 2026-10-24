@@ -283,7 +283,7 @@ impl Recipe {
     #[cfg(test)]
     fn row(&self, e: u64) -> (String, String) {
         let fields: Vec<String> = match self {
-            Recipe::Random { nodes, arity, seed, .. } => (0..*arity).map(|col| crate::gen_field_seeded(*seed, e, *nodes, col).to_string()).collect(),
+            Recipe::Random { nodes, arity, seed, .. } => (0..*arity).map(|col| gen_field_seeded(*seed, e, *nodes, col).to_string()).collect(),
             Recipe::Iota { .. } => vec![e.to_string()],
         };
         (format!("tuple({})", fields.join(",")), "tuple()".into())
@@ -298,7 +298,7 @@ impl Recipe {
             Recipe::Random { arity: 0, .. } => CValue::Unit(n),
             Recipe::Random { nodes, arity, seed, .. } => CValue::Prod(
                 (0..*arity)
-                    .map(|col| CValue::i64(indices.iter().map(|&e| crate::gen_field_seeded(*seed, e, *nodes, col)).collect()))
+                    .map(|col| CValue::i64(indices.iter().map(|&e| gen_field_seeded(*seed, e, *nodes, col)).collect()))
                     .collect(),
             ),
             Recipe::Iota { .. } => CValue::Prod(vec![CValue::i64(indices.iter().map(|&e| e as i64).collect())]),
@@ -335,6 +335,21 @@ fn clock_rows(rows: &[(OuterTime, Diff)]) -> Updates {
 /// The shape of the `clock` row.
 fn clock_shape() -> RowShape {
     (corgi::Shape::Prod(vec![corgi::Shape::Int]), corgi::Shape::Unit)
+}
+
+/// Deterministic hash: maps an index to a pseudorandom u64 (splitmix64).
+fn hash_u64(index: u64) -> u64 {
+    let mut x = index.wrapping_mul(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
+
+/// Field `col` of the `random:` source's row `edge_index`: a hash-derived `Int` of magnitude below
+/// `nodes`. Distinct seeds give distinct graphs.
+pub fn gen_field_seeded(seed: u64, edge_index: u64, nodes: u64, col: usize) -> i64 {
+    let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
+    (hash_u64(base.wrapping_add(col as u64)) % nodes) as i64
 }
 
 /// The shape of a generated source's rows, by its canonical name.

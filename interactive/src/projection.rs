@@ -1,5 +1,4 @@
-//! Field demand over the scope IR. The closure itself is also written in
-//! `examples/self_opt/demand.ddp`; this Rust form lets an installed program be
+//! Field demand over the scope IR, computed in Rust so that an installed program can be
 //! rewritten without starting a second dataflow inside `Server::install`.
 //!
 //! Lambda input demand comes from Corgi's typed demand transform. Unknown or

@@ -129,16 +129,12 @@ python3 interactive/server/bench/ldbc/update_stream.py \
 
 For SF1, prepare from the SF1 export, use `bindings/ic3-sf1.json`, and omit
 `--batch-limit` to exercise the complete stream and request retirement.
-At server revision `b137520a`, this request completed all 521 update epochs,
-then exceeded the 6-GiB sampled server limit during retirement, before deferred
-Python checking. Those captured SF1 answers were not validated. This is a
-historical investigation lead, not a failure assertion for newer binaries.
 
 The current query projects unused residence, message and country fields before
 the large joins, reducing message-expanded rows from 46 fields to 17. Integer
 counts and sums use differential weights rather than collected lists. Different
 messages that project to equal rows retain their multiplicities. The memory
-observations in [MEMORY.md](MEMORY.md) separate query-active storage from later
+profiler ([MEMORY.md](MEMORY.md)) separates query-active storage from later
 transient peaks; a process peak does not identify which operator owns the bytes.
 
 ## Query plans and reference memory
