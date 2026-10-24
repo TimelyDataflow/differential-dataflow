@@ -68,9 +68,13 @@ fn drop_in_scope(s: &mut Scope, depth: usize, as_of: &Time) -> usize {
         let Some(at) = ops.iter().rposition(|op| matches!(op, LinearOp::Lift)) else { continue };
         if !ops[at + 1..].iter().all(keeps_times) || uses[i].is_empty() { continue; }
         let dead: Vec<Use> = uses[i].iter().copied().filter(|u| dead_on(*u, &uses, &mut covered)).collect();
+        // The edge filter reads the time from the row value written by `lift`. Filter and Negate
+        // leave that value intact. Project, FlatMap, LiftIter and other tails may move or drop it;
+        // handling them needs tracking time through lambdas or splitting the node and duplicating
+        // its tail on dead edges, adding work every tick and losing the "never worse" property.
         if dead.len() == uses[i].len() {
             in_place.push((i, at + 1));
-        } else if !dead.is_empty() && at + 1 == ops.len() {
+        } else if !dead.is_empty() && ops[at + 1..].iter().all(|op| matches!(op, LinearOp::Filter(_) | LinearOp::Negate)) {
             on_edges.push((i, dead));
         }
     }
@@ -135,7 +139,7 @@ fn not_at(lanes: &[u64]) -> Lambda {
 }
 
 /// For each `(item, uses)`, a filter item right after `item`, read by those uses in its place.
-/// The item ends in its lift, so the filter reads the row `lift` wrote.
+/// The item ends in its lift or value-preserving ops, so the filter reads the row `lift` wrote.
 fn insert_edge_filters(s: &mut Scope, edges: Vec<(usize, Vec<Use>)>, lanes: &[u64]) {
     if edges.is_empty() { return; }
     let filtered = |i: usize| edges.iter().find(|(e, _)| *e == i).map(|(_, dead)| dead);
@@ -257,6 +261,25 @@ mod tests {
         assert_eq!(ops.len(), 1, "the filter alone, after the shared lift");
         assert_eq!(stream_reader(&prog.root, at), vec![true]);
         assert_eq!(stream_reader(&prog.root, *lift), vec![false], "the non-strict path still reads the lift");
+    }
+
+    #[test]
+    fn a_shared_lift_with_filter_and_negate_filters_its_strict_edge() {
+        let (prog, inserted) = rewrite(r#"
+            let p = import "p";
+            let lifted = p | lift | filter((k, _) -> (k, k) eq) | negate;
+            export "strict" = lifted | half_join(p, 1, (k, x, y) -> (k, (x, y)));
+            export "live" = lifted;
+        "#);
+        assert_eq!(inserted, 1);
+        let [(filtered, _)] = filters(&prog.root)[..] else { panic!("one edge filter") };
+        let Item::Op(Node::Linear { input: Ref::Local(shared), ops }) = &prog.root.items[filtered] else { panic!("edge filter") };
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0], LinearOp::Filter(_)));
+        let Item::Op(Node::Linear { ops: shared_ops, .. }) = &prog.root.items[*shared] else { panic!("shared lift") };
+        assert!(matches!(shared_ops.as_slice(), [.., LinearOp::Lift, LinearOp::Filter(_), LinearOp::Negate]));
+        assert_eq!(stream_reader(&prog.root, filtered), vec![true]);
+        assert!(matches!(prog.root.exports.iter().find(|e| e.name == "live").unwrap().value, Ref::Local(i) if i == *shared));
     }
 
     #[test]

@@ -255,6 +255,8 @@ pub struct Server {
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
     arranged_imports: bool,
+    /// Apply the as-of rewrite to programs installed afterwards (default on).
+    as_of_drop: bool,
     /// This worker's diagnostics, when they are on: the source of the `diag.*` collections.
     diagnostics: Option<Rc<RefCell<crate::diag::Diagnostics>>>,
 }
@@ -272,6 +274,7 @@ impl Server {
             bindings: Vec::new(),
             epoch: 0,
             arranged_imports: true,
+            as_of_drop: true,
             diagnostics: None,
         }
     }
@@ -303,6 +306,11 @@ impl Server {
     /// Affects programs installed afterwards.
     pub fn set_arranged_imports(&mut self, on: bool) {
         self.arranged_imports = on;
+    }
+
+    /// Drop dead as-of updates on programs installed afterwards (default on).
+    pub fn set_as_of_drop(&mut self, on: bool) {
+        self.as_of_drop = on;
     }
 
     /// Also keep each export's new batches for [`Server::take_changes`] (default off). Affects
