@@ -1,16 +1,140 @@
-//! corgi as DDIR's columnar scalar logic: type and compile each operator's slot, a corgi lambda,
-//! at the shapes of the rows it reads; and the Float functions and registered functions as words.
+//! The expression language of DDIR's slots: every operator's per-row logic (a map's projection, a
+//! filter's predicate, a reduce's body, …) is a lambda, and this module is everything the rest of
+//! DDIR needs from the language those lambdas are written in. Today that language is corgi's; this
+//! is the module another expression language would replace.
 //!
-//! Shapes are STATIC. Every input declares its shape, every other collection's follows from its
-//! operator's slot (`crate::shapes`), and all are fixed at install, never re-derived from data.
+//! What the rest of DDIR relies on, and nothing more:
+//! - **A slot is a [`Lambda`]:** text as written, and what it parses to in its program's scope
+//!   ([`Lambda::new`]). The parser (`crate::parse`) builds one per slot; the IR (`crate::ir`) holds
+//!   them; a parse error is kept and reported where the program is compiled.
+//! - **The scope a program's lambdas are parsed in** ([`base_scope`], plus [`function_word`] for
+//!   each [registered function](register) and the program's declared types).
+//! - **Typing a slot** at the shapes of the rows it reads ([`slot_shape`]), which is how
+//!   `crate::shapes` infers every collection's shape. Shapes are static: every input declares its
+//!   shape, every other collection's follows from its operator's slot, and all are fixed at
+//!   install, never re-derived from data. The typer is corgi's: [`slot_shape`] asks
+//!   `corgi::shape_of` (its evaluator on zero rows) for the shape a slot gives, so every shape rule
+//!   is the one the kernels enforce, and a program that types is a program that runs. `Err` is a
+//!   type error, reported with corgi's message.
+//! - **Compiling a slot** for the runtime to evaluate, one function per operator kind
+//!   ([`compile_projection`], [`compile_predicate`], [`compile_flatmap`], [`compile_reduce`],
+//!   [`compile_join_function`], [`compile_scalar`]).
+//! - **Composing lambdas** ([`Lambda::compose`]), which explain and the projection pass use to
+//!   write new slots from existing ones.
+//! - **Registered functions** ([`register`]): how an embedding program extends the language.
 //!
-//! The typer is corgi's: [`slot_shape`] asks `corgi::shape_of` (its evaluator on zero rows) for
-//! the shape a slot gives, so every shape rule is the one the kernels enforce, and a program that
-//! types is a program that runs. `Err` is a type error, reported with corgi's message.
-
-use crate::ir::Lambda;
+//! Corgi's types (`corgi::Shape` for shapes, `corgi::Graph` for compiled slots, `corgi::Value` for
+//! columns) still appear outside this module, in the shapes pass and the runtime; this module is
+//! where the language is chosen, not yet where it is abstracted.
 
 use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Value as CValue};
+
+/// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
+/// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
+/// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
+/// the registered functions and the Float functions as words `call` reaches, and the program's
+/// `type` declarations as enums. A parse error is kept, and reported where the program is compiled
+/// or run. A composed lambda's graph is authoritative: its readable `src` is
+/// reconstructed from the component sources and may reparse to a different
+/// graph, especially after masking. Serialization stores only `src` and
+/// deserialization reparses it in the empty scope.
+#[derive(Clone)]
+pub struct Lambda {
+    pub src: String,
+    pub graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
+}
+
+impl Lambda {
+    /// `src` parsed in `scope`. The graph is as written: it is optimized only once it types at the
+    /// shapes of the rows it reads ([`slot_graph`]), as optimizing first could drop or trip on
+    /// a type error.
+    pub fn new(src: String, scope: &corgi::Scope) -> Self {
+        let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
+        Lambda { src, graph }
+    }
+    /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
+    /// on an argument written over `pattern`'s names, and is bound to the name `body` is given for
+    /// it. Each lambda's compiled graph is bound as a private word, which `call` grafts, so its text
+    /// is never parsed again and its program's scope is not needed; the readable source writes the
+    /// lambda's own text in its place. Only `pattern`, the arguments and `body` are parsed, in the
+    /// empty scope.
+    pub fn compose(pattern: &str, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Self {
+        let mut scope = corgi::Scope::default();
+        let (mut code, mut src, mut names, mut error) = (String::new(), String::new(), Vec::new(), None);
+        for (i, (lambda, arg)) in calls.iter().enumerate() {
+            let name = format!("_call{i}");
+            match lambda.graph() {
+                Ok(g) => scope.word(&name, g.as_ref().clone()).expect("a fresh word"),
+                Err(e) => error = Some(e),
+            }
+            code += &format!("let {name} = {arg} call {name} in ");
+            src += &format!("let {name} = let input = {arg} in {} in ", lambda.src);
+            names.push(name);
+        }
+        let body = body(&names);
+        let mut lambda = Lambda::new(format!("let {pattern} = input in {code}{body}"), &scope);
+        lambda.src = format!("let {pattern} = input in {src}{body}");
+        if let Some(e) = error { lambda.graph = Err(e); }
+        lambda
+    }
+    /// The graph, or the parse error naming the program.
+    pub fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
+        self.graph.as_ref().map_err(|e| format!("corgi program `{}`: {e}", self.src))
+    }
+}
+
+impl std::fmt::Debug for Lambda {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.src.fmt(f) }
+}
+
+impl serde::Serialize for Lambda {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { self.src.serialize(s) }
+}
+
+impl<'de> serde::Deserialize<'de> for Lambda {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Lambda::new(String::deserialize(d)?, &corgi::Scope::default()))
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Registered functions: how an embedding program extends its programs' lambdas.
+
+/// A function an embedding program supplies to DDIR programs, called by name: a corgi host
+/// kernel, which runs on whole columns. Its name is the kernel's, and its input shape is `()` for a
+/// function of no arguments, or else the tuple of its arguments' shapes.
+///
+/// The contract is purity: the same arguments must always give the same result, because
+/// differential dataflow re-evaluates a call when it retracts what the call produced, and a
+/// retraction must cancel exactly.
+pub type Function = std::sync::Arc<dyn corgi::HostKernel>;
+
+fn functions() -> &'static std::sync::RwLock<std::collections::HashMap<String, Function>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, Function>>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+/// Register `f` under its name, for programs parsed afterwards (the parser resolves calls
+/// against the registry). Registering a name again replaces it; a name may not shadow a builtin.
+pub fn register(f: Function) {
+    assert!(!is_base_word(f.name()) && !crate::ir::KEYWORDS.contains(&f.name()), "`{}` is a builtin or keyword and cannot be registered", f.name());
+    assert!(matches!(f.input(), corgi::Shape::Unit | corgi::Shape::Prod(_)), "`{}`: a function's input is `()` or the tuple of its arguments", f.name());
+    functions().write().unwrap().insert(f.name().to_string(), f);
+}
+
+/// Every registered function.
+pub fn registered() -> Vec<Function> {
+    functions().read().unwrap().values().cloned().collect()
+}
+
+/// The registered function called `name`, if any.
+pub fn lookup(name: &str) -> Option<Function> {
+    functions().read().unwrap().get(name).cloned()
+}
+
+// ---------------------------------------------------------------------------
+// Typing and compiling slots, and the words every program's lambdas start with.
 
 type Res<T> = Result<T, String>;
 
@@ -209,7 +333,7 @@ pub fn is_base_word(name: &str) -> bool { FloatWord::all().any(|(word, _)| word 
 
 /// The registered function `f` as a word: one host-kernel node over the call's input, which is its
 /// argument when it takes one, and the tuple of its arguments (or `()`) otherwise.
-pub fn function_word(f: &crate::ir::Function) -> Graph<NumOp> {
+pub fn function_word(f: &Function) -> Graph<NumOp> {
     let mut b = Builder::<NumOp>::default();
     let x = b.input();
     let input = if matches!(f.input(), Shape::Prod(args) if args.len() == 1) { b.tuple(vec![x]) } else { x };

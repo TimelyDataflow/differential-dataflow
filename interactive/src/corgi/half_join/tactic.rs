@@ -17,7 +17,7 @@ use corgi::{Graph, NumOp, Shape, Value as CValue};
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
 use crate::corgi::col_times::ColTimes;
 use crate::corgi::container::CorgiContainer;
-use crate::corgi::logic::compile_projection;
+use crate::lambda::compile_projection;
 use crate::corgi::search::matching_ranges;
 use crate::ir::{Diff, Lambda, Time};
 

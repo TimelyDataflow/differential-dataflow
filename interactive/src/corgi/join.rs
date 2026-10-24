@@ -44,7 +44,7 @@ use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 use crate::corgi::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
-use crate::corgi::logic::compile_projection;
+use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;

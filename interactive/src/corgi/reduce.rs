@@ -42,7 +42,7 @@ use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
 use crate::corgi::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
-use crate::corgi::logic::compile_reduce;
+use crate::lambda::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;

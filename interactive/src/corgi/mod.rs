@@ -1,8 +1,8 @@
 //! The corgi rendering substrate's internals: the columnar container on dataflow
 //! edges ([`container`]) and its wire format ([`bytes`]), the columnar chunk and
 //! its arrangement plumbing ([`chunk`]), the key-hash shuffle ([`exchange`]),
-//! the slots' typing and compiling ([`logic`]), and the join/half-join/reduce tactic bindings ([`join`],
-//! [`half_join`], [`reduce`]). The `Backend` impl wiring these into rendering is
+//! and the join/half-join/reduce tactic bindings ([`join`], [`half_join`], [`reduce`]). The slots'
+//! typing and compiling are the expression language's, in `crate::lambda`. The `Backend` impl wiring these into rendering is
 //! [`crate::backend::corgi`].
 
 pub mod bytes;
@@ -14,6 +14,5 @@ pub mod feed;
 pub mod frame;
 pub mod half_join;
 pub mod join;
-pub mod logic;
 pub mod reduce;
 mod search;

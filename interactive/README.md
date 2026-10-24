@@ -72,7 +72,8 @@ A program moves through four parts, each using only the ones before it.
 1. **The language.** `parse/` reads `.ddp` text. `lower.rs` turns it into the scope-tree IR of
    `scope_ir.rs`: scopes, items, exports, and the IR's own optimizations. `shapes.rs` infers the
    shape of every collection. `ir.rs` is the vocabulary all of these are written in: lambdas,
-   operator steps, reducers, and registered functions.
+   operator steps, reducers, and registered functions. `lambda.rs` is where the expression
+   language plugs in: it parses, types, compiles and composes the lambdas in a program's slots.
 2. **Analyses** rewrite a program into another program. `explain/` produces one that explains its
    own outputs. `projection.rs`, on with `DDIR_PROJECTION`, replaces fields that nothing reads
    by `()`.
@@ -86,7 +87,7 @@ A program moves through four parts, each using only the ones before it.
 
 The stack aims to stay generic over two things: the expression language and the backend.
 - **The expression language** is corgi today. Slots are corgi lambdas, typed and compiled to corgi
-  graphs at the point where the language meets corgi.
+  graphs in `lambda.rs`.
 - **The backend** is the columnar runtime today, plugged in through `backend/`'s `Backend` trait.
 
 Another expression language or backend should plug in at those two places, without the rest of

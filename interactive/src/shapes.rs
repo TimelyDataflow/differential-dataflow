@@ -6,7 +6,7 @@
 //! The diff is an integer.
 //!
 //! Shapes start at the program's sources, from their ascriptions or from the caller, and follow
-//! from each operator's rule. Slots are typed by corgi's typer (`corgi::logic::slot_shape`), so a
+//! from each operator's rule. Slots are typed by corgi's typer (`crate::lambda::slot_shape`), so a
 //! shape here is the shape the corgi backend would compile against. Feedback variables take
 //! the shape of what is bound to them, found by iterating to a fixed point, unless they declare
 //! one. A declared variable or export is checked against the shape inferred for its value.
@@ -18,7 +18,7 @@
 
 use corgi::Shape;
 
-use crate::corgi::logic::slot_shape;
+use crate::lambda::slot_shape;
 use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir as st;
 

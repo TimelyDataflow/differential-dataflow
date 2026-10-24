@@ -245,6 +245,7 @@ fn lex(input: &str) -> Vec<Token> {
 }
 
 /// The lexer's keywords: an identifier spelled like one lexes as the keyword, never as a name.
+/// `crate::ir::KEYWORDS` lists the same names, for code below the parser.
 fn keyword(ident: &str) -> Option<Token> {
     Some(match ident {
         "let" => Token::Let, "var" => Token::Var, "export" => Token::Export,
@@ -260,9 +261,6 @@ fn keyword(ident: &str) -> Option<Token> {
         _ => return None,
     })
 }
-
-/// Whether `ident` is a keyword of the lexer (so it can never be used as a name).
-pub(crate) fn is_keyword(ident: &str) -> bool { keyword(ident).is_some() }
 
 struct Parser {
     tokens: Vec<Token>,
@@ -286,9 +284,9 @@ impl Parser {
     /// as words, the built-in `Option` and `Result`, and the types declared so far as enums.
     fn lambda_scope(&mut self) -> &corgi::Scope {
         if self.scope.is_none() {
-            let mut scope = crate::corgi::logic::base_scope();
-            for f in crate::ir::registered() {
-                scope.word(f.name(), crate::corgi::logic::function_word(&f)).unwrap_or_else(|e| panic!("{e}"));
+            let mut scope = crate::lambda::base_scope();
+            for f in crate::lambda::registered() {
+                scope.word(f.name(), crate::lambda::function_word(&f)).unwrap_or_else(|e| panic!("{e}"));
             }
             for name in &self.type_order {
                 declare_enum(&mut scope, name, &self.types[name], &self.types);
@@ -578,3 +576,15 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
 }
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_program() }
+
+#[cfg(test)]
+mod tests {
+    /// Every name `crate::ir::KEYWORDS` lists lexes as a keyword, so a registered function is
+    /// refused exactly the names the lexer would claim.
+    #[test]
+    fn ir_keywords_are_the_lexers() {
+        for k in crate::ir::KEYWORDS {
+            assert!(super::keyword(k).is_some(), "`{k}` is in ir::KEYWORDS but the lexer does not claim it");
+        }
+    }
+}
