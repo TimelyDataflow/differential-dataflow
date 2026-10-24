@@ -72,7 +72,7 @@ pub fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord>(bridg
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
-pub use frontier::BackendFrontier;
+pub use frontier::{read_as_of, BackendFrontier};
 
 /// A position between windows of an ordered key space.
 /// No minimum key or successor operation is required.
