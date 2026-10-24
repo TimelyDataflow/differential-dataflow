@@ -58,8 +58,10 @@ pub type ProxyBridge<T, R, K = u64, V = u64> = Vec<((K, V), T, R)>;
 
 /// Debug check that a presented [`ProxyBridge`] is consolidated.
 ///
-/// Operator harnesses use the test to flag backend implementations that do not uphold it.
-pub(crate) fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord>(bridge: &ProxyBridge<T, R, K, V>, who: &str) {
+/// Operator harnesses use the test to flag backend implementations that do not uphold it. It is
+/// public so that a tactic built outside this crate over the same bridges, such as dogs3's proxy
+/// half join, checks the contract its backends owe with the same test.
+pub fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord>(bridge: &ProxyBridge<T, R, K, V>, who: &str) {
     debug_assert!(
         bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)),
         "{}: a presented bridge must be sorted & consolidated by ((key, val), time)",
