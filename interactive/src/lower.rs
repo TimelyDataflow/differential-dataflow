@@ -51,7 +51,7 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
             | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
             | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
-        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expr_free_names(l, out); expr_free_names(r, out); },
+        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) | Expr::Count(l, r, _) => { expr_free_names(l, out); expr_free_names(r, out); },
         Expr::Concat(es) => { for e in es { expr_free_names(e, out); } },
     }
 }
@@ -178,6 +178,12 @@ impl ScopeLower {
                 let stream = self.lower_expr(s);
                 let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
                 self.push(st::Node::HalfJoin { stream, arrangement: ra, strict: *strict, projection: p.clone() })
+            },
+            // A count reads its stream as updates and only its second input arranged.
+            Expr::Count(s, r, p) => {
+                let stream = self.lower_expr(s);
+                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                self.push(st::Node::Count { stream, arrangement: ra, projection: p.clone() })
             },
             Expr::Reduce(e, red)=> {
                 let r = self.lower_expr(e); let a = self.push(st::Node::Arrange(r));
@@ -333,7 +339,7 @@ fn collect_qualified(e: &Expr, scope: &str, out: &mut Vec<String>) {
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::EnterAt(e, _)
         | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
         | Expr::LiftIter(e) | Expr::Reduce(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => collect_qualified(e, scope, out),
-        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },
+        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) | Expr::Count(l, r, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },
         Expr::Concat(es) => for e in es { collect_qualified(e, scope, out); },
         Expr::Input(_) | Expr::Import(_) | Expr::Name(_) => {}
     }

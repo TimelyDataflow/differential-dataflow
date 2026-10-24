@@ -262,6 +262,14 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
                 Err(e) => fail(format!("half_join: {e}")),
             }
         }
+        st::Node::Count { stream, arrangement, projection } => {
+            let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
+            if s.key != a.key { return fail(format!("count keys {} and {}", s.key, a.key)); }
+            match pair_shape(projection, &[s.key, s.val, Shape::Int]) {
+                Ok((k, v)) => Some(CollShape::new(k, v, depth)),
+                Err(e) => fail(format!("count: {e}")),
+            }
+        }
         st::Node::Reduce { input, reducer } => {
             let c = shapes.of(input)?;
             let v = match reducer {

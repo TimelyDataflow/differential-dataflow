@@ -40,7 +40,8 @@ fn keeps_times(op: &LinearOp) -> bool {
 enum Use {
     /// As the stream of the half join at this index.
     Stream { at: usize, strict: bool },
-    /// As the input of the time-preserving linear chain at this index.
+    /// As the input of the time-preserving linear chain at this index, or the stream of the
+    /// `count` at this index, which keeps times too.
     Linear(usize),
     /// Any other way: as an arrangement, by a concat, join, reduce, inspect, child scope, bind or
     /// export.
@@ -94,6 +95,8 @@ fn uses(s: &Scope) -> Vec<Vec<Use>> {
                 add(arrangement, Use::Other);
             }
             Item::Op(Node::Linear { input, ops }) => add(input, if ops.iter().all(keeps_times) { Use::Linear(c) } else { Use::Other }),
+            // A count keeps each row's own time and whatever time its value carries.
+            Item::Op(Node::Count { stream, arrangement, .. }) => { add(stream, Use::Linear(c)); add(arrangement, Use::Other); }
             Item::Op(Node::Arrange(r) | Node::Reduce { input: r, .. } | Node::Inspect { input: r, .. }) => add(r, Use::Other),
             Item::Op(Node::Join { left, right, .. }) => { add(left, Use::Other); add(right, Use::Other); }
             Item::Op(Node::Concat(refs)) => for r in refs { add(r, Use::Other); },
@@ -163,9 +166,9 @@ fn insert_edge_filters(s: &mut Scope, edges: Vec<(usize, Vec<Use>)>, lanes: &[u6
         for u in dead {
             let at = match u { Use::Stream { at, .. } | Use::Linear(at) => remap[*at], Use::Other => unreachable!("an `Other` use is never dead") };
             let slot = match &mut s.items[at] {
-                Item::Op(Node::HalfJoin { stream, .. }) => stream,
+                Item::Op(Node::HalfJoin { stream, .. } | Node::Count { stream, .. }) => stream,
                 Item::Op(Node::Linear { input, .. }) => input,
-                _ => unreachable!("a dead use is a half join's stream or a linear chain's input"),
+                _ => unreachable!("a dead use is a half join's or count's stream or a linear chain's input"),
             };
             if matches!((&*slot, &from), (Ref::Local(a), Ref::Local(b)) if a == b) { *slot = to.clone(); }
         }
@@ -285,6 +288,42 @@ mod tests {
             export "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1, (k, x, y) -> (k, (x, y)));
         "#);
         assert_eq!(moved, 0, "a delay between the lift and the strict half join can move the time");
+    }
+
+    /// A `count` keeps every time, so a lift read through one by a strict half join is dead at
+    /// the as-of time; through one by a non-strict half join it is live. When other readers
+    /// share the lift, the filter sits on the edge to the count alone.
+    #[test]
+    fn a_count_between_a_lift_and_a_strict_half_join_keeps_the_path_dead() {
+        let (_, dead) = rewrite(r#"
+            let a = import "a";
+            let b = import "b";
+            export "r" = a | lift | count(b, (k, (u, t), n) -> (k, (u, t))) | half_join(b, 1, (k, u, ()) -> (k, (u, ())));
+        "#);
+        assert_eq!(dead, 1, "the lift's only path reaches a strict half join through the count");
+        let (_, live) = rewrite(r#"
+            let a = import "a";
+            let b = import "b";
+            export "r" = a | lift | count(b, (k, (u, t), n) -> (k, (u, t))) | half_join(b, 0, (k, u, ()) -> (k, (u, ())));
+        "#);
+        assert_eq!(live, 0, "a non-strict half join keeps the path live");
+        let (prog, inserted) = rewrite(r#"
+            let a = import "a";
+            let b = import "b";
+            let la = a | lift;
+            export "r" = (la | count(b, (k, (u, t), n) -> (k, (u, t))) | half_join(b, 1, (k, u, ()) -> (k, (u, ()))))
+                       + (la | half_join(b, 0, (k, u, ()) -> (k, (u, ()))));
+        "#);
+        assert_eq!(inserted, 1);
+        let found = filters(&prog.root);
+        assert_eq!(found.len(), 1);
+        let (at, _) = found[0];
+        let counts_read_filter: Vec<bool> = prog.root.items.iter().filter_map(|item| match item {
+            Item::Op(Node::Count { stream: Ref::Local(j), .. }) => Some(*j == at),
+            _ => None,
+        }).collect();
+        assert_eq!(counts_read_filter, vec![true], "the count reads the lift through the filter");
+        assert_eq!(stream_reader(&prog.root, at), Vec::<bool>::new(), "the non-strict half join reads the lift directly");
     }
 
     #[test]

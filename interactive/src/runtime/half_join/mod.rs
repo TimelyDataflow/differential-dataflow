@@ -15,7 +15,8 @@
 //!
 //! The batcher keeps arrivals in time order and releases them as runs in identifier order; the
 //! backend reads a unit's runs by identifier a block at a time. A [`Run`] is what passes between
-//! them.
+//! them. The `count` stage (`count`) runs under the same driver and batcher, with a tactic that
+//! counts the arrangement's updates at each released row's key instead of matching pairs.
 
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -32,9 +33,11 @@ use crate::ir::{Diff, Time};
 
 mod backend;
 mod batcher;
+mod count;
 
 pub(crate) use backend::CorgiHalfJoinBackend;
 pub(crate) use batcher::HalfJoinBatcher;
+pub(crate) use count::CorgiCountTactic;
 
 type CC = CorgiContainer<Time, Diff>;
 type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
