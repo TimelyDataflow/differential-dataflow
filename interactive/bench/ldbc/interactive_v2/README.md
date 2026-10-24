@@ -117,14 +117,16 @@ did not help), DuckDB 2.0 with its default 10 threads.
 | DDIR, 16 read threads, plans before IC9 and IC14 were rewritten | 0.008 | 330 ops/s | 0.007 |
 | DDIR, 16 read threads | 0.007 | 377 ops/s | 0.006 |
 | DDIR, 64 read threads, `--batch-ms 50` | 0.006 | 441 ops/s | 0.005 |
-
 | DDIR, all complex reads one-off (`--oneoff`), 192 threads, `--batch-ms 50` | 0.0025 | 1,059 ops/s | 0.002 |
 
 At 0.005 DDIR's server is saturated with standing plans: about 3.2 of the 4
 workers' cores are busy. One-off complex reads (`oneoff/`, below) halve their
 work; the 0.0025 run was 81% one-off complex reads, 12% short reads and 3%
-updates. One-offs are installed while updates flow and read published traces
-without a consistent-frontier import, so these runs are experimental.
+updates. A one-off is installed while updates flow. Since #1024 and #1025 it
+reads every import, including the arrangements its half joins read, as of the
+tick it starts, so its answer is that tick's. The 0.0025 row was measured before
+those changes; on master-next with them (7eb7da8d) it passes again, at 1,049
+ops/s, and 0.002 still fails.
 
 At SF0.1, with SF1's query mix (`--sf 0.1`), 80,000 operations:
 
