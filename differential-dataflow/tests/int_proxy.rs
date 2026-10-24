@@ -608,3 +608,332 @@ fn reduce_prior_advanced_past_novel() {
     assert_eq!(hread(&outputs), vec![((7, 3), time(1, 0), 1), ((7, 3), time(1, 5), -1)]);
     assert!(pending.is_empty());
 }
+
+// ===== Reading as of a time =====
+//
+// A trace's accumulations are correct only at or beyond its compaction frontier: compaction can
+// leave a retraction advanced to the frontier beside the insertion it retracts. A reader that
+// starts after that reads every time advanced to the frontier, as a cursor through `TraceFrontier`
+// does. The proxy tactics read through backends, so `BackendFrontier` reads what a backend draws as
+// of a time. The reference is the same tactic over the rows with every time advanced by hand.
+
+use differential_dataflow::operators::int_proxy::join::{JoinInstance, JoinMatches, ProxyJoinBackend, ProxyJoinTactic};
+use differential_dataflow::operators::int_proxy::{BackendFrontier, KeyPosition, ProxyBridge};
+use differential_dataflow::operators::join::{Fresh, JoinTactic};
+
+/// The max-reduce's logic, as a plain function, so that its backends name one type.
+type MaxLogic = fn(&u64, &[(u64, i64)], &mut Vec<(u64, i64)>, &mut Vec<(u64, i64)>);
+/// The max-reduce's backend.
+type MaxBackend = VecReduceBackend<u64, u64, u64, u64, i64, MaxLogic>;
+fn max_backend() -> MaxBackend { VecReduceBackend::new(max_logic as MaxLogic) }
+
+/// `rows` with every time advanced to `since`, as a cursor through `TraceFrontier` reads them.
+fn advanced(rows: Vec<((u64, u64), u64, i64)>, since: u64) -> Vec<((u64, u64), u64, i64)> {
+    rows.into_iter().map(|(d, t, r)| (d, t.max(since), r)).collect()
+}
+
+/// The history the frontier hides: (7, 3) inserted at 1 and retracted at 5, beside (7, 4) at 1;
+/// (8, 1) inserted at 1 and retracted at 5, so key 8 is empty as of 5; and (9, 2) inserted at 1
+/// and retracted at 6. Read as of 5, nothing happens before 5.
+fn history() -> Vec<((u64, u64), u64, i64)> {
+    vec![((7, 3), 1, 1), ((7, 3), 5, -1), ((7, 4), 1, 1), ((8, 1), 1, 1), ((8, 1), 5, -1), ((9, 2), 1, 1), ((9, 2), 6, -1)]
+}
+
+/// One retire of a reduce tactic over `input`, between `lower` and `upper`, its output read.
+fn retire<B1>(mut tactic: impl ReduceTactic<u64, B1, Span<u64, (u64, u64), u64, i64>>, input: B1, lower: u64, upper: u64) -> Vec<((u64, u64), u64, i64)> {
+    let (produced, _) = tactic.retire(vec![], vec![], vec![input], &Antichain::from_elem(lower), &Antichain::from_elem(upper), &Antichain::from_elem(lower));
+    produced.into_iter().filter_map(|b| b.inner).flat_map(|b| hread(&[b])).collect()
+}
+
+#[test]
+fn reduce_reads_as_of_since() {
+    let got = retire(ProxyReduceTactic::new(BackendFrontier::new(max_backend(), Antichain::from_elem(5))), hbatch(history(), 0, 0), 0, 10);
+    let want = retire(ProxyReduceTactic::new(max_backend()), hbatch(advanced(history(), 5), 0, 0), 0, 10);
+    assert_eq!(got, want);
+    assert!(got.iter().all(|(_, t, _)| *t >= 5), "nothing before since: {got:?}");
+    // Read as stored, the history reduces at times before since.
+    let raw = retire(ProxyReduceTactic::new(max_backend()), hbatch(history(), 0, 0), 0, 10);
+    assert!(raw.iter().any(|(_, t, _)| *t < 5));
+}
+
+/// A join backend over hash-keyed `u64` pairs, which proxy themselves: it draws every update of
+/// both inputs in one block, at the times stored (it does not consolidate on load), and crosses
+/// matches into `((key, (val0, val1)), time, diff)` rows.
+struct PairJoin;
+type Pairs = Span<u64, (u64, u64), u64, i64>;
+type Joined = Vec<((u64, ((u64, u64), (u64, u64))), u64, i64)>;
+impl ProxyJoinBackend<u64, Pairs, Pairs> for PairJoin {
+    type Key = u64;
+    type V0 = (u64, u64);
+    type V1 = (u64, u64);
+    type R0 = i64;
+    type R1 = i64;
+    type ROut = i64;
+    type Output = Joined;
+    fn advance(&mut self, instance: &JoinInstance<u64, Pairs, Pairs>, from: &mut KeyPosition<u64>, bridge0: &mut ProxyBridge<u64, i64, u64, (u64, u64)>, bridge1: &mut ProxyBridge<u64, i64, u64, (u64, u64)>) {
+        fn draw(batches: &[Pairs]) -> ProxyBridge<u64, i64, u64, (u64, u64)> {
+            let mut rows: Vec<_> = hread(batches).into_iter().map(|(kv, t, r)| ((kv.0.hashed(), kv), t, r)).collect();
+            consolidate_updates(&mut rows);
+            rows
+        }
+        let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
+        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        *from = KeyPosition::End;
+    }
+    fn cross(&mut self, _instance: &JoinInstance<u64, Pairs, Pairs>, matches: &mut JoinMatches<u64, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
+        let rows = matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, *t, *r)).collect();
+        output.push(rows);
+    }
+}
+
+/// The join's output, keyed by its two values and consolidated.
+fn joined(rows: Box<dyn Iterator<Item = Joined>>) -> Vec<(((u64, u64), (u64, u64)), u64, i64)> {
+    let mut out: Vec<_> = rows.flatten().map(|((_, (a, b)), t, r)| ((a, b), t, r)).collect();
+    consolidate_updates(&mut out);
+    out
+}
+
+#[test]
+fn join_reads_as_of_since() {
+    // The other input: a row for each key, at `at`. Key 8 has nothing to meet as of 5.
+    let other_at = |at| hbatch::<u64, u64, u64, i64>(vec![((7, 70), at, 1), ((8, 80), at, 1), ((9, 90), at, 1)], 0, 0);
+    let since = 5;
+    let as_of = || Antichain::from_elem(since);
+    // The wrapper reads both inputs as of since; the reference advances only the history, which
+    // joins to the same output. The driver's bound is at or below the fresh input's times: with
+    // the other input at 2 the bound is before since, and the wrapper reads; at 5 it is at since,
+    // and the wrapper passes the inner backend's raw read through, which joins to the same output.
+    for (meet, label) in [(0, "the bound before since"), (5, "the bound at since")] {
+        let other = other_at(meet.max(2));
+        let got = joined(ProxyJoinTactic::new(BackendFrontier::new(PairJoin, as_of())).prep(vec![hbatch(history(), 0, 0)], vec![Rc::clone(&other)], Fresh::Input0, meet));
+        let want = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(advanced(history(), since), 0, 0)], vec![Rc::clone(&other)], Fresh::Input0, meet));
+        assert_eq!(got, want, "{label}");
+        assert!(got.iter().all(|(_, t, _)| *t >= since), "nothing before since: {got:?}");
+        // The same with the history on the second input.
+        let got_second = joined(ProxyJoinTactic::new(BackendFrontier::new(PairJoin, as_of())).prep(vec![Rc::clone(&other)], vec![hbatch(history(), 0, 0)], Fresh::Input0, meet));
+        let want_second = joined(ProxyJoinTactic::new(PairJoin).prep(vec![Rc::clone(&other)], vec![hbatch(advanced(history(), since), 0, 0)], Fresh::Input0, meet));
+        assert_eq!(got_second, want_second, "{label}, second input");
+    }
+    // Read as stored, the history joins at times before since.
+    let raw = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(history(), 0, 0)], vec![other_at(2)], Fresh::Input0, 0));
+    assert!(raw.iter().any(|(_, t, _)| *t < since));
+    // Two histories, both read as of since: the join of the two advanced histories.
+    let second = vec![((7, 70), 2, 1), ((8, 80), 2, 1), ((8, 80), 4, -1), ((9, 90), 6, 1)];
+    let got = joined(ProxyJoinTactic::new(BackendFrontier::new(PairJoin, as_of())).prep(vec![hbatch(history(), 0, 0)], vec![hbatch(second.clone(), 0, 0)], Fresh::Input0, 0));
+    let want = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(advanced(history(), since), 0, 0)], vec![hbatch(advanced(second, since), 0, 0)], Fresh::Input0, 0));
+    assert_eq!(got, want, "both inputs");
+    assert!(got.iter().all(|(_, t, _)| *t >= since), "nothing before since: {got:?}");
+}
+
+// ===== Reading as of a frontier, in a non-distributive lattice =====
+//
+// The wrapper's reasoning uses only the defining property of `advance_by`: for `t'` beyond `F`,
+// `t ≤ t' ⟺ advance_F(t) ≤ t'`. What a non-distributive lattice breaks is advancing commuting
+// with joins and meets. These tests run the wrapper over N5, the pentagon `0 < a < b < 1`,
+// `0 < c < 1`, with `c` incomparable to `a` and `b`: `a ∨ (b ∧ c) = a` but `(a ∨ b) ∧ (a ∨ c) = b`.
+// The reference is the same tactic over the rows advanced by `advance_by` by hand. The claims:
+// the output agrees with the reference at every time beyond `F` always; it is identical when `F`
+// has one element, or when `F` is beyond the unit's bound (as in every first unit, whose bound
+// is the minimum). Where the inner backend consolidates on load by a bound that crosses `F`, the
+// records it presents can differ from the reference's, and the test reports whether the outputs do.
+
+use serde::{Deserialize, Serialize};
+use timely::order::PartialOrder;
+use timely::progress::PathSummary;
+
+/// The pentagon, by index: 0 is the bottom, 1 is `a`, 2 is `b`, 3 is `c`, 4 is the top. The
+/// derived `Ord` is a linear extension of the partial order, as the tactics require.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, Serialize, Deserialize)]
+struct N5(u8);
+
+impl N5 {
+    const ALL: [N5; 5] = [N5(0), N5(1), N5(2), N5(3), N5(4)];
+    fn upper_bounds(self, other: N5) -> impl Iterator<Item = N5> {
+        N5::ALL.into_iter().filter(move |x| self.less_equal(x) && other.less_equal(x))
+    }
+}
+
+impl PartialOrder for N5 {
+    fn less_equal(&self, other: &Self) -> bool {
+        self == other || self.0 == 0 || other.0 == 4 || (self.0 == 1 && other.0 == 2)
+    }
+}
+
+impl Lattice for N5 {
+    fn join(&self, other: &Self) -> Self {
+        self.upper_bounds(*other).find(|x| self.upper_bounds(*other).all(|y| x.less_equal(&y))).expect("a lattice")
+    }
+    fn meet(&self, other: &Self) -> Self {
+        let lower = |x: &N5| x.less_equal(self) && x.less_equal(other);
+        N5::ALL.into_iter().filter(lower).find(|x| N5::ALL.iter().filter(|y| lower(y)).all(|y| y.less_equal(x))).expect("a lattice")
+    }
+}
+
+/// The one path summary: a step that leaves a time where it is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Stay;
+impl PartialOrder for Stay { fn less_equal(&self, _: &Self) -> bool { true } }
+impl PathSummary<N5> for Stay {
+    fn results_in(&self, time: &N5) -> Option<N5> { Some(*time) }
+    fn followed_by(&self, _: &Self) -> Option<Self> { Some(Stay) }
+}
+impl Timestamp for N5 {
+    type Summary = Stay;
+    fn minimum() -> Self { N5(0) }
+}
+
+fn beyond(frontier: &Antichain<N5>, t: N5) -> bool { frontier.less_equal(&t) }
+fn advanced_n5(mut t: N5, frontier: &Antichain<N5>) -> N5 { t.advance_by(frontier.borrow()); t }
+/// The antichains of N5 with one or two elements, the empty one aside.
+fn antichains() -> Vec<Antichain<N5>> {
+    let mut out: Vec<Antichain<N5>> = N5::ALL.iter().map(|t| Antichain::from_elem(*t)).collect();
+    for x in N5::ALL { for y in N5::ALL {
+        if x < y && !x.less_equal(&y) && !y.less_equal(&x) { out.push([x, y].into_iter().collect()); }
+    } }
+    out
+}
+
+/// A join backend over hash-keyed pairs at any time, which either presents stored times or
+/// consolidates on load by `instance.lower`, as the contract allows either.
+struct PairJoinAt<T> { apply_lower: bool, _t: std::marker::PhantomData<T> }
+type PairsAt<T> = Span<u64, (u64, u64), T, i64>;
+type JoinedAt<T> = Vec<((u64, ((u64, u64), (u64, u64))), T, i64)>;
+impl<T: Lattice + Timestamp> ProxyJoinBackend<T, PairsAt<T>, PairsAt<T>> for PairJoinAt<T> {
+    type Key = u64;
+    type V0 = (u64, u64);
+    type V1 = (u64, u64);
+    type R0 = i64;
+    type R1 = i64;
+    type ROut = i64;
+    type Output = JoinedAt<T>;
+    fn advance(&mut self, instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, from: &mut KeyPosition<u64>, bridge0: &mut ProxyBridge<T, i64, u64, (u64, u64)>, bridge1: &mut ProxyBridge<T, i64, u64, (u64, u64)>) {
+        let draw = |batches: &[PairsAt<T>]| {
+            let mut rows: Vec<_> = hread(batches).into_iter().map(|(kv, mut t, r)| {
+                if self.apply_lower { t.join_assign(&instance.lower); }
+                ((kv.0.hashed(), kv), t, r)
+            }).collect();
+            consolidate_updates(&mut rows);
+            rows
+        };
+        let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
+        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        *from = KeyPosition::End;
+    }
+    fn cross(&mut self, _instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, matches: &mut JoinMatches<T, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
+        output.push(matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, t.clone(), *r)).collect());
+    }
+}
+
+/// A collection's accumulation at `t`: each datum's total over the records at or before `t`.
+fn accumulation<D: Ord + Clone>(rows: &[(D, N5, i64)], t: N5) -> Vec<(D, i64)> {
+    let mut out: Vec<(D, i64)> = rows.iter().filter(|(_, time, _)| time.less_equal(&t)).map(|(d, _, r)| (d.clone(), *r)).collect();
+    differential_dataflow::consolidation::consolidate(&mut out);
+    out
+}
+
+/// Both readings agree at every time beyond `frontier`; returns whether they are identical.
+fn agree_beyond<D: Ord + Clone + std::fmt::Debug>(got: &[(D, N5, i64)], want: &[(D, N5, i64)], frontier: &Antichain<N5>, what: &str) -> bool {
+    for t in N5::ALL {
+        if beyond(frontier, t) {
+            assert_eq!(accumulation(got, t), accumulation(want, t), "{what}: accumulations differ at {t:?} beyond {frontier:?}\n got {got:?}\nwant {want:?}");
+        }
+    }
+    got == want
+}
+
+#[test]
+fn join_as_of_frontier_in_n5() {
+    let (a, b, c) = (N5(1), N5(2), N5(3));
+    assert_ne!(a.join(&b.meet(&c)), a.join(&b).meet(&a.join(&c)), "N5 is not distributive");
+    // The case the search for differences found: with `F = {b, c}` and a bound `a`, a record at 0
+    // is presented at `advance_F(0 ∨ a) = b` by a backend that consolidates on load, where the
+    // as-of reading has `advance_F(0) = 0`.
+    let f_bc: Antichain<N5> = [b, c].into_iter().collect();
+    assert_eq!(advanced_n5(N5(0).join(&a), &f_bc), b);
+    assert_eq!(advanced_n5(N5(0), &f_bc), N5(0));
+
+    let (mut units, mut exact, mut crossing, mut differ) = (0, 0, 0, Vec::new());
+    for frontier in antichains() {
+        for lower in N5::ALL {
+            if beyond(&frontier, lower) { continue; }   // a unit the wrapper leaves alone
+            for t1 in N5::ALL.into_iter().filter(|t| lower.less_equal(t)) {   // the fresh input's time
+                for t0 in N5::ALL {
+                    for apply_lower in [false, true] {
+                        let backend = || PairJoinAt::<N5> { apply_lower, _t: std::marker::PhantomData };
+                        // The history: one key with two values, one of them retracted at `t1`, so that
+                        // consolidation after advancing has something to do; the other input at `t1`.
+                        let history = vec![((7u64, 3u64), t0, 1i64), ((7, 3), t1, -1), ((7, 4), t0, 1)];
+                        let other = vec![((7u64, 70u64), t1, 1i64)];
+                        let as_of = |rows: &Vec<((u64, u64), N5, i64)>| rows.iter().map(|(d, t, r)| (*d, advanced_n5(*t, &frontier), *r)).collect::<Vec<_>>();
+                        let got = joined_at(ProxyJoinTactic::new(BackendFrontier::new(backend(), frontier.clone())).prep(vec![hbatch(history.clone(), N5(0), N5(0))], vec![hbatch(other.clone(), N5(0), N5(0))], Fresh::Input1, lower));
+                        let want = joined_at(ProxyJoinTactic::new(backend()).prep(vec![hbatch(as_of(&history), N5(0), N5(0))], vec![hbatch(as_of(&other), N5(0), N5(0))], Fresh::Input1, lower));
+                        units += 1;
+                        let identical = agree_beyond(&got, &want, &frontier, "join");
+                        // Exact when the backend presents stored times, when `F` has one element, or
+                        // when `F` is beyond the bound.
+                        let frontier_beyond_lower = frontier.iter().all(|s| lower.less_equal(s));
+                        if !apply_lower || frontier.len() == 1 || frontier_beyond_lower {
+                            assert!(identical, "join: expected identical outputs for F {frontier:?}, lower {lower:?}, t0 {t0:?}, t1 {t1:?}, apply_lower {apply_lower}\n got {got:?}\nwant {want:?}");
+                            exact += 1;
+                        } else {
+                            crossing += 1;
+                            if !identical { differ.push((frontier.clone(), lower, t0, t1)); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("join over N5: {units} units; {exact} exact by the claims; {crossing} where the bound crosses F, of which {} differ exactly: {differ:?}", differ.len());
+}
+
+/// The join's output, keyed by its two values and consolidated.
+fn joined_at(rows: Box<dyn Iterator<Item = JoinedAt<N5>>>) -> Vec<(((u64, u64), (u64, u64)), N5, i64)> {
+    let mut out: Vec<_> = rows.flatten().map(|((_, (x, y)), t, r)| ((x, y), t, r)).collect();
+    consolidate_updates(&mut out);
+    out
+}
+
+#[test]
+fn reduce_as_of_frontier_in_n5() {
+    type MaxN5 = VecReduceBackend<u64, u64, u64, N5, i64, MaxLogic>;
+    let backend = || -> MaxN5 { VecReduceBackend::new(max_logic as MaxLogic) };
+    let (mut units, mut exact, mut crossing, mut differ) = (0, 0, 0, Vec::new());
+    for frontier in antichains() {
+        for lower in N5::ALL {
+            if beyond(&frontier, lower) { continue; }
+            let lower_ac = Antichain::from_elem(lower);
+            // Prior rows before the retire, and novel rows in it: a value the novel rows retract,
+            // and a new maximum; a second prior value survives.
+            for tp in N5::ALL {
+                for tn in N5::ALL.into_iter().filter(|t| lower.less_equal(t)) {
+                    for retract in [false, true] {
+                        let prior = vec![((7u64, 3u64), tp, 1i64), ((7, 2), tp, 1)];
+                        let mut novel = vec![((7u64, 9u64), tn, 1i64)];
+                        if retract { novel.push(((7, 3), tn, -1)); }
+                        let as_of = |rows: &Vec<((u64, u64), N5, i64)>| rows.iter().map(|(d, t, r)| (*d, advanced_n5(*t, &frontier), *r)).collect::<Vec<_>>();
+                        let run = |tactic: &mut dyn ReduceTactic<N5, Span<u64, (u64, u64), N5, i64>, Span<u64, (u64, u64), N5, i64>>, prior_rows: Vec<((u64, u64), N5, i64)>, novel_rows: Vec<((u64, u64), N5, i64)>| {
+                            let (produced, _) = tactic.retire(vec![hbatch(prior_rows, N5(0), N5(0))], vec![], vec![hbatch(novel_rows, N5(0), N5(0))], &lower_ac, &Antichain::new(), &lower_ac);
+                            produced.into_iter().filter_map(|b| b.inner).flat_map(|b| hread(&[b])).collect::<Vec<_>>()
+                        };
+                        let got = run(&mut ProxyReduceTactic::new(BackendFrontier::new(backend(), frontier.clone())), prior.clone(), novel.clone());
+                        let want = run(&mut ProxyReduceTactic::new(backend()), as_of(&prior), as_of(&novel));
+                        units += 1;
+                        let identical = agree_beyond(&got, &want, &frontier, "reduce");
+                        let frontier_beyond_lower = frontier.iter().all(|s| lower.less_equal(s));
+                        if frontier.len() == 1 || frontier_beyond_lower {
+                            assert!(identical, "reduce: expected identical outputs for F {frontier:?}, lower {lower:?}, prior at {tp:?}, novel at {tn:?}, retract {retract}\n got {got:?}\nwant {want:?}");
+                            exact += 1;
+                        } else {
+                            crossing += 1;
+                            if !identical { differ.push((frontier.clone(), lower, tp, tn, retract)); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("reduce over N5: {units} retires; {exact} exact by the claims; {crossing} where the bound crosses F, of which {} differ exactly: {differ:?}", differ.len());
+}
