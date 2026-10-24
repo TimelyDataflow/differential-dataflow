@@ -234,8 +234,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
 /// An import is read as of `since`, the time its reader started: a published trace has compacted
 /// to that time, from which on its accumulations are correct, and before which its batches can
 /// hold counts no time had. Every reader advances the times it draws to `since`: a collection as
-/// it flattens the chunks, a join or reduce through DD's `BackendFrontier`. An arrangement the
-/// program built is read as it is, which `since` at the minimum says.
+/// it flattens the chunks, a join, reduce or half join through DD's `BackendFrontier`. An
+/// arrangement the program built is read as it is, which `since` at the minimum says.
 ///
 /// One time, not a frontier: the server compacts every published trace by the one-element
 /// frontier `{(epoch - 1, [])}` and a reader starts at that same element, so the frontier a
@@ -381,19 +381,20 @@ impl Backend for CorgiBackend {
         // `CorgiPact` places each update on the worker holding its key, as `arrange` placed the rows.
         // The stream's value is `(val, time)`, as `lift` makes it; the projection reads the val.
         //
-        // An imported arrangement is read as it is stored, even one read as of a later time. The
-        // stream's updates are the program's, at times at or beyond that time (its inputs are at
-        // its epochs, and its imports are read as of it), and a published trace's times are
-        // `(epoch, [])`. So an arranged row before the as-of time precedes every stream update in
-        // the total order on times, strictly, as it would advanced to it; its data time joins the
-        // stream's, which is at or beyond the as-of time, to the same time either way; and the
-        // rows met by an update sum to the trace's accumulation at the update's epoch, which
-        // compaction preserves.
+        // An imported arrangement is read as of `since`, as a join's or reduce's is: the import's
+        // rows also reach the program as a stream read as of `since` (through `as_collection`),
+        // and a delta join meets each pair exactly once only if both paths compare the same times.
+        // The wrapper advances every arranged time before `since`, in every unit, since the total
+        // order the half join compares in is not preserved by advancing even against later stream
+        // times; what is at or beyond `since` costs one comparison per row, and an arrangement the
+        // program built has `since` at the minimum, so every half join is wrapped and compiles to
+        // one operator.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
+        let Arr { arranged, since } = arrangement;
         let backend = CorgiHalfJoinBackend::new(projection, level + 1, [k, v0.swap_remove(0), v1]);
-        let tactic = ProxyHalfJoinTactic::new(backend, strict);
+        let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
-        half_join_with_tactic(stream.inner, arrangement.arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic).as_collection()
+        half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
