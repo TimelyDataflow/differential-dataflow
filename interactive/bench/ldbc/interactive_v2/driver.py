@@ -31,6 +31,7 @@ from collections import defaultdict, deque
 import gc
 import gzip
 import heapq
+import itertools
 import json
 import pickle
 import random
@@ -42,14 +43,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from snb.operations import operations  # noqa: E402
+import stream  # noqa: E402
 from systems import SYSTEMS, now_ms  # noqa: E402
 
 # Simulation milliseconds per update, and each complex read's frequency in updates
 # (ldbc_snb_interactive_v2_driver configuration/ldbc/snb/interactive/sf1.properties).
-UPDATE_INTERLEAVE = {'1': 1619}
+UPDATE_INTERLEAVE = {'1': 1619, '0.1': 16886}
 FREQUENCY = {'1': {'1': 26, '2': 37, '3a': 140, '3b': 140, '4': 36, '5': 57, '6': 129, '7': 87, '8': 45,
                    '9': 157, '10': 30, '11': 16, '12': 44, '13a': 38, '13b': 38, '14a': 96, '14b': 96}}
+# SF0.1's own file sets every frequency to 1, a test setting; '0.1' here runs SF1's mix on SF0.1's data.
+FREQUENCY['0.1'] = FREQUENCY['1']
 DISSIPATION = 0.2
 BUFFER = 1024
 
@@ -90,10 +93,11 @@ class Read:
 
 
 def complex_reads(bank, t0, horizon, sf):
-    """Every complex read up to simulation time `horizon` as (time, variant, plan, binding)."""
-    interleave, streams = UPDATE_INTERLEAVE[sf], []
-    for variant, freq in FREQUENCY[sf].items():
-        rows, cursor, out, k = bank[variant], 0, [], 1
+    """Every complex read up to simulation time `horizon` as (time, variant, plan, binding), lazily."""
+    interleave = UPDATE_INTERLEAVE[sf]
+
+    def stream(variant, freq):
+        rows, cursor, k = bank[variant], 0, 1
         while t0 + k * freq * interleave <= horizon:
             t = t0 + k * freq * interleave
             for _ in range(min(100, len(rows))):
@@ -101,11 +105,21 @@ def complex_reads(bank, t0, horizon, sf):
                 cursor += 1
                 if row['useFrom'] < t < row['useUntil']:
                     break
-            binding = {f: v for f, v in row.items() if f not in ('useFrom', 'useUntil')}
-            out.append((t, variant, 'ic' + variant.rstrip('ab'), binding))
+            yield t, variant, 'ic' + variant.rstrip('ab'), {f: v for f, v in row.items() if f not in ('useFrom', 'useUntil')}
             k += 1
-        streams.append(out)
-    return list(heapq.merge(*streams, key=lambda r: r[0]))
+    return heapq.merge(*(stream(v, f) for v, f in FREQUENCY[sf].items()), key=lambda r: r[0])
+
+
+class Peek:
+    """An iterator with one item of lookahead."""
+
+    def __init__(self, items):
+        self.items, self.head = iter(items), None
+        self.advance()
+
+    def advance(self):
+        item, self.head = self.head, next(self.items, None)
+        return item
 
 
 class Walk:
@@ -166,7 +180,9 @@ def main():
     p.add_argument('--system', default='ddir', choices=sorted(SYSTEMS))
     p.add_argument('--server', type=Path, help='ddir_server binary (--system ddir)')
     p.add_argument('--data', required=True, type=Path, help='BI CSV composite-merged-fk directory')
-    p.add_argument('--snapshot', required=True, type=Path, help="update_stream.py's journal initial.pickle.gz")
+    p.add_argument('--snapshot', type=Path, help="update_stream.py's journal initial.pickle.gz, for --cascade client and DuckDB")
+    p.add_argument('--cascade', default='dataflow', choices=('dataflow', 'client'),
+                   help='DDIR: compute delete cascades in the graph program (dataflow) or in the driver (client)')
     p.add_argument('--parameters', required=True, type=Path, help='interactive_v2/parameters.py output')
     p.add_argument('--output', required=True, type=Path)
     p.add_argument('--sf', default='1', choices=sorted(FREQUENCY))
@@ -188,15 +204,19 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
 
     t = time.time()
-    with gzip.open(args.snapshot) as f:
-        graph = pickle.load(f)
-    updates = operations(args.data)
-    for i, op in enumerate(updates):
-        op.index = i
-    t0 = updates[0].time
-    reads = complex_reads(json.loads(args.parameters.read_text()), t0, updates[-1].time, args.sf)
-    print(f'{len(updates)} updates and {len(reads)} complex reads over {(updates[-1].time - t0) / 86400000:.1f} '
-          f'simulated days, prepared in {time.time() - t:.0f} s', flush=True)
+    graph = None
+    if args.system == 'duckdb' or args.cascade == 'client':   # the client computes cascades, from a copy of the graph
+        with gzip.open(args.snapshot) as f:
+            graph = pickle.load(f)
+
+    def indexed():
+        for i, op in enumerate(stream.operations(args.data)):
+            op.index = i
+            yield op
+    updates = Peek(indexed())
+    t0, horizon = updates.head.time, stream.horizon(args.data)
+    reads = Peek(complex_reads(json.loads(args.parameters.read_text()), t0, horizon, args.sf))
+    print(f'{(horizon - t0) / 86400000:.1f} simulated days of updates, prepared in {time.time() - t:.0f} s', flush=True)
 
     t = time.time()
     sut = SYSTEMS[args.system](args, graph)
@@ -246,17 +266,17 @@ def timed(args, sut, updates, reads, t0):
     w0 = now_ms() + 1000
     wall = lambda sim: w0 + (sim - t0) * args.tcr
     record, stop = Recorder(args), threading.Event()
-    queue, queue_lock = iter(reads), threading.Lock()
+    queue, queue_lock = reads.items, threading.Lock()
+    if reads.head is not None:
+        queue = itertools.chain([reads.head], queue)
     errors = []
 
     def updater():
-        i = 0
-        while i < len(updates) and not stop.is_set():
-            sleep_until(wall(updates[i].time), stop)
+        while updates.head is not None and not stop.is_set():
+            sleep_until(wall(updates.head.time), stop)
             now, batch = now_ms(), []
-            while i < len(updates) and wall(updates[i].time) <= now:
-                batch.append(updates[i])
-                i += 1
+            while updates.head is not None and wall(updates.head.time) <= now:
+                batch.append(updates.advance())
             if batch:
                 def done(start, end, batch=batch):
                     for op in batch:
@@ -315,18 +335,17 @@ def validate(args, sut, updates, reads, t0):
     rng = random.Random(42)
     buffers = {'person': deque(maxlen=BUFFER), 'message': deque(maxlen=BUFFER)}
     out = (args.output / 'answers.jsonl').open('w')
-    ui = ri = done = 0
+    ui = done = 0
     t = time.time()
     applied = threading.Event()
-    while done < args.operations and (ui < len(updates) or ri < len(reads)):
-        if ui < len(updates) and (ri == len(reads) or updates[ui].time <= reads[ri][0]):
+    while done < args.operations and (updates.head is not None or reads.head is not None):
+        if updates.head is not None and (reads.head is None or updates.head.time <= reads.head[0]):
             applied.clear()
-            sut.apply([updates[ui]], lambda start, end: applied.set())
+            sut.apply([updates.advance()], lambda start, end: applied.set())
             applied.wait()
             ui, done = ui + 1, done + 1
             continue
-        sim, variant, plan, binding = reads[ri]
-        ri += 1
+        sim, variant, plan, binding = reads.advance()
         read = Read(variant, plan, binding, sim, 0, Walk(rng))
         while read is not None and done < args.operations:
             rows, _, _ = sut.read(read)

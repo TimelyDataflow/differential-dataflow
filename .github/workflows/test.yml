@@ -64,6 +64,7 @@ jobs:
           python3 interactive/bench/ldbc/test_snb.py
           python3 interactive/bench/ldbc/test_updates.py
           python3 interactive/bench/ldbc/test_operations.py
+          python3 interactive/bench/ldbc/test_cascade.py --server target/release/ddir_server
           for workers in 1 4; do
             python3 interactive/bench/ldbc/test_frames.py --server target/release/ddir_server \
               --workers "$workers"

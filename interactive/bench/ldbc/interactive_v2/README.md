@@ -20,18 +20,15 @@ data the rest of this suite uses. The official v2 update streams and parameter
 files live on SURF's repository, which could not be reached when this was
 written.
 
-1. **The initial graph:** `update_stream.py --prepare-only` writes
-   `journal/initial.pickle.gz`, the projected BI initial snapshot.
-2. **Updates:** `snb/operations.py` reads every insert and delete in
-   `inserts/dynamic` and `deletes/dynamic` as one operation at its own timestamp.
-   A person comes with its interests, studies and jobs; a forum, post or comment
-   with its tags. Cascades are resolved when the operation runs, by
-   `operations.Cascade`. Applied in order, the operations reproduce the BI daily
-   journal exactly at the end of every one of the 33 days.
+1. **The initial graph** is read from `initial_snapshot/` in chunks (`stream.py`).
+2. **Updates:** every insert and delete in `inserts/dynamic` and
+   `deletes/dynamic` is one operation at its own timestamp, read one day at a
+   time (`stream.py`). A person comes with its interests, studies and jobs; a
+   forum, post or comment with its tags. A delete is its explicit target; the
+   cascade is the system's to work out (below).
 3. **Parameters:** `factors.py` rebuilds Datagen's raw tables and the paramgen
    factor tables from the CSV export. The official paramgen then runs on them
    unchanged, and `parameters.py` converts its output to one JSON file:
-
 ```sh
 B=/path/to/bi-sf1-composite-merged-fk/graphs/csv/bi/composite-merged-fk
 python3 interactive_v2/factors.py $B /tmp/v2-sf1          # duckdb
@@ -44,19 +41,25 @@ python3 interactive_v2/parameters.py ../parameters /tmp/v2-sf1/parameters.json
 
 The paramgen needs Python 3.10+, `duckdb==0.10.2`, `pandas` 2.x (3.x breaks its
 group-by) and `networkit`. It must run with `TZ=UTC`, or the path parameters'
-validity windows shift by the local offset.
+validity windows shift by the local offset. For SF below 1, use
+`paramgen_window_values_test.json`, as the official scripts do.
 
 ## Running
 
 ```sh
 python3 interactive_v2/driver.py --system ddir --server target/release/ddir_server \
-  --data $B --snapshot journal/initial.pickle.gz --parameters /tmp/v2-sf1/parameters.json \
+  --data $B --parameters /tmp/v2-sf1/parameters.json \
   --tcr 0.008 --threads 16 --warmup 10000 --operations 60000 --output /tmp/v2-run
 ```
 
 `--system duckdb` runs the baseline: the `baselines/sql/duckdb` schema and SQL,
-updates through `baselines/sqlsystems.duckdb_apply`. It needs DuckDB 2.0 and
-Python 3.11+.
+updates through `baselines/sqlsystems.duckdb_apply`. It needs DuckDB 2.0,
+Python 3.11+, and `--snapshot`, the projected initial graph that
+`update_stream.py --prepare-only` writes, because its cascades are computed in
+the driver (`snb.operations.Cascade`). `--cascade client` does the same for DDIR.
+
+`--sf 0.1` runs SF0.1's data with SF1's query mix; SF0.1's own frequency file
+sets every frequency to 1, a test setting.
 
 Output: `results_log.csv` in the Java driver's format, and `results.json` with
 the audit, throughput, and per-type count, late count and latency percentiles.
@@ -84,8 +87,18 @@ driver's thread pool does.
   transaction, and each read worker runs its reads on its own connection, so
   reads run concurrently with each other and with updates.
 
-Both receive the same deltas: the cascades are computed in the driver process
-for both, inside the timed update.
+**Delete cascades.** DDIR computes them in its graph program (`graph.py`): it
+takes inserted rows and explicit delete targets, and derives each live relation
+by the rules of `snb.updates.State` (a deleted person takes their messages,
+Walls, Albums and edges, and their Groups lose their moderator; a deleted forum
+takes its posts; a deleted message takes the replies below it). The rest of the
+graph program is unchanged. Over the whole SF1 stream the live relations equal
+the BI daily journal (checked at three days), and `test_cascade.py` checks the
+rules on a fixture. The driver then holds no graph: 181 MB at SF1, against
+8 GB when it computed cascades itself. The server holds 7.5 GB instead of 4.7 at
+peak in the same setup, for arrangements of the inserted rows by the keys the
+cascades look them up by.
+DuckDB still gets exact deltas from the driver, computed inside the timed update.
 
 ## Results (SF1, Apple M4 with 4 performance and 6 efficiency cores, 16 GB)
 
@@ -105,7 +118,22 @@ did not help), DuckDB 2.0 with its default 10 threads.
 | DDIR, 16 read threads | 0.007 | 377 ops/s | 0.006 |
 | DDIR, 64 read threads, `--batch-ms 50` | 0.006 | 441 ops/s | 0.005 |
 
-At 0.005 DDIR's server is saturated: about 3.2 of the 4 workers' cores are busy.
+| DDIR, all complex reads one-off (`--oneoff`), 192 threads, `--batch-ms 50` | 0.0025 | 1,059 ops/s | 0.002 |
+
+At 0.005 DDIR's server is saturated with standing plans: about 3.2 of the 4
+workers' cores are busy. One-off complex reads (`oneoff/`, below) halve their
+work; the 0.0025 run was 81% one-off complex reads, 12% short reads and 3%
+updates. One-offs are installed while updates flow and read published traces
+without a consistent-frontier import, so these runs are experimental.
+
+At SF0.1, with SF1's query mix (`--sf 0.1`), 80,000 operations:
+
+| | lowest passing TCR | throughput | first failing TCR |
+| --- | ---: | ---: | ---: |
+| DuckDB, 16 read threads | 0.0001 | 2,521 ops/s | 0.00007 |
+| DDIR, one-off complex reads, 512 threads, `--batch-ms 50` | 0.00007 | 3,586 ops/s | 0.00005 |
+
+From SF0.1 to SF1, DuckDB's throughput falls 5.8 times and DDIR's 3.4 times.
 
 **Where DDIR's time goes.** `driver.py --tick-log` records each tick, and
 `replay.py` runs those ticks again back to back. For the first 8,000 ticks of a
@@ -126,6 +154,14 @@ TCR 0.008 run (26,000 operations), with 4 workers and the earlier plans:
   to 212 s. Work is spread evenly across workers (per tick, the busiest worker
   does 1.09 times the mean), except in ranking steps keyed by request, which
   is what the IC9 rewrite addresses.
+
+**One-off complex reads.** `oneoff/split.py` splits each authored IC plan into
+a standing program (its statements that do not depend on the request,
+published) and a one-off program (the request and everything that depends on
+it, importing those). `--oneoff ic1,...` makes each such read install its own
+copy of the one-off program, answer, and drop it at the next tick instead of
+retracting. Answered one at a time on the initial graph, all complex reads take
+17.2 s with 4 workers this way against 40.7 s standing, and the answers agree.
 
 **Work per read, against DuckDB.** `costs.py` answers every read of that slice
 on its own, against the initial graph, on one core (earlier plans):

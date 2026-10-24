@@ -26,7 +26,13 @@ import sys
 
 import duckdb
 
-FAR = 253402214400000  # 9999-12-31: Datagen's deletion date for entities never deleted
+FAR = 253402214400000
+
+
+def files(directory):
+    """A partition directory's CSV files: plain copies, else the compressed ones (as snb/updates.py reads)."""
+    plain = sorted(str(p) for p in directory.glob('*.csv'))
+    return plain or sorted(str(p) for p in directory.glob('*.csv.gz'))  # 9999-12-31: Datagen's deletion date for entities never deleted
 
 
 def main(src, out):
@@ -35,17 +41,18 @@ def main(src, out):
 
     def csv(phase, entity, columns):
         """One entity's partitions as a relation, reading only `columns` (name: type)."""
-        globs = [str(src / 'initial_snapshot' / phase / entity / '*.csv*')]
+        globs = files(src / 'initial_snapshot' / phase / entity)
         if phase == 'dynamic' and (src / 'inserts' / 'dynamic' / entity).is_dir():
-            globs.append(str(src / 'inserts' / 'dynamic' / entity / 'batch_id=*' / '*.csv*'))
+            for day in sorted((src / 'inserts' / 'dynamic' / entity).glob('batch_id=*')):
+                globs += files(day)
         cols = ', '.join(f"'{k}': '{v}'" for k, v in columns.items())
         return (f"read_csv({globs}, delim='|', header=true, quote='\"', escape='\\', "
                 f"columns={{{cols}}}, hive_partitioning=false, timestampformat='%Y-%m-%dT%H:%M:%S.%g%z')")
 
     def deletes(entity, columns):
         cols = ', '.join(f"'{k}': '{v}'" for k, v in columns.items())
-        path = str(src / 'deletes' / 'dynamic' / entity / 'batch_id=*' / '*.csv*')
-        return (f"read_csv('{path}', delim='|', header=true, columns={{{cols}}}, hive_partitioning=false, "
+        paths = [f for day in sorted((src / 'deletes' / 'dynamic' / entity).glob('batch_id=*')) for f in files(day)]
+        return (f"read_csv({paths}, delim='|', header=true, columns={{{cols}}}, hive_partitioning=false, "
                 f"timestampformat='%Y-%m-%dT%H:%M:%S.%g%z')")
 
     ms = lambda c: f"epoch_ms({c})"

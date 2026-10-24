@@ -27,12 +27,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE))
 from client import Server, decode, parse_shape  # noqa: E402
 from snb import data  # noqa: E402
 from snb.operations import Cascade  # noqa: E402
 from snb.parameters import requests  # noqa: E402
 from snb.rel import source_shape  # noqa: E402
+from snb.updates import project_rows  # noqa: E402
 from suite import compile_queries, graph_program  # noqa: E402
+from graph import DELETES, cascade_program, delete_row  # noqa: E402
+from stream import snapshot_rows  # noqa: E402
 
 PLANS = [f'is{i}' for i in range(1, 8)] + [f'ic{i}' for i in range(1, 15)]
 
@@ -79,13 +83,17 @@ class Ddir:
 
     def __init__(self, args, graph):
         self.server = Server(args.server, args.output / 'server.log', args.workers, args.timeout, args.max_rss_gib)
-        self.cascade = Cascade(graph)
+        # With cascades in the dataflow, the driver keeps no graph: inserts are fed as rows
+        # and deletes as their explicit targets (graph.py). Otherwise it retracts exact rows.
+        self.cascade = Cascade(graph) if getattr(args, 'cascade', 'client') == 'client' else None
         self.plans = compile_queries(PLANS)
         self.shapes = {n: (parse_shape(source_shape(p['parameters'])), 'unit') for n, p in self.plans.items()}
         self.relations = list(data.SCHEMA)
         self.graph_shapes = [(parse_shape(source_shape(s)), 'unit') for s in data.SCHEMA.values()]
+        self.graph_shapes = self.graph_shapes[:17] + [(parse_shape(DELETES[i][1]), 'unit') for i in sorted(DELETES)]
         plan_dir = Path(os.environ.get('DDIR_PLAN_DIR', HERE.parent / 'authored' / 'plans'))
-        self.server.commands([f'load graph begin\n{graph_program()}\n{{rid}} end-load', 'tick'])
+        program = graph_program() if self.cascade else cascade_program()
+        self.server.commands([f'load graph begin\n{program}\n{{rid}} end-load', 'tick'])
         # Plans answered one-off: each read installs its own copy of the plan's one-off half,
         # which imports what the standing half publishes, and drops it at the next tick.
         self.oneoff = {}
@@ -101,10 +109,14 @@ class Ddir:
                 continue
             text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
             self.server.commands([f'load {name} begin\n{text}\n{{rid}} end-load', 'tick'])
-        for i, name in enumerate(self.relations):
-            rows = sorted(graph[name])
-            for off in range(0, len(rows), 20000):
-                self.server.commands([Server.feed('graph', i, rows[off:off+20000], 1, self.graph_shapes[i])])
+        if self.cascade:
+            chunks = ((name, sorted(graph[name])[off:off + 20000]) for name in self.relations
+                      for off in range(0, len(graph[name]), 20000))
+        else:
+            chunks = snapshot_rows(args.data / 'initial_snapshot')
+        for name, rows in chunks:
+            i = self.relations.index(name)
+            self.server.commands([Server.feed('graph', i, rows, 1, self.graph_shapes[i])])
         self.server.commands(['tick'])
         self.live, self.rid, self.ticks = [], 0, 0
         self.profile = Counter()   # client-side time per tick phase, ms, and operation counts
@@ -173,11 +185,23 @@ class Ddir:
         self.ticks += 1
         t0 = time.perf_counter()
         commands = []
-        for name, delta in net_changes(self.cascade, updates).items():
-            i = self.relations.index(name)
-            for side, diff in (('removed', -1), ('added', 1)):
-                if delta[side]:
-                    commands.append(Server.feed('graph', i, delta[side], diff, self.graph_shapes[i]))
+        if self.cascade:
+            for name, delta in net_changes(self.cascade, updates).items():
+                i = self.relations.index(name)
+                for side, diff in (('removed', -1), ('added', 1)):
+                    if delta[side]:
+                        commands.append(Server.feed('graph', i, delta[side], diff, self.graph_shapes[i]))
+        else:
+            fed = defaultdict(list)
+            for op in updates:
+                if op.kind.startswith('insert-'):
+                    for name, rows in project_rows(op.rows).items():
+                        fed[self.relations.index(name)].extend(rows)
+                else:
+                    i, row = delete_row(op.kind, op.rows, op.time)
+                    fed[i].append(row)
+            for i, rows in sorted(fed.items()):
+                commands.append(Server.feed('graph', i, sorted(rows), 1, self.graph_shapes[i]))
         for plan, rows in self.live:
             if plan in self.plans:
                 commands.append(Server.feed(plan, 0, rows, -1, self.shapes[plan]))
