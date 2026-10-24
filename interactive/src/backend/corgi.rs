@@ -367,12 +367,11 @@ impl Backend for CorgiBackend {
         // same output when the other's times are at or beyond `s` (`(t0 ∨ s) ∨ t1 = t0 ∨ t1`
         // then), as every program time is; two imports share one time. So the join reads both
         // inputs as of the join of the two times, a one-element frontier as `Arr` says.
+        // Arrangements the program built have `since` at the minimum, where the wrapper returns
+        // after one comparison per unit, so every join is wrapped and compiles to one operator.
         let since = differential_dataflow::lattice::Lattice::join(&l.since, &r.since);
-        if since == Time::minimum() {
-            join_with_tactic::<_, _, _, CC>(l.arranged, r.arranged, "Join", ProxyJoinTactic::new(backend)).as_collection()
-        } else {
-            join_with_tactic::<_, _, _, CC>(l.arranged, r.arranged, "Join", ProxyJoinTactic::new(BackendFrontier::new(backend, Antichain::from_elem(since)))).as_collection()
-        }
+        let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
+        join_with_tactic::<_, _, _, CC>(l.arranged, r.arranged, "Join", ProxyJoinTactic::new(backend)).as_collection()
     }
 
     fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
@@ -400,12 +399,10 @@ impl Backend for CorgiBackend {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
         let backend = CorgiReduceBackend::new(reducer.clone(), shape);
         // An import is read as of its time; the output is the program's own, read as it is.
+        // As for the join, the wrapper at the minimum is one comparison per unit.
         let Arr { arranged, since } = a;
-        Arr::built(if since == Time::minimum() {
-            reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(backend).with_key_batch_size(256))
-        } else {
-            reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(BackendFrontier::new(backend, Antichain::from_elem(since))).with_key_batch_size(256))
-        })
+        let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
+        Arr::built(reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(backend).with_key_batch_size(256)))
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
