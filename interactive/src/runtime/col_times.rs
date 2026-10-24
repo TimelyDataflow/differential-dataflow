@@ -93,7 +93,7 @@ impl<T> Clone for ColTimes<T> {
 
 impl<T> ColTimes<T> {
     #[inline]
-    pub fn new() -> Self { Self::default() }
+    pub(crate) fn new() -> Self { Self::default() }
 
     #[inline]
     pub fn len(&self) -> usize { self.len }
@@ -102,7 +102,7 @@ impl<T> ColTimes<T> {
     pub fn is_empty(&self) -> bool { self.len == 0 }
 
     /// Empty the column, retaining allocation.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         for lane in &mut self.lanes { lane.clear(); }
         self.len = 0;
     }
@@ -121,7 +121,7 @@ impl<T> ColTimes<T> {
     }
 
     /// Append an owned time, each coordinate directly into its lane.
-    pub fn push(&mut self, t: &T) where T: Lanes {
+    pub(crate) fn push(&mut self, t: &T) where T: Lanes {
         let mut width = 0;
         for (j, x) in t.coordinates().enumerate() {
             if j == self.lanes.len() { self.lanes.push(vec![0; self.len]); }
@@ -133,27 +133,27 @@ impl<T> ColTimes<T> {
     }
 
     /// The number of lanes.
-    pub fn width(&self) -> usize { self.lanes.len() }
+    pub(crate) fn width(&self) -> usize { self.lanes.len() }
 
     /// Widen to at least `width` lanes and reserve room for `additional` more rows in each.
-    pub fn reserve(&mut self, width: usize, additional: usize) {
+    pub(crate) fn reserve(&mut self, width: usize, additional: usize) {
         self.widen(width);
         for lane in &mut self.lanes { lane.reserve(additional); }
     }
 
     /// Release capacity beyond the current rows.
-    pub fn shrink_to_fit(&mut self) {
+    pub(crate) fn shrink_to_fit(&mut self) {
         for lane in &mut self.lanes { lane.shrink_to_fit(); }
     }
 
     /// Append `other`'s row `i`.
     #[inline]
-    pub fn push_ref(&mut self, other: &ColTimes<T>, i: usize) {
+    pub(crate) fn push_ref(&mut self, other: &ColTimes<T>, i: usize) {
         self.push_range(other, i, i + 1);
     }
 
     /// Append rows `[s, e)` of `other`, one slice copy per lane.
-    pub fn push_range(&mut self, other: &ColTimes<T>, s: usize, e: usize) {
+    pub(crate) fn push_range(&mut self, other: &ColTimes<T>, s: usize, e: usize) {
         if e <= s { return; }
         self.widen(other.lanes.len());
         for (j, lane) in self.lanes.iter_mut().enumerate() {
@@ -166,7 +166,7 @@ impl<T> ColTimes<T> {
     }
 
     /// A new column of the selected rows, in selection order.
-    pub fn gather(&self, rows: &[usize]) -> Self {
+    pub(crate) fn gather(&self, rows: &[usize]) -> Self {
         let lanes = self.lanes.iter().map(|lane| rows.iter().map(|&i| lane[i]).collect()).collect();
         ColTimes { lanes, len: rows.len(), _t: PhantomData }
     }
@@ -183,7 +183,7 @@ impl<T> ColTimes<T> {
 
     /// Order rows `i` and `j` within this column.
     #[inline]
-    pub fn cmp(&self, i: usize, j: usize) -> Ordering {
+    pub(crate) fn cmp(&self, i: usize, j: usize) -> Ordering {
         for lane in &self.lanes {
             match lane[i].cmp(&lane[j]) {
                 Ordering::Equal => continue,
@@ -195,7 +195,7 @@ impl<T> ColTimes<T> {
 
     /// Order this column's row `i` against `other`'s row `j`.
     #[inline]
-    pub fn cmp_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> Ordering {
+    pub(crate) fn cmp_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> Ordering {
         for k in 0..self.lanes.len().max(other.lanes.len()) {
             match self.at(k, i).cmp(&other.at(k, j)) {
                 Ordering::Equal => continue,
@@ -203,11 +203,6 @@ impl<T> ColTimes<T> {
             }
         }
         Ordering::Equal
-    }
-
-    /// Whether this column's row `i` is less than or equal to `other`'s row `j` in the partial order.
-    pub fn less_equal_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> bool {
-        (0..self.lanes.len().max(other.lanes.len())).all(|k| self.at(k, i) <= other.at(k, j))
     }
 
     /// Whether row `i` is less than or equal to row `j` in the partial order.
@@ -218,7 +213,7 @@ impl<T> ColTimes<T> {
     /// Advance rows `0..end` by `frontier`, in place. Advancing by a frontier is the meet over its
     /// elements of the joins with each; in a product of chains that is the join with the elements'
     /// meet, so each lane takes a max with one constant. An empty frontier leaves rows unchanged.
-    pub fn advance_by(&mut self, frontier: AntichainRef<T>, end: usize) where T: Lanes {
+    pub(crate) fn advance_by(&mut self, frontier: AntichainRef<T>, end: usize) where T: Lanes {
         if frontier.is_empty() || end == 0 { return; }
         let mut meet: Option<Vec<u64>> = None;
         for f in frontier.iter() {
@@ -241,7 +236,7 @@ impl<T> ColTimes<T> {
     }
 
     /// For each row, whether some element of `frontier` is less than or equal to it.
-    pub fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> where T: Lanes {
+    pub(crate) fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> where T: Lanes {
         let mut beyond = vec![false; self.len];
         let mut dominated = vec![true; self.len];
         for f in frontier.iter() {
@@ -260,7 +255,7 @@ impl<T> ColTimes<T> {
 
     /// The minimal elements among the selected rows, as row indices, one per distinct minimal time.
     /// Quadratic in the number of minimal elements; callers first discard rows a known frontier covers.
-    pub fn minimal(&self, rows: &[usize]) -> Vec<usize> {
+    pub(crate) fn minimal(&self, rows: &[usize]) -> Vec<usize> {
         let mut minimal: Vec<usize> = Vec::new();
         for &i in rows {
             if minimal.iter().any(|&m| self.less_equal(m, i)) { continue; }
@@ -271,26 +266,26 @@ impl<T> ColTimes<T> {
     }
 
     /// Coordinate `k` of every row, zero where the column is narrower.
-    pub fn lane(&self, k: usize) -> Vec<u64> {
+    pub(crate) fn lane(&self, k: usize) -> Vec<u64> {
         self.lanes.get(k).cloned().unwrap_or_else(|| vec![0; self.len])
     }
 
     /// Raise coordinate `k` of each row to at least `values[i]`: the join with a time that is
     /// `values[i]` at coordinate `k` and zero elsewhere.
-    pub fn lane_max(&mut self, k: usize, values: &[u64]) {
+    pub(crate) fn lane_max(&mut self, k: usize, values: &[u64]) {
         assert_eq!(values.len(), self.len);
         self.widen(k + 1);
         for (x, &v) in self.lanes[k].iter_mut().zip(values) { *x = (*x).max(v); }
     }
 
     /// Keep only the first `width` coordinates of every row.
-    pub fn truncate(&mut self, width: usize) {
+    pub(crate) fn truncate(&mut self, width: usize) {
         self.lanes.truncate(width);
     }
 
     /// Apply a path summary to every row, in place. Returns the surviving row indices when some
     /// row's result overflowed and was dropped, and `None` when every row survived.
-    pub fn results_in<S: LaneSummary>(&mut self, step: &S) -> Option<Vec<usize>> {
+    pub(crate) fn results_in<S: LaneSummary>(&mut self, step: &S) -> Option<Vec<usize>> {
         let (retain, adds) = step.lane_steps();
         if let Some(retain) = retain { self.lanes.truncate(retain); }
         self.widen(adds.len());
@@ -316,14 +311,14 @@ impl<T> ColTimes<T> {
     pub fn raw_lanes(&self) -> &[Vec<u64>] { &self.lanes }
 
     /// A column from lanes that each hold `len` rows.
-    pub fn from_raw_lanes(lanes: Vec<Vec<u64>>, len: usize) -> Self {
+    pub(crate) fn from_raw_lanes(lanes: Vec<Vec<u64>>, len: usize) -> Self {
         assert!(lanes.iter().all(|lane| lane.len() == len), "every lane must hold {len} rows");
         ColTimes { lanes, len, _t: PhantomData }
     }
 
     /// The same lanes, read as times of type `U`. Coordinates `U` has beyond the lanes read as zero,
     /// so this enters a scope: an outer time is the inner time whose added coordinates are zero.
-    pub fn retime<U>(self) -> ColTimes<U> {
+    pub(crate) fn retime<U>(self) -> ColTimes<U> {
         ColTimes { lanes: self.lanes, len: self.len, _t: PhantomData }
     }
 }

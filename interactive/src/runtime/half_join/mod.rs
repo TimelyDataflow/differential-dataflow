@@ -31,8 +31,8 @@ use crate::ir::{Diff, Time};
 mod batcher;
 mod tactic;
 
-pub use batcher::HalfJoinBatcher;
-pub use tactic::CorgiHalfJoin;
+pub(crate) use batcher::HalfJoinBatcher;
+pub(crate) use tactic::CorgiHalfJoin;
 
 type CC = CorgiContainer<Time, Diff>;
 type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
@@ -43,7 +43,7 @@ type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
 /// it works. Runs are not consolidated: what one extraction releases from different chains may
 /// repeat a row.
 #[derive(Clone)]
-pub struct Run {
+pub(crate) struct Run {
     keys: CValue,
     vals: CValue,
     times: ColTimes<Time>,
@@ -52,7 +52,8 @@ pub struct Run {
 
 impl Run {
     /// Updates put in identifier order, as one run.
-    pub fn new(keys: CValue, vals: CValue, times: ColTimes<Time>, diffs: Vec<Diff>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(keys: CValue, vals: CValue, times: ColTimes<Time>, diffs: Vec<Diff>) -> Self {
         let n = diffs.len();
         let width = times.width();
         let part = Part { keys, vals: &vals, times: PartTimes::Col(&times), diffs: &diffs, rows: 0..n };
@@ -60,11 +61,11 @@ impl Run {
         part.runs(n.max(1), width, &mut runs);
         runs.pop().unwrap_or_else(|| Run { keys: present_key(part.keys.clone()), vals: vals.clone(), times: times.clone(), diffs: Vec::new() })
     }
-    pub fn len(&self) -> usize { self.diffs.len() }
-    pub fn keys(&self) -> &CValue { &self.keys }
-    pub fn vals(&self) -> &CValue { &self.vals }
-    pub fn times(&self) -> &ColTimes<Time> { &self.times }
-    pub fn diffs(&self) -> &[Diff] { &self.diffs }
+    pub(crate) fn len(&self) -> usize { self.diffs.len() }
+    pub(crate) fn keys(&self) -> &CValue { &self.keys }
+    pub(crate) fn vals(&self) -> &CValue { &self.vals }
+    pub(crate) fn times(&self) -> &ColTimes<Time> { &self.times }
+    pub(crate) fn diffs(&self) -> &[Diff] { &self.diffs }
 }
 
 /// Rows `rows` of released columns, from a time chunk or from arrivals released on arrival.

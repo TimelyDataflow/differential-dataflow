@@ -96,10 +96,10 @@ impl<T, R> CorgiChunk<T, R> {
         let (keys, vals) = split_kv(kv);
         Self::from_parts(keys, vals, times, diffs)
     }
-    pub fn keys(&self) -> &CValue { &self.0.keys }
-    pub fn vals(&self) -> &CValue { &self.0.vals }
+    pub(crate) fn keys(&self) -> &CValue { &self.0.keys }
+    pub(crate) fn vals(&self) -> &CValue { &self.0.vals }
     pub fn times(&self) -> &ColTimes<T> { &self.0.times }
-    pub fn diffs(&self) -> &[R] { &self.0.diffs }
+    pub(crate) fn diffs(&self) -> &[R] { &self.0.diffs }
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -485,7 +485,7 @@ where
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
-pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
+pub(crate) fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
@@ -515,7 +515,7 @@ where
 /// Crucially it **accumulates to `INGEST`** before consolidating (like `ContainerChunker`), so it
 /// emits few large chunks rather than one tiny chunk per input container — otherwise the columnar
 /// per-chunk set-up (`gather`/`sort_perm`) dominates when input arrives as many small batches.
-pub struct CorgiChunker<T, R> {
+pub(crate) struct CorgiChunker<T, R> {
     /// Un-consolidated key/val column blocks (one per absorbed container), flat time/diff.
     k_blocks: Vec<CValue>,
     v_blocks: Vec<CValue>,
@@ -553,7 +553,7 @@ impl<T, R> Default for CorgiChunker<T, R> {
 ///
 /// The hash is computed ONCE here, at ingest, and thereafter moves as data: `merge`, `advance`
 /// and `settle` permute key columns with `gather_lanes`, so no transducer recomputes it.
-pub fn present_key(keys: CValue) -> CValue {
+pub(crate) fn present_key(keys: CValue) -> CValue {
     match corgi::arrange::leaf_slice(&keys) {
         Some(_) => hold_wide(keys),
         None => {
@@ -565,7 +565,7 @@ pub fn present_key(keys: CValue) -> CValue {
 
 /// An integer column (an `Int` leaf, or a 1-field `Prod` of one) held as `i64`s; any other
 /// column as it is. Corgi chooses how to hold an integer column, and may hold one narrower.
-pub fn hold_wide(col: CValue) -> CValue {
+fn hold_wide(col: CValue) -> CValue {
     match corgi::arrange::leaf_slice(&col) {
         Some(std::borrow::Cow::Owned(ids)) => rewrap(&col, ids),
         _ => col,
@@ -573,7 +573,7 @@ pub fn hold_wide(col: CValue) -> CValue {
 }
 
 /// An integer column's values held as `i64`s, wrapped in `template`'s single-field products.
-pub fn rewrap(template: &CValue, ids: Vec<i64>) -> CValue {
+pub(crate) fn rewrap(template: &CValue, ids: Vec<i64>) -> CValue {
     match template {
         CValue::Prod(fields) => CValue::Prod(vec![rewrap(&fields[0], ids)]),
         _ => CValue::i64(ids),
@@ -583,7 +583,7 @@ pub fn rewrap(template: &CValue, ids: Vec<i64>) -> CValue {
 /// An integer column's values, borrowed: `Some` exactly when the column is an `Int` leaf (or a
 /// 1-field `Prod` of one) held as `i64`s. An integer column held narrower is `None`, and a
 /// reader that can take one falls back to its structural path.
-pub fn int_lane(col: &CValue) -> Option<&[i64]> {
+pub(crate) fn int_lane(col: &CValue) -> Option<&[i64]> {
     match col {
         CValue::Prod(fields) if fields.len() == 1 => int_lane(&fields[0]),
         _ => corgi::arrange::borrowed_i64(col),
@@ -592,13 +592,13 @@ pub fn int_lane(col: &CValue) -> Option<&[i64]> {
 
 /// The identifier lane of a [`present_key`] column, borrowed: the key's own values when it is an
 /// integer, and the prepended hash lane otherwise. `present_key` holds it as `i64`s.
-pub fn ident(keys: &CValue) -> &[i64] {
+pub(crate) fn ident(keys: &CValue) -> &[i64] {
     int_lane(key_lane(keys)).expect("an arrangement's identifier lane is held as i64s")
 }
 
 /// The integer identifier of each row of a [`present_key`] column: the key's own values when it is
 /// an integer, and the prepended hash lane otherwise. Never re-hashes.
-pub fn key_ids(keys: &CValue) -> Vec<i64> {
+pub(crate) fn key_ids(keys: &CValue) -> Vec<i64> {
     ident(keys).to_vec()
 }
 
@@ -609,7 +609,7 @@ pub fn key_ids(keys: &CValue) -> Vec<i64> {
 /// One rule covers both forms, because [`present_key`] leaves exactly three possibilities: a bare
 /// `Int`, the 1-field `Prod` that also counts as an integer, or a prepended `Prod([hash, key])`.
 /// The leading field is the identifier in all three.
-pub fn key_lane(keys: &CValue) -> &CValue {
+fn key_lane(keys: &CValue) -> &CValue {
     match keys {
         CValue::Prod(cols) => &cols[0],
         _ => keys,
@@ -619,19 +619,19 @@ pub fn key_lane(keys: &CValue) -> &CValue {
 /// Whether [`present_key`] prepended a hash to this key — i.e. whether rows sharing an identifier
 /// may hold DIFFERENT keys. False for primitive-integer keys, whose identifier is injective, so
 /// readers can skip the checks that guard against collisions entirely.
-pub fn key_is_hashed(keys: &CValue) -> bool {
+pub(crate) fn key_is_hashed(keys: &CValue) -> bool {
     corgi::arrange::leaf_slice(keys).is_none()
 }
 
 /// Undo [`present_key`]: the key as the rest of the system knows it.
 /// Cloning the column shares its primitive buffers.
-pub fn recover_key(keys: &CValue) -> CValue {
+pub(crate) fn recover_key(keys: &CValue) -> CValue {
     recover_key_ref(keys).clone()
 }
 
 /// Borrow the declared key without its arrangement-only identifier lane.
 /// Use before gathering a projection input to avoid copying a discarded hash column.
-pub fn recover_key_ref(keys: &CValue) -> &CValue {
+pub(crate) fn recover_key_ref(keys: &CValue) -> &CValue {
     match keys {
         CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[1],
         _ => keys,

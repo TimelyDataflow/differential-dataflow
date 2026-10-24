@@ -37,9 +37,9 @@
 
 use crate::ir::{Lambda, LinearOp, Reducer};
 
-pub type ItemId = usize; // index into `Scope::items`
-pub type ImportId = usize; // index into `Scope::imports`
-pub type VarId = usize; // index into `Scope::vars`
+type ItemId = usize; // index into `Scope::items`
+type ImportId = usize; // index into `Scope::imports`
+type VarId = usize; // index into `Scope::vars`
 
 /// A reference, resolved *within its own scope*. Nothing here can name an item
 /// in another scope's interior — cross-scope flow goes through imports/exports.
@@ -198,7 +198,7 @@ impl Scope {
     ///
     /// All three are *within-scope*: a scope boundary is a semantic barrier,
     /// so nothing merges or moves across one.
-    pub fn optimize(&mut self) {
+    pub(crate) fn optimize(&mut self) {
         for item in self.items.iter_mut() {
             if let Item::Sub(child) = item { child.optimize(); }
         }

@@ -48,7 +48,7 @@ type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, D
 /// The compiled form of one `LinearOp`, at the shapes of the batches it reads, which install
 /// inferred. A chain compiles once, when the operator is built; every batch reuses the graph, and
 /// a batch of other shapes is the invariant violation, not a recompile.
-pub struct Plan {
+pub(crate) struct Plan {
     shape: (Shape, Shape),
     /// The op's graph; `None` for the ops that compile none.
     graph: Option<Graph<NumOp>>,
@@ -229,7 +229,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
 
 /// The corgi backend's arrangement: one a program built, or a published export it imported.
 /// Both are the same trace type at the same time, so every operator reads either in place.
-pub type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
+pub(crate) type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
 
 /// The time each coordinate of `t` less one, at least zero: the half join's compaction of its
 /// arrangement. Every later stream time is at or beyond some such frontier element, and advancing
@@ -279,7 +279,7 @@ fn chunk_containers<'s, T: ColTime>(
 /// carries the [`Backend`] impl (a namespace of rendering functions selected by type) and is
 /// never a value — rendering goes through `render_tree::<CorgiBackend>`. The empty enum (vs a
 /// unit struct) makes constructing one impossible, signalling "type only".
-pub enum CorgiBackend {}
+pub(crate) enum CorgiBackend {}
 
 impl Backend for CorgiBackend {
     type Container = CC;
@@ -421,7 +421,7 @@ impl Backend for CorgiBackend {
 
 /// A root import for [`render_program`]: corgi containers, or a published export.
 #[allow(clippy::large_enum_variant)] // One per import, consumed as the program renders.
-pub enum CorgiImport<'s> {
+pub(crate) enum CorgiImport<'s> {
     Columns(Collection<'s, Time, CC>),
     Export(Arr<'s>),
 }
@@ -431,7 +431,7 @@ pub enum CorgiImport<'s> {
 /// producer's arrangement, which the program's `arrange`s, joins, and reduces read in place; an
 /// export that is already an arrangement is returned as it is. Shape ascriptions are the
 /// driver's to check, before it renders.
-pub fn render_program<'s>(
+pub(crate) fn render_program<'s>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     imports: Vec<CorgiImport<'s>>,
@@ -460,19 +460,19 @@ pub fn render_program<'s>(
 }
 
 /// A published export: a trace of corgi chunks at the program time, as the program built it.
-pub type ExportTrace = TraceAgent<CTrace>;
+pub(crate) type ExportTrace = TraceAgent<CTrace>;
 
 /// Arrange a collection as a published trace.
-pub fn arrange_export<'s>(c: Collection<'s, Time, CC>) -> Arranged<'s, ExportTrace> {
+pub(crate) fn arrange_export<'s>(c: Collection<'s, Time, CC>) -> Arranged<'s, ExportTrace> {
     CorgiBackend::arrange(c)
 }
 
 /// The batches an export's arrangement has produced on this worker, not yet taken.
-pub type ExportTap = std::rc::Rc<std::cell::RefCell<Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>>;
+pub(crate) type ExportTap = std::rc::Rc<std::cell::RefCell<Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>>;
 
 /// The updates in `batches`, one container per non-empty chunk. A chunk's key and value columns
 /// are shared with the container, not copied.
-pub fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>) -> Vec<CC> {
+pub(crate) fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>) -> Vec<CC> {
     batches.iter().flat_map(|batch| batch.chunks.iter().filter(|c| c.len() > 0)).map(|ch| CorgiContainer {
         keys: recover_key(ch.keys()),
         vals: ch.vals().clone(),
@@ -482,7 +482,7 @@ pub fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trac
 }
 
 /// Record each batch the arrangement emits into `tap`, passing the stream through.
-pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::dataflow::Stream<'s, Time, Vec<Span<Time, <ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>> {
+pub(crate) fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::dataflow::Stream<'s, Time, Vec<Span<Time, <ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>> {
     a.stream.clone().unary(Pipeline, "ExportTap", move |_, _| {
         move |input, output| {
             input.for_each(|cap, data| {
@@ -494,6 +494,6 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
 }
 
 /// The updates of an imported columnar export, as corgi containers.
-pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, Time, CC> {
+pub(crate) fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, Time, CC> {
     chunk_containers(a.stream, "ExportContainers")
 }

@@ -64,7 +64,7 @@ impl ScopeShapes {
         }
     }
     /// The scope at `path` (indices of `Sub` items from this one).
-    pub fn at(&self, path: &[usize]) -> &ScopeShapes {
+    pub(crate) fn at(&self, path: &[usize]) -> &ScopeShapes {
         match path.split_first() {
             None => self,
             Some((c, rest)) => match &self.items[*c] { ItemShapes::Sub(s) => s.at(rest), ItemShapes::Op(_) => panic!("not a scope") },
@@ -151,7 +151,7 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
 }
 
 /// The shape of a time at scope depth `depth` as data: the epoch and one coordinate per scope.
-pub fn time_shape(depth: usize) -> Shape {
+fn time_shape(depth: usize) -> Shape {
     Shape::Prod(vec![Shape::Int; depth + 1])
 }
 

@@ -1,7 +1,7 @@
 //! The corgi exchange: how a [`CorgiContainer`] is split across workers.
 //!
 //! An arrangement is only correct if every update for a key reaches the same worker, and a join is
-//! only correct if both of its arrangements agree on which worker that is. [`CorgiPact`] is the
+//! only correct if both of its arrangements agree on which worker that is. `CorgiPact` is the
 //! contract that establishes both — the corgi backend's `arrange` uses it in place of `Pipeline`,
 //! and that single substitution is what lifts the backend off one worker.
 //!
@@ -12,7 +12,7 @@
 //! columns, and taking it apart row-wise would undo the representation before the data even left
 //! the worker.
 //!
-//! So [`CorgiDistributor`] partitions the way a columnar engine does — a counting sort:
+//! So `CorgiDistributor` partitions the way a columnar engine does — a counting sort:
 //!
 //! 1. Hash the key column once, one pass, columnar ([`corgi::hash`]).
 //! 2. Count how many rows each destination takes, then place row indices into one `order` buffer
@@ -20,13 +20,13 @@
 //! 3. Per destination, `gather` the key and value columns through its run.
 //!
 //! The output of step 3 is a freshly allocated, contiguous column per destination — which is
-//! exactly what the [wire format](crate::runtime::bytes) wants to write, one `memcpy` per leaf. The
+//! exactly what the wire format (`bytes`) wants to write, one `memcpy` per leaf. The
 //! sort is stable, so rows keep their relative order within a destination.
 //!
 //! # The hash
 //!
 //! Routing uses [`corgi::hash`] — the same structural content hash that
-//! [`present_key`](crate::runtime::chunk::present_key) prepends as a compound key's identifier
+//! `chunk::present_key` prepends as a compound key's identifier
 //! lane. Any deterministic function of the key would be correct here; this one is seed-free and
 //! structural, so it agrees across processes and runs, and its low bits are mixed — a raw key
 //! column would route a strided identifier space onto a fraction of the workers.
@@ -49,7 +49,7 @@ use crate::runtime::container::CorgiContainer;
 /// the life of the dataflow; allocating three `Vec`s per batch is the kind of cost that shows up as
 /// a flat tax on every exchange. (The one per-batch allocation left is the hash column itself,
 /// which `corgi::hash` returns owned.)
-pub struct CorgiDistributor<T, R> {
+pub(crate) struct CorgiDistributor<T, R> {
     marker: std::marker::PhantomData<(T, R)>,
     /// Row indices, grouped by destination: destination `p` owns `order[starts[p]..starts[p+1]]`.
     order: Vec<usize>,
@@ -157,7 +157,7 @@ impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> f
 /// multi-worker: it is the only place the backend's data has to move between workers, because
 /// every other operator (`linear`, `join`, `reduce`, `as_collection`) is key-local given
 /// correctly placed arrangements.
-pub struct CorgiPact;
+pub(crate) struct CorgiPact;
 
 impl<Time, T, R> ParallelizationContract<Time, CorgiContainer<T, R>> for CorgiPact
 where

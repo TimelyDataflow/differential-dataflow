@@ -77,7 +77,7 @@ type Matches = Vec<Vec<(usize, Range<usize>)>>;
 /// Each retire goes: `begin`; then per window, `next_window` presents a run of keys' input and
 /// output as integer records, `reduce_corrections` computes the output each key wants and how it
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
-pub struct CorgiReduceBackend<T> {
+pub(crate) struct CorgiReduceBackend<T> {
     reducer: Reducer,
     /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads.
     graph: Option<(Shape, Shape, Graph<NumOp>)>,
@@ -144,12 +144,12 @@ impl Retire {
 impl<T> CorgiReduceBackend<T> {
     /// A backend for input of `shape`, covering the key space in windows of `1 << 12` input
     /// records.
-    pub fn new(reducer: Reducer, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, shape, 1 << 12) }
+    pub(crate) fn new(reducer: Reducer, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, shape, 1 << 12) }
 
     /// A backend with an explicit window budget, in presented input records. A `Reducer::Expr`
     /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
     /// type check keeps from being reached.
-    pub fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
+    pub(crate) fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
         let graph = match &reducer {
             Reducer::Expr(lambda) => {
                 let g = compile_reduce(lambda, &kshape, &vshape)

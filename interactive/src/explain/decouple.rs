@@ -42,7 +42,7 @@
 
 /// Builds the projections/predicates the reverse rules need, in terms of the
 /// demand envelope `(K, (V, chain, [q]))` documented at the module level.
-pub trait RowModel {
+pub(super) trait RowModel {
     type Proj;
     type Pred;
 
@@ -141,7 +141,7 @@ pub trait RowModel {
 }
 
 /// Orchestration backend: collection handles and the four primitive ops.
-pub trait Dataflow {
+pub(super) trait Dataflow {
     type Handle: Clone;
     type Proj;
     type Pred;
@@ -156,14 +156,14 @@ fn opt_filter<D: Dataflow>(df: &mut D, c: D::Handle, p: Option<D::Pred>) -> D::H
 }
 
 /// One side's inputs to a reverse rule: its pair-table halves and chain length.
-pub struct SideInfo<D: Dataflow> {
-    pub witness: D::Handle,
-    pub forward: D::Handle,
-    pub user_len: usize,
+pub(super) struct SideInfo<D: Dataflow> {
+    pub(super) witness: D::Handle,
+    pub(super) forward: D::Handle,
+    pub(super) user_len: usize,
 }
 
 /// Shape-preserving lookup (Concat/Leave). `keep == in_len` here.
-pub fn shape_preserving_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_depth: usize) -> D::Handle
+pub(super) fn shape_preserving_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_depth: usize) -> D::Handle
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let in_len = side.user_len;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
@@ -175,7 +175,7 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
 }
 
 /// Keyed (Reduce) lookup; `min` enables value-narrowing.
-pub fn keyed_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_len: usize, min: bool) -> D::Handle
+pub(super) fn keyed_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_len: usize, min: bool) -> D::Handle
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let in_len = side.user_len;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
@@ -193,7 +193,7 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
 }
 
 /// Lossy (Project) lookup, through the pair table.
-pub fn lossy_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_len: usize, proj: &M::Proj) -> D::Handle
+pub(super) fn lossy_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_len: usize, proj: &M::Proj) -> D::Handle
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let in_len = side.user_len;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
@@ -206,7 +206,7 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
 
 /// Join lookup (#758): forward-join pair tables, one combined dep×pair join
 /// carrying both chains, one combined time+value filter, then split per side.
-pub fn join_lookup<M, D>(df: &mut D, dep: &D::Handle, left: &SideInfo<D>, right: &SideInfo<D>, out_len: usize, proj: &M::Proj) -> (D::Handle, D::Handle)
+pub(super) fn join_lookup<M, D>(df: &mut D, dep: &D::Handle, left: &SideInfo<D>, right: &SideInfo<D>, out_len: usize, proj: &M::Proj) -> (D::Handle, D::Handle)
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let l_len = left.user_len;
     let r_len = right.user_len;
@@ -229,8 +229,8 @@ mod mem {
     use crate::ir::Lambda;
     use corgi::Value;
 
-    pub type Coll = Vec<(Value, Value)>;
-    pub struct Mem;
+    pub(super) type Coll = Vec<(Value, Value)>;
+    pub(super) struct Mem;
 
     /// A lambda on one row of its slot.
     fn eval(p: &Lambda, rows: Vec<Value>) -> Value {

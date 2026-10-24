@@ -36,10 +36,10 @@ use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The diagnostics sources, by the name a program imports.
-pub const SOURCES: [&str; 4] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records"];
+pub(crate) const SOURCES: [&str; 4] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records"];
 
 /// Whether `name` is a diagnostics source.
-pub fn is_source(name: &str) -> bool {
+pub(crate) fn is_source(name: &str) -> bool {
     SOURCES.contains(&name)
 }
 
@@ -48,7 +48,7 @@ fn text() -> Shape {
 }
 
 /// The shape of diagnostics source `name`'s rows.
-pub fn shape(name: &str) -> Option<(Shape, Shape)> {
+pub(crate) fn shape(name: &str) -> Option<(Shape, Shape)> {
     let worker_op = Shape::Prod(vec![Shape::Int, Shape::Int]);
     match name {
         "diag.operator" => Some((worker_op, Shape::Prod(vec![text(), text(), text(), Shape::List(Box::new(Shape::Int))]))),
@@ -157,7 +157,7 @@ pub fn register(worker: &mut Worker) -> Rc<RefCell<Diagnostics>> {
 }
 
 /// Flush this worker's loggers, so that every event so far has reached its `Diagnostics`.
-pub fn flush(worker: &Worker) {
+pub(crate) fn flush(worker: &Worker) {
     if let Some(mut registry) = worker.log_register() {
         registry.flush();
     }
@@ -165,13 +165,13 @@ pub fn flush(worker: &Worker) {
 
 impl Diagnostics {
     /// Record that dataflow `index` runs the installed `name`.
-    pub fn note_dataflow(&mut self, index: usize, name: &str) {
+    pub(crate) fn note_dataflow(&mut self, index: usize, name: &str) {
         self.dataflows.insert(index, program_of(name));
     }
 
     /// Fold the events received so far into the live operators and the pending changes.
     /// `installed` are the worker's live dataflows: an operator of any other has been dropped.
-    pub fn process(&mut self, installed: &HashSet<usize>) {
+    pub(crate) fn process(&mut self, installed: &HashSet<usize>) {
         let timely = std::mem::take(&mut self.timely);
         let mut elapsed: HashMap<usize, i64> = HashMap::new();
         let mut created = Vec::new();
@@ -270,7 +270,7 @@ impl Diagnostics {
     }
 
     /// The changes to source `name` since the last call, which are then forgotten for it.
-    pub fn take_pending(&mut self, name: &str) -> Option<Updates> {
+    pub(crate) fn take_pending(&mut self, name: &str) -> Option<Updates> {
         let worker = self.worker as i64;
         match name {
             "diag.operator" => {
@@ -295,7 +295,7 @@ impl Diagnostics {
     }
 
     /// Source `name`'s whole contents now, for a source installed after diagnostics began.
-    pub fn snapshot(&self, name: &str) -> Option<Updates> {
+    pub(crate) fn snapshot(&self, name: &str) -> Option<Updates> {
         let worker = self.worker as i64;
         match name {
             "diag.operator" => operator_rows(worker, self.ops.iter()
@@ -310,7 +310,7 @@ impl Diagnostics {
 
     /// Forget the pending changes of every source: called before a source is installed and seeded
     /// from [`Self::snapshot`], once the installed sources have taken theirs.
-    pub fn clear_pending(&mut self) {
+    pub(crate) fn clear_pending(&mut self) {
         self.pending = Pending::default();
     }
 
