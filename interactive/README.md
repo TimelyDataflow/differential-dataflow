@@ -81,7 +81,8 @@ A program moves through four parts, each using only the ones before it.
    trait and `render_tree`, which turns the scope tree into operators. `corgi/` is today's
    backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
    and frame formats.
-4. **The host.** `server.rs` is the in-process registry: install, feed, tick, publish and peek.
+4. **The host.** `server/` is the in-process registry: install, feed, tick, publish and peek,
+   one file per concern.
    `diag.rs` turns the server's own logging into the `diag.*` collections. The `ddir-server`
    crate in `server/` is the executable that drives it all.
 
