@@ -10,14 +10,14 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::batcher::merge::{MergeLadder, Merger};
 
-use corgi::arrange::{gather, gather_lanes, sort_blocks, survey_groups, GroupRun};
+use corgi::arrange::{gather, gather_lanes, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use crate::runtime::chunk::concat_blocks;
 use crate::runtime::col_times::{ColTimes, Lanes};
 use crate::ir::{Diff, Time};
 
-use super::{gather_rows, Part, PartTimes, Run, CC};
+use super::{consolidate_rows, gather_rows, Part, PartTimes, Run, CC};
 
 /// The most rows in one [`Run`]. Small under test, so that units hold many runs.
 const RUN: usize = if cfg!(test) { 4 } else { 1 << 16 };
@@ -52,19 +52,7 @@ impl TimeChunk {
 
     /// Sorts and consolidates rows `(t, key, val)`.
     fn form(rows: CValue, diffs: Vec<Diff>) -> Option<Self> {
-        let (perm, labels) = sort_blocks(&[], &rows);
-        let (mut keep, mut kept) = (Vec::new(), Vec::new());
-        let mut i = 0;
-        while i < perm.len() {
-            let mut j = i + 1;
-            while j < perm.len() && labels[j] == labels[i] { j += 1; }
-            let d: Diff = perm[i..j].iter().map(|&p| diffs[p]).sum();
-            if d != 0 {
-                keep.push(perm[i]);
-                kept.push(d);
-            }
-            i = j;
-        }
+        let (keep, kept) = consolidate_rows(&rows, &diffs);
         if kept.is_empty() { return None; }
         Some(TimeChunk::new(gather(&rows, &keep), kept))
     }
@@ -209,7 +197,8 @@ impl Merger for TimeMerger {
 /// Updates wait in a merge ladder of chains in time order, so what a frontier releases from each
 /// chain is a prefix: whole chunks from its front, and part of at most one more. Arrivals the
 /// frontier already unblocks skip the ladder. What one extraction releases is put in identifier
-/// order, ready to meet the arrangement in its order.
+/// order, ready to meet the arrangement in its order, and consolidated within each window it is
+/// released in (see [`Run`]); nothing is held back to consolidate more.
 pub(crate) struct HalfJoinBatcher {
     strict: bool,
     /// The number of lanes in a time: the scope depth, plus one.
@@ -328,6 +317,41 @@ mod tests {
         // (0, [5]) and (1, [0]) are incomparable, so both bound what is kept.
         assert_eq!(released(false, &[t(0, 3), t(2, 0)]), (vec![t(0, 2)], vec![t(0, 5), t(1, 0)]));
         assert_eq!(released(true, &[]), (vec![t(0, 2), t(0, 5), t(1, 0)], vec![]));
+    }
+
+    /// Arrivals the frontier already unblocks leave in the extraction they arrive for, nothing held
+    /// back, and each release comes out consolidated within itself: equal rows merged, rows that
+    /// cancel gone. Keys are tuples, so they are identified by a hash; consolidation compares the
+    /// real keys, so distinct keys stay apart.
+    #[test]
+    fn a_release_is_consolidated_within_itself() {
+        let keys = |ks: &[(i64, i64)]| CValue::Prod(vec![ints(&ks.iter().map(|k| k.0).collect::<Vec<_>>()), ints(&ks.iter().map(|k| k.1).collect::<Vec<_>>())]);
+        let arrival = |ks: &[(i64, i64)], vals: &[i64], times: &[Time], diffs: &[Diff]| CorgiContainer {
+            keys: keys(ks),
+            vals: CValue::Prod(vec![ints(vals), lifted(&vec![(0, 0); vals.len()])]),
+            times: times.iter().cloned().collect(),
+            diffs: diffs.to_vec(),
+        };
+        let row = |k: (i64, i64), v: i64| (tup(vec![int(k.0), int(k.1)]), tup(vec![int(v), tup(vec![int(0), int(0)])]));
+        let updates = |runs: &[Run]| -> Vec<_> {
+            runs.iter().flat_map(|run| CorgiContainer { keys: recover_key(run.keys()), vals: run.vals().clone(), times: run.times().clone(), diffs: run.diffs().to_vec() }.into_updates()).collect()
+        };
+        for strict in [false, true] {
+            let mut batcher = HalfJoinBatcher::new(strict, 2);
+            // One arrival, all of it unblocked and within one window of `RUN` rows: (1, 1) repeats,
+            // (2, 1) cancels.
+            batcher.insert(&mut arrival(&[(1, 1), (2, 1), (1, 1), (2, 1)], &[5, 7, 5, 7], &vec![t(0, 1); 4], &[1, 1, 2, -1]));
+            let (out, lower) = batcher.extract(Antichain::from_elem(t(1, 0)).borrow());
+            assert!(lower.is_empty(), "strict {strict}: nothing unblocked is held back");
+            let got = updates(&out.expect("an unblocked arrival is released at once"));
+            assert_eq!(got, vec![(row((1, 1), 5), t(0, 1), 3)], "strict {strict}: one row per (key, val, time), cancelling rows gone");
+
+            // A later arrival repeating a row is released in its own extraction, not held to merge.
+            batcher.insert(&mut arrival(&[(1, 1)], &[5], &[t(0, 1)], &[1]));
+            let (later, later_lower) = batcher.extract(Antichain::from_elem(t(1, 0)).borrow());
+            assert!(later_lower.is_empty());
+            assert_eq!(updates(&later.unwrap()), vec![(row((1, 1), 5), t(0, 1), 1)]);
+        }
     }
 
     /// Against a model that holds each update until the frontier unblocks it: over rounds of random
