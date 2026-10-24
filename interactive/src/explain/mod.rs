@@ -409,7 +409,7 @@ impl Sb {
     /// Shape-preserving lookup; also the universal depth adapter — when a
     /// contribution's chain length differs from its target's, the join against
     /// the target's host form injects (deeper target) or strips (shallower)
-    /// the difference, outer-aligned by `folded`.
+    /// the difference, aligned at the outermost coordinates.
     fn emit_lookup_shape_preserving(&mut self, dep_y: Ref, side: &Side, output_depth: usize) -> Ref {
         decouple::shape_preserving_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_depth)
     }

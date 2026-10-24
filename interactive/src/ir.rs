@@ -3,7 +3,6 @@
 //! `scope_ir`.
 
 pub type Diff = i64;
-pub type Id = usize;
 pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
 
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
