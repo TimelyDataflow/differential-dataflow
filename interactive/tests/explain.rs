@@ -19,7 +19,9 @@ use interactive::{explain, lower, parse};
 
 /// SCC with the scc edge-set itself as the result, so individual output
 /// edges are queryable. Mirrors `examples/programs/scc.ddp` minus the final
-/// aggregation, with its nodes as one-field tuples.
+/// aggregation, with its nodes as one-field tuples. It stays a copy rather than an
+/// `include_str!`: the tests query result edges by one-field keys (`row(&[773])`),
+/// where `scc.ddp` keys bare integers and counts its result.
 const SCC_ROW: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
     let trans = edges | map((src, dst) -> (dst, src));
