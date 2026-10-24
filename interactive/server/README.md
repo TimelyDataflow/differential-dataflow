@@ -54,7 +54,7 @@ no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
 the current epoch, each worker reading its own share of the arrangement, and
 `diff=<d>` scales every row: `feed bank 0 from retire diff=-1` deletes from an
 input the rows a program exports as no longer needed (see
-[`bench/txn`](bench/txn/README.md)). Unlike `bind`, this is one delivery of the
+[`bench/txn`](../bench/txn/README.md)). Unlike `bind`, this is one delivery of the
 trace's contents, not a standing mirror of its changes. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
 and `tick [n]` reports the epoch reached and the wall-clock time it took. `load` also accepts
@@ -98,7 +98,7 @@ u64*rows*lanes times`, all little-endian. `keys` and `vals` are each one column 
 Corgi's self-describing byte encoding (`corgi::bytes`), so a client reads their
 shapes from the bytes. A `peek` frame has no times (`lanes` is 0); a `tail` frame
 has one lane, each change's epoch. `interactive::corgi::frame` decodes a payload,
-and `bench/ldbc/client.py` has a Python decoder. A `tail` whose client falls more
+and `../bench/ldbc/client.py` has a Python decoder. A `tail` whose client falls more
 than 256 MiB of frames behind gets `err client too slow` and `end`, and stops
 sending.
 
@@ -145,7 +145,7 @@ diffs`. On WebSocket the header line and its bytes are one binary message. The
 session checks that the keys and values have the input's declared shapes (any
 integer storage will do) and admits the columns as one feed, as above. A frame
 of other shapes, not a whole frame, or larger than `DDIR_MAX_FEED_BYTES` is
-refused, and its bytes are read past. `bench/ldbc/client.py` has an encoder,
+refused, and its bytes are read past. `../bench/ldbc/client.py` has an encoder,
 `encode_frame`. The bench clients (`run.py`, `suite.py`, `update_stream.py`) feed
 frames by default, so a benchmark measures the server rather than the client's
 text; `--feed text` restores text.
@@ -219,6 +219,6 @@ fronting proxy if a deployment ever needs one.
 
 ## Benchmarking
 
-The [LDBC-derived workload](bench/ldbc/README.md) runs parameterized interactive
+The [LDBC-derived workload](../bench/ldbc/README.md) runs parameterized interactive
 queries and maintained BI queries together through this server. It includes a
 tiny correctness fixture and can read an existing SNB CSV snapshot for timing.

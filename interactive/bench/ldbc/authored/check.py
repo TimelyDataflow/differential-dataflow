@@ -8,9 +8,9 @@ answers every binding (bind, peek, release; warmup plus measured repetitions).
 The two plans' answers must be identical for every binding; the report records
 both plans' latencies (bind + peek wire time, median) and setup phases.
 
-    python3 interactive/server/bench/ldbc/authored/check.py --server target/release/ddir_server \\
+    python3 interactive/bench/ldbc/authored/check.py --server target/release/ddir_server \\
         --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \\
-        --parameters interactive/server/bench/ldbc/bindings/bi-official-sf1.json \\
+        --parameters interactive/bench/ldbc/bindings/bi-official-sf1.json \\
         --workers 4 --output /tmp/authored-check [query ...]
 
 Bindings are the suite's smoke bindings (`parameters` and `alternate`, labelled

@@ -63,12 +63,12 @@ whole-row run's RSS read 4.3 GB while 21.4 GB of its 24.8 GB footprint was swapp
 ```sh
 cargo build --release -p ddir-server
 # No data needed: the suite's 199-row witness graph.
-python3 interactive/server/bench/ldbc/authored/check.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/authored/check.py --server target/release/ddir_server \
     --fixture --workers 4 --output /tmp/authored-fixture
 # A BI composite-merged-fk snapshot, with the official SF1 BI parameters as extra bindings.
-python3 interactive/server/bench/ldbc/authored/check.py --server target/release/ddir_server \
+python3 interactive/bench/ldbc/authored/check.py --server target/release/ddir_server \
     --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \
-    --parameters interactive/server/bench/ldbc/bindings/bi-official-sf1.json \
+    --parameters interactive/bench/ldbc/bindings/bi-official-sf1.json \
     --workers 4 --output /tmp/authored-sf1 [query ...]
 ```
 

@@ -151,7 +151,7 @@ def main():
     else:
         args.output = Path(tempfile.mkdtemp(prefix='ddir-ldbc-'))
     print(f'Artifacts: {args.output}', flush=True)
-    repo = HERE.parents[3]
+    repo = HERE.parents[2]
     def git(*command):
         return subprocess.run(['git', '-C', str(repo), *command], capture_output=True,
                               text=True, check=False).stdout.strip()

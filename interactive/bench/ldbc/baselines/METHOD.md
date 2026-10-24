@@ -130,16 +130,16 @@ Results distinguish:
 
 ```sh
 # DDIR: generated and authored plans, one-off (see ../authored/README.md).
-python3 interactive/server/bench/ldbc/authored/check.py --server target/release/ddir_server \
-    --prepared JOURNAL --parameters interactive/server/bench/ldbc/bindings/bi-official-sf1.json \
+python3 interactive/bench/ldbc/authored/check.py --server target/release/ddir_server \
+    --prepared JOURNAL --parameters interactive/bench/ldbc/bindings/bi-official-sf1.json \
     --workers 4 --output OUT
 # DDIR maintenance (Python validation is slow at SF1; compare captures across systems instead).
-python3 interactive/server/bench/ldbc/update_stream.py --prepared JOURNAL --server target/release/ddir_server \
+python3 interactive/bench/ldbc/update_stream.py --prepared JOURNAL --server target/release/ddir_server \
     --queries all --workers 4 --check-mode replay --check-every 16 --no-check-first-class --output OUT
 
 # Bindings and reference answers (the suite's Python; slow at SF1).
-python3 interactive/server/bench/ldbc/baselines/reference.py --prepared JOURNAL \
-    --parameters interactive/server/bench/ldbc/bindings/bi-official-sf1.json --output ref.json
+python3 interactive/bench/ldbc/baselines/reference.py --prepared JOURNAL \
+    --parameters interactive/bench/ldbc/bindings/bi-official-sf1.json --output ref.json
 
 # DuckDB (Python >= 3.11: pip install duckdb psycopg[binary] pyarrow), from baselines/.
 python run_sql.py check    --system duckdb --snapshot SNAP --bindings ref.json
