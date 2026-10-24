@@ -110,8 +110,10 @@ class Ddir:
             text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
             self.server.commands([f'load {name} begin\n{text}\n{{rid}} end-load', 'tick'])
         if self.cascade:
-            chunks = ((name, sorted(graph[name])[off:off + 20000]) for name in self.relations
-                      for off in range(0, len(graph[name]), 20000))
+            def chunks_of(name):
+                rows = sorted(graph[name])
+                return ((name, rows[off:off + 20000]) for off in range(0, len(rows), 20000))
+            chunks = (chunk for name in self.relations for chunk in chunks_of(name))
         else:
             chunks = snapshot_rows(args.data / 'initial_snapshot')
         for name, rows in chunks:
