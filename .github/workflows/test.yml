@@ -91,6 +91,12 @@ jobs:
         run: |
           python3 interactive/bench/ldbc/authored/check.py --server target/release/ddir_server \
             --fixture --workers 4 --reps 1 --warmup 0 --output /tmp/ldbc-authored-check
+      # Programs installed late read every import as of the time they start. A late install
+      # that reads an import at its stored times can hang (no progress for 120 s) or disagree.
+      - name: Late-install difftest sweep
+        run: |
+          DIFFTEST_SEED=40000000 DIFFTEST_CASES=500 DIFFTEST_ORACLES=split,bind,reinstall \
+            cargo test --release -p interactive --test difftest -- --ignored --nocapture
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
       # report is skipped (it prints, it does not assert).

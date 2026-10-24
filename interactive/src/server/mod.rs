@@ -98,18 +98,21 @@ use self::sources::{canonical_source_name, clock_rows, generated_shape, InputCon
 pub struct Published(pub crate::backend::corgi::ExportTrace);
 
 impl Published {
-    /// Import into `scope` as containers, one per chunk of each batch, with the import's shutdown
-    /// button. Each worker reads its own share.
+    /// Import into `scope` as containers, one per chunk of each batch, read as of `as_of` (see
+    /// [`Server::import_as_of`]), with the import's shutdown button. Each worker reads its own
+    /// share.
     pub fn import_containers<'s>(
         &mut self,
         scope: timely::dataflow::Scope<'s, HostTime>,
         name: &str,
+        as_of: HostTime,
     ) -> (
         differential_dataflow::Collection<'s, HostTime, HostContainer>,
         ShutdownButton<CapabilitySet<HostTime>>,
     ) {
+        debug_assert!(self.0.get_logical_compaction().less_equal(&as_of), "an import as of {as_of:?}, before its trace's compaction frontier");
         let (arranged, shutdown) = self.0.import_core(scope, name);
-        (crate::backend::corgi::export_containers(arranged), shutdown)
+        (crate::backend::corgi::export_containers(arranged, as_of), shutdown)
     }
 }
 
@@ -276,6 +279,17 @@ impl Server {
     /// The current epoch (the open host time).
     pub fn epoch(&self) -> OuterTime {
         self.epoch
+    }
+
+    /// The time a program installed now, or a binding, snapshot or tail started now, reads the
+    /// published traces it imports as of: the epoch before the current one, as a program time.
+    ///
+    /// [`Server::tick`] compacts every published trace to it, so their accumulations are correct
+    /// from it on; before it a trace's batches can hold counts no time had (a retraction advanced
+    /// to it beside the insertion it retracts), on which an iterative scope need not converge.
+    /// Every import advances the times it reads to it, as DD's `import_frontier` reads a trace.
+    pub fn import_as_of(&self) -> HostTime {
+        host_time(self.epoch.saturating_sub(1))
     }
 
     /// Whether `name` (canonical) is published.

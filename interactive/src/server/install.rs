@@ -123,6 +123,7 @@ impl Server {
         let root = &prog.root;
         let arranged_imports = self.arranged_imports;
         let tapped = self.export_taps;
+        let as_of = self.import_as_of();
         let traces = &mut self.traces;
 
         // The id this dataflow will get; captured so `drop` can remove it.
@@ -137,7 +138,7 @@ impl Server {
                 use timely::dataflow::operators::core::Input as _;
                 use timely::dataflow::operators::Probe;
                 use differential_dataflow::AsCollection;
-                use crate::backend::corgi::{export_containers, CorgiImport};
+                use crate::backend::corgi::{export_containers, Arr, CorgiImport};
                 let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
 
                 // One value per root import, rendered without rows. An input converts rows to
@@ -154,13 +155,16 @@ impl Server {
                             CorgiImport::Columns(stream.as_collection().enter(scope))
                         }
                         st::Source::Trace(t) => {
-                            // The first binding point: resolve a named trace by importing it.
+                            // The first binding point: resolve a named trace by importing it, as
+                            // of the program's start.
                             let key = canonical_source_name(t);
-                            let arranged = traces.get_mut(&key).expect("validated above").import(scope);
+                            let trace = traces.get_mut(&key).expect("validated above");
+                            debug_assert!(trace.get_logical_compaction().less_equal(&as_of), "an import as of {as_of:?}, before its trace's compaction frontier");
+                            let arranged = trace.import(scope);
                             if arranged_imports {
-                                CorgiImport::Export(arranged)
+                                CorgiImport::Export(Arr { arranged, since: as_of.clone() })
                             } else {
-                                CorgiImport::Columns(export_containers(arranged))
+                                CorgiImport::Columns(export_containers(arranged, as_of.clone()))
                             }
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),

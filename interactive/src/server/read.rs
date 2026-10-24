@@ -42,7 +42,8 @@ impl Server {
 
         let name = canonical_source_name(name);
         let epoch = self.epoch;
-        let Published(mut trace) = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let mut published = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let as_of = self.import_as_of();
         let shape = self.shapes[&name].clone();
         let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
         let parts_in = parts.clone();
@@ -50,8 +51,8 @@ impl Server {
         let id = worker.next_dataflow_index();
         host_dataflow(worker, |_, scope| {
             // The dataflow is dropped once drained, which releases the import.
-            let (arranged, _shutdown) = trace.import_core(scope.clone(), "SnapshotImport");
-            crate::backend::corgi::export_containers(arranged)
+            let (containers, _shutdown) = published.import_containers(scope, "SnapshotImport", as_of);
+            containers
                 .inner
                 .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::runtime::exchange::GatherPact, "Snapshot", move |_, _| {
                     move |input, _output| {
