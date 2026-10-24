@@ -1,6 +1,8 @@
 //! The proxy half-join tactic over the vec backend: in a dataflow, against the cursor half join on
 //! the same random inputs, strict and not, at one and two workers, with the backend presenting
-//! blocks of several sizes; and alone, against the definition over product times.
+//! blocks of several sizes; alone, against the definition over product times; and wrapped in
+//! differential's `BackendFrontier`, against the definition over arranged times advanced to the
+//! frontier, at product times and over the pentagon N5.
 
 use std::sync::{Arc, Mutex};
 
@@ -149,5 +151,173 @@ fn half_join_meets_what_the_definition_meets() {
                 assert_eq!(got, expected, "seed {seed}, strict {strict}, window {window}");
             }
         }
+    }
+}
+
+/// The wrapped backend: arranged rows stored before `since` are read advanced to it, which can
+/// change their place in the total order against stream times beyond `since`.
+mod frontier {
+    use super::*;
+    use differential_dataflow::operators::int_proxy::BackendFrontier;
+    use differential_dogs3::operators::half_join::HalfJoinTactic;
+    use timely::order::Product;
+    use timely::progress::{Antichain, PathSummary, Timestamp};
+    use timely::PartialOrder;
+
+    type T2 = Product<u64, u64>;
+
+    /// The definition, over arranged times advanced to `since`: `(((key, val, val2), data ∨ t2'), t, d · d2)`
+    /// for each pair with `t2' < t` (or `≤`), consolidated.
+    fn definition<T: Lattice + Timestamp>(
+        stream: &[((Collide, u64, T), T, i64)],
+        arranged: &[((Collide, u64), T, i64)],
+        since: &Antichain<T>,
+        strict: bool,
+    ) -> Vec<(((Collide, u64, u64), T), T, i64)> {
+        let mut expected = Vec::new();
+        for ((k, v, data), t, d) in stream {
+            for ((k2, v2), t2, d2) in arranged {
+                if k != k2 { continue; }
+                let mut t2 = t2.clone();
+                t2.advance_by(since.borrow());
+                if !(t2 < *t || (!strict && t2 == *t)) { continue; }
+                expected.push((((k.clone(), *v, *v2), data.join(&t2)), t.clone(), d * d2));
+            }
+        }
+        consolidate_updates(&mut expected);
+        expected
+    }
+
+    /// The wrapped tactic's output for one unit, consolidated.
+    fn wrapped<T: Lattice + Timestamp>(
+        stream: &[((Collide, u64, T), T, i64)],
+        arranged: &[((Collide, u64), T, i64)],
+        since: &Antichain<T>,
+        strict: bool,
+        window: usize,
+    ) -> Vec<(((Collide, u64, u64), T), T, i64)> {
+        let backend = VecHalfJoinBackend::with_window(|k: &Collide, v: &u64, v2: &u64| (k.clone(), *v, *v2), window);
+        let mut tactic = ProxyHalfJoinTactic::new(BackendFrontier::new(backend, since.clone()), strict);
+        let batches: Vec<_> = arranged.chunks(1 + arranged.len() / 3).map(|rows| hbatch(rows.to_vec())).collect();
+        let chunks: Vec<Vec<_>> = stream.chunks(1 + stream.len() / 4).map(|rows| rows.to_vec()).collect();
+        let lower: Antichain<T> = stream.iter().map(|u| u.1.clone()).collect();
+        let mut got: Vec<_> = tactic.prep(chunks, batches, lower).flatten().collect();
+        consolidate_updates(&mut got);
+        got
+    }
+
+    /// Advancing flips the total order: stored, `(0, 5)` precedes the stream time `(1, 0)`;
+    /// advanced to `since = {(1, 0)}` it is `(1, 5)`, which follows it. So the stored reading
+    /// meets, and the as-of reading does not, and the wrapper gives the latter in every unit,
+    /// although the stream time is beyond `since`.
+    #[test]
+    fn advancing_flips_the_total_order() {
+        let time = T2::new;
+        let arranged = vec![((Collide(1), 7), time(0, 5), 1i64)];
+        let stream = vec![((Collide(1), 3, time(1, 0)), time(1, 0), 1i64)];
+        let since = Antichain::from_elem(time(1, 0));
+        for strict in [true, false] {
+            assert_eq!(wrapped(&stream, &arranged, &Antichain::new(), strict, usize::MAX).len(), 1, "stored: meets");
+            assert_eq!(wrapped(&stream, &arranged, &since, strict, usize::MAX).len(), 0, "as of (1, 0): does not");
+            assert_eq!(definition(&stream, &arranged, &since, strict).len(), 0);
+        }
+        // An arranged row before `since` that still precedes once advanced is met, and its data
+        // time is joined with the advanced time: `(0, 5)` as of `{(1, 0)}` is `(1, 5)`.
+        let later = vec![((Collide(1), 3, time(2, 0)), time(2, 0), 1i64)];
+        let got = wrapped(&later, &arranged, &since, true, usize::MAX);
+        assert_eq!(got, vec![(((Collide(1), 3, 7), time(2, 5)), time(2, 0), 1)]);
+        assert_eq!(got, definition(&later, &arranged, &since, true));
+    }
+
+    /// Against the definition over product times: arranged rows stored at times on both sides of
+    /// `since`, stream rows beyond it, strict and not, several block sizes, colliding hashes.
+    #[test]
+    fn reads_the_arrangement_as_of_since() {
+        let time = T2::new;
+        let mut random = 23u64;
+        let mut next = move |n: u64| { random = random.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (random >> 33) % n };
+        for seed in 0..40 {
+            let since = Antichain::from_elem(time(2, 1 + next(3)));
+            let n_arr = 1 + next(50) as usize;
+            let arranged: Vec<((Collide, u64), T2, i64)> = (0..n_arr).map(|_| {
+                ((Collide(next(5)), next(6)), time(next(5), next(4)), if next(3) == 0 { -1 } else { 1 })
+            }).collect();
+            let n_str = 1 + next(30) as usize;
+            let stream: Vec<((Collide, u64, T2), T2, i64)> = (0..n_str).map(|_| {
+                // Beyond `since`: at or past its element.
+                let t = since[0].join(&time(2 + next(3), next(4)));
+                let data = t.join(&time(next(5), next(4)));
+                ((Collide(next(6)), next(4), data), t, if next(3) == 0 { -1 } else { 1 })
+            }).collect();
+            for strict in [false, true] {
+                let expected = definition(&stream, &arranged, &since, strict);
+                for window in [1, 4, usize::MAX] {
+                    assert_eq!(wrapped(&stream, &arranged, &since, strict, window), expected, "seed {seed}, strict {strict}, window {window}");
+                }
+            }
+        }
+    }
+
+    /// The pentagon `0 < a < b < 1`, `0 < c < 1`, with `a`, `b` incomparable to `c`: the smallest
+    /// non-distributive lattice. The derived `Ord` is a linear extension of the partial order.
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct N5(u8);
+    impl N5 {
+        const ALL: [N5; 5] = [N5(0), N5(1), N5(2), N5(3), N5(4)];
+        fn bounds(self, other: N5, upper: bool) -> impl Iterator<Item = N5> {
+            N5::ALL.into_iter().filter(move |x| if upper { self.less_equal(x) && other.less_equal(x) } else { x.less_equal(&self) && x.less_equal(&other) })
+        }
+    }
+    impl PartialOrder for N5 {
+        fn less_equal(&self, other: &Self) -> bool {
+            self == other || self.0 == 0 || other.0 == 4 || (self.0 == 1 && other.0 == 2)
+        }
+    }
+    impl Lattice for N5 {
+        fn join(&self, other: &Self) -> Self {
+            self.bounds(*other, true).find(|x| self.bounds(*other, true).all(|y| x.less_equal(&y))).expect("a lattice")
+        }
+        fn meet(&self, other: &Self) -> Self {
+            self.bounds(*other, false).find(|x| self.bounds(*other, false).all(|y| y.less_equal(x))).expect("a lattice")
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+    struct Stay;
+    impl PartialOrder for Stay { fn less_equal(&self, _: &Self) -> bool { true } }
+    impl PathSummary<N5> for Stay {
+        fn results_in(&self, time: &N5) -> Option<N5> { Some(*time) }
+        fn followed_by(&self, _: &Self) -> Option<Self> { Some(Stay) }
+    }
+    impl Timestamp for N5 {
+        type Summary = Stay;
+        fn minimum() -> Self { N5(0) }
+    }
+
+    /// Over N5, every frontier of one or two elements, arranged rows at every time, and stream
+    /// rows at every time beyond the frontier: the wrapper agrees with the definition over
+    /// advanced times exactly. Nothing here uses distributivity, and N5 has none.
+    #[test]
+    fn reads_as_of_a_frontier_in_n5() {
+        let mut frontiers: Vec<Antichain<N5>> = N5::ALL.iter().map(|t| Antichain::from_elem(*t)).collect();
+        for x in N5::ALL { for y in N5::ALL {
+            if x < y && !x.less_equal(&y) && !y.less_equal(&x) { frontiers.push([x, y].into_iter().collect()); }
+        } }
+        let mut units = 0;
+        for since in &frontiers {
+            let arranged: Vec<((Collide, u64), N5, i64)> = N5::ALL.iter().enumerate()
+                .flat_map(|(i, &t)| [((Collide(1), i as u64), t, 1i64), ((Collide(1), 9), t, if i % 2 == 0 { 1 } else { -1 }), ((Collide(2), i as u64), t, 1)])
+                .collect();
+            let stream: Vec<((Collide, u64, N5), N5, i64)> = N5::ALL.iter().filter(|t| since.less_equal(t))
+                .flat_map(|&t| [((Collide(1), 0, t), t, 1i64), ((Collide(1), 1, t.join(&N5(3))), t, -1), ((Collide(2), 0, t), t, 1), ((Collide(3), 0, t), t, 1)])
+                .collect();
+            for strict in [false, true] {
+                let expected = definition(&stream, &arranged, since, strict);
+                for window in [1, usize::MAX] {
+                    assert_eq!(wrapped(&stream, &arranged, since, strict, window), expected, "since {since:?}, strict {strict}, window {window}");
+                    units += 1;
+                }
+            }
+        }
+        assert_eq!(units, 4 * frontiers.len());
     }
 }
