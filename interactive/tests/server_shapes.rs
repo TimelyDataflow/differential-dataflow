@@ -16,6 +16,20 @@ fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 
 const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
 
+#[test]
+fn later_types_are_available_to_shapes_and_qualified_variants() {
+    timely::execute_directly(|worker| {
+        let src = r#"
+            export "out" = input 0 : (int, Inner)
+                | map((k, v) -> (k, v inject Outer::Wrap));
+            type Outer = Wrap Inner;
+            type Other = Wrap int;
+            type Inner = Leaf int;
+        "#;
+        Server::new().install(worker, "later", &program(src)).unwrap();
+    });
+}
+
 
 #[test]
 fn exports_publish_their_shapes() {
