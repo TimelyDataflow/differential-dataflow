@@ -66,7 +66,8 @@
 //!
 //! A shape is `int`, `float`, `()`, `(a, b, …)`, `List(a)`, `Option(a)`, `Result(a, b)`, or a
 //! declared type's name. A variant's payload shape is `()` when omitted, and a type's payloads
-//! may name earlier types, never recursively.
+//! may name other types declared anywhere in the program, including inside a scope. Types are
+//! global to the program and may appear in any order, but cannot be recursive.
 //!
 //! A collection's shape, as `input`, `import`, `var` and `export` declare it, is the pair
 //! `(key_shape, val_shape)`: its root has exactly two fields, the key and the value, as a slot's
@@ -96,7 +97,7 @@
 //!   otherwise follow the total order (`fmin` of `-0.0` and `0.0` is `-0.0`). `feq fne flt fle fgt
 //!   fge` are IEEE comparisons giving Int 0/1: NaN compares false (`fne` true) and `-0.0` equals
 //!   `0.0`, where corgi's own `eq lt …` use the total order.
-//! - The program's `type` declarations, written before the lambda, are corgi enums of the same
+//! - The program's `type` declarations are corgi enums of the same
 //!   names and variants. A variant two types share is written `Type::Variant`.
 //! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums whose payload lanes are open,
 //!   `None` aside: `x inject Some` takes its lane's shape from `x`, and `branch`, `map_variant` and
@@ -116,6 +117,31 @@ enum Token {
     LParen, RParen, LBrace, RBrace,
     Comma, Semi, Colon, ColonColon, Eq,
     Pipe, Plus, Minus, Eof,
+}
+
+/// A shape before names in type declarations have been resolved.
+enum TypeShape {
+    Unit, Int, Float,
+    Prod(Vec<TypeShape>), List(Box<TypeShape>),
+    Option(Box<TypeShape>), Result(Box<TypeShape>, Box<TypeShape>),
+    Named(String),
+}
+
+impl TypeShape {
+    fn dependencies(&self, names: &mut Vec<String>) {
+        match self {
+            Self::Prod(fields) => { for field in fields { field.dependencies(names); } },
+            Self::List(inner) | Self::Option(inner) => inner.dependencies(names),
+            Self::Result(ok, err) => { ok.dependencies(names); err.dependencies(names); },
+            Self::Named(name) => names.push(name.clone()),
+            Self::Unit | Self::Int | Self::Float => {},
+        }
+    }
+}
+
+struct TypeDecl {
+    name: String,
+    variants: Vec<(String, TypeShape)>,
 }
 
 /// The source as a stream of chars, with the byte offset of the next one.
@@ -279,12 +305,11 @@ struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     /// Declared sum types: name -> the variants in tag order, each with its payload shape.
-    /// Populated by `type` decls; tags are positions, scoped to their type.
+    /// Populated before statements are parsed; tags are positions, scoped to their type.
     types: std::collections::HashMap<String, Vec<(String, corgi::Shape)>>,
-    /// The declared types, in declaration order (a type's payload may name an earlier one).
+    /// The declared types, in dependency order.
     type_order: Vec<String>,
-    /// The corgi scope lambdas are parsed in, built at the first lambda and then kept current
-    /// with each `type` declaration.
+    /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
 }
 
@@ -294,7 +319,7 @@ impl Parser {
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the Float functions
-    /// as words, the built-in `Option` and `Result`, and the types declared so far as enums.
+    /// as words, the built-in `Option` and `Result`, and all declared types as enums.
     fn lambda_scope(&mut self) -> &corgi::Scope {
         if self.scope.is_none() {
             let mut scope = crate::lambda::base_scope();
@@ -312,61 +337,73 @@ impl Parser {
     fn next(&mut self) -> Token { let t = self.tokens[self.pos].clone(); self.pos += 1; t }
     fn expect(&mut self, expected: &Token) { let t = self.next(); assert_eq!(&t, expected, "Expected {:?}, got {:?}", expected, t); }
 
+    /// Collect declarations at every brace depth, then remove them from the statement stream.
+    fn collect_types(&mut self) {
+        let mut decls = Vec::new();
+        let mut indices = std::collections::HashMap::new();
+        let mut ranges = Vec::new();
+        while *self.peek() != Token::Eof {
+            if *self.peek() != Token::Type { self.next(); continue; }
+            let start = self.pos;
+            self.next();
+            let name = self.parse_ident();
+            assert!(!indices.contains_key(&name), "type `{name}` declared twice");
+            self.expect(&Token::Eq);
+            let mut variants = vec![self.parse_variant_decl()];
+            while *self.peek() == Token::Pipe {
+                self.next();
+                variants.push(self.parse_variant_decl());
+            }
+            self.expect(&Token::Semi);
+            for (tag, (variant, _)) in variants.iter().enumerate() {
+                assert!(!variants[..tag].iter().any(|(other, _)| other == variant),
+                    "type `{name}` declares `{variant}` twice");
+            }
+            indices.insert(name.clone(), decls.len());
+            ranges.push((start, self.pos));
+            decls.push(TypeDecl { name, variants });
+        }
+        let mut states = vec![0; decls.len()];
+        let mut stack = Vec::new();
+        for index in 0..decls.len() {
+            declare_type(index, &decls, &indices, &mut states, &mut stack, self);
+        }
+        for (start, end) in ranges.into_iter().rev() { self.tokens.drain(start..end); }
+        self.pos = 0;
+    }
+
     fn parse_program(&mut self) -> Vec<Stmt> {
         let mut stmts = Vec::new();
         while *self.peek() != Token::Eof && *self.peek() != Token::RBrace {
-            // `type Name = V0 shape? | V1 shape? | …;` is a parse-time declaration (no IR): the
-            // sum universe. Tags are positions; an omitted payload shape is `()`.
-            if *self.peek() == Token::Type {
-                self.next();
-                let name = self.parse_ident();
-                self.expect(&Token::Eq);
-                let mut variants = vec![self.parse_variant_decl()];
-                while *self.peek() == Token::Pipe {
-                    self.next();
-                    variants.push(self.parse_variant_decl());
-                }
-                self.expect(&Token::Semi);
-                assert!(!self.types.contains_key(&name), "type `{name}` declared twice");
-                for (tag, (v, _)) in variants.iter().enumerate() {
-                    assert!(!variants[..tag].iter().any(|(w, _)| w == v), "type `{name}` declares `{v}` twice");
-                }
-                if let Some(scope) = self.scope.as_mut() {
-                    declare_enum(scope, &name, &variants, &self.types);
-                }
-                self.type_order.push(name.clone());
-                self.types.insert(name, variants);
-                continue;
-            }
             stmts.push(self.parse_stmt());
         }
         stmts
     }
 
     /// One `Name shape?` of a `type` declaration.
-    fn parse_variant_decl(&mut self) -> (String, corgi::Shape) {
+    fn parse_variant_decl(&mut self) -> (String, TypeShape) {
         let name = self.parse_ident();
         let shape = match self.peek() {
-            Token::Pipe | Token::Semi => corgi::Shape::Unit,
-            _ => self.parse_shape(),
+            Token::Pipe | Token::Semi => TypeShape::Unit,
+            _ => self.parse_type_shape(),
         };
         (name, shape)
     }
 
     /// A payload shape: `int`, `float`, `()`, `(a, b, ..)`, `List(a)`, `Option(a)`, `Result(a, b)`,
-    /// or an earlier `type`'s name (so sums nest; never recursively).
-    fn parse_shape(&mut self) -> corgi::Shape {
-        use corgi::Shape;
+    /// or a declared type's name.
+    fn parse_type_shape(&mut self) -> TypeShape {
+        use TypeShape as Shape;
         match self.next() {
             Token::LParen => {
                 if *self.peek() == Token::RParen {
                     self.next();
                     return Shape::Unit;
                 }
-                let mut fields = vec![self.parse_shape()];
+                let mut fields = vec![self.parse_type_shape()];
                 while *self.peek() == Token::Comma {
                     self.next();
-                    fields.push(self.parse_shape());
+                    fields.push(self.parse_type_shape());
                 }
                 self.expect(&Token::RParen);
                 Shape::Prod(fields)
@@ -377,27 +414,46 @@ impl Parser {
                 "float" => Shape::Float,
                 "List" => {
                     self.expect(&Token::LParen);
-                    let inner = self.parse_shape();
+                    let inner = self.parse_type_shape();
                     self.expect(&Token::RParen);
                     Shape::List(Box::new(inner))
                 }
                 "Option" => {
                     self.expect(&Token::LParen);
-                    let inner = self.parse_shape();
+                    let inner = self.parse_type_shape();
                     self.expect(&Token::RParen);
-                    Shape::Sum(vec![Shape::Unit, inner])
+                    Shape::Option(Box::new(inner))
                 }
                 "Result" => {
                     self.expect(&Token::LParen);
-                    let ok = self.parse_shape();
+                    let ok = self.parse_type_shape();
                     self.expect(&Token::Comma);
-                    let err = self.parse_shape();
+                    let err = self.parse_type_shape();
                     self.expect(&Token::RParen);
-                    Shape::Sum(vec![ok, err])
+                    Shape::Result(Box::new(ok), Box::new(err))
                 }
-                name => Shape::Sum(self.type_lanes(name)),
+                name => Shape::Named(name.to_owned()),
             },
             other => panic!("expected a shape, got {:?}", other),
+        }
+    }
+
+    fn parse_shape(&mut self) -> corgi::Shape {
+        let shape = self.parse_type_shape();
+        self.resolve_shape(&shape)
+    }
+
+    fn resolve_shape(&self, shape: &TypeShape) -> corgi::Shape {
+        use corgi::Shape;
+        match shape {
+            TypeShape::Unit => Shape::Unit,
+            TypeShape::Int => Shape::Int,
+            TypeShape::Float => Shape::Float,
+            TypeShape::Prod(fields) => Shape::Prod(fields.iter().map(|s| self.resolve_shape(s)).collect()),
+            TypeShape::List(inner) => Shape::List(Box::new(self.resolve_shape(inner))),
+            TypeShape::Option(inner) => Shape::Sum(vec![Shape::Unit, self.resolve_shape(inner)]),
+            TypeShape::Result(ok, err) => Shape::Sum(vec![self.resolve_shape(ok), self.resolve_shape(err)]),
+            TypeShape::Named(name) => Shape::Sum(self.type_lanes(name)),
         }
     }
 
@@ -579,6 +635,40 @@ impl Parser {
     }
 }
 
+/// Visit dependencies before declaring a type. The active stack gives a useful cycle path.
+fn declare_type(
+    index: usize,
+    decls: &[TypeDecl],
+    indices: &std::collections::HashMap<String, usize>,
+    states: &mut [u8],
+    stack: &mut Vec<usize>,
+    parser: &mut Parser,
+) {
+    if states[index] == 2 { return; }
+    if states[index] == 1 {
+        let from = stack.iter().position(|&i| i == index).unwrap();
+        let path = stack[from..].iter().chain(std::iter::once(&index))
+            .map(|&i| decls[i].name.as_str()).collect::<Vec<_>>().join(" -> ");
+        panic!("recursive types: {path}");
+    }
+    states[index] = 1;
+    stack.push(index);
+    let decl = &decls[index];
+    let mut dependencies = Vec::new();
+    for (_, shape) in &decl.variants { shape.dependencies(&mut dependencies); }
+    for name in dependencies {
+        let dependency = *indices.get(&name).unwrap_or_else(|| panic!("unknown type `{name}`"));
+        declare_type(dependency, decls, indices, states, stack, parser);
+    }
+    let variants = decl.variants.iter()
+        .map(|(name, shape)| (name.clone(), parser.resolve_shape(shape)))
+        .collect();
+    parser.types.insert(decl.name.clone(), variants);
+    parser.type_order.push(decl.name.clone());
+    stack.pop();
+    states[index] = 2;
+}
+
 /// Declare the DDIR type `name` in a lambda scope, as the corgi enum of the same name and variants.
 /// A payload that is itself a sum is written as the name of a declared type with those lanes, or
 /// else as a fresh enum declared for it, with names no program writes.
@@ -611,11 +701,61 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
     scope.declare(&format!("enum {name} = {}", body.join(" | "))).unwrap_or_else(|e| panic!("type `{name}`: {e}"));
 }
 
-pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_program() }
+pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.collect_types(); p.parse_program() }
 
 #[cfg(test)]
 mod tests {
     use super::{parse, Stmt};
+
+    fn panic_text(src: &str) -> String {
+        let err = std::panic::catch_unwind(|| parse(src)).unwrap_err();
+        *err.downcast::<String>().expect("string panic")
+    }
+
+    #[test]
+    fn types_resolve_after_uses_and_in_dependency_order() {
+        let stmts = parse(r#"
+            export "out" = input 0 : (int, Inner)
+                | map((k, v) -> (k, v inject Outer::Wrap));
+            type Outer = Wrap Inner | Empty;
+            type Nested = Lane List(Option(Inner));
+            type Inner = Leaf int;
+        "#);
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(&stmts[0], Stmt::Export(name, _, _) if name == "out"));
+    }
+
+    #[test]
+    fn a_type_inside_a_scope_is_visible_at_the_root() {
+        let stmts = parse(r#"
+            export "out" = input 0 : (int, Member)
+                | map((k, v) -> (k, v inject Group));
+            inner: { type Member = User int; }
+            type Group = Group Member;
+        "#);
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(&stmts[1], Stmt::Scope(_, body) if body.is_empty()));
+    }
+
+    #[test]
+    fn recursive_types_name_the_cycle() {
+        let message = panic_text("type A = Wrap B; type B = Wrap A;");
+        assert!(message.contains("A -> B -> A"), "{message}");
+    }
+
+    #[test]
+    fn unknown_types_keep_their_error() {
+        let message = panic_text("type A = Wrap Missing;");
+        assert!(message.contains("unknown type `Missing`"), "{message}");
+    }
+
+    #[test]
+    fn duplicate_types_and_variants_keep_their_errors() {
+        let name = panic_text("type A = One; s: { type A = Two; }");
+        assert!(name.contains("type `A` declared twice"), "{name}");
+        let variant = panic_text("type A = One | One;");
+        assert!(variant.contains("type `A` declares `One` twice"), "{variant}");
+    }
 
     #[test]
     fn parses_set_and_optional_declarations() {
