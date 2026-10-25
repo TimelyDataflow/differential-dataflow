@@ -18,6 +18,24 @@ use corgi::{Shape, Value as CValue};
 use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
+/// Render one update in the spelling accepted by a single-row `feed` command.
+/// A tail supplies its epoch; a peek has no time. The caller adds the protocol's
+/// request id and `data` prefix.
+pub fn render_row(updates: &Updates, row: usize, time: Option<u64>) -> String {
+    let mut line = print(&updates.keys, row);
+    if !matches!(updates.vals, CValue::Unit(_)) {
+        line.push_str(" val=");
+        line.push_str(&print(&updates.vals, row));
+    }
+    if let Some(time) = time {
+        line.push_str(&format!(" time={time}"));
+    }
+    if updates.diffs[row] != 1 {
+        line.push_str(&format!(" diff={}", updates.diffs[row]));
+    }
+    line
+}
+
 /// Rows of an input's key and value shapes, read from text into columns.
 pub struct FeedDecoder {
     keys: Col,
@@ -206,8 +224,7 @@ impl Col {
 }
 
 /// Row `row` of `v` written as a feed writes it, with every wrapper: `tuple(1,list(2,3))`,
-/// `tuple()`, `inject(1,7)`. A float is written as Rust writes it, so `NaN` and `inf` do not read
-/// back.
+/// `tuple()`, `inject(1,7)`. A float is written as Rust writes it.
 pub(crate) fn print(v: &CValue, row: usize) -> String {
     let mut out = String::new();
     write(v, row, &mut out);
@@ -292,7 +309,7 @@ impl Cursor<'_> {
 
     fn float(&mut self) -> Result<f64, String> {
         let start = self.at;
-        let token = self.token(|b| b.is_ascii_digit() || matches!(b, b'-' | b'+' | b'.' | b'e' | b'E'));
+        let token = self.token(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'+' | b'.'));
         let parsed = std::str::from_utf8(token).ok().and_then(|t| t.parse().ok());
         parsed.ok_or_else(|| { self.at = start; self.expected("a number") })
     }
@@ -325,6 +342,48 @@ mod tests {
         let columns = decoder.finish();
         assert_eq!((corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals)), (key, val));
         assert_eq!(columns.rows(), rows.map(|(k, v)| (k.to_string(), v.to_string(), 1)));
+    }
+
+    #[test]
+    fn rendered_rows_round_trip_at_their_shapes() {
+        let cases = [
+            (Shape::Int, Shape::Unit, vec![("-7", None, 1), ("42", None, -1)]),
+            (Shape::Float, Shape::Float, vec![("-2.75", Some("0.125"), 1), ("3.5", Some("-10.25"), -2)]),
+            (Shape::Unit, Shape::Unit, vec![("tuple()", None, 1)]),
+            (Shape::Prod(vec![Shape::Int, Shape::Prod(vec![Shape::Float, Shape::Unit])]), Shape::Unit,
+                vec![("tuple(4,tuple(-1.5,tuple()))", None, 1)]),
+            (list(Shape::Int), list(list(Shape::Int)),
+                vec![("list()", Some("list(list(),list(1,-2))"), 1), ("list(3)", Some("list()"), -1)]),
+            (Shape::Sum(vec![Shape::Unit, Shape::Int]), Shape::Sum(vec![Shape::Float, Shape::Unit]),
+                vec![("inject(0,tuple())", Some("inject(1,tuple())"), 1), ("inject(1,-3)", Some("inject(0,-0.75)"), -1)]),
+            (Shape::Prod(vec![Shape::Int, list(Shape::Sum(vec![Shape::Unit, Shape::Prod(vec![Shape::Int, Shape::Float])]))]),
+                Shape::Unit, vec![("tuple(9,list(inject(0,tuple()),inject(1,tuple(-4,2.25))))", None, 1)]),
+        ];
+        for (key, val, rows) in cases {
+            let mut source = FeedDecoder::new(&key, &val);
+            for (k, v, d) in &rows { source.push(k, *v, *d).unwrap(); }
+            let columns = source.finish();
+            let mut read = FeedDecoder::new(&key, &val);
+            for row in 0..columns.len() {
+                let line = render_row(&columns, row, None);
+                assert!(!line.contains("time="));
+                read.push_line(&line).unwrap();
+            }
+            let read = read.finish();
+            assert_eq!((read.keys, read.vals, read.diffs), (columns.keys, columns.vals, columns.diffs));
+        }
+    }
+
+    #[test]
+    fn printed_nonfinite_floats_are_feed_values() {
+        let mut source = FeedDecoder::new(&Shape::Float, &Shape::Unit);
+        for key in ["NaN", "inf", "-inf"] { source.push(key, None, 1).unwrap(); }
+        let columns = source.finish();
+        let mut read = FeedDecoder::new(&Shape::Float, &Shape::Unit);
+        for row in 0..columns.len() { read.push_line(&render_row(&columns, row, None)).unwrap(); }
+        let floats = read.finish().keys.as_f64("test").unwrap();
+        assert!(floats[0].is_nan());
+        assert_eq!(floats[1..], [f64::INFINITY, f64::NEG_INFINITY]);
     }
 
     /// An integer may carry a `+` sign, as Rust's integers read: `+1,-2` is `1,-2`.

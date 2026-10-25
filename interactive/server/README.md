@@ -76,11 +76,23 @@ fixed-size window into an infinite hash-derived sequence and replaces
 
 ## Reads: text, or binary frames
 
-Without `as corgi`, `peek` answers with one `data` line holding the consolidated
-contents' columns, as Corgi's `Debug` shows them (`keys=… vals=… diffs=[…]`), and
-`tail` sends one `data` line per batch of changes (`times=… diffs=… keys=…
-vals=…`). These are for people: they show each column's storage, which can differ
-between runs and worker counts for the same answer.
+By default, `peek` answers with one `data` line per consolidated row, written as
+`<key> [val=<v>] [diff=<d>]`. `tail` sends one `data` line per change, written as
+`<key> [val=<v>] time=<epoch> [diff=<d>]`. The key and value use the same
+`tuple(…)`, `list(…)`, `inject(lane,payload)`, integer, and float spelling as a
+text feed. Unit values omit `val=`, and a diff of 1 omits `diff=`. For example,
+`_5 data tuple(inject(0,3),100) val=inject(1,tuple())` is a row that can be
+copied into `feed <prog> <in#> tuple(inject(0,3),100) val=inject(1,tuple())`
+when the input has the same shape. A tail row's `time=` is also accepted by a
+single-row feed. The server refuses writes to a closed epoch, so when feeding a
+tail row later, remove or update its `time=`. To use several rows in
+`feed … begin`, remove their `time=` fields; the batch takes one epoch.
+
+`peek <trace> [key] as columns` and `tail <trace> as columns` keep the earlier
+text dump: one `data` line of Corgi `Debug` columns for a peek
+(`keys=… vals=… diffs=[…]`) or each tail batch
+(`times=… diffs=… keys=… vals=…`). Column storage can differ between runs and
+worker counts for the same answer.
 
 With `as corgi` (`peek <trace> [key] as corgi`, `tail <trace> as corgi`), they
 answer with binary frames instead. A frame is a header line

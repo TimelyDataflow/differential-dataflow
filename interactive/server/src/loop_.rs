@@ -12,6 +12,7 @@ use std::time::Instant;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use interactive::runtime::container::Updates;
 use interactive::runtime::exchange::GatherPact;
+use interactive::runtime::feed::render_row;
 use interactive::runtime::frame;
 use interactive::server::{host_time, Command as ServerCommand, HostContainer, HostTime, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
@@ -21,7 +22,7 @@ use timely::dataflow::operators::vec::{Input as VecInput, Map};
 use timely::dataflow::operators::{CapabilitySet, Exchange, Probe};
 use timely::worker::Worker;
 
-use crate::cmd::{ConnectionId, Out, PreparedCommand, Request};
+use crate::cmd::{ConnectionId, Out, PreparedCommand, ReadFormat, Request};
 use crate::ControlEvent;
 
 struct Tail {
@@ -392,23 +393,32 @@ fn dispatch(
                 Ok("bye".into())
             }
         },
-        Ok(PreparedCommand::Peek { name, key, columnar }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
+        Ok(PreparedCommand::Peek { name, key, format }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
             if let Some(response) = response.as_ref() {
-                if columnar {
-                    let (k, v) = server.trace_shape(&name).expect("a peeked trace has a shape");
-                    send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
-                    send_frame(response, reqid, "data", frame::encode(&updates, &[]), None);
-                } else if !updates.is_empty() {
-                    send(response, reqid, "data", format!("keys={:?} vals={:?} diffs={:?}", updates.keys, updates.vals, updates.diffs));
+                match format {
+                    ReadFormat::Corgi => {
+                        let (k, v) = server.trace_shape(&name).expect("a peeked trace has a shape");
+                        send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
+                        send_frame(response, reqid, "data", frame::encode(&updates, &[]), None);
+                    }
+                    ReadFormat::Columns if !updates.is_empty() => {
+                        send(response, reqid, "data", format!("keys={:?} vals={:?} diffs={:?}", updates.keys, updates.vals, updates.diffs));
+                    }
+                    ReadFormat::Rows => {
+                        for row in 0..updates.len() {
+                            send(response, reqid, "data", render_row(&updates, row, None));
+                        }
+                    }
+                    ReadFormat::Columns => {}
                 }
             }
             format!("t={}", server.epoch())
         }),
-        Ok(PreparedCommand::Tail { name, columnar }) => start_tail(
+        Ok(PreparedCommand::Tail { name, format }) => start_tail(
             connection_id,
             reqid,
             &name,
-            columnar,
+            format,
             response.clone(),
             server,
             tails,
@@ -444,7 +454,7 @@ fn dispatch(
 const TAIL_PENDING_BYTES: usize = 256 << 20;
 
 /// Subscribe the session to `name`'s changes. Every worker reads its share of the trace and sends
-/// it whole to worker 0, which writes each batch as a text line of its columns, or with `columnar`
+/// it whole to worker 0, which writes one text line per row (or a column dump), or with `as corgi`
 /// as a `data` frame after one `schema` frame, and then a `progress` frame whenever the
 /// subscription's frontier advances: every change before that time has been sent.
 #[allow(clippy::too_many_arguments)]
@@ -452,7 +462,7 @@ fn start_tail(
     connection: ConnectionId,
     reqid: &str,
     name: &str,
-    columnar: bool,
+    format: ReadFormat,
     response: Option<Sender<Out>>,
     server: &Server,
     tails: &mut HashMap<TailKey, Tail>,
@@ -469,7 +479,7 @@ fn start_tail(
     let mut trace = server
         .published(name)
         .ok_or_else(|| format!("no trace {:?}", name))?;
-    if let (Some(response), true) = (response.as_ref(), columnar) {
+    if let (Some(response), ReadFormat::Corgi) = (response.as_ref(), format) {
         let (k, v) = server.trace_shape(name).expect("a published trace has a shape");
         send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
     }
@@ -505,14 +515,20 @@ fn start_tail(
                         let updates = Updates { keys, vals, diffs };
                         // A published trace's times are `(epoch, [])`: its rows go out at their epochs.
                         let epochs = &times.raw_lanes()[..times.raw_lanes().len().min(1)];
-                        if columnar {
-                            out("data", frame::encode(&updates, epochs));
-                        } else {
-                            let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).outer).collect();
-                            send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", epochs, updates.diffs, updates.keys, updates.vals));
+                        match format {
+                            ReadFormat::Corgi => out("data", frame::encode(&updates, epochs)),
+                            ReadFormat::Columns => {
+                                let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).outer).collect();
+                                send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", epochs, updates.diffs, updates.keys, updates.vals));
+                            }
+                            ReadFormat::Rows => {
+                                for row in 0..updates.len() {
+                                    send(response, &tag, "data", render_row(&updates, row, Some(times.get(row).outer)));
+                                }
+                            }
                         }
                     });
-                    if columnar {
+                    if format == ReadFormat::Corgi {
                         if let Some(t) = frontier.frontier().iter().map(|t| t.outer).min() {
                             if upper != Some(t) {
                                 upper = Some(t);
