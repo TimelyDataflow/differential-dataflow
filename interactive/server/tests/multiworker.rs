@@ -187,9 +187,11 @@ fn assert_commands_replay() {
             "diff=1 key=tuple(7) val=tuple(9)",
         ]
     );
-    // The text form is one line of the answer's columns, as corgi shows them.
+    // Text defaults to one feed-shaped line per row; the old dump remains available.
     let text = request(&mut writer, &mut reader, "r4", "r4 peek rows\n");
-    assert!(matches!(&text[..], [line] if line.starts_with("keys=") && line.ends_with("diffs=[1, 1]")), "{text:?}");
+    assert_eq!(text, vec!["tuple(7) val=tuple(3)", "tuple(7) val=tuple(9)"]);
+    let columns = request(&mut writer, &mut reader, "r4", "r4 peek rows as columns\n");
+    assert!(matches!(&columns[..], [line] if line.starts_with("keys=") && line.ends_with("diffs=[1, 1]")), "{columns:?}");
     let minimum = request(&mut writer, &mut reader, "r5", "r5 peek minimum as corgi\n");
     assert_eq!(
         minimum,
@@ -250,6 +252,55 @@ fn assert_commands_replay() {
 #[test]
 fn commands_replay_on_four_workers_without_duplicating_input() {
     assert_commands_replay();
+}
+
+#[test]
+fn peek_rows_feed_another_program() {
+    let (server, mut writer, mut reader) = start_server(4);
+    let declaration = "let rows = input 0 : ((Option(int), List(Option(int))), Option(int));";
+    for (id, program, export) in [("a", "first", "original"), ("b", "second", "copied")] {
+        request(&mut writer, &mut reader, id, &format!("{id} load {program} begin\n{declaration}\nexport \"{export}\" = rows;\n{id} end-load\n"));
+    }
+    request(&mut writer, &mut reader, "f", "f feed first 0 begin\ntuple(inject(0,tuple()),list(inject(1,3))) val=inject(1,8)\ntuple(inject(1,-2),list()) val=inject(0,tuple())\nf end-feed\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    let rows = request(&mut writer, &mut reader, "p", "p peek original\n");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|line| line.contains("inject(0,tuple())")));
+    let body = rows.join("\n");
+    request(&mut writer, &mut reader, "f", &format!("f feed second 0 begin\n{body}\nf end-feed\n"));
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek copied\n"), rows);
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
+#[test]
+fn text_tail_rows_keep_epochs_and_retractions() {
+    let (server, mut writer, mut reader) = start_server(1);
+    request(&mut writer, &mut reader, "l", "l load source begin\nlet rows = input 0 : ((int), ());\nexport \"changes\" = rows;\nl end-load\n");
+    request(&mut writer, &mut reader, "w", "w tail changes\n");
+    request(&mut writer, &mut reader, "c", "c tail changes as columns\n");
+    request(&mut writer, &mut reader, "f", "f feed source 0 tuple(7)\n");
+    let mut changes = Vec::new();
+    let mut columns = Vec::new();
+    request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, _| {
+        if let Some(row) = line.strip_prefix("w data ") { changes.push(row.to_string()); }
+        if let Some(batch) = line.strip_prefix("c data ") { columns.push(batch.to_string()); }
+    });
+    request(&mut writer, &mut reader, "f", "f feed source 0 tuple(7) diff=-1\n");
+    request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, _| {
+        if let Some(row) = line.strip_prefix("w data ") { changes.push(row.to_string()); }
+        if let Some(batch) = line.strip_prefix("c data ") { columns.push(batch.to_string()); }
+    });
+    assert_eq!(changes, ["tuple(7) time=0", "tuple(7) time=1 diff=-1"]);
+    assert!(columns.iter().any(|batch| batch.starts_with("times=[0] diffs=[1] keys=") && batch.contains(" vals=Unit(1)")), "{columns:?}");
+    assert!(columns.iter().any(|batch| batch.starts_with("times=[1] diffs=[-1] keys=") && batch.contains(" vals=Unit(1)")), "{columns:?}");
+    request(&mut writer, &mut reader, "s", "s stop w\n");
+    request(&mut writer, &mut reader, "s", "s stop c\n");
+    drop(reader);
+    drop(writer);
+    server.stop();
 }
 
 fn assert_typed_sources() {

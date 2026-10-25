@@ -151,7 +151,7 @@ class Client:
         return self.request("tick")[1]
 
     def peek(self, trace: str) -> tuple[list[str], float]:
-        return self.request(f"peek {trace}")
+        return self.request(f"peek {trace} as columns")
 
     def feed_from(self, prog: str, trace: str, diff: int) -> float:
         return self.request(f"feed {prog} 0 from {trace} diff={diff}")[1]
@@ -235,7 +235,7 @@ def ints(text: str) -> list[int]:
 
 
 def parse_rows(lines: Iterable[str]) -> list[tuple[tuple[int, ...], tuple[int, ...], int]]:
-    """A peek's `keys=… vals=… diffs=[…]` containers as (key, val, diff) rows of integers."""
+    """An `as columns` peek's containers as (key, val, diff) rows of integers."""
     rows = []
     for line in lines:
         keys, sep, rest = line.partition(" vals=")

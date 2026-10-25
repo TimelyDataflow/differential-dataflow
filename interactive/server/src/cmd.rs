@@ -4,7 +4,7 @@
 //! Each response line starts with the same `<reqid>` followed by one of:
 //!   - `ok [body...]` — terminal success line
 //!   - `err [body...]` — terminal error line
-//!   - `data <fields...>` — one streamed body line (peek/tail batches)
+//!   - `data <fields...>` — one streamed body line (peek/tail rows by default)
 //!   - `end` — terminator of a `tail` stream, once it is stopped
 //!
 //! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
@@ -29,6 +29,9 @@ use interactive::scope_ir::{Program, Source};
 use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
 
 pub type ReqId = String;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ReadFormat { Rows, Columns, Corgi }
 
 /// One client session's outbound stream. Cloned into each `Request` so
 /// dispatch can route responses back to the originating client (and so
@@ -94,11 +97,10 @@ pub enum Cmd {
     /// List held names.
     List,
     /// One-shot snapshot of a named trace, optionally of one key (text, read at the trace's key
-    /// shape): a text line of its columns, or with `as corgi` binary frames.
-    Peek { name: String, key: Option<String>, columnar: bool },
-    /// Persistent subscription to a named trace: text lines of its changes' columns, or with
-    /// `as corgi` binary frames.
-    Tail { name: String, columnar: bool },
+    /// shape): one text line per row, columns with `as columns`, or binary frames with `as corgi`.
+    Peek { name: String, key: Option<String>, format: ReadFormat },
+    /// Persistent subscription to a named trace in the same formats as `peek`.
+    Tail { name: String, format: ReadFormat },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
     /// Update positional `input` of `prog` with one row, read into columns at
@@ -155,8 +157,8 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
-    Peek { name: String, key: Option<String>, columnar: bool },
-    Tail { name: String, columnar: bool },
+    Peek { name: String, key: Option<String>, format: ReadFormat },
+    Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
 }
 
@@ -222,8 +224,8 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         }
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
-        Cmd::Peek { name, key, columnar } => return Ok(PreparedCommand::Peek { name, key, columnar }),
-        Cmd::Tail { name, columnar } => return Ok(PreparedCommand::Tail { name, columnar }),
+        Cmd::Peek { name, key, format } => return Ok(PreparedCommand::Peek { name, key, format }),
+        Cmd::Tail { name, format } => return Ok(PreparedCommand::Tail { name, format }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
         Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
@@ -604,11 +606,12 @@ enum ParseOutcome {
 }
 
 
-/// `args` without a trailing `as corgi`, and whether it was there.
-fn as_corgi<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], bool) {
+/// Strip a recognized read format from the end of a command.
+fn read_format<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], ReadFormat) {
     match args {
-        [rest @ .., "as", "corgi"] => (rest, true),
-        _ => (args, false),
+        [rest @ .., "as", "columns"] => (rest, ReadFormat::Columns),
+        [rest @ .., "as", "corgi"] => (rest, ReadFormat::Corgi),
+        _ => (args, ReadFormat::Rows),
     }
 }
 
@@ -796,16 +799,16 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             _ => ParseOutcome::Err("list: takes no arguments".into()),
         },
         "peek" => {
-            let (args, columnar) = as_corgi(args);
+            let (args, format) = read_format(args);
             match args {
-                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, columnar }),
-                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), columnar }),
-                _ => ParseOutcome::Err("peek: expected `<name> [key] [as corgi]`".into()),
+                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, format }),
+                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), format }),
+                _ => ParseOutcome::Err("peek: expected `<name> [key] [as columns|corgi]`".into()),
             }
         }
-        "tail" => match as_corgi(args) {
-            ([name], columnar) => ParseOutcome::Cmd(Cmd::Tail { name: (*name).to_string(), columnar }),
-            _ => ParseOutcome::Err("tail: expected `<name> [as corgi]`".into()),
+        "tail" => match read_format(args) {
+            ([name], format) => ParseOutcome::Cmd(Cmd::Tail { name: (*name).to_string(), format }),
+            _ => ParseOutcome::Err("tail: expected `<name> [as columns|corgi]`".into()),
         },
         "stop" => match args {
             [rid] => ParseOutcome::Cmd(Cmd::Stop {
@@ -925,7 +928,7 @@ mod tests {
         assert!(matches!(got[0].1, Ok(Cmd::List)));
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
-        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, columnar: false }) if name == "foo"));
+        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
     }
 
     #[test]
@@ -1012,21 +1015,24 @@ mod tests {
     }
 
     #[test]
-    fn peek_and_tail_take_a_key_and_as_corgi() {
+    fn peek_and_tail_take_a_key_and_a_format() {
         let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &[
             "r1 peek t 2,3\n", "r2 peek t\n", "r3 peek t 2,3 as corgi\n", "r4 peek t as corgi\n", "r5 peek t 1 2\n",
             "r6 tail t\n", "r7 tail t as corgi\n", "r8 tail t as rows\n",
+            "r9 peek t as columns\n", "r10 tail t as columns\n",
         ]);
-        let peek = |i: usize| match &got[i].1 { Ok(Cmd::Peek { key, columnar, .. }) => Some((key.clone(), *columnar)), _ => None };
-        assert_eq!(peek(0), Some((Some("2,3".into()), false)));
-        assert_eq!(peek(1), Some((None, false)));
-        assert_eq!(peek(2), Some((Some("2,3".into()), true)));
-        assert_eq!(peek(3), Some((None, true)));
+        let peek = |i: usize| match &got[i].1 { Ok(Cmd::Peek { key, format, .. }) => Some((key.clone(), *format)), _ => None };
+        assert_eq!(peek(0), Some((Some("2,3".into()), ReadFormat::Rows)));
+        assert_eq!(peek(1), Some((None, ReadFormat::Rows)));
+        assert_eq!(peek(2), Some((Some("2,3".into()), ReadFormat::Corgi)));
+        assert_eq!(peek(3), Some((None, ReadFormat::Corgi)));
         assert!(got[4].1.is_err());
-        assert!(matches!(&got[5].1, Ok(Cmd::Tail { columnar: false, .. })));
-        assert!(matches!(&got[6].1, Ok(Cmd::Tail { columnar: true, .. })));
+        assert!(matches!(&got[5].1, Ok(Cmd::Tail { format: ReadFormat::Rows, .. })));
+        assert!(matches!(&got[6].1, Ok(Cmd::Tail { format: ReadFormat::Corgi, .. })));
         assert!(got[7].1.is_err());
+        assert_eq!(peek(8), Some((None, ReadFormat::Columns)));
+        assert!(matches!(&got[9].1, Ok(Cmd::Tail { format: ReadFormat::Columns, .. })));
     }
 
     #[test]
@@ -1041,7 +1047,7 @@ mod tests {
         assert_eq!(got[1].0, "_2"); // tick 3
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
-        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, columnar: false }) if name == "foo"));
+        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
     }
