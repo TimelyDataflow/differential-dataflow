@@ -54,7 +54,7 @@ search: {
     let cost   = scores | map((key, s) -> (key, (2.0, (s, 2) add to_float) div));
     let grow   = steps | join(cost, ((rid, _, next), (side, c), w) -> ((rid, side, next, (c, w) add), ()));
 
-    var search = (starts + search + grow) | map(((rid, side, node, c), ()) -> ((rid, side, node), c)) | min
+    set search = (starts + search + grow) | map(((rid, side, node, c), ()) -> ((rid, side, node), c)) | min
                                           | map(((rid, side, node), c) -> ((rid, side, node, c), ()));
 }
 

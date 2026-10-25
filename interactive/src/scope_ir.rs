@@ -148,7 +148,7 @@ pub struct Scope {
     pub imports: Vec<Import>,
     pub vars: Vec<Var>,
     pub items: Vec<Item>,
-    /// For each item, the name of the statement it was lowered from: the `let`, `var`, or
+    /// For each item, the name of the statement it was lowered from: the `let`, `set`, or
     /// `export` whose expression built it, or a child scope's name. Diagnostics only. Empty
     /// for a scope built without them; a reader uses it only when it has one entry per item.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

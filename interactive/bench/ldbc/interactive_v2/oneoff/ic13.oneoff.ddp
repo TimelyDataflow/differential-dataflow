@@ -18,7 +18,7 @@ search: {
     let grow   = (open + near) | map((rid, (side, node, d)) -> (node, (rid, side, d)))
                                | join(friend, (_, (rid, side, d), (next, _)) -> ((rid, side, next, (d, 1) add), ()));
 
-    var search = (starts + search + grow) | map(((rid, side, node, d), ()) -> ((rid, side, node), d)) | min
+    set search = (starts + search + grow) | map(((rid, side, node, d), ()) -> ((rid, side, node), d)) | min
                                           | map(((rid, side, node), d) -> ((rid, side, node, d), ()));
 }
 let side0  = search::search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));

@@ -15,7 +15,7 @@ export "filter" = pairs | filter(((a), (b)) -> (a, b) lt);
 export "flatmap" = pairs | flatmap(((a), (b)) -> (a enlist, b enlist, (a, b) add enlist) append);
 stepped: {
     let delayed = pairs | enter_at((_, (b)) -> b);
-    var counted = delayed | count;
+    set counted = delayed | count;
 }
 export "enter_at" = stepped::counted;
 export "comment" = pairs | value(((a), (b)) ->

@@ -7,7 +7,7 @@
 //! # Collection language
 //!
 //! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
-//! (named trace), `name` (a `let`/`var` in scope), `scope::field` (a child scope's
+//! (named trace), `name` (a `let` or `set` in scope), `scope::field` (a child scope's
 //! export). An input declares its shape, using the shape syntax below, as a table
 //! declares its columns: the server refuses to install a program with an undeclared
 //! input. The shape is the column encoding, also for empty lists and inactive sum
@@ -44,12 +44,13 @@
 //!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
-//! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
-//! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
-//! program output, root scope only). A `var` or `export` may declare its
-//! shape, `var x : (key_shape, val_shape) = …;`, which installation checks
-//! against the shape inferred for its value. `type Name = V0 shape? | V1 shape? …;`
-//! declares a sum type, an enum of the program's lambdas (below); it emits no IR.
+//! Statements: `let x = …;`, `set x = …;` (a feedback variable in a named
+//! scope), `name: { … }` (a nested scope), `export "name" = …;` (a
+//! program output, root scope only). An optional `var x;` or
+//! `var x : (key_shape, val_shape);` declares a feedback variable; the latter
+//! checks the shape inferred for its `set` value. An `export` may also declare
+//! its shape. `type Name = V0 shape? | V1 shape? …;` declares a sum type, an
+//! enum of the program's lambdas (below); it emits no IR.
 //!
 //! A shape is `int`, `float`, `()`, `(a, b, …)`, `List(a)`, `Option(a)`, `Result(a, b)`, or a
 //! declared type's name. A variant's payload shape is `()` when omitted, and a type's payloads
@@ -95,7 +96,7 @@ use crate::ir::{Lambda, Reducer};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Let, Var, Export, Type,
+    Let, Var, Set, Export, Type,
     Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
@@ -248,7 +249,7 @@ fn lex(input: &str) -> Vec<Token> {
 /// `crate::ir::KEYWORDS` lists the same names, for code below the parser.
 fn keyword(ident: &str) -> Option<Token> {
     Some(match ident {
-        "let" => Token::Let, "var" => Token::Var, "export" => Token::Export,
+        "let" => Token::Let, "var" => Token::Var, "set" => Token::Set, "export" => Token::Export,
         "type" => Token::Type,
         "input" => Token::Input, "import" => Token::Import,
         "map" => Token::Map,
@@ -401,7 +402,20 @@ impl Parser {
     fn parse_stmt(&mut self) -> Stmt {
         match self.peek().clone() {
             Token::Let => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Let(n, e) },
-            Token::Var => { self.next(); let n = self.parse_ident(); let s = self.declared_shape(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Var(n, s, e) },
+            Token::Var => {
+                self.next();
+                let n = self.parse_ident();
+                let s = self.declared_shape();
+                if *self.peek() == Token::Eq {
+                    if s.is_some() {
+                        panic!("`var {n} : S = e;` is no longer valid; write `var {n} : S;` then `set {n} = e;`");
+                    }
+                    panic!("`var {n} = e;` is no longer valid; write `set {n} = e;`");
+                }
+                self.expect(&Token::Semi);
+                Stmt::Var(n, s)
+            },
+            Token::Set => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Set(n, e) },
             Token::Export => {
                 self.next();
                 let name = match self.next() {
@@ -579,6 +593,30 @@ pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p
 
 #[cfg(test)]
 mod tests {
+    use super::{parse, Stmt};
+
+    #[test]
+    fn parses_set_and_optional_declarations() {
+        let stmts = parse("s: { var x; set x = x; set y = x; var y : ((int), ()); }");
+        let Stmt::Scope(_, body) = &stmts[0] else { panic!("expected a scope") };
+        assert!(matches!(&body[0], Stmt::Var(n, None) if n == "x"));
+        assert!(matches!(&body[1], Stmt::Set(n, _) if n == "x"));
+        assert!(matches!(&body[2], Stmt::Set(n, _) if n == "y"));
+        assert!(matches!(&body[3], Stmt::Var(n, Some(_)) if n == "y"));
+    }
+
+    #[test]
+    fn old_var_bindings_explain_the_new_spelling() {
+        for (old, expected) in [
+            ("s: { var x = x; }", "set x = e;"),
+            ("s: { var x : ((int), ()) = x; }", "var x : S;` then `set x = e;"),
+        ] {
+            let err = std::panic::catch_unwind(|| parse(old)).unwrap_err();
+            let message = err.downcast_ref::<String>().expect("string panic");
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
     /// Every name `crate::ir::KEYWORDS` lists lexes as a keyword, so a registered function is
     /// refused exactly the names the lexer would claim.
     #[test]

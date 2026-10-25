@@ -16,7 +16,7 @@ move: {
         | min;
     -- ((state,x,m,a,s), (first prio, next))
     let moved = mtch | map(((_, x, m, a, s), (_, nx)) -> ((nx, x, m, a, s), ()));
-    var mv = parts + moved | distinct;
+    set mv = parts + moved | distinct;
 }
 
 export "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)

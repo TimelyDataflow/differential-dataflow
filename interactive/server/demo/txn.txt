@@ -47,7 +47,7 @@ res: {
     let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ()))
                    | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
 
-    var rollback = (bad_seen + bad_absent) | distinct;
+    set rollback = (bad_seen + bad_absent) | distinct;
 }
 
 let rb = res::rollback;

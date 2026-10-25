@@ -30,7 +30,7 @@ const SCC_ROW: &str = r#"
         fwd: {
             let nodes = edges | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
             let labels = proposals + nodes | min;
-            var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
+            set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
         let trim_fwd = edges
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
@@ -40,14 +40,14 @@ const SCC_ROW: &str = r#"
         bwd: {
             let nodes = trans | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
             let labels = proposals + nodes | min;
-            var proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
+            set proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
         }
         let trim_bwd = trans
             | join(bwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(bwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
             | map((dst, (src, _, _)) -> (dst, (src)));
-        var trim = trim_bwd - edges;
+        set trim = trim_bwd - edges;
     }
     export "result" = outer::scc;
 "#;
@@ -60,7 +60,7 @@ const TC_ROW: &str = r#"
             | map(((a), (b)) -> ((a, b), ()))
             | distinct
             | map(((a, b), ()) -> ((a), (b)));
-        var more = tc
+        set more = tc
             | map((a, b) -> (b, a))
             | join(edges, (_, a, c) -> (a, c));
     }
@@ -73,7 +73,7 @@ const REACH_ROW: &str = r#"
     let roots = input 1 : ((int), ()) | map(((n), ()) -> ((n), ()));
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-        var reach = roots + proposals | distinct;
+        set reach = roots + proposals | distinct;
     }
     export "result" = reach::reach;
 "#;
@@ -398,7 +398,7 @@ fn unread_loop_explanations_sufficient() {
         let roots = edges | map((src, _) -> (src, ()));
         reach: {
             let step = x | join(edges, (_, (), dst) -> (dst, ()));
-            var x = (roots + step) | distinct;
+            set x = (roots + step) | distinct;
         }
         export "result" = edges;
         export "reach" = reach::x;
@@ -418,12 +418,12 @@ fn sibling_scope_explanations_sufficient() {
         let roots = edges | map((src, _) -> (src, ()));
         reach: {
             let step = x | join(edges, (_, (), dst) -> (dst, ()));
-            var x = (roots + step) | distinct;
+            set x = (roots + step) | distinct;
         }
         let reached = reach::x;
         again: {
             let step = y | join(edges, (_, (), dst) -> (dst, ()));
-            var y = (reached + step) | distinct;
+            set y = (reached + step) | distinct;
         }
         export "result" = again::y;
     "#;
@@ -442,7 +442,7 @@ fn flatmap_of_a_parent_explanations_sufficient() {
         reach: {
             let hops = edges | flatmap((_, (dst)) -> (dst enlist, (dst, 1) add enlist) append) | map((src, (_, dst)) -> (src, (dst)));
             let step = x | join(hops, (_, (), (dst)) -> ((dst), ()));
-            var x = (roots + step) | distinct;
+            set x = (roots + step) | distinct;
         }
         export "result" = reach::x;
     "#;
@@ -475,7 +475,7 @@ fn negated_fanout_explanations_sufficient() {
 fn min_then_count_explanations_sufficient() {
     const MIN_COUNT: &str = r#"
         let i0 = input 0 : (int, int);
-        s: { let step = x | join(i0, (k, l, e) -> (e, l)); var x = (i0 + step) | min; }
+        s: { let step = x | join(i0, (k, l, e) -> (e, l)); set x = (i0 + step) | min; }
         export "result" = s::x | map((k, l) -> ((l), ())) | count;
     "#;
     let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(int(2), int(4)), (int(4), int(1))]]);
@@ -606,7 +606,7 @@ const LAMBDAS: &str = r#"
     let roots = input 1 : ((int), ()) | map(((n), ()) -> ((n), ()));
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-        var reach = roots + proposals | distinct;
+        set reach = roots + proposals | distinct;
     }
     export "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
 "#;
@@ -628,7 +628,7 @@ const SCALARS: &str = r#"
     let lists = pairs | value((_, v) -> (v, 2) mul) | collect;
     let flat = lists | flatmap((_, l) -> l) | value((_, (_, x)) -> x);
     inner: {
-        var low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
+        set low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
     }
     export "result" = inner::low | join(counted, (k, l, c) -> (k, (l, c)));
 "#;
@@ -672,7 +672,7 @@ const REACH_ENTER_AT: &str = r#"
     reach: {
         let seeds = roots | enter_at(((n), ()) -> n);
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-        var reach = seeds + proposals | distinct;
+        set reach = seeds + proposals | distinct;
     }
     export "result" = reach::reach;
 "#;
@@ -689,7 +689,7 @@ const MIN_LOOP: &str = r#"
     outer: {
         let nodes = edges | map((_, dst) -> (dst, dst));
         let labels = proposals + nodes | min;
-        var proposals = labels | join(edges, (_, label, dst) -> (dst, label));
+        set proposals = labels | join(edges, (_, label, dst) -> (dst, label));
     }
     export "result" = outer::labels;
 "#;
@@ -708,19 +708,19 @@ const SCC_ONE_SCOPE: &str = r#"
         fwd: {
             let nodes = edges | map((_, dst) -> (dst, dst));
             let labels = proposals + nodes | min;
-            var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
+            set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
         let trim_fwd = edges
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(fwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
             | map((dst, (src, _, _)) -> (dst, (src)));
-        var trim = trim_fwd | filter(((n), _) -> (n, 1000000) gt);
+        set trim = trim_fwd | filter(((n), _) -> (n, 1000000) gt);
     }
     export "result" = outer::scc;
 "#;
 
-/// The same program with `var trim = trim_fwd - edges`.
+/// The same program with `set trim = trim_fwd - edges`.
 const SCC_ONE_SCOPE_NEGATED: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
     outer: {
@@ -728,14 +728,14 @@ const SCC_ONE_SCOPE_NEGATED: &str = r#"
         fwd: {
             let nodes = edges | map((_, dst) -> (dst, dst));
             let labels = proposals + nodes | min;
-            var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
+            set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
         let trim_fwd = edges
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(fwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
             | map((dst, (src, _, _)) -> (dst, (src)));
-        var trim = trim_fwd - edges;
+        set trim = trim_fwd - edges;
     }
     export "result" = outer::scc;
 "#;

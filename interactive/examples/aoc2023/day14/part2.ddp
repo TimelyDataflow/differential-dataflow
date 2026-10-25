@@ -77,7 +77,7 @@ spin: {
         | map(((k, r, b, _), n) -> (((k, 1) add, r, (b, n) sub), ()));
     -- (k+1, r, c'): next round
 
-    var os = rocks0 + ose | distinct;
+    set os = rocks0 + ose | distinct;
 }
 
 let final = spin::os | filter(((k, _, _), _) -> (k, 141) eq);

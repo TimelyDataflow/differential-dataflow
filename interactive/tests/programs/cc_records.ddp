@@ -12,7 +12,7 @@ let nodes = edges | map((a, _) -> (a, ())) | distinct;
 -- maintaining the least label it has seen.
 cc: {
     let props  = labels | join(edges, (_, lbl, dst) -> (dst, lbl));
-    var labels = nodes | map((n, _) -> (n, n)) + props | min;
+    set labels = nodes | map((n, _) -> (n, n)) + props | min;
 }
 
 -- the labels now identify components.

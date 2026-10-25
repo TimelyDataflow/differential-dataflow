@@ -12,7 +12,7 @@ let starts = numerals - has_left;
 runs: {
     let grow = run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
                    | join(numerals, ((r, e), (s, v), d) -> ((r, s, (e, 1) add, ((v, 10) mul, d) add), ()));
-    var run = (starts | map(((r, col), d) -> ((r, col, (col, 1) add, d), ()))) + grow | distinct;
+    set run = (starts | map(((r, col), d) -> ((r, col, (col, 1) add, d), ()))) + grow | distinct;
 }
 let extendable = runs::run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
                            | join(numerals, ((r, e), (s, v), _) -> ((r, s, e, v), ()));
@@ -22,7 +22,7 @@ let partvals = maximal | map(((r, s, _, v), _) -> ((r, s), v));
 
 labels: {
     let ext = label | map(((r, col, s), _) -> ((r, (col, 1) add), s)) | join(numerals, ((r, col), s, _) -> ((r, col, s), ()));
-    var label = (starts | map(((r, col), _) -> ((r, col, col), ()))) + ext | distinct;
+    set label = (starts | map(((r, col), _) -> ((r, col, col), ()))) + ext | distinct;
 }
 let labelcells = labels::label | map(((r, col, s), _) -> ((r, col), s));
 

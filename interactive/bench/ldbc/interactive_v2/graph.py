@@ -88,7 +88,7 @@ let seeds = (del_message | map(((id, _), ()) -> (id, ())))
 let children = message_in | filter({msg} -> ({m[1]}, 1) eq) | map({msg} -> ({m[10]}, {m[0]}));
 dead_m: {{
     let kids   = dead_m | join(children, (_, (), child) -> (child, ()));
-    var dead_m = (seeds + kids) | distinct;
+    set dead_m = (seeds + kids) | distinct;
 }}
 let dead_msg = dead_m::dead_m;
 let gone_knows  = del_knows  | map(((a, b, _), ()) -> ((a, b), ())) | distinct;

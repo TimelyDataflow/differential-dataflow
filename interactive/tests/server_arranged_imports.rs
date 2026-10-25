@@ -18,7 +18,7 @@ fn consumer(tag: &str) -> String {
         let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
         r: {{
             let step = reach | join(edges, (_, _, dst) -> (dst, ()));
-            var reach = roots + step | distinct;
+            set reach = roots + step | distinct;
         }}
         export "hop{tag}" = roots | join(edges, (n, _, dst) -> (dst, n));
         export "degree{tag}" = edges | count;

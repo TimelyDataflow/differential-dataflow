@@ -2,9 +2,9 @@
 //!
 //! Statement order within a scope does not affect semantics: each scope
 //! buckets its statements (rejecting duplicate names), pre-declares its
-//! `var`s so anything in the scope can refer to them, topologically lowers
+//! `set` variables so anything in the scope can refer to them, topologically lowers
 //! `let`s and child scopes by dependency (a cycle among `let`s is an error;
-//! use a `var` for recursion), then lowers exports and the `var` bodies
+//! use `set` for recursion), then lowers exports and the `set` bodies
 //! (each emitting a `Bind`).
 
 use std::collections::{BTreeSet, HashMap};
@@ -63,14 +63,15 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
     let mut local: BTreeSet<&'a str> = BTreeSet::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(n, _) | Stmt::Var(n, _, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
+            Stmt::Let(n, _) | Stmt::Var(n, _) | Stmt::Set(n, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
             Stmt::Export(_, _, _) => {},
         }
     }
     let mut inner: BTreeSet<&'a str> = BTreeSet::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Var(_, _, e) | Stmt::Export(_, _, e) => expr_free_names(e, &mut inner),
+            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => expr_free_names(e, &mut inner),
+            Stmt::Var(_, _) => {},
             Stmt::Scope(_, b) => collect_body_free_names(b, &mut inner),
         }
     }
@@ -227,25 +228,43 @@ fn lower_scope_tree(
 
     // Bucket statements.
     let mut lets: HashMap<String, &Expr> = HashMap::new();
-    let mut var_list: Vec<(&str, &Option<st::RowShape>, &Expr)> = Vec::new();
+    let mut sets: Vec<(&str, &Expr)> = Vec::new();
+    let mut declarations: HashMap<&str, &Option<st::RowShape>> = HashMap::new();
     let mut child_bodies: HashMap<String, &[Stmt]> = HashMap::new();
     let mut export_stmts: Vec<(&str, &Option<st::RowShape>, &Expr)> = Vec::new();
     let mut order: Vec<(ItemKind, String)> = Vec::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(n, e)  => { lets.insert(n.clone(), e); order.push((ItemKind::Let, n.clone())); },
-            Stmt::Var(n, s, e)  => { var_list.push((n.as_str(), s, e)); },
-            Stmt::Scope(n, b)=> { child_bodies.insert(n.clone(), b.as_slice()); order.push((ItemKind::Scope, n.clone())); },
+            Stmt::Let(n, e)  => { assert!(lets.insert(n.clone(), e).is_none(), "let `{n}` defined twice"); order.push((ItemKind::Let, n.clone())); },
+            Stmt::Var(n, s) => { assert!(declarations.insert(n, s).is_none(), "var `{n}` declared twice"); },
+            Stmt::Set(n, e) => {
+                assert!(!is_root, "set `{n}` is only valid in a named scope");
+                assert!(!sets.iter().any(|(name, _)| *name == n), "set `{n}` defined twice");
+                sets.push((n, e));
+            },
+            Stmt::Scope(n, b)=> { assert!(child_bodies.insert(n.clone(), b.as_slice()).is_none(), "scope `{n}` defined twice"); order.push((ItemKind::Scope, n.clone())); },
             Stmt::Export(n, s, e) => { export_stmts.push((n.as_str(), s, e)); },
         }
+    }
+
+    for name in declarations.keys() {
+        assert!(sets.iter().any(|(set_name, _)| set_name == name), "var `{name}` has no set in this scope");
+    }
+    for (name, _) in &sets {
+        assert!(!lets.contains_key(*name) && !child_bodies.contains_key(*name),
+            "set `{name}` conflicts with a let or child scope in this scope");
+    }
+    for name in lets.keys() {
+        assert!(!child_bodies.contains_key(name), "`{name}` is both a let and child scope");
     }
 
     // Pre-declare feedback variables so anything in the scope can refer to them.
     let mut vars: Vec<st::Var> = Vec::new();
     let mut var_id: HashMap<&str, usize> = HashMap::new();
-    for (name, shape, _) in &var_list {
+    for (name, _) in &sets {
         let idx = vars.len();
-        vars.push(st::Var { name: (*name).to_string(), shape: (*shape).clone() });
+        let shape = declarations.get(name).and_then(|shape| (*shape).clone());
+        vars.push(st::Var { name: (*name).to_string(), shape });
         s.env.insert((*name).to_string(), st::Ref::Var(idx));
         var_id.insert(*name, idx);
     }
@@ -262,7 +281,7 @@ fn lower_scope_tree(
     let mut pending = order;
     while !pending.is_empty() {
         let pos = pending.iter().position(|(_, n)| deps[n].is_empty())
-            .unwrap_or_else(|| panic!("Cyclic let/scope dependency; use `var` for recursion: {:?}",
+            .unwrap_or_else(|| panic!("Cyclic let/scope dependency; use `set` for recursion: {:?}",
                 pending.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()));
         let (kind, name) = pending.remove(pos);
         deps.remove(&name);
@@ -287,9 +306,9 @@ fn lower_scope_tree(
         }
     }
 
-    // Lower var bodies and emit binds.
+    // Lower set bodies and emit binds.
     let mut binds: Vec<st::Bind> = Vec::new();
-    for (name, _, e) in &var_list {
+    for (name, e) in &sets {
         s.statement = (*name).to_string();
         let r = s.lower_expr(e);
         binds.push(st::Bind { var: var_id[*name], value: r });
@@ -320,7 +339,8 @@ fn qualified_fields(body: &[Stmt], scope: &str) -> Vec<String> {
     let mut out = Vec::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Var(_, _, e) | Stmt::Export(_, _, e) => collect_qualified(e, scope, &mut out),
+            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => collect_qualified(e, scope, &mut out),
+            Stmt::Var(_, _) => {},
             Stmt::Scope(_, _) => {} // a child's `scope::field`s reference *its* children, not ours
         }
     }
@@ -353,13 +373,55 @@ mod tree_tests {
     }
 
     #[test]
+    fn set_bindings_ignore_statement_order_across_nested_scopes() {
+        let src = "\
+            let seed = input 0;\n\
+            outer: {\n\
+                set a = seed + from_inner;\n\
+                inner: { set c = a + c; var c; }\n\
+                let from_inner = inner::c;\n\
+                var a : ((int), ());\n\
+                set b = seed + from_inner;\n\
+                var b;\n\
+            }\n\
+            export \"out\" = outer::a;";
+        let program = lower_tree(parse(src));
+        let outer = subs(&program.root)[0];
+        let inner = subs(outer)[0];
+        assert_eq!(outer.vars.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(outer.binds.len(), 2);
+        assert!(outer.vars[0].shape.is_some());
+        assert!(outer.vars[1].shape.is_none());
+        assert_eq!(inner.vars.len(), 1);
+        assert_eq!(inner.binds.len(), 1);
+    }
+
+    #[test]
+    fn rejects_invalid_set_and_var_names() {
+        for (src, expected) in [
+            ("set x = x;", "only valid in a named scope"),
+            ("s: { set x = x; set x = x; }", "set `x` defined twice"),
+            ("s: { var x; }", "var `x` has no set"),
+            ("s: { var x; let y = x; }", "var `x` has no set"),
+            ("s: { var x; var x; set x = x; }", "var `x` declared twice"),
+            ("s: { let x = input 0; set x = x; }", "set `x` conflicts"),
+            ("s: { x: {} set x = x; }", "set `x` conflicts"),
+            ("s: { var x; child: { set x = x; } }", "var `x` has no set"),
+        ] {
+            let err = std::panic::catch_unwind(|| lower_tree(parse(src))).unwrap_err();
+            let message = err.downcast_ref::<String>().expect("string panic");
+            assert!(message.contains(expected), "{src}: {message}");
+        }
+    }
+
+    #[test]
     fn lowers_reach_to_tree() {
         let src = "\
             let edges = input 0 | map(((src, dst), ()) -> (src, dst));\n\
             let roots = input 1 | map(((n), ()) -> (n, ()));\n\
             reach: {\n\
                 let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));\n\
-                var reach = roots + proposals | distinct;\n\
+                set reach = roots + proposals | distinct;\n\
             }\n\
             export \"result\" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);";
         let prog = lower_tree(parse(src));
@@ -392,7 +454,7 @@ mod tree_tests {
             let i = input 0 | map(((a, b), ()) -> (a, b));\n\
             outer: {\n\
                 inner: {\n\
-                    var x = i | distinct;\n\
+                    set x = i | distinct;\n\
                 }\n\
                 let y = inner::x;\n\
             }\n\
@@ -487,7 +549,7 @@ mod optimize_tests {
         let src = "\
             let e = input 0 | map(((a, b), ()) -> (a, b));\n\
             s: {\n\
-                var x = e | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
+                set x = e | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
             }\n\
             export \"result\" = s::x;";
         let mut p = lower_tree(parse(src));

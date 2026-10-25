@@ -20,7 +20,7 @@ below: {
                       | join(tagclass, (_, low, (_, parent)) -> (low, parent))
                       | filter((_, parent) -> (parent, 0) ge)
                       | map((low, higher) -> ((low, higher), ()));
-    var below = selves + step | distinct;
+    set below = selves + step | distinct;
 }
 
 -- Tagged posts in the requested class: ((rid, post), tag name).

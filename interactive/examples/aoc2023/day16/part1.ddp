@@ -18,7 +18,7 @@ beam: {
     let onsym = l | map(((r, c, d), _) -> ((r, c), d)) | join(cells, (rc, d, s) -> ((d, s), rc));
     -- ((dir, sym), (r, c))
     let next = onsym | join(shift, (_, (r, c), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd), ()));
-    var l = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0), ()))) + next | distinct;
+    set l = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0), ()))) + next | distinct;
 }
 
 export "result" = beam::l | map(((r, c, _), _) -> ((r, c), ()))

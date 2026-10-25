@@ -21,7 +21,7 @@ sufficed.
 3. **`distinct` erases the value to unit**, so every iterative loop's state
    must be packed into keys and re-projected around every join (days 3, 5,
    10, 14, 16, 18, 19, 22). Minimal fix: a value-preserving idempotent
-   reducer — `distinct` on rows, or blessing `min` as the var-reducer idiom
+   reducer — `distinct` on rows, or blessing `min` as the feedback reducer idiom
    (days 17 and 22 show it works).
 4. **No scalar let-bindings or user scalar functions**; repeated
    subexpressions are copy-pasted or staged through extra `map`s (days 1p2,
@@ -45,7 +45,7 @@ sufficed.
    own input.
 9. **No extrinsic iteration bound** (SQL's `RETURN AT RECURSION LIMIT`);
    bounds must be encoded in the data. This is ergonomics, not expressive
-   power: a one-round stall (`var d = x;` then `x + (d | negate)` fires at
+   power: a one-round stall (`set d = x;` then `x + (d | negate)` fires at
    round 0 only) seeds a marker that marches `k -> k+1` under
    `filter($0[0] < K)` with O(1) live rows per round — the full
    delayed-pulse stepwise driver, in the language today. The residual ask
@@ -66,7 +66,7 @@ sufficed.
 ## Near-misses that are not gaps
 
 Two things initially read as gaps and turned out not to be. The
-delayed-pulse driver above (entry 9) is fully expressible via the `var`
+delayed-pulse driver above (entry 9) is fully expressible via a feedback
 stall — the survey's first pass got this wrong, and the construction is
 worth knowing. And several days where SQL's stepwise idioms would not
 transliterate ended up with *better* programs for it: day 14's closed-form

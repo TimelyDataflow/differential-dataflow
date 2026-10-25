@@ -12,7 +12,7 @@ below: {
                       | join(tagclass, (_, low, (_, parent)) -> (low, parent))
                       | filter((_, parent) -> (parent, 0) ge)
                       | map((low, higher) -> ((low, higher), ()));
-    var below = selves + step | distinct;
+    set below = selves + step | distinct;
 }
 let below_hl = below::below | map(((low, high), ()) -> (high, low));
 let reply   = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)

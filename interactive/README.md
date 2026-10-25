@@ -18,7 +18,7 @@ let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
 
 reach: {
     let label = reach | join(edges, (_, _, dst) -> (dst, ()));
-    var reach = roots + label | distinct;
+    set reach = roots + label | distinct;
 }
 
 export "result" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);
@@ -26,7 +26,7 @@ export "result" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);
 ```
 
 Informally, this computation starts from graph `edges` and nodes `roots`, and repeatedly expands a set of nodes that can be reached from each root.
-The details of this example are somewhat arbitrary, but the `let`, `var`, and `{ .. }` bits are quite important.
+The details of this example are somewhat arbitrary, but the `let`, `set`, and `{ .. }` bits are quite important.
 Everything else does have a role, but what they do and how they are expressed is intentionally fluid.
 If you are familiar with differential dataflow, they correspond to various of its transformation operators.
 
@@ -39,7 +39,7 @@ Within each named scope one can
 2. name and bind iteration variables,
 3. create further nested scopes.
 
-The root can do the same except bind iteration variables: a `var` belongs in a named scope, so what a program exports is what it computes at each time, not a round of an iteration.
+The root can do the same except bind iteration variables: a `set` belongs in a named scope, and an optional `var` declares it and can check its shape, so what a program exports is what it computes at each time, not a round of an iteration.
 
 The expression language is on collections of data, and involves differential's relatively few operators: join, reduce, concat, and a surprisingly general flatmap operator.
 The particular details of the expression language are evolving, and the intent is to let anyone pick their favorite concrete syntax.

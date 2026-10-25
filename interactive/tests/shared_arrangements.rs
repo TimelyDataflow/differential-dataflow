@@ -87,7 +87,7 @@ const REACH: &str = r#"
     let roots = edges | map((src, _) -> (src, ())) | distinct | filter((n, ()) -> (n, 3) lt);
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-        var reach = roots + proposals | distinct;
+        set reach = roots + proposals | distinct;
     }
     export "result" = reach::reach;
 "#;

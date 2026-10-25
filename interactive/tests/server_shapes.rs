@@ -112,10 +112,10 @@ fn declared_exports_publish_their_shapes() {
 fn collections_without_a_shape_reject_the_install() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
-        let alone = r#"s: { var v = v | distinct; } export "out" = s::v;"#;
+        let alone = r#"s: { set v = v | distinct; } export "out" = s::v;"#;
         let err = server.install(worker, "alone", &program(alone)).unwrap_err();
         assert!(err.contains("variable `v` has no shape"), "{err}");
-        let declared = alone.replace("var v =", "var v : ((int), ()) =");
+        let declared = alone.replace("set v =", "var v : ((int), ());\nset v =");
         server.install(worker, "declared", &program(&declared)).unwrap();
     });
 }

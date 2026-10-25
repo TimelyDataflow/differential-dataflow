@@ -9,7 +9,7 @@ matching: {
     let by_b = props | map((l, (lp, r, rp)) -> (r, (rp, l, lp)));
     let accpt = by_b | min;
     let by_a = accpt | map((r, (rp, l, lp)) -> (l, (lp, r, rp)));
-    var removals = removals + by_a - props | arrange;
+    set removals = removals + by_a - props | arrange;
 }
 
 export "result" = matching::props | map(_ -> ((), ())) | arrange | inspect(total);

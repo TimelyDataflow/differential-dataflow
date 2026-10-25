@@ -6,7 +6,7 @@ let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
 dist: {
     let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)))
                     | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
-    var dist = (starts + grow) | min | map(((rid, node), cost) -> ((rid, node, cost), ()));
+    set dist = (starts + grow) | min | map(((rid, node), cost) -> ((rid, node, cost), ()));
 }
 let best = dist::dist | map(((rid, node, cost), ()) -> ((rid, node), cost));
 let pred = dist::dist | map(((rid, u, cost), ()) -> (u, (rid, cost)))
@@ -17,14 +17,14 @@ let pred = dist::dist | map(((rid, u, cost), ()) -> (u, (rid, cost)))
 let targets = request | map(((rid, _, to), ()) -> ((rid, to), ())) | join(best, (key, (), _) -> (key, ()));
 back: {
     let up = back | join(pred, ((rid, _), (), u) -> ((rid, u), ()));
-    var back = (targets + up) | distinct;
+    set back = (targets + up) | distinct;
 }
 let next = pred | join(back::back, ((rid, v), u, ()) -> ((rid, u), v)) | min;
 let first = request | map(((rid, from, _), ()) -> ((rid, from), ())) | join(back::back, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
 walk: {
     let step = walk | map(((rid, node, path), ()) -> ((rid, node), path))
                     | join(next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
-    var walk = first + step;
+    set walk = first + step;
 }
 let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path))
                         | join(targets, ((rid, node), path, ()) -> ((rid, node), path))

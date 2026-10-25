@@ -157,7 +157,7 @@ Two conventions apply throughout:
   a whole-row key.
 - **Destructuring.** Lambdas name what they take apart:
   `map(((id, _, created, author, …), ()) -> (author, (id, created)))`.
-- **Loops.** A `var` inside a scope is a fixpoint, and its rows are unit-valued:
+- **Loops.** A `set` inside a scope defines a feedback variable, and its rows are unit-valued:
   `((rid, node, cost), ())`. The tag-class hierarchy and the shortest-path searches
   are loops; threads (each message's root post) are a loop in the graph program.
 - **`distinct` takes unit values.** Re-key to `((fields), ())` first. Many

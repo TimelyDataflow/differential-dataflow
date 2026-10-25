@@ -25,7 +25,7 @@ let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, n) -> (n, 2) eq)
 
 reach: {
     let next = r | join(symm, (_, (), rc) -> (rc, ()));
-    var r = (scell | map(((r, c), _) -> ((r, c), ()))) + next | distinct;
+    set r = (scell | map(((r, c), _) -> ((r, c), ()))) + next | distinct;
 }
 let loop = reach::r;
 -- key (r, c) of loop cells (incl. S)
@@ -41,7 +41,7 @@ status: {
     let tog = cur | join(toggles, ((r, c), e, _) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
     let matched = cur | join(toggles, (rc, e, _) -> (rc, e));
     let nontog = (cur - matched) | map(((r, c), e) -> (((r, 1) add, (c, 1) add, e), ()));
-    var st = (symbols | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) any) | map(((r, c), _) -> ((r, c, 0), ()))) + tog + nontog | distinct;
+    set st = (symbols | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) any) | map(((r, c), _) -> ((r, c, 0), ()))) + tog + nontog | distinct;
 }
 
 let enclosed = status::st | filter(((_, _, e), _) -> (e, 1) eq) | map(((r, c, _), _) -> ((r, c), ()));

@@ -34,7 +34,7 @@ flow: {
             (((f, 2) eq, isgt) all, (v, ah) min, ah) select,
             (((f, 3) eq, islt) all, (v, sl) max, sl) select,
             (((f, 3) eq, isgt) all, (v, sh) min, sh) select), ()));
-    var reg = (rules | map(_ -> ((), ())) | distinct | map(_ -> ((0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000), ())))
+    set reg = (rules | map(_ -> ((), ())) | distinct | map(_ -> ((0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000), ())))
         + b1 + b2 | arrange;
 }
 

@@ -12,7 +12,7 @@ let seeds = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
 -- Refine: each cell's children are `cell call grow`, until `grow` returns none.
 refine: {
     let kids = cells | flatmap((n, ()) -> n call grow) | map((_, (_, (kid, _))) -> (kid, ()));
-    var cells = seeds + kids | distinct;
+    set cells = seeds + kids | distinct;
 }
 let cells = refine::cells;
 

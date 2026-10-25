@@ -10,7 +10,7 @@ outer: {
     fwd: {
         let nodes = edges | map((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
-        var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
+        set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
     }
 
     let trim_fwd = edges
@@ -22,7 +22,7 @@ outer: {
     bwd: {
         let nodes = trans | map((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
-        var proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
+        set proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
     }
 
     let trim_bwd = trans
@@ -31,7 +31,7 @@ outer: {
         | filter((_, (_, a, b)) -> (a, b) eq)
         | map((dst, (src, _, _)) -> (dst, src));
 
-    var trim = trim_bwd - edges;
+    set trim = trim_bwd - edges;
 }
 
 export "result" = outer::scc | map(_ -> ((), ())) | arrange | inspect(total);

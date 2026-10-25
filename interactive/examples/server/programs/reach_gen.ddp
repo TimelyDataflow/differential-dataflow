@@ -9,7 +9,7 @@ let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-    var reach = roots + proposals | distinct;
+    set reach = roots + proposals | distinct;
 }
 
 export "result" = reach::reach | inspect(reach);

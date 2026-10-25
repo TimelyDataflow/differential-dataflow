@@ -20,7 +20,7 @@ def statements(text):
     return out
 
 def name_of(s):
-    m = re.match(r'(let|var)\s+([a-z_0-9]+)', s) or re.match(r'([a-z_]+):\s*\{', s)
+    m = re.match(r'(let|set)\s+([a-z_0-9]+)', s) or re.match(r'([a-z_]+):\s*\{', s)
     return m.group(2) if m and m.lastindex == 2 else (m.group(1) if m else None)
 
 # plan -> {standing statement name: its exported (key, value) type}, plus text edits for the one-off

@@ -10,8 +10,8 @@ const PROGRAM: &str = r#"
     export "epoch" = pairs | delay((_, b) -> (b)) | lift;
     export "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);
     stepped: {
-        var at = pairs | delay((_, b) -> (0, b)) | lift;
-        var below = pairs | delay((_, b) -> (0, (0, b) sub)) | lift;
+        set at = pairs | delay((_, b) -> (0, b)) | lift;
+        set below = pairs | delay((_, b) -> (0, (0, b) sub)) | lift;
     }
     export "delay" = stepped::at;
     export "negative" = stepped::below;
@@ -92,7 +92,7 @@ fn ill_shaped_times_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
             (r#"export "a" = input 0 : ((int, int), ()) | delay((_, _) -> (0, 0));"#, "join_function"),
-            (r#"let i = input 0 : ((int, int), ()); s: { var a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
+            (r#"let i = input 0 : ((int, int), ()); s: { set a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
             (r#"export "a" = input 0 : ((int, int), ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));

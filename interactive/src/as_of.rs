@@ -317,7 +317,7 @@ mod tests {
             let b = import "b";
             s: {
                 let r = a | lift | half_join(b, 1, (k, x, y) -> (k, x)) | map((k, (x, _)) -> (k, x));
-                var x = (r + x) | distinct;
+                set x = (r + x) | distinct;
             }
             export "r" = s::x;
         "#);

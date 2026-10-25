@@ -26,7 +26,7 @@ let starts = request | map(((rid, c1, _), ()) -> (c1, rid))
 search: {
     let grow   = search | map(((rid, source, node, cost), ()) -> (node, (rid, source, cost)))
                         | join(weighted, (_, (rid, source, cost), (next, w)) -> ((rid, source, next, (cost, w) add), ()));
-    var search = (starts + grow) | map(((rid, source, node, cost), ()) -> ((rid, source, node), cost)) | min
+    set search = (starts + grow) | map(((rid, source, node, cost), ()) -> ((rid, source, node), cost)) | min
                                  | map(((rid, source, node), cost) -> ((rid, source, node, cost), ()));
 }
 

@@ -19,13 +19,13 @@ const PROGRAM: &str = r#"
     let roots = a | map((k, _) -> (k, ()));
     joined: {
         let step = reach | join(b, (_, (), dst) -> (dst, ()));
-        var reach = roots + step | distinct;
+        set reach = roots + step | distinct;
     }
     halved: {
         let fwd = reach | lift | half_join(b, 0, (_, (), dst) -> (dst, ()));
         let rev = b | lift | half_join(reach, 1, (_, dst, ()) -> (dst, ()));
         let step = (fwd + rev) | delay((_, (_, t)) -> t) | map((n, _) -> (n, ()));
-        var reach = roots + step | distinct;
+        set reach = roots + step | distinct;
     }
     export "reach_join" = joined::reach;
     export "reach_delta" = halved::reach;

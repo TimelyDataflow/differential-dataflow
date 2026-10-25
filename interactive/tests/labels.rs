@@ -14,7 +14,7 @@ let pairs = edges | join(edges, (k, a, b) -> (a, b));
 let counts = pairs | count;
 reach: {
     let step = reach | join(edges, (k, (), b) -> (b, ()));
-    var reach = (edges | map((a, _) -> (a, ()))) + step | distinct;
+    set reach = (edges | map((a, _) -> (a, ()))) + step | distinct;
 }
 export \"counts\" = counts | map((k, n) -> (k, n));
 export \"reach\" = reach::reach;

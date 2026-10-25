@@ -15,7 +15,7 @@ chain: {
     let mapped  = cands | map(((stage, idx, dst, src, _), _) -> (((stage, 1) add, ((idx, dst) add, src) sub), ()));
     let covered = cands | map(((stage, idx, _, _, _), _) -> ((stage, idx), ())) | distinct;
     let unmapped = (cur - covered) | map(((stage, idx), _) -> (((stage, 1) add, idx), ()));
-    var active = seeds + mapped + unmapped | distinct;
+    set active = seeds + mapped + unmapped | distinct;
 }
 
 export "result" = chain::active | filter(((stage, _), _) -> (stage, 7) eq)
