@@ -21,7 +21,10 @@ pub enum Expr {
     /// shape comes from the registry the program is installed against.
     Import(String),
     Name(String),
-    Qualified(String, String),
+    /// A scope path. The bool marks a leading `::`.
+    Path(Vec<String>, bool),
+    /// A path checked against the scope tree before lowering.
+    ResolvedPath { anchor: Vec<String>, target: Vec<String>, field: String },
     Map(Box<Expr>, Lambda),
     Join(Box<Expr>, Box<Expr>, Lambda),
     /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
