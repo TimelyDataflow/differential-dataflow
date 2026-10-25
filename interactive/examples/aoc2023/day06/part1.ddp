@@ -8,7 +8,7 @@ let races = input 0 : ((int, int), ()) | map(((t, d), ()) -> (t, d));
 
 cands: {
     let step = c | filter(((t, h), ()) -> ((h, 1) add, t) lt) | map(((t, h), ()) -> ((t, (h, 1) add), ()));
-    var c = (races | map((t, _) -> ((t, 1), ()))) + step | distinct;
+    set c = (races | map((t, _) -> ((t, 1), ()))) + step | distinct;
 }
 
 let wins = cands::c

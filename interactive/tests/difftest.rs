@@ -112,7 +112,7 @@ impl Sh {
 
 // ===== Programs =====
 
-/// A `let` (or `var`) whose value is `src` piped through `ops`, at shape `(key, val)`.
+/// A `let` (or `set`) whose value is `src` piped through `ops`, at shape `(key, val)`.
 #[derive(Clone, Debug)]
 struct Let {
     name: String,
@@ -238,7 +238,7 @@ fn render_stmts(stmts: &[Stmt], delta: bool, indent: &str, out: &mut String) {
 }
 
 fn render_let(l: &Let, delta: bool, indent: &str) -> String {
-    let keyword = if l.var { "var" } else { "let" };
+    let keyword = if l.var { "set" } else { "let" };
     let mut text = l.src.clone();
     for op in &l.ops {
         match op {

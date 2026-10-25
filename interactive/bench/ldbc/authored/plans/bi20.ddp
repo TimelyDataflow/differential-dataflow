@@ -30,7 +30,7 @@ let starts   = outside | map(((rid, who), ()) -> ((rid, who, who, 0), ()));
 search: {
     let grow   = search | map(((rid, from, node, cost), ()) -> (node, (rid, from, cost)))
                         | join(mates, (_, (rid, from, cost), (next, w)) -> ((rid, from, next, (cost, w) add), ()));
-    var search = (starts + grow) | map(((rid, from, node, cost), ()) -> ((rid, from, node), cost)) | min
+    set search = (starts + grow) | map(((rid, from, node, cost), ()) -> ((rid, from, node), cost)) | min
                                  | map(((rid, from, node), cost) -> ((rid, from, node, cost), ()));
 }
 let reached  = search::search | map(((rid, from, node, cost), ()) -> ((rid, node), (from, cost)))

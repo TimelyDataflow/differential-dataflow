@@ -1018,7 +1018,7 @@ mod tests {
         let text = "let source = input 0 : ((int, int), ());
                     let initial = source | map((row, ()) -> ((row.0, row.1), ()));
                     toy: {
-                        var state = (initial) + (state | filter((row, ()) -> 0));
+                        set state = (initial) + (state | filter((row, ()) -> 0));
                     }
                     export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));

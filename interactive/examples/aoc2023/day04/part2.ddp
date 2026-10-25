@@ -1,5 +1,5 @@
 -- AoC 2023 day 4 part 2: cascading card copies; total card count.
--- Copies are collection multiplicities; the cascade is a var fixpoint.
+-- Copies are collection multiplicities; the cascade is a set fixpoint.
 -- input 0: (card, side, idx, value)
 
 let numbers = input 0 : ((int, int, int, int), ());
@@ -14,14 +14,14 @@ let cards = numbers | map(((card, _, _, _), _) -> (card, ())) | distinct;
 wt: {
     let step = t | map(((card, target), _) -> (card, target)) | join(matches, (card, target, m) -> ((card, (target, 1) add, m), ()))
                  | filter(((card, target, m), _) -> (target, (card, m) add) le) | map(((card, target, _), _) -> ((card, target), ()));
-    var t = (matches | filter((_, m) -> (m, 1) ge) | map((card, _) -> ((card, (card, 1) add), ()))) + step | distinct;
+    set t = (matches | filter((_, m) -> (m, 1) ge) | map((card, _) -> ((card, (card, 1) add), ()))) + step | distinct;
 }
 let wtflat = wt::t | map(((card, target), _) -> (card, target));
 
 -- instances: multiplicity of (card, ()) = copies of that card
 insts: {
     let spawned = inst | join(wtflat, (_, _, target) -> (target, ()));
-    var inst = cards + spawned | arrange;
+    set inst = cards + spawned | arrange;
 }
 
 export "result" = insts::inst | map(_ -> ((), ())) | count | arrange | inspect(part2);

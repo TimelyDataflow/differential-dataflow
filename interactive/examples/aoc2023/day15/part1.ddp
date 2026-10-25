@@ -17,7 +17,7 @@ hash: {
     -- ((), (r, i, t))
     let next = t | join(ktab, (_, (r, i, t), k) -> ((r, i, (t, (256, k) mul) sub), ()))
         | filter(((_, _, t), _) -> ((t, 0) ge, (t, 256) lt) all);
-    var st = (lens | map((r, _) -> ((r, 0, 0), ()))) + next | distinct;
+    set st = (lens | map((r, _) -> ((r, 0, 0), ()))) + next | distinct;
 }
 
 export "result" = hash::st | map(((r, i, h), _) -> (r, (i, h)))

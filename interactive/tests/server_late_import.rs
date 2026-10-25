@@ -24,7 +24,7 @@ const CONSUMER: &str = r#"
     let edges = import "edges";
     s: {
         let step = x | join(edges, ((_, b), (), ()) -> (((b, 5) rem, b), ()));
-        var x = (seeds + step) | distinct;
+        set x = (seeds + step) | distinct;
     }
     export "result" = s::x;
 "#;
@@ -96,7 +96,7 @@ const ARRANGED_CONSUMER: &str = r#"
     let r = pairs | join(pairs, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)) | distinct;
     s: {
         let step = x | join(weights, (k, v, _) -> (k, v));
-        var x = (r + step) | min;
+        set x = (r + step) | min;
     }
     export "result" = s::x;
     export "least" = weights | min;
@@ -152,7 +152,7 @@ const DELTA_CONSUMER: &str = r#"
           | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
     s: {
         let step = x | join(weights, (k, v, _) -> (k, v));
-        var x = (r + step) | min;
+        set x = (r + step) | min;
     }
     export "result" = s::x;
     export "least" = weights | min;

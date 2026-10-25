@@ -294,7 +294,7 @@ mod tests {
         let roots = input 1 : ((int), ()) | map(((n), ()) -> ((n), ()));
         reach: {
             let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-            var reach = roots + proposals | distinct;
+            set reach = roots + proposals | distinct;
         }
         export "result" = reach::reach | map(_ -> ((), ())) | arrange;
     "#;
@@ -319,12 +319,12 @@ mod tests {
     #[test]
     fn declared_variables_and_exports_are_checked() {
         let declared = REACH
-            .replace("var reach =", "var reach : ((int), ()) =")
+            .replace("set reach =", "var reach : ((int), ());\n            set reach =")
             .replace("export \"result\" =", "export \"result\" : ((), ()) =");
         let (_, problems) = shapes_of(&declared);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
 
-        let (_, problems) = shapes_of(&REACH.replace("var reach =", "var reach : ((int, int), ()) ="));
+        let (_, problems) = shapes_of(&REACH.replace("set reach =", "var reach : ((int, int), ());\n            set reach ="));
         assert!(problems.conflicts.iter().any(|e| e.contains("variable `reach`")), "{problems:?}");
         let (_, problems) = shapes_of(&REACH.replace("export \"result\" =", "export \"result\" : ((int), ()) ="));
         assert!(problems.conflicts.iter().any(|e| e.contains("export `result`")), "{problems:?}");

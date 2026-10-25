@@ -33,7 +33,7 @@ res: {
             (((bid, -1) eq, (x, -1) ne, (bv, x) ne) select, ((i), 1))) in
         (judged map ((b, _) -> b), judged map ((_, o) -> o)) zip filter);
 
-    var rollback = bad | map((_, (rid)) -> ((rid), ())) | distinct;
+    set rollback = bad | map((_, (rid)) -> ((rid), ())) | distinct;
 }
 
 let rb = res::rollback;

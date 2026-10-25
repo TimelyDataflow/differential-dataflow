@@ -424,7 +424,7 @@ class Compiler:
             combined = list(seed.fields)+['next_'+x for x in nextrel.fields]
             joined = product(refs[x] for x in combined)
             step_refs = positions(combined)
-            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n var state = ({s} + proposals) | map((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
+            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n set state = ({s} + proposals) | map((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
             code = f'{name}_loop::state'
         else: raise ValueError(op)
         self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')

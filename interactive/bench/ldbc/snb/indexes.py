@@ -109,7 +109,7 @@ let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), (
 thread: {
     let below  = thread | map(((mid, root), ()) -> (mid, root))
                         | join(replies, (_, root, child) -> ((child, root), ()));
-    var thread = (posts + below) | distinct;
+    set thread = (posts + below) | distinct;
 }
 export "ldbc.message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
 export "ldbc.message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;''')

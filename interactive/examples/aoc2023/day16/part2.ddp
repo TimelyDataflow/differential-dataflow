@@ -31,7 +31,7 @@ beam: {
         | join(cells, ((r, c), (d, sd, si), s) -> ((d, s), (r, c, sd, si)));
     -- ((dir, sym), (r, c, sd, si))
     let next = onsym | join(shift, (_, (r, c, sd, si), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd, sd, si), ()));
-    var l = seeds + next | distinct;
+    set l = seeds + next | distinct;
 }
 
 let energized = beam::l | map(((r, c, _, sd, si), _) -> ((r, c), (sd, si)))

@@ -37,7 +37,7 @@ let uniq    = edges | map((a, _) -> (a, ())) | distinct;
 -- Iteration: reach, with concat (+) and distinct.
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-    var reach = roots + proposals | distinct;
+    set reach = roots + proposals | distinct;
 }
 
 export "scored" = scored | arrange | inspect(total);

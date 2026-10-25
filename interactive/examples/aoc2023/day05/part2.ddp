@@ -41,7 +41,7 @@ ranges: {
     let nocs = cand - withcs;
     let holes_tail = nocs | filter(((_, _, e, h), _) -> (h, e) lt) | map(((stage, _, e, h), _) -> (((stage, 1) add, h, e), ()));
 
-    var active = seeds + mapped + holes_bounded + holes_tail | distinct;
+    set active = seeds + mapped + holes_bounded + holes_tail | distinct;
 }
 
 export "result" = ranges::active | filter(((stage, _, _), _) -> (stage, 7) eq)

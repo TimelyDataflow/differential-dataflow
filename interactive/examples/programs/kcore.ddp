@@ -21,7 +21,7 @@ peel: {
     let kept = active | join(alive_set, (k, v, _) -> (k, v));
     let newly_removed = active - kept;
 
-    var removals = removals - newly_removed | arrange;
+    set removals = removals - newly_removed | arrange;
 }
 
 let core_edges = symm + peel::removals;

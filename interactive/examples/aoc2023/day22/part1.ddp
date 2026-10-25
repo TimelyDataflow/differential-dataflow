@@ -21,7 +21,7 @@ let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, z
 -- resting z per brick, stored negated (mz = BIG - z) so `min` computes max
 rests: {
     let lifted = rest | join(ovl, (_, mz, (up, h)) -> (up, (mz, h) sub));
-    var rest = (bricks | map((r, _) -> (r, 999999))) + lifted | min;
+    set rest = (bricks | map((r, _) -> (r, 999999))) + lifted | min;
 }
 let rest = rests::rest;
 -- (r, BIG - resting z), BIG = 1000000

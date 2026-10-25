@@ -26,7 +26,7 @@ impl Server {
         // epoch, not a round of an iteration. Loops live in named scopes.
         if let Some(var) = prog.root.vars.first() {
             return Err(format!(
-                "program {:?} declares `var {}` at its root; a `var` belongs in a named scope (`name: {{ var {} = ...; }}`)",
+                "program {:?} has feedback variable `{}` at its root; `set` belongs in a named scope (`name: {{ set {} = ...; }}`)",
                 name, var.name, var.name
             ));
         }

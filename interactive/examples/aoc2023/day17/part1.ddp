@@ -16,7 +16,7 @@ dijk: {
     let turnb = mc
         | map(((r, c, dr, dc, _), h) -> (((r, dc) sub, (c, dr) sub), ((0, dc) sub, (0, dr) sub, h)))
         | join(cells, ((r, c), (dr, dc, h), w) -> ((r, c, dr, dc, 1), (h, w) add));
-    var mc = seeds + straight + turna + turnb | min;
+    set mc = seeds + straight + turna + turnb | min;
 }
 
 let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min

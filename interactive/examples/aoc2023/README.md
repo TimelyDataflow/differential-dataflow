@@ -36,7 +36,7 @@ CLEAN = direct expression; AWKWARD = right answer via a workaround idiom.
 | 01 | clean | awkward | no string literals: digit words matched as charcode filters over k-wide windows (k−1 self-joins) |
 | 02 | clean | clean | anti-join as `games - bad`; max via `min` of (BIG − x) |
 | 03 | awkward | awkward | run assembly needs 2 fixpoints; `distinct` erases values, so loop state is packed into keys |
-| 04 | clean | clean | p2: card copies ARE collection multiplicities; the cascade is a bare `var` fixpoint |
+| 04 | clean | clean | p2: card copies ARE collection multiplicities; the cascade is a bare `set` fixpoint |
 | 05 | clean | awkward | stage-chain fixpoint, identity fallback = anti-join; p2 range split/holes all key-packed |
 | 06 | awkward | — | no `/` or sqrt: hold times enumerated by fixpoint; slt has no separate part 2 |
 | 07 | clean | awkward | hand type = pairwise-equality count; p2 stages maps to stand in for scalar lets |
@@ -46,7 +46,7 @@ CLEAN = direct expression; AWKWARD = right answer via a workaround idiom.
 | 14 | clean | awkward | p1: closed-form roll, zero recursion; p2: round-tagged fixpoint with 4 hand-unrolled direction pipelines |
 | 15 | awkward | clean | no `%`: modulo done relationally via a k-table cross join; p2 boxes need no sequencing |
 | 16 | clean | clean | beam automaton with a literal transition table via flatmap |
-| 17 | clean | clean | Bellman-Ford: `var mc = seeds + moves \| min`; p2 = 3 filter tweaks on p1 |
+| 17 | clean | clean | Bellman-Ford: `set mc = seeds + moves \| min`; p2 = 3 filter tweaks on p1 |
 | 18 | awkward | awkward | shoelace prefix fixpoint; /2 via a 40-step binary-decomposition gadget; p2 hex decoded from charcodes |
 | 19 | clean | clean | first-match = min (priority, next) inside the fixpoint; p2 reproduces the slt's negative-product quirk |
 | 22 | clean | clean | interval overlap, no cell expansion; p2's count-inside-fixpoint converges fine |

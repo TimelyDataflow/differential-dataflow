@@ -48,7 +48,7 @@ eqsat: {
     -- congruence edges + rule edges, symmetrized, then one min-label hop
     let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
     let prop  = eq | join(edges, (_, l, n) -> (n, l));
-    var eq = elems + prop | min;
+    set eq = elems + prop | min;
 }
 
 export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

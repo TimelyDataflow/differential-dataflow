@@ -23,7 +23,7 @@ search: {
     let grow   = search | filter(((_, most, _, d), ()) -> (d, most) lt)
                         | map(((rid, most, node, d), ()) -> (node, (rid, most, d)))
                         | join(friend, (_, (rid, most, d), (next, _)) -> ((rid, most, next, (d, 1) add), ()));
-    var search = (starts + grow) | map(((rid, most, node, d), ()) -> ((rid, most, node), d)) | min
+    set search = (starts + grow) | map(((rid, most, node, d), ()) -> ((rid, most, node), d)) | min
                                  | map(((rid, most, node), d) -> ((rid, most, node, d), ()));
 }
 
