@@ -52,6 +52,7 @@ The intended semantics assign values to the names in each scope through an itera
 
 References between scopes are resolved at their least common ancestor.
 A reference sees the converged value as observed from the ancestor scope.
+In a path `x::…::f`, `x` is the one visible scope with that name: if it encloses the reference, the rest is read in `x`, and otherwise the whole path is read in `x`'s parent; `::` reads in the root.
 
 ## Design goals
 

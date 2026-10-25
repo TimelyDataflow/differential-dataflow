@@ -7,8 +7,20 @@
 //! # Collection language
 //!
 //! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
-//! (named trace), `name` (a `let` or `set` in scope), `scope::field` (a child scope's
-//! export). An input declares its shape, using the shape syntax below, as a table
+//! (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
+//! scope path such as `a::b::f` or `::a::b::f`.
+//! A leading `::` reads the rest of the path in the root. Otherwise the first
+//! component names one visible scope: the current scope, an ancestor, or a child
+//! of one of these. Scope names cannot shadow one another, so that scope is unique.
+//! If it encloses the reference, the rest of the path is read in it; otherwise the
+//! whole path is read in its parent. Every component except the last descends into
+//! a child scope, and the last names a binding that scope exports. The binding is
+//! read as converged where the path is read, and carried down to the reference
+//! through ordinary import edges. Paths may have any depth. A path cannot descend
+//! into a scope that encloses the reference; use the local name there. A scope name
+//! cannot shadow an ancestor or a sibling of any ancestor, and a binding cannot
+//! share a name with a child scope. Disjoint subtrees may reuse scope names.
+//! An input declares its shape, using the shape syntax below, as a table
 //! declares its columns: the server refuses to install a program with an undeclared
 //! input. The shape is the column encoding, also for empty lists and inactive sum
 //! lanes, which a row cannot reveal. An `import` may declare a shape too, which must
@@ -463,7 +475,17 @@ impl Parser {
         match self.peek().clone() {
             Token::Input => { self.next(); let source = match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) }; self.source_shape(source) },
             Token::Import => { self.next(); let source = match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) }; self.source_shape(source) },
-            Token::Ident(_) => { let n = self.parse_ident(); if *self.peek() == Token::ColonColon { self.next(); let f = self.parse_ident(); Expr::Qualified(n, f) } else { Expr::Name(n) } },
+            Token::Ident(_) | Token::ColonColon => {
+                let root = *self.peek() == Token::ColonColon;
+                if root { self.next(); }
+                let mut parts = vec![self.parse_ident()];
+                while *self.peek() == Token::ColonColon {
+                    self.next();
+                    parts.push(self.parse_ident());
+                }
+                if root || parts.len() > 1 { Expr::Path(parts, root) }
+                else { Expr::Name(parts.pop().unwrap()) }
+            },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
             other => panic!("Unexpected token in atom: {:?}", other),
         }

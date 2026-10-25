@@ -16,16 +16,210 @@ use crate::ir::LinearOp;
 #[derive(Clone, Copy)]
 enum ItemKind { Let, Scope }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum RefName {
+    Plain(String),
+    Path(PathKey),
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PathKey { anchor: Vec<String>, target: Vec<String>, field: String }
+
+impl PathKey {
+    fn display(&self) -> String {
+        if self.target.is_empty() { format!("::{}", self.field) }
+        else { format!("::{}::{}", self.target.join("::"), self.field) }
+    }
+}
+
+#[derive(Default)]
+struct ScopeNames { bindings: BTreeSet<String>, children: BTreeSet<String> }
+
+#[derive(Default)]
+struct PathPlan {
+    imports: HashMap<Vec<String>, BTreeSet<PathKey>>,
+    exports: HashMap<Vec<String>, BTreeSet<PathKey>>,
+    deps: HashMap<Vec<String>, HashMap<String, BTreeSet<String>>>,
+    path_edges: HashMap<Vec<String>, HashMap<(String, String), BTreeSet<String>>>,
+}
+
+fn scope_label(path: &[String]) -> &str { path.last().map(String::as_str).unwrap_or("root") }
+
+fn scope_address(path: &[String]) -> String {
+    if path.is_empty() { "::".to_string() }
+    else { format!("::{}", path.join("::")) }
+}
+
+fn export_lookup(key: &PathKey, address: &[String]) -> RefName {
+    if key.target == address { RefName::Plain(key.field.clone()) }
+    else { RefName::Path(key.clone()) }
+}
+
+fn export_slots(wanted: &[PathKey], address: &[String]) -> Vec<usize> {
+    let mut slots = HashMap::new();
+    wanted.iter().map(|key| {
+        let next = slots.len();
+        *slots.entry(export_lookup(key, address)).or_insert(next)
+    }).collect()
+}
+
+fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<String>>,
+                  scopes: &mut HashMap<Vec<String>, ScopeNames>) {
+    let mut names = ScopeNames::default();
+    let mut all = BTreeSet::new();
+    for stmt in body {
+        let name = match stmt {
+            Stmt::Let(n, _) | Stmt::Set(n, _) | Stmt::Scope(n, _) => n,
+            Stmt::Var(..) | Stmt::Export(..) => continue,
+        };
+        // Duplicate and conflicting definitions are reported while lowering.
+        all.insert(name.clone());
+        match stmt {
+            Stmt::Scope(..) => { names.children.insert(name.clone()); }
+            _ => { names.bindings.insert(name.clone()); }
+        }
+    }
+    let mut next_visible = visible.clone();
+    for child in &names.children {
+        if let Some(other) = visible.get(child) {
+            panic!("scope `{child}` in `{}` ({}) shadows visible scope `{}` in `{}` ({})",
+                scope_label(path), scope_address(path), child, scope_label(other), scope_address(other));
+        }
+        let mut address = path.to_vec();
+        address.push(child.clone());
+        next_visible.insert(child.clone(), address);
+    }
+    scopes.insert(path.to_vec(), names);
+    for stmt in body {
+        if let Stmt::Scope(name, nested) = stmt {
+            let mut address = path.to_vec();
+            address.push(name.clone());
+            collect_scopes(nested, &address, &next_visible, scopes);
+        }
+    }
+}
+
+fn resolve_path(parts: &[String], absolute: bool, here: &[String],
+                scopes: &HashMap<Vec<String>, ScopeNames>) -> (Vec<String>, PathKey, String) {
+    let written = format!("{}{}", if absolute { "::" } else { "" }, parts.join("::"));
+    let (anchor, skip) = if absolute { (Vec::new(), 0) } else {
+        let first = &parts[0];
+        let mut found = None;
+        for depth in (1..=here.len()).rev() {
+            let candidate = here[..depth].to_vec();
+            if scope_label(&candidate) == first {
+                found = Some((candidate, 1));
+                break;
+            }
+        }
+        if let Some(found) = found { found } else {
+            let mut found = None;
+            for depth in (0..=here.len()).rev() {
+                let candidate = here[..depth].to_vec();
+                if scopes[&candidate].children.contains(first) {
+                    found = Some((candidate, 0));
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| {
+                if (0..=here.len()).any(|depth| scopes[&here[..depth]].bindings.contains(first)) {
+                    panic!("path `{written}` needs a scope at `{first}`, but `{first}` is a binding visible from `{}` ({})",
+                        scope_label(here), scope_address(here));
+                }
+                panic!("path `{written}` has unknown anchor `{first}` from scope `{}` ({})",
+                    scope_label(here), scope_address(here));
+            })
+        }
+    };
+    assert!(parts.len() > skip, "path `{written}` in `{}` needs a final binding", scope_label(here));
+    let mut target = anchor.clone();
+    for component in &parts[skip..parts.len()-1] {
+        let names = &scopes[&target];
+        if !names.children.contains(component) {
+            if names.bindings.contains(component) {
+                panic!("path `{written}` needs a scope at `{component}` in `{}`, but it is a binding (at {})",
+                    scope_label(&target), scope_address(&target));
+            }
+            panic!("path `{written}` has unknown child scope `{component}` in `{}` ({})",
+                scope_label(&target), scope_address(&target));
+        }
+        target.push(component.clone());
+        if here.starts_with(&target) {
+            let suffix = parts[skip + target.len() - anchor.len()..].join("::");
+            panic!("path `{written}` descends into enclosing scope `{}` from `{}`; inside `{}`, write `{suffix}` ({} from {})",
+                scope_label(&target), scope_label(&anchor), scope_label(&target), scope_address(&target), scope_address(&anchor));
+        }
+    }
+    let field = parts.last().unwrap();
+    let names = &scopes[&target];
+    if names.children.contains(field) {
+        panic!("path `{written}` needs a binding at `{field}` in `{}`, but it is a scope ({})",
+            scope_label(&target), scope_address(&target));
+    }
+    if !names.bindings.contains(field) {
+        panic!("path `{written}`: scope `{}` does not define field `{field}` ({})",
+            scope_label(&target), scope_address(&target));
+    }
+    (anchor.clone(), PathKey { anchor, target, field: field.clone() }, written)
+}
+
+fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
+                scopes: &HashMap<Vec<String>, ScopeNames>, plan: &mut PathPlan) {
+    match expr {
+        Expr::Path(parts, absolute) => {
+            let (anchor, key, written) = resolve_path(parts, *absolute, here, scopes);
+            for depth in anchor.len()+1..=key.target.len() {
+                plan.exports.entry(key.target[..depth].to_vec()).or_default().insert(key.clone());
+            }
+            for depth in anchor.len()+1..=here.len() {
+                plan.imports.entry(here[..depth].to_vec()).or_default().insert(key.clone());
+            }
+            let needed = key.target.get(anchor.len()).cloned().unwrap_or_else(|| key.field.clone());
+            let dependent = if here == anchor { item.map(str::to_string) }
+                else { here.get(anchor.len()).cloned() };
+            if let Some(dependent) = dependent {
+                if dependent != needed {
+                    plan.deps.entry(anchor.clone()).or_default().entry(dependent.clone()).or_default().insert(needed.clone());
+                    plan.path_edges.entry(anchor).or_default().entry((dependent, needed)).or_default().insert(written);
+                }
+            }
+            *expr = Expr::ResolvedPath { anchor: key.anchor, target: key.target, field: key.field };
+        }
+        Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
+        | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::FlatMap(e, _)
+        | Expr::Lift(e) | Expr::JoinFunction(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) =>
+            resolve_expr(e, here, item, scopes, plan),
+        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => {
+            resolve_expr(l, here, item, scopes, plan);
+            resolve_expr(r, here, item, scopes, plan);
+        }
+        Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
+        Expr::Input(_) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
+    }
+}
+
+fn resolve_body(body: &mut [Stmt], here: &[String], scopes: &HashMap<Vec<String>, ScopeNames>, plan: &mut PathPlan) {
+    for stmt in body {
+        match stmt {
+            Stmt::Let(name, expr) => resolve_expr(expr, here, Some(name), scopes, plan),
+            Stmt::Set(_, expr) | Stmt::Export(_, _, expr) => resolve_expr(expr, here, None, scopes, plan),
+            Stmt::Var(..) => {},
+            Stmt::Scope(name, nested) => {
+                let mut address = here.to_vec();
+                address.push(name.clone());
+                resolve_body(nested, &address, scopes, plan);
+            }
+        }
+    }
+}
+
 /// Free names of `expr` that are defined at this scope level, excluding the
 /// item's own name (a let referencing its own name is just an unresolved
 /// reference for the current pass — not a self-dep).
 fn expr_deps(expr: &Expr, defined: &BTreeSet<&str>, self_name: &str) -> BTreeSet<String> {
     let mut free = BTreeSet::new();
     expr_free_names(expr, &mut free);
-    free.into_iter()
-        .filter(|n| *n != self_name && defined.contains(n))
-        .map(String::from)
-        .collect()
+    dependency_names(free, defined, self_name)
 }
 
 /// Free names of a scope body (names referenced inside that aren't bound
@@ -33,20 +227,23 @@ fn expr_deps(expr: &Expr, defined: &BTreeSet<&str>, self_name: &str) -> BTreeSet
 fn scope_body_deps(body: &[Stmt], defined: &BTreeSet<&str>, self_name: &str) -> BTreeSet<String> {
     let mut free = BTreeSet::new();
     collect_body_free_names(body, &mut free);
-    free.into_iter()
-        .filter(|n| *n != self_name && defined.contains(n))
-        .map(String::from)
-        .collect()
+    dependency_names(free, defined, self_name)
+}
+
+fn dependency_names(free: BTreeSet<RefName>, defined: &BTreeSet<&str>, self_name: &str) -> BTreeSet<String> {
+    free.into_iter().filter_map(|name| match name {
+        RefName::Plain(n) if n != self_name && defined.contains(n.as_str()) => Some(n),
+        _ => None,
+    }).collect()
 }
 
 /// Names this expression refers to that the surrounding scope must resolve.
-/// For `name`, the name itself; for `scope::field`, the scope name (the
-/// field is resolved within that scope's environment, not the enclosing one).
-fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
+fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
     match expr {
         Expr::Input(_) | Expr::Import(_) => {},
-        Expr::Name(n) => { out.insert(n.as_str()); },
-        Expr::Qualified(scope, _) => { out.insert(scope.as_str()); },
+        Expr::Name(n) => { out.insert(RefName::Plain(n.clone())); },
+        Expr::ResolvedPath { .. } => {},
+        Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
             | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
             | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
@@ -59,23 +256,34 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
 /// Recursively collect names referenced in `body`'s expressions that aren't
 /// bound somewhere within `body` itself. The recursion descends through
 /// nested scopes, masking out their local bindings as it goes.
-fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
-    let mut local: BTreeSet<&'a str> = BTreeSet::new();
+fn collect_body_free_names(body: &[Stmt], out: &mut BTreeSet<RefName>) {
+    let mut local = BTreeSet::new();
     for stmt in body {
         match stmt {
             Stmt::Let(n, _) | Stmt::Var(n, _) | Stmt::Set(n, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
             Stmt::Export(_, _, _) => {},
         }
     }
-    let mut inner: BTreeSet<&'a str> = BTreeSet::new();
+    let mut inner = BTreeSet::new();
+    collect_body_references(body, &mut inner);
+    for name in inner {
+        let bound = match &name {
+            RefName::Plain(n) => local.contains(n.as_str()),
+            RefName::Path(_) => false,
+        };
+        if !bound { out.insert(name); }
+    }
+}
+
+/// References from this body, after each descendant masks its own bindings.
+fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => expr_free_names(e, &mut inner),
+            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => expr_free_names(e, out),
             Stmt::Var(_, _) => {},
-            Stmt::Scope(_, b) => collect_body_free_names(b, &mut inner),
+            Stmt::Scope(_, b) => collect_body_free_names(b, out),
         }
     }
-    for n in inner { if !local.contains(n) { out.insert(n); } }
 }
 
 // ===== Scope-tree lowering (AST -> scope_ir) =====
@@ -88,9 +296,15 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
 
 use crate::scope_ir as st;
 
-pub fn lower_tree(stmts: Vec<Stmt>) -> st::Program {
+pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
+    let mut scopes = HashMap::new();
+    // The program root has no source-level name; `::` is its only explicit anchor.
+    let visible = HashMap::new();
+    collect_scopes(&stmts, &[], &visible, &mut scopes);
+    let mut plan = PathPlan::default();
+    resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
-    st::Program { root: lower_scope_tree("root", &stmts, &empty, &[], true) }
+    st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true) }
 }
 
 /// Expr-lowering state for one scope. Resolves names to scope-local `Ref`s and
@@ -105,9 +319,7 @@ struct ScopeLower {
     imports: Vec<st::Import>,
     input_import: HashMap<usize, usize>, // input n  -> import idx (root, deduped)
     trace_import: HashMap<String, usize>, // trace name -> import idx (root, deduped)
-    env: HashMap<String, st::Ref>,        // local names + pre-created imports -> Ref
-    child_idx: HashMap<String, usize>,    // child scope name -> children index
-    child_exports: HashMap<String, Vec<String>>, // child name -> its export field order
+    env: HashMap<RefName, st::Ref>,        // local names, qualified child exports, and imports
 }
 
 impl ScopeLower {
@@ -133,12 +345,6 @@ impl ScopeLower {
         self.trace_import.insert(name.to_string(), i);
         st::Ref::Import(i)
     }
-    fn qualified_ref(&self, scope: &str, field: &str) -> st::Ref {
-        let cidx = *self.child_idx.get(scope).unwrap_or_else(|| panic!("unknown scope `{}`", scope));
-        let pos = self.child_exports[scope].iter().position(|f| f == field)
-            .unwrap_or_else(|| panic!("scope `{}` does not export `{}`", scope, field));
-        st::Ref::ChildExport(cidx, pos)
-    }
     fn lower_expr(&mut self, e: &Expr) -> st::Ref {
         match e {
             Expr::Input(n) => self.input_ref(*n),
@@ -154,9 +360,11 @@ impl ScopeLower {
                 self.imports[i].shape = Some(shape);
                 r
             }
-            Expr::Name(name) => self.env.get(name).cloned()
+            Expr::Name(name) => self.env.get(&RefName::Plain(name.clone())).cloned()
                 .unwrap_or_else(|| panic!("unresolved name `{}`", name)),
-            Expr::Qualified(s, f) => self.qualified_ref(s, f),
+            Expr::ResolvedPath { anchor, target, field } => self.env.get(&RefName::Path(PathKey { anchor: anchor.clone(), target: target.clone(), field: field.clone() })).cloned()
+                .unwrap_or_else(|| panic!("unresolved path `::{}::{}`", target.join("::"), field)),
+            Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
             Expr::Map(e, p)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Project(p.clone())] }) },
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
             Expr::Negate(e)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Negate] }) },
@@ -191,12 +399,14 @@ impl ScopeLower {
 }
 
 fn lower_scope_tree(
-    scope_name: &str,
+    address: &[String],
     body: &[Stmt],
-    parent_env: &HashMap<String, st::Ref>,
-    exports_wanted: &[String],
+    parent_env: &HashMap<RefName, st::Ref>,
+    exports_wanted: &[PathKey],
+    plan: &PathPlan,
     is_root: bool,
 ) -> st::Scope {
+    let scope_name = scope_label(address);
     let mut s = ScopeLower {
         is_root,
         items: Vec::new(),
@@ -206,8 +416,6 @@ fn lower_scope_tree(
         input_import: HashMap::new(),
         trace_import: HashMap::new(),
         env: HashMap::new(),
-        child_idx: HashMap::new(),
-        child_exports: HashMap::new(),
     };
 
     // Pre-create imports from this scope's transitive free names (names used
@@ -215,14 +423,20 @@ fn lower_scope_tree(
     // cross-level references: an outer name a grandchild needs is imported into
     // every scope on the path.
     if !is_root {
-        let mut free: BTreeSet<&str> = BTreeSet::new();
+        let mut free = BTreeSet::new();
         collect_body_free_names(body, &mut free);
+        free.extend(plan.imports.get(address).into_iter().flatten().cloned().map(RefName::Path));
         for name in free {
-            let from = parent_env.get(name).cloned()
-                .unwrap_or_else(|| panic!("scope references unknown outer name `{}`", name));
+            let from = parent_env.get(&name).cloned().unwrap_or_else(|| match &name {
+                RefName::Plain(n) => panic!("scope references unknown outer name `{}`", n),
+                RefName::Path(key) => panic!("path `{}` is unavailable in scope `{scope_name}`", key.display()),
+            });
             let i = s.imports.len();
-            s.imports.push(st::Import { name: name.to_string(), from: st::Source::Parent(from), shape: None });
-            s.env.insert(name.to_string(), st::Ref::Import(i));
+            s.imports.push(st::Import { name: match &name {
+                RefName::Plain(n) => n.clone(),
+                RefName::Path(key) => key.display(),
+            }, from: st::Source::Parent(from), shape: None });
+            s.env.insert(name, st::Ref::Import(i));
         }
     }
 
@@ -265,7 +479,8 @@ fn lower_scope_tree(
         let idx = vars.len();
         let shape = declarations.get(name).and_then(|shape| (*shape).clone());
         vars.push(st::Var { name: (*name).to_string(), shape });
-        s.env.insert((*name).to_string(), st::Ref::Var(idx));
+        s.env.insert(RefName::Plain((*name).to_string()), st::Ref::Var(idx));
+        s.env.insert(RefName::Path(PathKey { anchor: address.to_vec(), target: address.to_vec(), field: (*name).to_string() }), st::Ref::Var(idx));
         var_id.insert(*name, idx);
     }
 
@@ -276,13 +491,25 @@ fn lower_scope_tree(
     let mut deps: HashMap<String, BTreeSet<String>> = HashMap::new();
     for (n, e) in &lets { deps.insert(n.clone(), expr_deps(e, &defined, n)); }
     for (n, b) in &child_bodies { deps.insert(n.clone(), scope_body_deps(b, &defined, n)); }
+    if let Some(path_deps) = plan.deps.get(address) {
+        for (name, needed) in path_deps {
+            if let Some(deps) = deps.get_mut(name) {
+                deps.extend(needed.iter().filter(|n| defined.contains(n.as_str())).cloned());
+            }
+        }
+    }
     drop(defined);
 
     let mut pending = order;
     while !pending.is_empty() {
-        let pos = pending.iter().position(|(_, n)| deps[n].is_empty())
-            .unwrap_or_else(|| panic!("Cyclic let/scope dependency; use `set` for recursion: {:?}",
-                pending.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()));
+        let pos = pending.iter().position(|(_, n)| deps[n].is_empty()).unwrap_or_else(|| {
+            let names: BTreeSet<_> = pending.iter().map(|(_, n)| n.clone()).collect();
+            let paths: BTreeSet<_> = plan.path_edges.get(address).into_iter().flat_map(HashMap::iter)
+                .filter(|((from, to), _)| names.contains(from) && names.contains(to))
+                .flat_map(|(_, paths)| paths.iter().cloned()).collect();
+            panic!("cycle between scopes or lets in `{scope_name}` ({}): {:?}; paths {:?}; use `set` for recursion",
+                scope_address(address), pending.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>(), paths);
+        });
         let (kind, name) = pending.remove(pos);
         deps.remove(&name);
         for d in deps.values_mut() { d.remove(&name); }
@@ -291,17 +518,22 @@ fn lower_scope_tree(
                 let e = lets.remove(&name).unwrap();
                 s.statement = name.clone();
                 let r = s.lower_expr(e);
-                s.env.insert(name, r);
+                s.env.insert(RefName::Plain(name.clone()), r.clone());
+                s.env.insert(RefName::Path(PathKey { anchor: address.to_vec(), target: address.to_vec(), field: name }), r);
             },
             ItemKind::Scope => {
                 let b = child_bodies.remove(&name).unwrap();
-                let wanted = qualified_fields(body, &name);
-                let child = lower_scope_tree(&name, b, &s.env, &wanted, false);
+                let mut child_address = address.to_vec();
+                child_address.push(name.clone());
+                let wanted: Vec<PathKey> = plan.exports.get(&child_address).into_iter().flatten().cloned().collect();
+                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false);
+                let slots = export_slots(&wanted, &child_address);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
                 s.labels.push(name.clone());
-                s.child_idx.insert(name.clone(), cidx);
-                s.child_exports.insert(name, wanted);
+                for (key, pos) in wanted.into_iter().zip(slots) {
+                    s.env.insert(RefName::Path(key), st::Ref::ChildExport(cidx, pos));
+                }
             },
         }
     }
@@ -324,39 +556,18 @@ fn lower_scope_tree(
             exports.push(st::Export { name: (*name).to_string(), value: r, shape: (*shape).clone() });
         }
     } else {
-        for field in exports_wanted {
-            let r = s.env.get(field).cloned()
-                .unwrap_or_else(|| panic!("scope export `{}` is not a local name", field));
-            exports.push(st::Export { name: field.clone(), value: r, shape: None });
+        let mut seen = BTreeSet::new();
+        for key in exports_wanted {
+            let lookup = export_lookup(key, address);
+            if !seen.insert(lookup.clone()) { continue; }
+            let r = s.env.get(&lookup).cloned()
+                .unwrap_or_else(|| panic!("path `{}` is unavailable in scope `{scope_name}`", key.display()));
+            let name = if key.target == address { key.field.clone() } else { key.display() };
+            exports.push(st::Export { name, value: r, shape: None });
         }
     }
 
     st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, binds, exports }
-}
-
-/// The fields of child scope `scope` that this body references via `scope::field`.
-fn qualified_fields(body: &[Stmt], scope: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for stmt in body {
-        match stmt {
-            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => collect_qualified(e, scope, &mut out),
-            Stmt::Var(_, _) => {},
-            Stmt::Scope(_, _) => {} // a child's `scope::field`s reference *its* children, not ours
-        }
-    }
-    out
-}
-
-fn collect_qualified(e: &Expr, scope: &str, out: &mut Vec<String>) {
-    match e {
-        Expr::Qualified(s, f) => if s == scope && !out.contains(f) { out.push(f.clone()); },
-        Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::EnterAt(e, _)
-        | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
-        | Expr::LiftIter(e) | Expr::Reduce(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => collect_qualified(e, scope, out),
-        Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },
-        Expr::Concat(es) => for e in es { collect_qualified(e, scope, out); },
-        Expr::Input(_) | Expr::Import(_) | Expr::Name(_) => {}
-    }
 }
 
 #[cfg(test)]
@@ -367,6 +578,9 @@ mod tree_tests {
     fn parse(src: &str) -> Vec<Stmt> { crate::parse::pipe::parse(src) }
     fn subs(s: &st::Scope) -> Vec<&st::Scope> {
         s.items.iter().filter_map(|i| match i { st::Item::Sub(c) => Some(c), _ => None }).collect()
+    }
+    fn child<'a>(scope: &'a st::Scope, name: &str) -> &'a st::Scope {
+        subs(scope).into_iter().find(|c| c.name == name).unwrap()
     }
     fn reads_a_child_export(s: &st::Scope) -> bool {
         s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Linear { input: Ref::ChildExport(..), .. })))
@@ -484,6 +698,174 @@ mod tree_tests {
             assert!(child.exports.iter().any(|e| e.name == "labels"));
         }
         assert!(reads_a_child_export(&prog.root)); // root reads outer::scc
+    }
+
+    #[test]
+    fn grandchild_reads_uncle_export_through_parent() {
+        let src = "let source = input 0; uncle: { let value = source; } \
+            parent: { child: { let result = uncle::value; } let result = child::result; } \
+            export \"out\" = parent::result;";
+        let prog = lower_tree(parse(src));
+        let uncle = child(&prog.root, "uncle");
+        let parent = child(&prog.root, "parent");
+        let grandchild = child(parent, "child");
+        assert_eq!(uncle.exports[0].name, "value");
+        let parent_import = parent.imports.iter().find(|i| i.name == "::uncle::value").unwrap();
+        assert!(matches!(parent_import.from, Source::Parent(Ref::ChildExport(..))));
+        let child_import = grandchild.imports.iter().find(|i| i.name == "::uncle::value").unwrap();
+        assert!(matches!(child_import.from, Source::Parent(Ref::Import(_))));
+    }
+
+    #[test]
+    #[should_panic(expected = "scope `X` in `outer` (::outer) shadows visible scope `X` in `X` (::X)")]
+    fn local_child_shadows_outer_scope() {
+        let src = "let source0 = input 0; let source1 = input 1; \
+            X: { let value = source0; } \
+            outer: { X: { let value = source1; } \
+                inner: { let picked = X::value; } let result = inner::picked; } \
+            export \"out\" = outer::result;";
+        lower_tree(parse(src));
+    }
+
+    #[test]
+    fn var_body_reads_sibling_var() {
+        let src = "let source = input 0; first: { set result = second::value; } \
+            second: { set value = source; } export \"out\" = first::result;";
+        let prog = lower_tree(parse(src));
+        let first = child(&prog.root, "first");
+        assert!(matches!(first.imports.iter().find(|i| i.name == "::second::value").unwrap().from,
+            Source::Parent(Ref::ChildExport(..))));
+        assert!(matches!(first.binds[0].value, Ref::Import(_)));
+    }
+
+    #[test]
+    fn local_binding_does_not_hide_outer_scope_qualifier() {
+        let src = "let source = input 0; X: { let value = source; } \
+            middle: { let X = source; let result = X::value; } \
+            export \"out\" = middle::result;";
+        let prog = lower_tree(parse(src));
+        let middle = child(&prog.root, "middle");
+        assert!(middle.imports.iter().any(|i| i.name == "::X::value"
+            && matches!(i.from, Source::Parent(Ref::ChildExport(..)))));
+    }
+
+    #[test]
+    #[should_panic(expected = "cycle between scopes or lets in `root` (::): [\"first\", \"second\"]")]
+    fn sibling_scope_cycle_is_rejected() {
+        lower_tree(parse("first: { let x = second::y; } second: { let y = first::x; }"));
+    }
+
+    #[test]
+    fn scope_cycle_names_both_paths() {
+        let error = std::panic::catch_unwind(|| {
+            lower_tree(parse("first: { let x = second::y; } second: { let y = first::x; }"));
+        }).unwrap_err();
+        let message = error.downcast_ref::<String>().unwrap();
+        assert!(message.contains("first::x") && message.contains("second::y"), "{message}");
+    }
+
+    #[test]
+    #[should_panic(expected = "path `second::missing`: scope `second` does not define field `missing`")]
+    fn missing_sibling_field_names_scope_and_field() {
+        lower_tree(parse("let source = input 0; first: { let x = second::missing; } second: { let value = source; }"));
+    }
+
+    #[test]
+    #[should_panic(expected = "`X` is both a let and child scope")]
+    fn binding_and_scope_cannot_share_a_name() {
+        lower_tree(parse("let X = input 0; X: { let value = input 1; }"));
+    }
+
+    #[test]
+    fn root_path_descends_three_scopes() {
+        let src = "let source = input 0; a: { b: { c: { let value = source; } } } \
+            export \"out\" = ::a::b::c::value;";
+        let prog = lower_tree(parse(src));
+        assert_eq!(child(child(child(&prog.root, "a"), "b"), "c").exports[0].name, "value");
+        assert!(matches!(prog.root.exports[0].value, Ref::ChildExport(..)));
+    }
+
+    #[test]
+    fn grandchild_reads_uncles_child() {
+        let src = "let source = input 0; uncle: { branch: { let value = source; } } \
+            parent: { child: { let result = uncle::branch::value; } let result = child::result; } \
+            export \"out\" = parent::result;";
+        let prog = lower_tree(parse(src));
+        let parent = child(&prog.root, "parent");
+        let grandchild = child(parent, "child");
+        assert!(parent.imports.iter().any(|i| i.name == "::uncle::branch::value"
+            && matches!(i.from, Source::Parent(Ref::ChildExport(..)))));
+        assert!(grandchild.imports.iter().any(|i| i.name == "::uncle::branch::value"
+            && matches!(i.from, Source::Parent(Ref::Import(_)))));
+    }
+
+    #[test]
+    fn enclosing_scope_reads_the_rest_inside_it() {
+        let src = "let source = input 0; outer: { fwd: { let labels = source; } \
+            bwd: { let result = outer::fwd::labels; } let result = bwd::result; } \
+            export \"out\" = outer::result;";
+        let prog = lower_tree(parse(src));
+        let outer = child(&prog.root, "outer");
+        let bwd = child(outer, "bwd");
+        assert!(bwd.imports.iter().any(|i| i.name == "::outer::fwd::labels"
+            && matches!(i.from, Source::Parent(Ref::ChildExport(..)))));
+    }
+
+    #[test]
+    fn one_field_can_be_read_at_two_anchors() {
+        let src = "let source = input 0; outer: { fwd: { let labels = source; } \
+            bwd: { let result = outer::fwd::labels; } let result = bwd::result; } \
+            other: { let result = ::outer::fwd::labels; } \
+            export \"out\" = outer::result + other::result;";
+        let prog = lower_tree(parse(src));
+        assert_eq!(child(child(&prog.root, "outer"), "fwd").exports.len(), 1);
+        assert!(child(&prog.root, "other").imports.iter().any(|i| i.name == "::outer::fwd::labels"));
+    }
+
+    #[test]
+    #[should_panic(expected = "path `outer::fwd::labels` descends into enclosing scope `fwd` from `outer`; inside `fwd`, write `labels`")]
+    fn path_into_enclosing_scope_is_rejected() {
+        lower_tree(parse("outer: { fwd: { let labels = input 0; let x = outer::fwd::labels; } }"));
+    }
+
+    #[test]
+    fn disjoint_subtrees_can_reuse_scope_name() {
+        let src = "let source = input 0; left: { shared: { let value = source; } \
+            let result = shared::value; } right: { shared: { let value = source; } \
+            let result = shared::value; } export \"out\" = left::result + right::result;";
+        let prog = lower_tree(parse(src));
+        assert_eq!(child(child(&prog.root, "left"), "shared").exports[0].name, "value");
+        assert_eq!(child(child(&prog.root, "right"), "shared").exports[0].name, "value");
+    }
+
+    #[test]
+    fn root_is_available_as_a_child_scope_name() {
+        let prog = lower_tree(parse("let source = input 0; root: { let value = source; } export \"out\" = root::value;"));
+        assert_eq!(child(&prog.root, "root").exports[0].name, "value");
+    }
+
+    #[test]
+    #[should_panic(expected = "path `unknown::value` has unknown anchor `unknown` from scope `root`")]
+    fn unknown_anchor_names_path_and_scope() {
+        lower_tree(parse("export \"out\" = unknown::value;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "path `a::missing::value` has unknown child scope `missing` in `a`")]
+    fn unknown_child_names_path_and_scope() {
+        lower_tree(parse("a: { let value = input 0; } export \"out\" = a::missing::value;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "path `a::value::field` needs a scope at `value` in `a`, but it is a binding")]
+    fn binding_cannot_be_path_scope() {
+        lower_tree(parse("a: { let value = input 0; } export \"out\" = a::value::field;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "path `a::b` needs a binding at `b` in `a`, but it is a scope")]
+    fn scope_cannot_be_path_field() {
+        lower_tree(parse("a: { b: { let value = input 0; } } export \"out\" = a::b;"));
     }
 }
 

@@ -164,6 +164,22 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test] fn reach() { assert_matches_expected("reach"); }
 #[test] fn scc() { assert_matches_expected("scc"); }
+
+#[test]
+fn scc_with_explicit_anchors_matches_shorthand() {
+    let src = include_str!("../examples/programs/scc.ddp");
+    let explicit = src.replace("join(fwd::labels", "join(outer::fwd::labels")
+        .replace("join(bwd::labels", "join(outer::bwd::labels")
+        .replace("export \"result\" = outer::scc", "export \"result\" = ::outer::scc")
+        .replace("bwd: {", "bwd: { let observed = outer::fwd::labels;");
+    let inputs = inputs_for("scc");
+    let original = lower::lower_tree(parse::pipe::parse(src));
+    let anchored = lower::lower_tree(parse::pipe::parse(&explicit));
+    let want = render(&evaluate(timely::Config::process(1), &original, &inputs));
+    let got = render(&evaluate(timely::Config::process(1), &anchored, &inputs));
+    assert_eq!(got, want);
+    assert_eq!(got, include_str!("../examples/programs/scc.expected").trim_end());
+}
 #[test] fn cc_stages() { assert_matches_expected("cc_stages"); }
 #[test] fn cc_records() { assert_matches_expected("cc_records"); }
 #[test] fn kcore() { assert_matches_expected("kcore"); }
