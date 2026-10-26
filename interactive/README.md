@@ -62,6 +62,7 @@ The pair structure `(key, val)` calls out first how the data are organized, and 
 A currently unfortunate amount of symbolic load is in shuffling around fields of collection elements.
 The `map` operator applies to each record, and the `->` fragment is an expression converting the input to the output.
 The language is a small interpreted columnar language with ADTs, and is at the moment a bit esoteric (the `inject` verb puts data within an enum variant).
+
 </details>
 <p>
 
@@ -84,7 +85,7 @@ Within a scope, the values of variables are established like so:
 
 1. Initially, each variable is the empty collection.
 2. Repeatedly, all variables synchronously update to new values, as a function of their prior values.
-3. Eventually, the value of each named variable is its fixed point under this process.
+3. Eventually, each variable that will cease changing does so, at its fixed point.
 
 Should termination occur, all names bound in the scope reach a limit, and all `set` bindings become equalities.
 From outside the scope, a path `scope::name` references the fixed point of the collection bound to `name`.
@@ -111,24 +112,6 @@ barring: {
 
 A recursive scope can contain arbitrary logic, including negation, aggregation, and other nested scopes.
 The only rule is that each cyclic definition must pass through a `set` binding for it to be well defined.
-
-```
--- Access spreads from `grants` through `groups`, except where `barred`.
-export "access" = sharing::allowed;
-sharing: {
-   var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
-   set allowed = offered
-               - (offered | join(barred, (pair, acc, ()) -> (pair, acc)))
-               | min;
-
-   let offered = grants | map((doc, (who, acc)) -> ((who, doc), acc))
-               + inherited;
-
-   let inherited = allowed
-         | map(((who, doc), acc) -> (who, (doc, acc)))
-         | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
-}
-```
 
 The `-` sigil subtracts one multiset from another.
 The `min` operation produces for each key its smallest associated value.
@@ -181,7 +164,7 @@ The dataflow is up and running, but has nothing to do yet.
 ```
 # Variants are structural, and written by position:
 # inject(0,x) is User x, inject(1,x) is Group x,
-# inject(0,_), inject(1,_), inject(2,_) are Owner, Edit, View.
+# inject(0,tuple()), inject(1,tuple()), inject(2,tuple()) are Owner, Edit, View.
 
 # Input 1, `groups`: group 10 holds user 2 and group 11; group 11 holds user 3.
 feed demo 1 begin
@@ -206,7 +189,7 @@ feed demo 0 begin
 end-feed
 ```
 Further updates for the grants, putting us in a place where we could now expect real output.
-We have not introduced any bans yet.
+We have not introduced any blocks yet.
 
 ```
 # Apply the changes, then read every (member, doc) and its access.
