@@ -721,12 +721,15 @@ fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lam
 
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
     let mut masked = 0;
+    let labeled = scope.labels.len() == scope.items.len();
     let mut remap = Vec::with_capacity(scope.items.len());
     let mut items = Vec::with_capacity(scope.items.len());
+    let mut labels = Vec::with_capacity(scope.labels.len());
     let identity = Lambda::new("input".into(), &corgi::Scope::default());
-    for (mut item, planned) in std::mem::take(&mut scope.items)
+    for (i, (mut item, planned)) in std::mem::take(&mut scope.items)
         .into_iter()
         .zip(&plan.items)
+        .enumerate()
     {
         match (&mut item, planned) {
             (Item::Op(Node::Linear { ops, .. }), PlannedItem::Op { stages, .. }) => {
@@ -804,6 +807,9 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                                 });
                                 *r = Ref::Local(items.len());
                                 items.push(project);
+                                if labeled {
+                                    labels.push(scope.labels[i].clone());
+                                }
                                 masked += fields;
                             }
                         }
@@ -825,6 +831,9 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             _ => None,
         };
         items.push(item);
+        if labeled {
+            labels.push(scope.labels[i].clone());
+        }
         if let Some(output) = reduced_output {
             if let Some(lambda) = mask_site_lambda(&identity, output, live) {
                 let fields = output
@@ -839,6 +848,9 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                 });
                 remap.push(items.len());
                 items.push(project);
+                if labeled {
+                    labels.push(scope.labels[i].clone());
+                }
                 masked += fields;
                 continue;
             }
@@ -852,6 +864,9 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
         remap_ref(&mut export.value, &remap);
     }
     scope.items = items;
+    if labeled {
+        scope.labels = labels;
+    }
     masked
 }
 
@@ -982,6 +997,29 @@ mod tests {
         // Count still groups by both key fields; the second is masked only
         // after the reduction, where the next map no longer reads it.
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn inserted_projections_keep_statement_labels() {
+        let text = "let source = input 0 : ((int, int), ());
+                    let left = source | map((row, ()) -> (row, ()));
+                    let merged = source + left;
+                    let counted = source | count;
+                    export \"merged\" = merged | map((row, ()) -> (row.0, ()));
+                    export \"counts\" = counted | map(((a, _), n) -> (a, n));";
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        program.optimize();
+        assert_eq!(program.root.labels, [
+            "left", "merged", "counted", "counted", "export merged", "export counts",
+        ]);
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        // A projection inserted before each concat input, and after the reduce, takes the
+        // label of the statement it serves.
+        assert_eq!(program.root.labels.len(), program.root.items.len());
+        assert_eq!(program.root.labels, [
+            "left", "merged", "merged", "merged", "counted", "counted", "counted",
+            "export merged", "export counts",
+        ]);
     }
 
     #[test]
