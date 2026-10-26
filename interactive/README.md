@@ -22,9 +22,11 @@ I am currently iterating on increasing its legibility.
 
 Folks often have rules to determine who should be allowed to access resources, like documents.
 One approach organizes users into groups, and allows groups to contain other groups themselves.
-A user is allowed to read a document if:
-* it is a (transitive) member of a group that has been given access, and
-* it is not a (transitive) member of a group that has been denied access.
+A member, a user or a group, has access to a document if:
+* it, or a group that (transitively) contains it, was granted access to the document, and
+* neither it nor any group that (transitively) contains it was blocked on the document.
+
+Access comes in levels (owner, edit and view), and a member gets the strongest level it was granted.
 
 You can write this as (it's one file, but broken up for exposition):
 
