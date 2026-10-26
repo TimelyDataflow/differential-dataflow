@@ -152,10 +152,12 @@ The intent is that the operation of the system is conducted less by humans and k
 
 The examples will feed and read data with textual, row-oriented versions.
 This is better done through binary columnar forms, which exist but aren't easy to present.
+The program is [`examples/server/programs/access.ddp`](examples/server/programs/access.ddp), and the whole session is [`examples/server/sessions/access.txt`](examples/server/sessions/access.txt).
+From `interactive/`, `cargo run --release -p ddir-server < examples/server/sessions/access.txt` runs it end to end.
 
 ```
 # Install access.ddp under the name `demo`.
-load demo from access.ddp
+load demo from examples/server/programs/access.ddp
 ```
 This binds the name `demo` to the root scope of `access.ddp`.
 There are now three inputs we can reference, and the output `access`.
