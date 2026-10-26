@@ -46,6 +46,8 @@ diagnostics off. Five measured cycles after two warmups. Every transaction's
 ids increase; "cycle" is everything from admission to the store being ready
 for the next batch. Intents go to the server as one binary frame of columns
 per batch (`feed … frame`, the default; `--feed text` sends framed text rows).
+Rollbacks and the final state come back as binary frames (`peek … as corgi`), decoded
+after the clock stops.
 Encoding the frame in Python happens before the clock starts.
 
 One read and one write per transaction, sparse random keys from 10M:

@@ -23,7 +23,6 @@ import math
 import os
 from pathlib import Path
 import random
-import re
 import shlex
 import socket
 import subprocess
@@ -35,9 +34,10 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
-# The LDBC client's frame encoder writes `feed … frame` payloads.
+# The LDBC client's frame encoder writes `feed … frame` payloads, and its decoder reads
+# `peek … as corgi` frames.
 sys.path.insert(0, str(HERE.parent / "ldbc"))
-from client import encode_frame  # noqa: E402
+from client import decode, encode_frame  # noqa: E402
 
 # The intents input of every program here: `((txn, is_read, key), (value))`.
 INTENTS = (("prod", ["int", "int", "int"]), ("prod", ["int"]))
@@ -94,9 +94,10 @@ class Client:
         self.next_id += 1
         return f"q{self.next_id}"
 
-    def _exchange(self, reqid: str, payload) -> list[str]:
+    def _exchange(self, reqid: str, payload) -> tuple[list[str], list[tuple[str, bytes]]]:
         self.stream.sendall(payload if isinstance(payload, bytes) else payload.encode())
         data: list[str] = []
+        frames: list[tuple[str, bytes]] = []
         while True:
             raw = self.reader.readline()
             if not raw:
@@ -106,17 +107,21 @@ class Client:
             if not line.startswith(prefix):
                 continue
             response = line[len(prefix) :]
-            if response.startswith("data "):
+            if response.startswith("frame "):
+                # `<id> frame <kind> <nbytes>`, then exactly that many bytes.
+                kind, nbytes = response[len("frame ") :].split(" ")
+                frames.append((kind, self.reader.read(int(nbytes))))
+            elif response.startswith("data "):
                 data.append(response[5:])
             elif response == "ok" or response.startswith("ok "):
-                return data
+                return data, frames
             elif response == "err" or response.startswith("err "):
                 raise RuntimeError(response)
 
     def request(self, command: str) -> tuple[list[str], float]:
         reqid = self._id()
         start = time.perf_counter()
-        data = self._exchange(reqid, f"{reqid} {command}\n")
+        data, _ = self._exchange(reqid, f"{reqid} {command}\n")
         return data, (time.perf_counter() - start) * 1000.0
 
     def load(self, name: str, program: Path) -> float:
@@ -150,8 +155,13 @@ class Client:
     def tick(self) -> float:
         return self.request("tick")[1]
 
-    def peek(self, trace: str) -> tuple[list[str], float]:
-        return self.request(f"peek {trace} as columns")
+    def peek(self, trace: str) -> tuple[list[tuple[tuple[int, ...], tuple[int, ...], int]], float]:
+        """A binary peek, as (key, val, diff) rows of integers. Decoding is outside the clock."""
+        reqid = self._id()
+        start = time.perf_counter()
+        _, frames = self._exchange(reqid, f"{reqid} peek {trace} as corgi\n")
+        observe_ms = (time.perf_counter() - start) * 1000.0
+        return [(flat(key), flat(val), diff) for key, val, diff in decode(frames)], observe_ms
 
     def feed_from(self, prog: str, trace: str, diff: int) -> float:
         return self.request(f"feed {prog} 0 from {trace} diff={diff}")[1]
@@ -226,45 +236,26 @@ def free_ports(count: int) -> list[int]:
             sock.close()
 
 
-COLUMN_RE = re.compile(r"Prim\(\w+\(\[([^\]]*)\]\)\)")
-DIFFS_RE = re.compile(r" diffs=\[([^\]]*)\]$")
+def flat(value) -> tuple[int, ...]:
+    """A decoded key or value as its integers in order: tuples flatten and unit vanishes."""
+    if isinstance(value, list):
+        return tuple(x for part in value for x in flat(part))
+    return (value,)
 
 
-def ints(text: str) -> list[int]:
-    return [int(part) for part in text.split(",") if part.strip()]
-
-
-def parse_rows(lines: Iterable[str]) -> list[tuple[tuple[int, ...], tuple[int, ...], int]]:
-    """An `as columns` peek's containers as (key, val, diff) rows of integers."""
-    rows = []
-    for line in lines:
-        keys, sep, rest = line.partition(" vals=")
-        diffs = DIFFS_RE.search(rest)
-        if not keys.startswith("keys=") or not sep or diffs is None:
-            raise RuntimeError(f"unrecognized peek row: {line}")
-        key_cols = [ints(col) for col in COLUMN_RE.findall(keys)]
-        val_cols = [ints(col) for col in COLUMN_RE.findall(rest[: diffs.start()])]
-        counts = ints(diffs.group(1))
-        if any(len(col) != len(counts) for col in key_cols + val_cols):
-            raise RuntimeError(f"ragged peek row: {line}")
-        for i, diff in enumerate(counts):
-            rows.append((tuple(c[i] for c in key_cols), tuple(c[i] for c in val_cols), diff))
-    return rows
-
-
-def parse_rollback(lines: Iterable[str]) -> set[int]:
+def parse_rollback(rows) -> set[int]:
     result: set[int] = set()
-    for key, _, diff in parse_rows(lines):
+    for key, _, diff in rows:
         if diff != 1:
             raise RuntimeError(f"rollback {key} has multiplicity {diff}")
         result.add(key[0])
     return result
 
 
-def parse_state(lines: Iterable[str]) -> dict[int, int]:
+def parse_state(rows) -> dict[int, int]:
     """`state` is ((k), (v)) and `store` is ((k), (wid, v)): the value is the last field."""
     result: dict[int, int] = {}
-    for key, val, diff in parse_rows(lines):
+    for key, val, diff in rows:
         if diff != 1 or key[0] in result:
             raise RuntimeError(f"state key {key} has invalid multiplicity {diff}")
         result[key[0]] = val[-1]
