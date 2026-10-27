@@ -500,19 +500,27 @@ fn lower_scope_tree(
     }
     drop(defined);
 
-    let mut pending = order;
-    while !pending.is_empty() {
-        let pos = pending.iter().position(|(_, n)| deps[n].is_empty()).unwrap_or_else(|| {
-            let names: BTreeSet<_> = pending.iter().map(|(_, n)| n.clone()).collect();
-            let paths: BTreeSet<_> = plan.path_edges.get(address).into_iter().flat_map(HashMap::iter)
-                .filter(|((from, to), _)| names.contains(from) && names.contains(to))
-                .flat_map(|(_, paths)| paths.iter().cloned()).collect();
-            panic!("cycle between scopes or lets in `{scope_name}` ({}): {:?}; paths {:?}; use `set` for recursion",
-                scope_address(address), pending.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>(), paths);
-        });
-        let (kind, name) = pending.remove(pos);
-        deps.remove(&name);
-        for d in deps.values_mut() { d.remove(&name); }
+    // Kahn's algorithm, taking the earliest ready item in `order` each step: the same order as
+    // repeatedly scanning for the first item with no pending deps, in O((n + e) log n).
+    let mut pending: Vec<Option<(ItemKind, String)>> = order.into_iter().map(Some).collect();
+    let index: HashMap<String, usize> = pending.iter().enumerate()
+        .map(|(i, it)| (it.as_ref().unwrap().1.clone(), i)).collect();
+    let mut users: Vec<Vec<usize>> = vec![Vec::new(); pending.len()];
+    let mut remaining: Vec<usize> = vec![0; pending.len()];
+    for (i, it) in pending.iter().enumerate() {
+        for d in &deps[&it.as_ref().unwrap().1] {
+            remaining[i] += 1;
+            if let Some(&j) = index.get(d) { users[j].push(i); }
+        }
+    }
+    drop(deps);
+    let mut ready: BTreeSet<usize> = (0..pending.len()).filter(|&i| remaining[i] == 0).collect();
+    while let Some(pos) = ready.pop_first() {
+        for &u in &users[pos] {
+            remaining[u] -= 1;
+            if remaining[u] == 0 { ready.insert(u); }
+        }
+        let (kind, name) = pending[pos].take().unwrap();
         match kind {
             ItemKind::Let => {
                 let e = lets.remove(&name).unwrap();
@@ -536,6 +544,16 @@ fn lower_scope_tree(
                 }
             },
         }
+    }
+
+    let rest: Vec<String> = pending.into_iter().flatten().map(|(_, n)| n).collect();
+    if !rest.is_empty() {
+        let names: BTreeSet<_> = rest.iter().cloned().collect();
+        let paths: BTreeSet<_> = plan.path_edges.get(address).into_iter().flat_map(HashMap::iter)
+            .filter(|((from, to), _)| names.contains(from) && names.contains(to))
+            .flat_map(|(_, paths)| paths.iter().cloned()).collect();
+        panic!("cycle between scopes or lets in `{scope_name}` ({}): {:?}; paths {:?}; use `set` for recursion",
+            scope_address(address), rest, paths);
     }
 
     // Lower set bodies and emit binds.
