@@ -7,7 +7,7 @@
 //! use `set` for recursion), then lowers exports and the `set` bodies
 //! (each emitting a `Bind`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::parse::*;
 use crate::ir::LinearOp;
@@ -63,7 +63,7 @@ fn export_slots(wanted: &[PathKey], address: &[String]) -> Vec<usize> {
     }).collect()
 }
 
-fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<String>>,
+fn collect_scopes(body: &[Stmt], path: &[String], visible: &mut HashMap<String, Vec<String>>,
                   scopes: &mut HashMap<Vec<String>, ScopeNames>) {
     let mut names = ScopeNames::default();
     let mut all = BTreeSet::new();
@@ -79,7 +79,6 @@ fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<
             _ => { names.bindings.insert(name.clone()); }
         }
     }
-    let mut next_visible = visible.clone();
     for child in &names.children {
         if let Some(other) = visible.get(child) {
             panic!("scope `{child}` in `{}` ({}) shadows visible scope `{}` in `{}` ({})",
@@ -87,16 +86,19 @@ fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<
         }
         let mut address = path.to_vec();
         address.push(child.clone());
-        next_visible.insert(child.clone(), address);
+        visible.insert(child.clone(), address);
     }
     scopes.insert(path.to_vec(), names);
     for stmt in body {
         if let Stmt::Scope(name, nested) = stmt {
             let mut address = path.to_vec();
             address.push(name.clone());
-            collect_scopes(nested, &address, &next_visible, scopes);
+            collect_scopes(nested, &address, visible, scopes);
         }
     }
+    // Siblings share the same visible names. Remove only this scope's additions
+    // when returning to its parent, rather than cloning the whole map per child.
+    for child in &scopes[path].children { visible.remove(child); }
 }
 
 fn resolve_path(parts: &[String], absolute: bool, here: &[String],
@@ -299,8 +301,8 @@ use crate::scope_ir as st;
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut scopes = HashMap::new();
     // The program root has no source-level name; `::` is its only explicit anchor.
-    let visible = HashMap::new();
-    collect_scopes(&stmts, &[], &visible, &mut scopes);
+    let mut visible = HashMap::new();
+    collect_scopes(&stmts, &[], &mut visible, &mut scopes);
     let mut plan = PathPlan::default();
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
@@ -443,6 +445,7 @@ fn lower_scope_tree(
     // Bucket statements.
     let mut lets: HashMap<String, &Expr> = HashMap::new();
     let mut sets: Vec<(&str, &Expr)> = Vec::new();
+    let mut set_names = HashSet::new();
     let mut declarations: HashMap<&str, &Option<st::RowShape>> = HashMap::new();
     let mut child_bodies: HashMap<String, &[Stmt]> = HashMap::new();
     let mut export_stmts: Vec<(&str, &Option<st::RowShape>, &Expr)> = Vec::new();
@@ -453,7 +456,7 @@ fn lower_scope_tree(
             Stmt::Var(n, s) => { assert!(declarations.insert(n, s).is_none(), "var `{n}` declared twice"); },
             Stmt::Set(n, e) => {
                 assert!(!is_root, "set `{n}` is only valid in a named scope");
-                assert!(!sets.iter().any(|(name, _)| *name == n), "set `{n}` defined twice");
+                assert!(set_names.insert(n.as_str()), "set `{n}` defined twice");
                 sets.push((n, e));
             },
             Stmt::Scope(n, b)=> { assert!(child_bodies.insert(n.clone(), b.as_slice()).is_none(), "scope `{n}` defined twice"); order.push((ItemKind::Scope, n.clone())); },
@@ -462,7 +465,7 @@ fn lower_scope_tree(
     }
 
     for name in declarations.keys() {
-        assert!(sets.iter().any(|(set_name, _)| set_name == name), "var `{name}` has no set in this scope");
+        assert!(set_names.contains(name), "var `{name}` has no set in this scope");
     }
     for (name, _) in &sets {
         assert!(!lets.contains_key(*name) && !child_bodies.contains_key(*name),

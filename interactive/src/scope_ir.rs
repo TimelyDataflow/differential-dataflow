@@ -266,24 +266,28 @@ impl Scope {
         counts
     }
 
-    /// Redirect every `Ref::Local(from)` to `to`, and mark `from` dead.
-    fn redirect(&mut self, from: usize, to: Ref, dead: &mut [bool]) {
-        self.for_each_ref(|r| if matches!(r, Ref::Local(i) if *i == from) { *r = to.clone(); });
-        dead[from] = true;
+    /// Apply a batch of local redirects in one walk, including child imports,
+    /// binds, and exports. Each target is already the surviving item.
+    fn redirect(&mut self, redirects: &[usize]) {
+        self.for_each_ref(|r| if let Ref::Local(i) = r { *i = redirects[*i]; });
     }
 
     /// `Arrange` of an arrangement (an `Arrange` or `Reduce` item) is redundant.
     fn collapse_arranges(&mut self, dead: &mut [bool]) -> bool {
+        let mut redirects: Vec<usize> = (0..self.items.len()).collect();
         let mut changed = false;
         for i in 0..self.items.len() {
             if dead[i] { continue; }
             let Item::Op(Node::Arrange(Ref::Local(j))) = &self.items[i] else { continue };
-            let j = *j;
+            // Items are in dependency order, so an earlier redirect is final.
+            let j = redirects[*j];
             if !dead[j] && matches!(&self.items[j], Item::Op(Node::Arrange(_) | Node::Reduce { .. })) {
-                self.redirect(i, Ref::Local(j), dead);
+                redirects[i] = j;
+                dead[i] = true;
                 changed = true;
             }
         }
+        if changed { self.redirect(&redirects); }
         changed
     }
 
@@ -296,9 +300,12 @@ impl Scope {
             let Item::Op(Node::Linear { input: Ref::Local(j), .. }) = &self.items[i] else { continue };
             let j = *j;
             if dead[j] || counts[j] != 1 { continue; }
-            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = self.items[j].clone() else { continue };
+            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = &mut self.items[j] else { continue };
+            let inner_input = inner_input.clone();
+            // The input dies here. Move its growing op list so each prefix is
+            // neither cloned nor retained in a dead item until compaction.
+            let mut fused = std::mem::take(inner_ops);
             let Item::Op(Node::Linear { ops, .. }) = &mut self.items[i] else { unreachable!() };
-            let mut fused = inner_ops;
             fused.append(ops);
             self.items[i] = Item::Op(Node::Linear { input: inner_input, ops: fused });
             dead[j] = true;
@@ -312,20 +319,18 @@ impl Scope {
     fn dedup(&mut self, dead: &mut [bool]) -> bool {
         use std::collections::HashMap;
         let mut seen: HashMap<String, usize> = HashMap::new();
-        let mut redirects: Vec<(usize, usize)> = Vec::new();
+        let mut redirects: Vec<usize> = (0..self.items.len()).collect();
+        let mut changed = false;
         for i in 0..self.items.len() {
             if dead[i] { continue; }
             let Item::Op(node) = &self.items[i] else { continue };
             let key = format!("{:?}", node);
             match seen.get(&key) {
-                Some(&first) => redirects.push((i, first)),
+                Some(&first) => { redirects[i] = first; dead[i] = true; changed = true; },
                 None => { seen.insert(key, i); },
             }
         }
-        let changed = !redirects.is_empty();
-        for (i, first) in redirects {
-            self.redirect(i, Ref::Local(first), dead);
-        }
+        if changed { self.redirect(&redirects); }
         changed
     }
 
