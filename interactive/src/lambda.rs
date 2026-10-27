@@ -89,6 +89,15 @@ impl std::fmt::Debug for Lambda {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.src.fmt(f) }
 }
 
+// Identity is the stored graph, without optimizing it or reparsing its display text.
+impl PartialEq for Lambda {
+    fn eq(&self, other: &Self) -> bool { self.graph == other.graph }
+}
+impl Eq for Lambda {}
+impl std::hash::Hash for Lambda {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.graph.hash(state); }
+}
+
 impl serde::Serialize for Lambda {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { self.src.serialize(s) }
 }

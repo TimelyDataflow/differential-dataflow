@@ -43,7 +43,7 @@ type VarId = usize; // index into `Scope::vars`
 
 /// A reference, resolved *within its own scope*. Nothing here can name an item
 /// in another scope's interior — cross-scope flow goes through imports/exports.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Ref {
     /// An earlier `Op` item in this scope.
     Local(ItemId),
@@ -57,7 +57,7 @@ pub enum Ref {
 
 /// Where an import's value comes from. Inner scopes import from the parent; the
 /// root imports the program's external sources — unifying `Input`/`Import`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
@@ -103,7 +103,7 @@ pub struct Var {
 }
 
 /// Closes a feedback loop: `var <- value`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Bind {
     pub var: VarId,
     pub value: Ref,
@@ -111,7 +111,7 @@ pub struct Bind {
 
 /// A pure operator. Sources (`Input`/`Import`) are imports; structure
 /// (`Scope`/`Variable`/`Leave`/`Bind`) is the scope itself — neither is a node.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Linear { input: Ref, ops: Vec<LinearOp> },
     Concat(Vec<Ref>),
@@ -136,6 +136,51 @@ pub enum Node {
 pub enum Item {
     Op(Node),
     Sub(Scope),
+}
+
+/// Structural identity, excluding diagnostic names and labels. Export positions and
+/// declared shapes matter; an Inspect's label remains part of its operator.
+#[derive(PartialEq, Eq, Hash)]
+enum ItemKey<'a> {
+    Op(&'a Node),
+    Sub {
+        imports: Vec<(&'a Source, &'a Option<RowShape>)>,
+        vars: Vec<&'a Option<RowShape>>,
+        items: Vec<ItemKey<'a>>,
+        binds: &'a [Bind],
+        exports: Vec<(&'a Ref, &'a Option<RowShape>)>,
+    },
+}
+
+impl Item {
+    fn key(&self) -> ItemKey<'_> {
+        match self {
+            Item::Op(node) => ItemKey::Op(node),
+            Item::Sub(s) => ItemKey::Sub {
+                imports: s.imports.iter().map(|i| (&i.from, &i.shape)).collect(),
+                vars: s.vars.iter().map(|v| &v.shape).collect(),
+                items: s.items.iter().map(Item::key).collect(),
+                binds: &s.binds,
+                exports: s.exports.iter().map(|e| (&e.value, &e.shape)).collect(),
+            },
+        }
+    }
+
+    /// References read by this item, in the scope that owns it.
+    fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            Item::Op(node) => match node {
+                Node::Linear { input, .. } | Node::Arrange(input)
+                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
+                Node::Join { left, right, .. } => { f(left); f(right); },
+                Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
+                Node::Concat(refs) => for r in refs { f(r); },
+            },
+            Item::Sub(child) => for imp in child.imports.iter_mut() {
+                if let Source::Parent(r) = &mut imp.from { f(r); }
+            },
+        }
+    }
 }
 
 /// A scope owns its IR. It iterates iff it has `vars`. Children are owned,
@@ -192,9 +237,9 @@ impl Scope {
     ///
     /// - collapse an `Arrange` whose input is already an arrangement
     ///   (an `Arrange` or a `Reduce`);
+    /// - deduplicate structurally identical operators and child scopes;
     /// - fuse a `Linear` into its `Linear` input when it is that input's only
-    ///   consumer;
-    /// - deduplicate structurally identical operators.
+    ///   consumer. Deduplication comes first so fusion cannot hide shared prefixes.
     ///
     /// All three are *within-scope*: a scope boundary is a semantic barrier,
     /// so nothing merges or moves across one.
@@ -205,8 +250,8 @@ impl Scope {
         let mut dead: Vec<bool> = vec![false; self.items.len()];
         loop {
             let changed = self.collapse_arranges(&mut dead)
-                | self.fuse_linear(&mut dead)
-                | self.dedup(&mut dead);
+                | self.dedup(&mut dead)
+                | self.fuse_linear(&mut dead);
             if !changed { break; }
         }
         self.compact(&dead);
@@ -215,20 +260,7 @@ impl Scope {
     /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
     /// import edges, binds, and exports.
     pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
-        for item in self.items.iter_mut() {
-            match item {
-                Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
-                    Node::Join { left, right, .. } => { f(left); f(right); },
-                    Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
-                    Node::Concat(refs) => for r in refs { f(r); },
-                },
-                Item::Sub(child) => for imp in child.imports.iter_mut() {
-                    if let Source::Parent(r) = &mut imp.from { f(r); }
-                },
-            }
-        }
+        for item in self.items.iter_mut() { item.for_each_ref(&mut f); }
         for b in self.binds.iter_mut() { f(&mut b.value); }
         for e in self.exports.iter_mut() { f(&mut e.value); }
     }
@@ -314,24 +346,23 @@ impl Scope {
         changed
     }
 
-    /// Deduplicate structurally identical operators (the later one redirects to
-    /// the earlier, so references keep pointing backward).
+    /// Rewrite inputs before keying each item, so duplicate chains merge in one walk.
+    /// Children are already optimized. Keep the first item's text and labels.
     fn dedup(&mut self, dead: &mut [bool]) -> bool {
-        use std::collections::HashMap;
-        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut seen = std::collections::HashMap::new();
         let mut redirects: Vec<usize> = (0..self.items.len()).collect();
-        let mut changed = false;
-        for i in 0..self.items.len() {
+        let rewrite = |r: &mut Ref, redirects: &[usize]| {
+            if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = redirects[*i]; }
+        };
+        for (i, item) in self.items.iter_mut().enumerate() {
             if dead[i] { continue; }
-            let Item::Op(node) = &self.items[i] else { continue };
-            let key = format!("{:?}", node);
-            match seen.get(&key) {
-                Some(&first) => { redirects[i] = first; dead[i] = true; changed = true; },
-                None => { seen.insert(key, i); },
-            }
+            item.for_each_ref(|r| rewrite(r, &redirects));
+            redirects[i] = *seen.entry(item.key()).or_insert(i);
+            dead[i] = redirects[i] != i;
         }
-        if changed { self.redirect(&redirects); }
-        changed
+        for b in &mut self.binds { rewrite(&mut b.value, &redirects); }
+        for e in &mut self.exports { rewrite(&mut e.value, &redirects); }
+        redirects.iter().enumerate().any(|(i, &j)| i != j)
     }
 
     /// Drop dead items and remap every item-indexed `Ref` to the compacted
@@ -434,6 +465,29 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedup_chains_in_one_walk() {
+        let mut scope = Scope::default();
+        let mut inputs = [Ref::Import(0), Ref::Import(0)];
+        for _ in 0..128 {
+            for (input, names) in inputs.iter_mut().zip(["(k, v)", "(p, q)"]) {
+                let lambda = Lambda::new(format!("let {names} = input in {names}"), &corgi::Scope::default());
+                scope.items.push(Item::Op(Node::Linear { input: input.clone(), ops: vec![LinearOp::Project(lambda)] }));
+                *input = Ref::Local(scope.items.len() - 1);
+            }
+        }
+        scope.binds.push(Bind { var: 0, value: inputs[1].clone() });
+        scope.exports.push(Export { name: "out".into(), value: inputs[1].clone(), shape: None });
+        let mut dead = vec![false; scope.items.len()];
+        assert!(scope.dedup(&mut dead));
+        assert_eq!(dead.iter().filter(|&&d| d).count(), 128);
+        assert_eq!(scope.binds[0].value, inputs[0]);
+        assert_eq!(scope.exports[0].value, inputs[0]);
+        assert!(!scope.dedup(&mut dead));
+        scope.compact(&dead);
+        assert_eq!(scope.items.len(), 128);
+    }
 
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the
