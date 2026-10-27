@@ -16,7 +16,7 @@ pub(crate) const KEYWORDS: &[&str] = &[
     "collect", "flatmap", "arrange", "negate", "filter", "enter_at", "inspect", "lift_iter",
 ];
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
     Min,
     /// Each `(key, val)` whose accumulated diff is not zero, once: a collection read as a set of
@@ -39,7 +39,7 @@ pub enum Reducer {
 }
 
 /// An individual step within a Linear node.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LinearOp {
     /// Rekey/reval: the lambda gives the new `(key, val)`.
     Project(Lambda),
