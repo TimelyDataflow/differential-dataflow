@@ -296,9 +296,12 @@ impl Scope {
             let Item::Op(Node::Linear { input: Ref::Local(j), .. }) = &self.items[i] else { continue };
             let j = *j;
             if dead[j] || counts[j] != 1 { continue; }
-            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = self.items[j].clone() else { continue };
+            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = &mut self.items[j] else { continue };
+            let inner_input = inner_input.clone();
+            // The input dies here. Move its growing op list so each prefix is
+            // neither cloned nor retained in a dead item until compaction.
+            let mut fused = std::mem::take(inner_ops);
             let Item::Op(Node::Linear { ops, .. }) = &mut self.items[i] else { unreachable!() };
-            let mut fused = inner_ops;
             fused.append(ops);
             self.items[i] = Item::Op(Node::Linear { input: inner_input, ops: fused });
             dead[j] = true;
