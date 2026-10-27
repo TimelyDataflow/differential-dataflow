@@ -63,7 +63,7 @@ fn export_slots(wanted: &[PathKey], address: &[String]) -> Vec<usize> {
     }).collect()
 }
 
-fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<String>>,
+fn collect_scopes(body: &[Stmt], path: &[String], visible: &mut HashMap<String, Vec<String>>,
                   scopes: &mut HashMap<Vec<String>, ScopeNames>) {
     let mut names = ScopeNames::default();
     let mut all = BTreeSet::new();
@@ -79,7 +79,6 @@ fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<
             _ => { names.bindings.insert(name.clone()); }
         }
     }
-    let mut next_visible = visible.clone();
     for child in &names.children {
         if let Some(other) = visible.get(child) {
             panic!("scope `{child}` in `{}` ({}) shadows visible scope `{}` in `{}` ({})",
@@ -87,16 +86,19 @@ fn collect_scopes(body: &[Stmt], path: &[String], visible: &HashMap<String, Vec<
         }
         let mut address = path.to_vec();
         address.push(child.clone());
-        next_visible.insert(child.clone(), address);
+        visible.insert(child.clone(), address);
     }
     scopes.insert(path.to_vec(), names);
     for stmt in body {
         if let Stmt::Scope(name, nested) = stmt {
             let mut address = path.to_vec();
             address.push(name.clone());
-            collect_scopes(nested, &address, &next_visible, scopes);
+            collect_scopes(nested, &address, visible, scopes);
         }
     }
+    // Siblings share the same visible names. Remove only this scope's additions
+    // when returning to its parent, rather than cloning the whole map per child.
+    for child in &scopes[path].children { visible.remove(child); }
 }
 
 fn resolve_path(parts: &[String], absolute: bool, here: &[String],
@@ -299,8 +301,8 @@ use crate::scope_ir as st;
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut scopes = HashMap::new();
     // The program root has no source-level name; `::` is its only explicit anchor.
-    let visible = HashMap::new();
-    collect_scopes(&stmts, &[], &visible, &mut scopes);
+    let mut visible = HashMap::new();
+    collect_scopes(&stmts, &[], &mut visible, &mut scopes);
     let mut plan = PathPlan::default();
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
