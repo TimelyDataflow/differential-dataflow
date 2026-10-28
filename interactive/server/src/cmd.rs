@@ -91,6 +91,8 @@ pub enum Cmd {
         program: String,
         explain: Option<bool>,
     },
+    /// Print preparation stages without installing, using the live export catalog.
+    Plan { name: String, program: String },
     /// Drop the named dataflow. Fails if any export of this dataflow is
     /// still imported by another live dataflow or held by a reader.
     Drop { name: String },
@@ -157,6 +159,7 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
+    Plan { name: String, program: String },
     Peek { name: String, key: Option<String>, format: ReadFormat },
     Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
@@ -222,6 +225,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 program,
             }
         }
+        Cmd::Plan { name, program } => return Ok(PreparedCommand::Plan { name, program }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
         Cmd::Peek { name, key, format } => return Ok(PreparedCommand::Peek { name, key, format }),
@@ -327,7 +331,7 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
+    "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
     "unbind",
 ];
 
@@ -352,6 +356,7 @@ fn max_feed_bytes() -> usize {
 }
 
 struct PendingLoad {
+    plan: bool,
     reqid: ReqId,
     id_hint: String,
     bindings: BTreeMap<String, String>,
@@ -455,8 +460,8 @@ impl LineParser {
             return None;
         }
 
-        // Inside a pending load body: every line is literal program text
-        // until `<reqid> end-load` or `<id_hint> end-load`. The id_hint
+        // Inside a pending load/plan body: every line is literal program text
+        // until `<reqid> end-load` (or `end-plan`) or `<id_hint> end-load`. The id_hint
         // form is the friendly default when the load was auto-reqid'd
         // (so the user can type `gen end-load` after `load gen … begin`
         // without having to know the minted reqid).
@@ -464,18 +469,23 @@ impl LineParser {
             let trimmed = line.trim_end_matches(['\r', '\n']);
             let mut parts = trimmed.split_whitespace();
             if let (Some(tok0), Some(tok1), None) = (parts.next(), parts.next(), parts.next()) {
-                if (tok0 == pl.reqid || tok0 == pl.id_hint) && tok1 == "end-load" {
+                let end = if pl.plan { "end-plan" } else { "end-load" };
+                if (tok0 == pl.reqid || tok0 == pl.id_hint) && tok1 == end {
                     let done = self.pending_load.take().unwrap();
                     if let Some(err) = done.poisoned {
                         return Some((done.reqid, Err(err)));
                     }
                     return Some((
                         done.reqid,
-                        Ok(Cmd::Load {
-                            id_hint: done.id_hint,
-                            bindings: done.bindings,
-                            program: done.body,
-                            explain: done.explain,
+                        Ok(if done.plan {
+                            Cmd::Plan { name: done.id_hint, program: done.body }
+                        } else {
+                            Cmd::Load {
+                                id_hint: done.id_hint,
+                                bindings: done.bindings,
+                                program: done.body,
+                                explain: done.explain,
+                            }
                         }),
                     ));
                 }
@@ -485,8 +495,8 @@ impl LineParser {
                 pl.body.push('\n');
                 if pl.body.len() > self.max_load_bytes {
                     pl.poisoned = Some(format!(
-                        "load: program body exceeds {} bytes (DDIR_MAX_PROGRAM_BYTES)",
-                        self.max_load_bytes
+                        "{}: program body exceeds {} bytes (DDIR_MAX_PROGRAM_BYTES)",
+                        if pl.plan { "plan" } else { "load" }, self.max_load_bytes
                     ));
                     pl.body = String::new();
                 }
@@ -522,11 +532,13 @@ impl LineParser {
             ParseOutcome::Cmd(c) => Some((reqid, Ok(c))),
             ParseOutcome::Err(e) => Some((reqid, Err(e))),
             ParseOutcome::BeginLoad {
+                plan,
                 id_hint,
                 bindings,
                 explain,
             } => {
                 self.pending_load = Some(PendingLoad {
+                    plan,
                     reqid,
                     id_hint,
                     bindings,
@@ -590,6 +602,7 @@ enum ParseOutcome {
     Cmd(Cmd),
     Err(String),
     BeginLoad {
+        plan: bool,
         id_hint: String,
         bindings: BTreeMap<String, String>,
         explain: Option<bool>,
@@ -617,6 +630,16 @@ fn read_format<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], ReadFormat) {
 
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
     match cmd {
+        "plan" => match args {
+            [name, "from", path] => match std::fs::read_to_string(path) {
+                Ok(program) => ParseOutcome::Cmd(Cmd::Plan { name: (*name).into(), program }),
+                Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
+            },
+            [name, "begin"] => ParseOutcome::BeginLoad {
+                plan: true, id_hint: (*name).into(), bindings: BTreeMap::new(), explain: None,
+            },
+            _ => ParseOutcome::Err("plan: expected `<name> from <path>` or `<name> begin`".into()),
+        },
         "load" => {
             // Two forms. `load <name> from <path> [options]` installs a program
             // file, read here on the session thread. `load <name> [options] begin`
@@ -664,6 +687,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     Err(error) => ParseOutcome::Err(format!("load: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
+                    plan: false,
                     id_hint,
                     bindings,
                     explain,
@@ -929,6 +953,25 @@ mod tests {
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
         assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
+    }
+
+    #[test]
+    fn plan_is_read_only_and_uses_load_framing() {
+        let mut p = LineParser::with_cap(256);
+        let got = feed_all(&mut p, &[
+            "r0 plan preview begin", "export \"out\" = input 0 : (int, ());", "r0 end-plan",
+        ]);
+        let [(_, Ok(Cmd::Plan { name, program }))] = &got[..] else { panic!("expected Plan: {got:?}") };
+        assert_eq!(name, "preview");
+        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone() }, &p.catalog).unwrap();
+        assert!(matches!(prepared, PreparedCommand::Plan { .. }));
+        assert!(p.catalog.shape("preview", 0).is_err());
+        assert!(matches!(p.feed("plan p from /nonexistent/plan.ddp"), Some((_, Err(e))) if e.starts_with("plan: cannot read")));
+        let mut p = LineParser::with_cap(8);
+        assert!(p.feed("plan p begin").is_none());
+        assert!(p.feed("export \"out\" = input 0;").is_none());
+        assert!(matches!(p.feed("p end-plan"), Some((_, Err(e))) if e.starts_with("plan: program body exceeds")));
+        assert!(matches!(p.feed("list"), Some((_, Ok(Cmd::List)))));
     }
 
     #[test]

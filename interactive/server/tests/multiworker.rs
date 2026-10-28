@@ -591,3 +591,20 @@ fn framed_feeds_on_one_worker() {
 fn framed_feeds_on_three_workers() {
     assert_framed_feeds(3);
 }
+
+#[test]
+fn planning_reads_live_exports_without_installing() {
+    let (server, mut writer, mut reader) = start_server(2);
+    request(&mut writer, &mut reader, "r0", "r0 load provider begin\nexport \"rows\" = input 0 : (int, int);\nr0 end-load\n");
+    let before = request(&mut writer, &mut reader, "before", "before list\n");
+    let command = "p plan preview begin\nexport \"out\" = import \"rows\" | distinct;\np end-plan\n";
+    let plan = request(&mut writer, &mut reader, "p", command);
+    assert!(plan.iter().any(|line| line.contains("map((k, v) -> ((k, v), ())) -> arrange")));
+    assert!(!plan.iter().any(|line| line.contains("Unresolved import")));
+    assert_eq!(plan, request(&mut writer, &mut reader, "p", command));
+    assert_eq!(before, request(&mut writer, &mut reader, "after", "after list\n"));
+    request(&mut writer, &mut reader, "r3", "r3 drop provider\n");
+    let missing = request(&mut writer, &mut reader, "p", command);
+    assert!(missing.iter().any(|line| line.contains("Unresolved import: \"rows\"")));
+    server.stop();
+}

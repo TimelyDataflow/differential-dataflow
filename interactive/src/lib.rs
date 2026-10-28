@@ -33,6 +33,9 @@ pub mod projection;
 // Crate-only: the rewrite install makes once it knows the program's as-of time.
 mod as_of;
 
+// `report`: read-only planning stages, and their diagnostic printer.
+pub mod plan;
+
 // The runtime: rendering a scope tree onto differential dataflow.
 // Only the statement labels escape (`LabelEvent`, `LabelEventBuilder`), for a logger to read;
 // the `Backend` trait and `render_tree` are the crate's own.

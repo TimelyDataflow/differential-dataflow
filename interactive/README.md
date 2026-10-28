@@ -331,3 +331,20 @@ Its module documentation lists the oracles, and how to pick them and replay a fa
 This is a research project, primarily for personal learning at this point.
 Various bits of what is written above are not yet entirely true.
 I would not recommend relying on any of this yet.
+
+## Plan without running
+
+`cargo run -p interactive --bin ddir-plan -- file.ddp [more.ddp ...]` prints
+lowering, optimization, projection, and as-of-drop stages. Earlier files supply
+their inferred export shapes to later files. No dataflow or generated source is
+installed. A missing provider is unresolved even if its import declares a shape;
+the tool prints the partial report and exits unsuccessfully.
+
+The library entry point is `plan::report(text, source)`, where `source` looks up a
+published trace's shape. `Report::print` prints all stages; `Stage::print` prints
+one. Reports assume arranged imports, enable projection (off by default on the
+server), and use placeholder as-of time `(1, [])`, for installation at epoch 2.
+They ignore environment switches. The output is diagnostic text, not yet
+parseable DDP. Lambda text may differ from its compiled graph after composition.
+Renderer notes describe known storage conversions and non-unit distinct; other
+expansions and scalar compilation are not shown.

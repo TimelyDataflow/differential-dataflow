@@ -74,6 +74,19 @@ import named `edges` to the same content-addressed source as the
 fixed-size window into an infinite hash-derived sequence and replaces
 `churn` rows on every tick.
 
+`plan <name> from <path>` prints the same four preparation stages as
+`ddir-plan`, using the server's currently published import shapes. The inline
+form is `plan <name> begin`, DDP lines, then `<name> end-plan`. Each report line
+is an `<id> data` reply, followed by `<id> ok planned ...`. The name labels the
+reply; it does not reserve a name or install anything. Unresolved imports and
+shape problems appear in the report and mark the reply incomplete.
+
+Planning always enables projection, assumes arranged imports, and uses the
+fixed placeholder as-of time `(1, [])` for epoch 2. These assumptions are printed;
+they do not change the server's settings or current time. Reports are not yet
+parseable DDP. Command-line load bindings and the explain transform are not
+options of `plan`.
+
 ## Reads: text, or binary frames
 
 By default, `peek` answers with one `data` line per consolidated row, written as
