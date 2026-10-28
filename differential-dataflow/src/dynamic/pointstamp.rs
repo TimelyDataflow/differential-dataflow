@@ -227,6 +227,19 @@ use crate::lattice::Lattice;
 impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
     #[inline(always)]
     fn join(&self, other: &Self) -> Self {
+        match (self.vector.len(), other.vector.len()) {
+            (0, _) => return other.clone(),
+            (_, 0) => return self.clone(),
+            (1, 1) => return Self {
+                vector: SmallVec::from_buf([self.vector[0].join(&other.vector[0])]),
+            },
+            (a, b) if a == b => {
+                let mut result = self.clone();
+                result.join_assign(other);
+                return result;
+            }
+            _ => {}
+        }
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
         let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());
         let mut vector = SmallVec::with_capacity(max_len);

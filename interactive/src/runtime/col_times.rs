@@ -176,6 +176,17 @@ impl<T> ColTimes<T> {
         T::from_coordinates(self.lanes.iter().map(|lane| lane[i]))
     }
 
+    /// The owned time at row `i` joined with `lower`: `get(i).join(lower)`, as the lane-wise
+    /// maximum built into one timestamp rather than through an intermediate one.
+    pub(crate) fn get_joined(&self, i: usize, lower: &T) -> T where T: Lanes {
+        let mut stored = self.lanes.iter();
+        let mut bounds = lower.coordinates();
+        T::from_coordinates(std::iter::from_fn(|| match (stored.next(), bounds.next()) {
+            (None, None) => None,
+            (lane, bound) => Some(lane.map_or(0, |lane| lane[i]).max(bound.unwrap_or(0))),
+        }))
+    }
+
     /// Materialize the whole column to `Vec<T>`.
     pub fn to_vec(&self) -> Vec<T> where T: Lanes {
         (0..self.len).map(|i| self.get(i)).collect()
@@ -385,6 +396,7 @@ mod tests {
         let narrow: ColTimes<T> = times[..5].iter().cloned().collect();
         for i in 0..times.len() {
             for j in 0..times.len() {
+                assert_eq!(store.get_joined(i, &times[j]), times[i].join(&times[j]));
                 assert_eq!(times[i].cmp(&times[j]), store.cmp(i, j), "{:?} vs {:?}", times[i], times[j]);
                 if j < 5 {
                     assert_eq!(times[i].cmp(&times[j]), store.cmp_cross(i, &narrow, j));

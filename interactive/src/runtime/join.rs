@@ -348,7 +348,8 @@ impl<T: ColTime> SideScratch<T> {
             for run in runs {
                 let ids = int_lane(run.chunk.vals()).unwrap();
                 self.entries.extend((run.s..run.e).map(|row| {
-                    (ids[row] as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
+                    let time = run.chunk.times().get_joined(row, lower);
+                    (ids[row] as u64, time, run.chunk.diffs()[row])
                 }));
             }
             differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
@@ -364,7 +365,8 @@ impl<T: ColTime> SideScratch<T> {
                 if row > v_start && !run.val_eq(row, run, v_start) {
                     v_start = row;
                 }
-                self.push(coord_hi | v_start as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row]);
+                let time = run.chunk.times().get_joined(row, lower);
+                self.push(coord_hi | v_start as u64, time, run.chunk.diffs()[row]);
             }
             if self.entries.windows(2).any(|w| w[0].0 == w[1].0 && w[0].1 > w[1].1) {
                 differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
@@ -394,7 +396,8 @@ impl<T: ColTime> SideScratch<T> {
                     if run.val_eq(row, &runs[ri_min], row_min) {
                         let r_end = run.val_run_end(row);
                         for r in row..r_end {
-                            self.tds.push((run.chunk.times().get(r).join(lower), run.chunk.diffs()[r]));
+                            let time = run.chunk.times().get_joined(r, lower);
+                            self.tds.push((time, run.chunk.diffs()[r]));
                         }
                         coord = coord.min(((run.cid as u64) << COORD_BITS) | row as u64);
                         if r_end < run.e { heads[h] = (ri, r_end); h += 1; } else { heads.swap_remove(h); }
