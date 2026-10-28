@@ -265,7 +265,9 @@ fn join_key<T, R0, R1, RO, K: Copy + Ord, V0: Copy + Ord, V1: Copy + Ord>(
         for a in r0 {
             for b in r1.clone() {
                 matches.ids.push((kh, (p0[a].0.1, p1[b].0.1)));
-                matches.times.push(p0[a].1.join(&p1[b].1));
+                let mut time = p0[a].1.clone();
+                time.join_assign(&p1[b].1);
+                matches.times.push(time);
                 matches.diffs.push(p0[a].2.clone().multiply(&p1[b].2));
             }
         }
@@ -306,14 +308,18 @@ fn bilinear_wave<V0, V1, T, R0, R1, RO>(
             h1.advance_buffer_by(h0.meet().unwrap());
             let (v0, t0, d0) = h0.edit().unwrap();
             for ((v1, t1), d1) in h1.buffer() {
-                emit(v0, *v1, t0.join(t1), d0.clone().multiply(d1));
+                let mut time = t0.clone();
+                time.join_assign(t1);
+                emit(v0, *v1, time, d0.clone().multiply(d1));
             }
             h0.step();
         } else {
             h0.advance_buffer_by(h1.meet().unwrap());
             let (v1, t1, d1) = h1.edit().unwrap();
             for ((v0, t0), d0) in h0.buffer() {
-                emit(*v0, v1, t0.join(t1), d0.clone().multiply(d1));
+                let mut time = t0.clone();
+                time.join_assign(t1);
+                emit(*v0, v1, time, d0.clone().multiply(d1));
             }
             h1.step();
         }
@@ -322,7 +328,9 @@ fn bilinear_wave<V0, V1, T, R0, R1, RO>(
         h1.advance_buffer_by(h0.meet().unwrap());
         let (v0, t0, d0) = h0.edit().unwrap();
         for ((v1, t1), d1) in h1.buffer() {
-            emit(v0, *v1, t0.join(t1), d0.clone().multiply(d1));
+            let mut time = t0.clone();
+            time.join_assign(t1);
+            emit(v0, *v1, time, d0.clone().multiply(d1));
         }
         h0.step();
     }
@@ -330,7 +338,9 @@ fn bilinear_wave<V0, V1, T, R0, R1, RO>(
         h0.advance_buffer_by(h1.meet().unwrap());
         let (v1, t1, d1) = h1.edit().unwrap();
         for ((v0, t0), d0) in h0.buffer() {
-            emit(*v0, v1, t0.join(t1), d0.clone().multiply(d1));
+            let mut time = t0.clone();
+            time.join_assign(t1);
+            emit(*v0, v1, time, d0.clone().multiply(d1));
         }
         h1.step();
     }
