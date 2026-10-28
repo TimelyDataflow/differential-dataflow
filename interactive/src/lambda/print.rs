@@ -523,7 +523,7 @@ mod tests {
         printed.text
     }
 
-    fn graph_lambda(graph: G) -> Lambda { Lambda { src: "this is deliberately not the graph".into(), graph: Ok(Arc::new(graph)), added_by: None } }
+    fn graph_lambda(graph: G) -> Lambda { Lambda { src: "this is deliberately not the graph".into(), graph: Ok(Arc::new(graph)), added_by: None, scope: None } }
     fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
     fn list(s: Shape) -> Shape { Shape::List(Box::new(s)) }
 

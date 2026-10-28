@@ -1,7 +1,7 @@
 //! Projection changes what reduce stores, without changing which input wins.
 
 use corgi::Shape;
-use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::projection};
+use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::narrow};
 use interactive::scope_ir::{Item, Node, Ref};
 use interactive::server::Server;
 
@@ -13,12 +13,12 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
         export "answer" = best | map((k, (_, v)) -> (k, ((), v)));
     "#;
     let mut original = lower::lower_tree(parse::pipe::parse(text));
-    interactive::passes::optimize(&mut original);
     let mut projected = original.clone();
-    assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
+    // The optimizer folds the one-reader projection into the reducer; nothing is left to narrow.
+    interactive::passes::optimize(&mut projected);
     let Ref::Local(index) = projected.root.exports[0].value else { panic!("a local reduce") };
     assert!(matches!(&projected.root.items[index], Item::Op(Node::Reduce { reducer: Reducer::Expr(_), .. })));
-    assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
+    assert_eq!(narrow::narrow(&mut projected, &|_| None).unwrap().fields, 0);
     original.root.exports[0].name = "before".into();
     projected.root.exports[0].name = "after".into();
     timely::execute_directly(move |worker| {
@@ -59,8 +59,8 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
     let mut original = lower::lower_tree(parse::pipe::parse(text));
     interactive::passes::optimize(&mut original);
     let mut projected = original.clone();
-    assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
-    assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
+    assert!(narrow::narrow(&mut projected, &|_| None).unwrap().fields > 0);
+    assert_eq!(narrow::narrow(&mut projected, &|_| None).unwrap().fields, 0);
     let (shapes, problems) = interactive::shapes::infer(&projected, &|_| None);
     assert!(problems.conflicts.is_empty());
     for (i, item) in projected.root.items.iter().enumerate() {
@@ -83,20 +83,27 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
 }
 
 #[test]
-fn fusion_requires_one_reader_an_unchanged_key_and_a_value_projection() {
-    for (map, extra, fused) in [
-        ("(k, (a, b)) -> (k, (b, a, b))", "", true),
-        ("(k, (a, b)) -> (k, b)", "export \"also\" = best;", false),
-        ("(k, (a, b)) -> (b, a)", "", false),
-        ("(k, (a, b)) -> (k, (b, 1) add)", "", false),
-        ("(k, (a, b)) -> (k, (k, b))", "", false),
+fn a_reduce_keeps_only_the_output_fields_its_readers_use() {
+    // A one-reader map that only rewires the value folds into the reducer (compose-maps);
+    // otherwise narrowing drops the fields no reader uses, and the reader keeps its map.
+    for (map, extra, folded, value) in [
+        ("(k, (a, b)) -> (k, (b, a, b))", "", true, Shape::Prod(vec![Shape::Int, Shape::Int, Shape::Int])),
+        ("(k, (a, b)) -> (k, b)", "", true, Shape::Int),
+        ("(k, (a, b)) -> (k, b)", "export \"also\" = best | map((k, (_, b)) -> (k, (b, 1) add));", false, Shape::Prod(vec![Shape::Unit, Shape::Int])),
+        ("(k, (a, b)) -> (k, (b, 1) add)", "", false, Shape::Prod(vec![Shape::Unit, Shape::Int])),
+        ("(k, (a, b)) -> (k, (k, b))", "", false, Shape::Prod(vec![Shape::Unit, Shape::Int])),
+        // An identity map goes; the other reader keeps the reduce's second field live.
+        ("(k, (a, b)) -> (k, (a, b))", "export \"also\" = best | map((k, (a, _)) -> (k, a));", true, Shape::Prod(vec![Shape::Int, Shape::Int])),
     ] {
         let text = format!("let rows = input 0 : (int, (int, int)); let best = rows | min; export \"out\" = best | map({map}); {extra}");
         let mut program = lower::lower_tree(parse::pipe::parse(&text));
         interactive::passes::optimize(&mut program);
-        projection::pushdown(&mut program, &|_| None).unwrap();
+        let outcome = narrow::narrow(&mut program, &|_| None).unwrap();
+        let reduce = program.root.items.iter().position(|item| matches!(item, Item::Op(Node::Reduce { .. }))).unwrap();
+        let shape = interactive::shapes::infer(&program, &|_| None).0.of(&Ref::Local(reduce)).unwrap();
+        assert_eq!(shape.val, value, "{map}; {extra}: {outcome:?}");
         let Ref::Local(index) = program.root.exports[0].value else { panic!("local output") };
-        assert_eq!(matches!(&program.root.items[index], Item::Op(Node::Reduce { .. })), fused, "{map}; {extra}");
-        if !fused { assert!(matches!(&program.root.items[index], Item::Op(Node::Linear { ops, .. }) if matches!(ops.last(), Some(LinearOp::Project(_))))); }
+        assert_eq!(index == reduce, folded, "{map}; {extra}");
+        if !folded { assert!(matches!(&program.root.items[index], Item::Op(Node::Linear { ops, .. }) if matches!(ops.last(), Some(LinearOp::Project(_)))), "{map}; {extra}"); }
     }
 }

@@ -312,7 +312,7 @@ struct Parser {
     /// The declared types, in dependency order.
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
-    scope: Option<corgi::Scope>,
+    scope: Option<std::sync::Arc<corgi::Scope>>,
 }
 
 impl Parser {
@@ -322,7 +322,7 @@ impl Parser {
 
     /// The corgi scope of this program's lambdas: the registered functions and the Float functions
     /// as words, the built-in `Option` and `Result`, and all declared types as enums.
-    fn lambda_scope(&mut self) -> &corgi::Scope {
+    fn lambda_scope(&mut self) -> &std::sync::Arc<corgi::Scope> {
         if self.scope.is_none() {
             let mut scope = crate::lambda::base_scope();
             for f in crate::lambda::registered() {
@@ -331,7 +331,7 @@ impl Parser {
             for name in &self.type_order {
                 declare_enum(&mut scope, name, &self.types[name], &self.types);
             }
-            self.scope = Some(scope);
+            self.scope = Some(std::sync::Arc::new(scope));
         }
         self.scope.as_ref().unwrap()
     }
@@ -646,7 +646,7 @@ impl Parser {
     /// A corgi lambda, `pat -> body`: it runs `let pat = input in body`, in the program's scope.
     fn lambda(&mut self) -> Lambda {
         match self.next() {
-            Token::Lambda { pat, body } => Lambda::new(format!("let {pat} = input in {body}"), self.lambda_scope()),
+            Token::Lambda { pat, body } => Lambda::new_in(format!("let {pat} = input in {body}"), self.lambda_scope().clone()),
             other => panic!("expected a lambda `pat -> body`, got {other:?}"),
         }
     }
@@ -724,7 +724,7 @@ pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p
 pub(crate) fn print_context(input: &str) -> (Vec<(String, Vec<(String, corgi::Shape)>)>, corgi::Scope, std::collections::BTreeSet<String>) {
     let mut p = Parser::new(tokenize(input));
     p.collect_types();
-    let scope = p.lambda_scope().clone();
+    let scope = p.lambda_scope().as_ref().clone();
     let types = p.type_order.iter().map(|name| (name.clone(), p.types[name].clone())).collect();
     let sources = p.tokens.iter().filter_map(|token| match token {
         Token::Lambda { pat, body } => Some(format!("let {pat} = input in {body}")),

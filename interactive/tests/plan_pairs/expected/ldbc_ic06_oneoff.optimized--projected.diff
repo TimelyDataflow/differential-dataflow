@@ -1,0 +1,13 @@
+--- optimized
++++ projected
+@@ -31,8 +31,8 @@
+ let with_it_idx3 = with_it_join2 | arrange;
+ let message_idx = message | arrange;
+ let with_it_join3 = with_it_idx3 | join(message_idx, (m, (rid, t), (kind, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), (kind, m, t)));
+-let with_it_filter = with_it_join3 | filter((_, (kind, _, _)) -> (kind, 0) eq);
+-let with_it_idx4 = with_it_filter | arrange;
++let with_it_rows = with_it_join3 | filter((_, (kind, _, _)) -> (kind, 0) eq) | map((k, (_, v1, v2)) -> (k, ((), v1, v2)));
++let with_it_idx4 = with_it_rows | arrange;
+ let with_it = with_it_idx4 | join(circle, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
+ let with_it_idx5 = with_it | arrange;
+ let tags_of_idx = tags_of | arrange;

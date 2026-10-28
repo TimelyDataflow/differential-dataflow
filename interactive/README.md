@@ -277,7 +277,9 @@ A program moves through four parts, each using only the ones before it.
 2. **Rewrites** turn a program into another program. `passes/` holds the passes install runs,
    through one entry point, `passes::run`: dead-code removal, structural optimization, map
    composition, arrangement sharing, invariant motion, projection (fields nothing reads
-   become `()`), and the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
+   become `()`, in the lambdas that produce them and before the arrangements that would
+   store them; `passes/demand.rs` is the analysis, `passes/narrow.rs` the transform), and
+   the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
    `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
    excludes projection; `all` enables every pass. `explain/` produces a
    program that explains its own outputs.
@@ -356,8 +358,8 @@ the tool prints the partial report and exits unsuccessfully.
 
 `ddir-plan --timings file.ddp` adds wall times, call counts, rewrite counts, and
 fixed-point rounds. The table separates parsing, lowering, preparation stages,
-report snapshots/diffs, source context, and printing. Pass totals include calls
-made by projection, including rejected candidates; they are subtotals of the
+report snapshots/diffs, source context, and printing. Pass totals include the
+optimizer's cleanup after projection; they are subtotals of the
 stages, so do not add both. Shape inference includes schedule and projection
 checks; inference for report snapshots stays in the snapshot row. Times exclude
 file I/O. With `--emit-ddp`, the table goes to stderr, leaving DDP stdout unchanged.
@@ -366,10 +368,11 @@ Default reports, stage diffs, and plan-pairs snapshots never contain timings.
 Changes use the stage's `Change` observations: structural rewrites count one per
 observation, map canonicalization counts one per rewrite (a bulk composition is
 one), binding/import cleanup counts removed bindings, and projection/as-of count
-masks/fusions and inserted filters. Pass counts include attempted rewrites; stage
+narrowed fields and inserted filters. Pass counts include attempted rewrites; stage
 counts describe accepted changes. Disabled passes have zero calls. A disabled
 projection stage still checks providers and shapes. Fixed-point rounds include
-the final stable round; optimizer totals include projection's optimizer calls.
+the final stable round; projection's rounds are one plus one per round in which
+a site declined; optimizer totals include projection's cleanup.
 `passes::run` returns `Timings`; because it receives lowered IR, the plan frontend
 supplies the lowering measurement. `report_program` leaves parse and lowering
 counts at zero. Collection uses clocks around calls, never around individual items.

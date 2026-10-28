@@ -53,7 +53,7 @@ fn unprintable_composition_keeps_maps() {
     let v = b.add(Op::Field(1), vec![x]);
     let woven = b.add(Op::Weave, vec![v]);
     let out = b.tuple(vec![k, woven]);
-    let second = Lambda { src: "deliberately not the graph".into(), graph: Ok(std::sync::Arc::new(b.finish(out))), added_by: None };
+    let second = Lambda { src: "deliberately not the graph".into(), graph: Ok(std::sync::Arc::new(b.finish(out))), added_by: None, scope: None };
     let list = Shape::List(Box::new(Shape::Int));
     let shape = Shape::Prod(vec![Shape::Int, Shape::Prod(vec![list.clone(), list.clone(), list])]);
     assert!(compose_run(&[&first, &second], &shape).is_none());

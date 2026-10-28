@@ -134,7 +134,7 @@ fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
         output_id = builder.graft(graph, output_id);
     }
     let graph = builder.finish(output_id);
-    let mut composed = Lambda { src: String::new(), graph: Ok(std::sync::Arc::new(graph)), added_by: None };
+    let mut composed = Lambda { src: String::new(), graph: Ok(std::sync::Arc::new(graph)), added_by: None, scope: None };
     let graph = composed.graph().ok()?;
     let graph = canonical(graph, input).ok()?;
     if corgi::shape_of(&graph, input).ok()? != output { return None; }

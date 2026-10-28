@@ -49,6 +49,9 @@ pub struct Lambda {
     pub(crate) graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
     /// Printer provenance only; it never affects compilation or equality.
     pub(crate) added_by: Option<&'static str>,
+    /// The scope `src` was parsed in, when the parser supplied it (`new_in`): a rewrite that
+    /// edits the text reparses it there, with the program's types and functions.
+    pub(crate) scope: Option<std::sync::Arc<corgi::Scope>>,
 }
 
 impl Lambda {
@@ -57,7 +60,12 @@ impl Lambda {
     /// a type error.
     pub(crate) fn new(src: String, scope: &corgi::Scope) -> Self {
         let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
-        Lambda { src, graph, added_by: None }
+        Lambda { src, graph, added_by: None, scope: None }
+    }
+    /// As `new`, keeping the shared scope for rewrites of the text.
+    pub(crate) fn new_in(src: String, scope: std::sync::Arc<corgi::Scope>) -> Self {
+        let graph = corgi::parse_ml_in(&src, &scope).map(std::sync::Arc::new);
+        Lambda { src, graph, added_by: None, scope: Some(scope) }
     }
     /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
     /// on an argument written over `pattern`'s names, and is bound to the name `body` is given for
@@ -170,77 +178,6 @@ impl Projection {
             })
         }
         strip(&parts[1])
-    }
-
-    pub(crate) fn of(lambda: &Lambda, input: &Shape) -> Option<Self> {
-        let projection = Self::parse(&lambda.src)?;
-        // Composed graphs are authoritative. Never optimize from diagnostic source alone.
-        let parsed = corgi::parse_ml(&lambda.src).ok()?;
-        (corgi::compile(parsed, input).ok()?.graph()
-            == corgi::compile(lambda.graph().ok()?.as_ref().clone(), input).ok()?.graph()).then_some(projection)
-    }
-
-    /// A deliberately small subset of Corgi: bindings, tuple patterns, field selections,
-    /// tuples and unit. Reject arithmetic, calls, and all other expressions.
-    pub(crate) fn parse(source: &str) -> Option<Self> {
-        #[derive(Clone)]
-        enum Pattern<'a> { Name(&'a str), Tuple(Vec<Pattern<'a>>) }
-        struct Parser<'a> { tokens: Vec<&'a str>, at: usize, names: std::collections::BTreeMap<&'a str, Projection> }
-        impl<'a> Parser<'a> {
-            fn eat(&mut self, token: &str) -> bool {
-                if self.tokens.get(self.at) == Some(&token) { self.at += 1; true } else { false }
-            }
-            fn next(&mut self) -> Option<&'a str> { let token = *self.tokens.get(self.at)?; self.at += 1; Some(token) }
-            fn pattern(&mut self) -> Option<Pattern<'a>> {
-                if self.eat("(") {
-                    let mut parts = Vec::new();
-                    if !self.eat(")") { loop { parts.push(self.pattern()?); if self.eat(")") { break; } if !self.eat(",") { return None; } } }
-                    Some(Pattern::Tuple(parts))
-                } else { Some(Pattern::Name(self.next()?)) }
-            }
-            fn bind(&mut self, pattern: &Pattern<'a>, value: Projection) -> Option<()> {
-                match pattern {
-                    Pattern::Name(name) => { self.names.insert(name, value); }
-                    Pattern::Tuple(parts) => for (i, p) in parts.iter().enumerate() { self.bind(p, value.field(i)?)?; },
-                }
-                Some(())
-            }
-            fn expr(&mut self) -> Option<Projection> {
-                if self.eat("let") {
-                    let pattern = self.pattern()?;
-                    if !self.eat("=") { return None; }
-                    let value = self.expr()?;
-                    if !self.eat("in") { return None; }
-                    let saved = self.names.clone();
-                    self.bind(&pattern, value)?;
-                    let result = self.expr();
-                    self.names = saved;
-                    return result;
-                }
-                let mut value = if self.eat("(") {
-                    let mut parts = Vec::new();
-                    if !self.eat(")") { loop { parts.push(self.expr()?); if self.eat(")") { break; } if !self.eat(",") { return None; } } }
-                    if parts.is_empty() { Projection::Unit } else { Projection::Tuple(parts) }
-                } else { let name = self.next()?; self.names.get(name)?.clone() };
-                while self.eat(".") { value = value.field(self.next()?.parse().ok()?)?; }
-                Some(value)
-            }
-        }
-        let mut tokens = Vec::new();
-        let mut start = 0;
-        let bytes = source.as_bytes();
-        while start < bytes.len() {
-            if bytes[start].is_ascii_whitespace() { start += 1; continue; }
-            let mut end = start + 1;
-            if bytes[start].is_ascii_alphanumeric() || bytes[start] == b'_' {
-                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') { end += 1; }
-            } else if !b"(),.=".contains(&bytes[start]) { return None; }
-            tokens.push(&source[start..end]);
-            start = end;
-        }
-        let mut parser = Parser { tokens, at: 0, names: [("input", Self::Field(Vec::new()))].into_iter().collect() };
-        let result = parser.expr()?;
-        (parser.at == parser.tokens.len()).then_some(result)
     }
 }
 

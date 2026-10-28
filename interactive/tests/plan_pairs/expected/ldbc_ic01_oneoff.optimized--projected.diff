@@ -1,0 +1,19 @@
+--- optimized
++++ projected
+@@ -13,10 +13,12 @@
+ let hop1_idx = hop1_map | arrange;
+ let friend_idx = friend | arrange;
+ let hop1 = hop1_idx | join(friend_idx, (_, req, (f, _)) -> (f, (req, 1)));
+-let hop1_idx2 = hop1 | arrange;
+-let hop2 = hop1_idx2 | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
+-let hop2_idx = hop2 | arrange;
+-let hop3 = hop2_idx | join(friend_idx, (_, (req, _), (h, _)) -> (h, (req, 3)));
++let hop2_map = hop1 | map((k, (v0, _)) -> (k, (v0, ())));
++let hop2_idx = hop2_map | arrange;
++let hop2 = hop2_idx | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
++let hop3_map = hop2 | map((k, (v0, _)) -> (k, (v0, ())));
++let hop3_idx = hop3_map | arrange;
++let hop3 = hop3_idx | join(friend_idx, (_, (req, _), (h, _)) -> (h, (req, 3)));
+ let circle_rows = hop1 + hop2 + hop3;
+ let circle_rows2 = circle_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d));
+ let circle_idx = circle_rows2 | arrange;

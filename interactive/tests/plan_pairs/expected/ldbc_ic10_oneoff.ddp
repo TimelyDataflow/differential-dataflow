@@ -10,8 +10,9 @@ let hop1_map = request | map(((rid, who, month), ()) -> (who, (rid, who, month))
 let hop1_idx = hop1_map | arrange;
 let friend_idx = friend | arrange;
 let hop1 = hop1_idx | join(friend_idx, (_, req, (f, _)) -> (f, (req, 1)));
-let hop1_idx2 = hop1 | arrange;
-let hop2 = hop1_idx2 | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
+let hop2_map = hop1 | map((k, (v0, _)) -> (k, (v0, ())));
+let hop2_idx = hop2_map | arrange;
+let hop2 = hop2_idx | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
 let twohop_rows = hop1 + hop2;
 let twohop_rows2 = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
 let twohop_idx = twohop_rows2 | arrange;
@@ -35,11 +36,10 @@ let liked_join2 = liked_idx2 | join(likes_idx, ((who, _), (rid, node, m), ()) ->
 let liked_idx3 = liked_join2 | arrange;
 let liked = liked_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 let points_map = liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1));
-let points_map2 = wrote | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, _call0.0.1, _call0.0.2, ()), ()));
-let points_rows = liked | negate | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, _call0.0.1, _call0.0.2, ()), ()));
-let points_rows2 = points_map2 + points_rows;
-let points_map3 = points_rows2 | map(((rid, who, node, _), ()) -> ((rid, who, node), -1));
-let points = points_map + points_map3;
+let points_neg = liked | negate;
+let points_rows = wrote + points_neg;
+let points_map2 = points_rows | map(((rid, who, node, _), ()) -> ((rid, who, node), -1));
+let points = points_map + points_map2;
 let summed_rows = points | join_function((key, p) -> ((key, ()), (0), p) enlist);
 let summed_idx = summed_rows | arrange;
 let summed = summed_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
