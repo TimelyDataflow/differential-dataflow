@@ -1,0 +1,68 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let request = input 0 : ((int, int, int), ());
+let weighted = import "ic14.s.weighted" : (int, (int, int));
+let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
+dist: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var dist : ((int, int, int), ());
+    let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
+    let grow_idx = grow_map | arrange;
+    let weighted_idx = ::weighted | arrange;
+    let grow = grow_idx | join(weighted_idx, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
+    let dist_rows = ::starts + grow;
+    let dist_idx = dist_rows | arrange;
+    let dist_reduce = dist_idx | min;
+    let dist_map = dist_reduce | map(((rid, node), cost) -> ((rid, node, cost), ()));
+    set dist = dist_map;
+}
+let best = dist::dist | map(((rid, node, cost), ()) -> ((rid, node), cost));
+let pred_map = dist::dist | map(((rid, u, cost), ()) -> (u, (rid, cost)));
+let pred_idx = pred_map | arrange;
+let weighted_idx = weighted | arrange;
+let pred_join = pred_idx | join(weighted_idx, (u, (rid, cost), (v, w)) -> ((rid, v), (u, (cost, w) add)));
+let pred_idx2 = pred_join | arrange;
+let best_idx = best | arrange;
+let pred_join2 = pred_idx2 | join(best_idx, ((rid, v), (u, via), least) -> ((rid, v), (u, via, least)));
+let pred = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq) | map((key, (u, _, _)) -> (key, u));
+let targets_map = request | map(((rid, _, to), ()) -> ((rid, to), ()));
+let targets_idx = targets_map | arrange;
+let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
+back: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var back : ((int, int), ());
+    let back_idx = back | arrange;
+    let pred_idx = ::pred | arrange;
+    let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
+    let back_rows = ::targets + up;
+    let back_idx2 = back_rows | arrange;
+    let back_reduce = back_idx2 | distinct;
+    set back = back_reduce;
+}
+let pred_idx3 = pred | arrange;
+let next_idx = back::back | arrange;
+let next_join = pred_idx3 | join(next_idx, ((rid, v), u, ()) -> ((rid, u), v));
+let next_idx2 = next_join | arrange;
+let next = next_idx2 | min;
+let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
+let first_idx = first_map | arrange;
+let first = first_idx | join(next_idx, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
+walk: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var walk : ((int, int, List(int)), ());
+    let step_map = walk | map(((rid, node, path), ()) -> ((rid, node), path));
+    let step_idx = step_map | arrange;
+    let next_idx = ::next | arrange;
+    let step = step_idx | join(next_idx, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
+    let walk_rows = ::first + step;
+    set walk = walk_rows;
+}
+let answer_map = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path));
+let answer_idx = answer_map | arrange;
+let targets_idx2 = targets | arrange;
+let answer_join = answer_idx | join(targets_idx2, ((rid, node), path, ()) -> ((rid, node), path));
+let answer_idx2 = answer_join | arrange;
+let answer = answer_idx2 | join(best_idx, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
+let answer_idx3 = answer | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic14x1.answer" = answer_idx3;

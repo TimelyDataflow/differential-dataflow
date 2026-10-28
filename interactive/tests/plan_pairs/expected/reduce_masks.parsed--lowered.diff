@@ -1,0 +1,12 @@
+--- parsed
++++ lowered
+@@ -1,3 +1,7 @@
++-- Time lanes: epoch.
+ let rows = input 0 : ((int, int), ());
+-let counted = rows | count;
+-export "out" = counted | map(((a, _), n) -> (a, n));
++let rows_idx = rows | arrange;
++let counted = rows_idx | count;
++let out_map = counted | map(((a, _), n) -> (a, n));
++-- Renderer: build an export arrangement.
++export "out" = out_map;

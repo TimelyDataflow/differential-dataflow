@@ -1,0 +1,4 @@
+let rows = input 0 : (int, (int, int)) | map((k, v) -> (k, v));
+export "first" = rows | map((k, (a, _)) -> (k, a));
+export "second" = rows | map((k, (_, b)) -> (k, b));
+export "counts" = rows | count;

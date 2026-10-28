@@ -1,0 +1,47 @@
+-- Time lanes: epoch.
+let input0 = input 0 : ((int), (int, List(int)));
+let node = input0 | map(((id), v) -> (id, v));
+let elems = node | map((id, _) -> (id, id));
+let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((_, cs) -> cs) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
+let producing_filter = node | filter((_, (op, _)) -> (op, 1) eq);
+let producing_map = producing_filter | map((id, _) -> (id, ()));
+let producing_rows = node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ()));
+let producing = producing_map + producing_rows;
+let arr = producing_filter | map((id, (_, cs)) -> (id, (0, cs) get));
+eqsat: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var eq : (int, int);
+    let pc_idx = ::pc | arrange;
+    let eq_idx = eq | arrange;
+    let canon = pc_idx | join(eq_idx, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
+    let canon_idx = canon | arrange;
+    let bsig_reduce = canon_idx | collect;
+    let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
+    let bsig_idx = bsig | arrange;
+    let reps = bsig_idx | min;
+    let cong = bsig_idx | join(reps, (_, id, rep) -> (id, rep));
+    let producing_idx = ::producing | arrange;
+    let arranged_join = producing_idx | join(eq_idx, (_, _, cls) -> (cls, ()));
+    let arranged_idx = arranged_join | arrange;
+    let arranged = arranged_idx | distinct;
+    let arr_cls_map = ::arr | map((a, c) -> (c, a));
+    let arr_cls_idx = arr_cls_map | arrange;
+    let arr_cls = arr_cls_idx | join(eq_idx, (_, a, cls) -> (a, cls));
+    let rule_map = arr_cls | map((a, cls) -> (cls, a));
+    let rule_idx = rule_map | arrange;
+    let rule = rule_idx | join(arranged, (cls, a, _) -> (a, cls));
+    let edges_map = cong | map((a, b) -> (b, a));
+    let edges_map2 = rule | map((a, b) -> (b, a));
+    let edges = cong + edges_map + rule + edges_map2;
+    let edges_idx = edges | arrange;
+    let prop = eq_idx | join(edges_idx, (_, l, n) -> (n, l));
+    let eq_rows = ::elems + prop;
+    let eq_idx2 = eq_rows | arrange;
+    let eq_reduce = eq_idx2 | min;
+    set eq = eq_reduce;
+}
+let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));
+let classes_idx = classes_map | arrange;
+let classes_inspect = classes_idx | inspect(classes);
+-- Renderer: build an export arrangement.
+export "classes" = classes_inspect;

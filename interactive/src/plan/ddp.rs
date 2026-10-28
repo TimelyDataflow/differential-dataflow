@@ -16,13 +16,19 @@ pub(crate) struct Context {
     types: Vec<(String, Vec<(String, Shape)>)>,
     scope: corgi::Scope,
     sources: BTreeSet<String>,
-    parsed: Vec<Stmt>,
+    parsed: Option<Vec<Stmt>>,
 }
 
 impl Context {
+    pub(super) fn for_program() -> Self {
+        let mut context = Self::new("");
+        context.parsed = None;
+        context
+    }
+
     pub(super) fn new(text: &str) -> Self {
         let (types, scope, sources) = crate::parse::pipe::print_context(text);
-        Self { types, scope, sources, parsed: crate::parse::pipe::parse(text) }
+        Self { types, scope, sources, parsed: Some(crate::parse::pipe::parse(text)) }
     }
 }
 
@@ -85,7 +91,7 @@ impl Report {
             }
             printer.scope(&stage.program.root, &stage.shapes, None, 0, &mut body)?;
         } else {
-            printer.statements(&self.context.parsed, 0, &mut body)?;
+            printer.statements(self.context.parsed.as_deref().ok_or("parsed syntax unavailable for a program supplied as IR")?, 0, &mut body)?;
         }
         let mut text = String::new();
         for i in 0..printer.types.len() { printer.declare_type(i, &mut text)?; }
@@ -115,6 +121,22 @@ fn fresh(base: &str, used: &mut BTreeSet<String>, next: &mut BTreeMap<String, us
     name
 }
 
+// IR producers can use export names such as "demand:input0". Nested exports
+// need local DDP bindings; only root trace names can remain quoted strings.
+fn export_names(scope: &Scope) -> Vec<String> {
+    let mut used: BTreeSet<_> = scope.names.iter().map(|(name, _)| name.clone())
+        .chain(scope.vars.iter().map(|v| v.name.clone()))
+        .chain(scope.imports.iter().map(|i| i.name.clone()))
+        .chain(scope.items.iter().filter_map(|i| if let Item::Sub(s) = i { Some(s.name.clone()) } else { None }))
+        .chain(scope.exports.iter().filter(|e| identifier(&e.name) == e.name).map(|e| e.name.clone()))
+        .collect();
+    let mut next = BTreeMap::new();
+    scope.exports.iter().map(|e| {
+        if e.name.contains("::") || identifier(&e.name) == e.name { e.name.clone() }
+        else { fresh(&e.name, &mut used, &mut next) }
+    }).collect()
+}
+
 struct Names {
     items: Vec<String>,
     imports: Vec<String>,
@@ -130,6 +152,7 @@ impl Names {
             .chain(scope.vars.iter().map(|v| v.name.clone()))
             .chain(scope.items.iter().filter_map(|i| if let Item::Sub(s) = i { Some(s.name.clone()) } else { None }))
             .chain(scope.imports.iter().filter(|i| parent.is_some() && !i.name.contains("::")).map(|i| identifier(&i.name))).collect();
+        used.extend(export_names(scope));
         let mut next = BTreeMap::new();
         let mut aliases = HashMap::new();
         for (name, r) in &scope.names { aliases.entry(r.clone()).or_insert_with(|| name.clone()); }
@@ -170,8 +193,8 @@ impl Names {
             fresh(&format!("{}_{role}", scope.labels.get(i).map(String::as_str).unwrap_or("item")), &mut used, &mut next)
         }).collect();
         let exports = scope.items.iter().map(|item| match item {
-            Item::Sub(child) => child.exports.iter().map(|e| {
-                if e.name.contains("::") { e.name.clone() } else { format!("{}::{}", child.name, e.name) }
+            Item::Sub(child) => export_names(child).into_iter().map(|name| {
+                if name.contains("::") { name } else { format!("{}::{name}", child.name) }
             }).collect(),
             _ => Vec::new(),
         }).collect();
@@ -316,7 +339,7 @@ impl Printer<'_> {
         for bind in &scope.binds {
             writeln!(out, "{indent}set {} = {};", names.vars[bind.var], names.of(&bind.value)).unwrap();
         }
-        for export in &scope.exports {
+        for (export, local) in scope.exports.iter().zip(export_names(scope)) {
             let value = names.of(&export.value);
             if depth == 0 {
                 let storage = match super::form(&export.value, &imports, &forms) {
@@ -325,9 +348,9 @@ impl Printer<'_> {
                 writeln!(out, "{indent}-- Renderer: {storage}.").unwrap();
                 let shape = export.shape.as_ref().map(|s| self.row(s).map(|s| format!(" : {s}"))).transpose()?.unwrap_or_default();
                 writeln!(out, "{indent}export {}{shape} = {value};", quoted(&export.name)?).unwrap();
-            } else if !export.name.contains("::") && !defined.contains(&export.name) {
-                writeln!(out, "{indent}let {} = {value};", export.name).unwrap();
-                defined.insert(export.name.clone());
+            } else if !local.contains("::") && !defined.contains(&local) {
+                writeln!(out, "{indent}let {local} = {value};").unwrap();
+                defined.insert(local);
             }
         }
         Ok(())

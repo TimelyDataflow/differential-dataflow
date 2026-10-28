@@ -1,0 +1,30 @@
+let store = import "store" : ((int), (int, int));
+let intents = input 0 : ((int, int, int), (int));
+let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
+let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+let read_entries = reads | map(((rid, k), (e)) -> ((k), (1, rid, e)));
+let store_entries = read_entries | join(store, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
+res: {
+    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let writes = wid + (wr_bad | negate);
+    let write_entries = writes | map(((wid), (k, v)) -> ((k), (0, wid, v)));
+    let bad = read_entries + store_entries + write_entries | reduce((_, vals) -> let entries = vals map ((e, _) -> e) in
+        let ws = (entries map ((t, _, _) -> (t, 0) eq), entries) zip filter in
+        let rs = (entries map ((t, _, _) -> (t, 1) eq), entries) zip filter in
+        let judged = (ws, rs) cap_list map ((ws, (_, i, x)) ->
+            let best = ((-1, -1), (i, ws) cap_list) fold (((bid, bv), (i, (_, j, y))) ->
+                (((j, i) lt, (j, bid) gt) and, (j, y), (bid, bv)) select) in
+            let (bid, bv) = best in
+            (((bid, -1) eq, (x, -1) ne, (bv, x) ne) select, ((i), 1))) in
+        (judged map ((b, _) -> b), judged map ((_, o) -> o)) zip filter);
+    set rollback = bad | map((_, (rid)) -> ((rid), ())) | distinct;
+}
+let rb = res::rollback;
+let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let committed = wid + (wbad | negate);
+let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
+let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
+export "rollback" = rb;
+export "delta" = new_rows + (old_rows | negate);

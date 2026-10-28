@@ -1,0 +1,36 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let request = input 0 : ((int, int, int, int), ());
+let friend = import "ldbc.friend" : (int, (int, int));
+let posts = import "ic4.s.posts" : (int, (int, int));
+let tags = import "ic4.s.tags" : (int, (int, List(int)));
+let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
+let seen_idx = seen_map | arrange;
+let friend_idx = friend | arrange;
+let seen_join = seen_idx | join(friend_idx, (_, req, (f, _)) -> (f, req));
+let seen_idx2 = seen_join | arrange;
+let posts_idx = posts | arrange;
+let seen_join2 = seen_idx2 | join(posts_idx, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end)));
+let seen_idx3 = seen_join2 | arrange;
+let tags_idx = tags | arrange;
+let seen = seen_idx3 | join(tags_idx, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
+let before_rows = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ()));
+let before_idx = before_rows | arrange;
+let before = before_idx | distinct;
+let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
+let during_idx = during | arrange;
+let fresh_join = during_idx | join(before, ((a, _), (b, _, _, _), _) -> ((a, ()), (b, (), (), ())));
+let fresh_neg = fresh_join | negate;
+let fresh_map = during | map(((a, _), (b, _, _, _)) -> ((a, ()), (b, (), (), ())));
+let fresh_map2 = fresh_neg | map(((a, _), (b, _, _, _)) -> ((a, ()), (b, (), (), ())));
+let fresh = fresh_map + fresh_map2;
+let counts_map = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ()));
+let counts_idx = counts_map | arrange;
+let counts = counts_idx | count;
+let ranked_map = counts | map(((rid, name), n) -> (rid, (n neg, name)));
+let ranked_idx = ranked_map | arrange;
+let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, (neg, name))) -> ((rid, rank), (name, neg neg)));
+let answer_idx = answer | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic4x1.answer" = answer_idx;

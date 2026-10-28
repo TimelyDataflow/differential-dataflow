@@ -1,0 +1,17 @@
+--- parsed
++++ lowered
+@@ -1,4 +1,12 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let rows = import "rows" : (int, int);
+ let lifted = rows | lift;
+-export "strict" = lifted | half_join(rows, 1, (k, v, _) -> (k, v));
+-export "inclusive" = lifted | half_join(rows, 0, (k, v, _) -> (k, v));
++let rows_idx = rows | arrange;
++let strict_join = lifted | half_join(rows_idx, 1, (k, v, _) -> (k, v));
++let rows_idx2 = rows | arrange;
++let inclusive_join = lifted | half_join(rows_idx2, 0, (k, v, _) -> (k, v));
++-- Renderer: build an export arrangement.
++export "strict" = strict_join;
++-- Renderer: build an export arrangement.
++export "inclusive" = inclusive_join;

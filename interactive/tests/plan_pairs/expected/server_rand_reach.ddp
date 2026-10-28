@@ -1,0 +1,20 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let iota_12 = import "iota:12" : ((int), ());
+let input0 = input 0 : ((int), ());
+let edges = iota_12 | map(((i), _) -> ((((i, 0) hash shr_b64 1, 8) rem), (((i, 1) hash shr_b64 1, 8) rem)));
+let roots = input0 | map((n, ()) -> (n, ()));
+reach: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var reach : ((int), ());
+    let reach_idx = reach | arrange;
+    let edges_idx = ::edges | arrange;
+    let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));
+    let reach_rows = ::roots + proposals;
+    let reach_idx2 = reach_rows | arrange;
+    let reach_reduce = reach_idx2 | distinct;
+    set reach = reach_reduce;
+}
+let result_inspect = reach::reach | inspect(reach);
+-- Renderer: build an export arrangement.
+export "result" = result_inspect;

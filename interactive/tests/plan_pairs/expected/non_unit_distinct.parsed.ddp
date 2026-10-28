@@ -1,0 +1,1 @@
+export "out" = input 0 : (int, int) | distinct;

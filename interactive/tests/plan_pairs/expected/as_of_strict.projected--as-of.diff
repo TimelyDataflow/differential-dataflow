@@ -1,0 +1,11 @@
+--- projected
++++ as-of
+@@ -1,7 +1,7 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let rows = import "rows" : (int, int);
+-let out_rows = rows | lift;
++let out_rows = rows | lift | filter((_, (_, (a))) -> (a, 1) ne);
+ let rows_idx = rows | arrange;
+ let out_join = out_rows | half_join(rows_idx, 1, (k, v, _) -> (k, v));
+ -- Renderer: build an export arrangement.

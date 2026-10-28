@@ -1,0 +1,3 @@
+-- The harness applies explain before preparation, as the server does.
+let edges = input 0 : (int, int);
+export "out" = edges | map((src, dst) -> (dst, ())) | count;

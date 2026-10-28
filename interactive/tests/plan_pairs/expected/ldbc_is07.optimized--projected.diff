@@ -1,0 +1,21 @@
+--- optimized
++++ projected
+@@ -22,12 +22,14 @@
+ let known_rows = known_join | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ()));
+ let known_idx2 = known_rows | arrange;
+ let known_reduce = known_idx2 | distinct;
+-let known = known_reduce | map(((pair, row), ()) -> (pair, row));
++let known = known_reduce | map((((a, _), (b, c, d, e)), _) -> ((a, ()), (b, c, d, e)));
+ let marked_map = known | map(((who, _), row) -> (who, (row, 1)));
+ let marked_neg = known | negate;
+-let marked_rows = reply + marked_neg;
+-let marked_map2 = marked_rows | map(((who, _), row) -> (who, (row, 0)));
+-let marked = marked_map + marked_map2;
++let marked_map2 = reply | map(((a, _), (b, c, d, e)) -> ((a, ()), (b, c, d, e)));
++let marked_map3 = marked_neg | map(((a, _), (b, c, d, e)) -> ((a, ()), (b, c, d, e)));
++let marked_rows = marked_map2 + marked_map3;
++let marked_map4 = marked_rows | map(((who, _), row) -> (who, (row, 0)));
++let marked = marked_map + marked_map4;
+ let marked_idx = marked | arrange;
+ let person_idx = person | arrange;
+ let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));

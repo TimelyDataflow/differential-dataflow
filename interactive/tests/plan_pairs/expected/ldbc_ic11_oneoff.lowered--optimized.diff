@@ -1,0 +1,38 @@
+--- lowered
++++ optimized
+@@ -14,12 +14,10 @@
+ let friend_idx = friend | arrange;
+ let hop1 = hop1_idx2 | join(friend_idx, (_, req, (f, _)) -> (f, req));
+ let hop1_idx3 = hop1 | arrange;
+-let friend_idx2 = friend | arrange;
+-let hop2 = hop1_idx3 | join(friend_idx2, (_, req, (g, _)) -> (g, req));
++let hop2 = hop1_idx3 | join(friend_idx, (_, req, (g, _)) -> (g, req));
+ let circle_rows = hop1 + hop2;
+-let circle_filter = circle_rows | filter((node, (_, who, _, _)) -> (node, who) ne);
+-let circle_map = circle_filter | map((node, (rid, _, country, year)) -> ((node, rid, country, year), ()));
+-let circle_idx = circle_map | arrange;
++let circle_rows2 = circle_rows | filter((node, (_, who, _, _)) -> (node, who) ne) | map((node, (rid, _, country, year)) -> ((node, rid, country, year), ()));
++let circle_idx = circle_rows2 | arrange;
+ let circle = circle_idx | distinct;
+ let jobs_map = circle | map(((node, rid, country, year), ()) -> (node, (rid, country, year)));
+ let jobs_idx = jobs_map | arrange;
+@@ -32,15 +30,12 @@
+ let jobs_idx3 = jobs_join2 | arrange;
+ let place_idx = place | arrange;
+ let jobs_join3 = jobs_idx3 | join(place_idx, (_, (key, (company, country)), (there, _, _)) -> (key, (company, country, there)));
+-let jobs_filter2 = jobs_join3 | filter((_, (_, country, there)) -> (country, there) eq);
+-let jobs = jobs_filter2 | map((key, (company, _, _)) -> (key, company));
++let jobs = jobs_join3 | filter((_, (_, country, there)) -> (country, there) eq) | map((key, (company, _, _)) -> (key, company));
+ let jobs_idx4 = jobs | arrange;
+ let named_reduce = jobs_idx4 | collect;
+-let named = named_reduce | flatmap((_, entries) -> entries);
+-let ranked_map = named | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)));
+-let ranked_idx = ranked_map | arrange;
+-let person_idx2 = person | arrange;
+-let ranked_join = ranked_idx | join(person_idx2, (node, (rid, since, pos, company), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since, node, pos neg), (first, last, company))));
++let ranked_rows = named_reduce | flatmap((_, entries) -> entries) | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)));
++let ranked_idx = ranked_rows | arrange;
++let ranked_join = ranked_idx | join(person_idx, (node, (rid, since, pos, company), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since, node, pos neg), (first, last, company))));
+ let ranked_idx2 = ranked_join | arrange;
+ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+ let answer = ranked | map((rid, (rank, ((since, node, _), (first, last, company)))) -> ((rid, rank), (node, first, last, company, since)));

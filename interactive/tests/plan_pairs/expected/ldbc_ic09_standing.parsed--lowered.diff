@@ -1,0 +1,29 @@
+--- parsed
++++ lowered
+@@ -1,9 +1,21 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "ldbc.friend" : (int, (int, int));
+ let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));
+-let latest = by_author | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1) | map((author, (_, (neg, id))) -> (author, (neg, id)));
+-let newest = by_author | map((author, (neg, _)) -> (author, neg)) | min;
+-export "ic9.s.by_author" = by_author | arrange;
+-export "ic9.s.latest" = latest | arrange;
+-export "ic9.s.newest" = newest | arrange;
++let by_author_idx = by_author | arrange;
++let latest_reduce = by_author_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
++let latest = latest_reduce | map((author, (_, (neg, id))) -> (author, (neg, id)));
++let newest_map = by_author | map((author, (neg, _)) -> (author, neg));
++let newest_idx = newest_map | arrange;
++let newest = newest_idx | min;
++let by_author_idx2 = by_author | arrange;
++let latest_idx = latest | arrange;
++let newest_idx2 = newest | arrange;
++-- Renderer: publish the existing arrangement.
++export "ic9.s.by_author" = by_author_idx2;
++-- Renderer: publish the existing arrangement.
++export "ic9.s.latest" = latest_idx;
++-- Renderer: publish the existing arrangement.
++export "ic9.s.newest" = newest_idx2;

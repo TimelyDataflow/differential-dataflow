@@ -1,0 +1,26 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+let selves = tagclass | map((id, _) -> ((id, id), ()));
+below: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var below : ((int, int), ());
+    let step_map = below | map(((low, high), ()) -> (high, low));
+    let step_idx = step_map | arrange;
+    let tagclass_idx = ::tagclass | arrange;
+    let step_join = step_idx | join(tagclass_idx, (_, low, (_, parent)) -> (low, parent));
+    let step = step_join | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));
+    let below_rows = ::selves + step;
+    let below_idx = below_rows | arrange;
+    let below_reduce = below_idx | distinct;
+    set below = below_reduce;
+}
+let below_hl = below::below | map(((low, high), ()) -> (high, low));
+let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
+let below_hl_idx = below_hl | arrange;
+let reply_idx = reply | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic12.s.below_hl" = below_hl_idx;
+-- Renderer: publish the existing arrangement.
+export "ic12.s.reply" = reply_idx;

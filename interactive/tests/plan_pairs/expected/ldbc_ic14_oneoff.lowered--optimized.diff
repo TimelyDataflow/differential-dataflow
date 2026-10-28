@@ -1,0 +1,46 @@
+--- lowered
++++ optimized
+@@ -1,8 +1,6 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int, int), ());
+-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let pals = import "ldbc.friend.pair" : ((int, int), ());
+ let weighted = import "ic14.s.weighted" : (int, (int, int));
+ let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
+ dist: {
+@@ -26,12 +24,10 @@
+ let pred_idx2 = pred_join | arrange;
+ let best_idx = best | arrange;
+ let pred_join2 = pred_idx2 | join(best_idx, ((rid, v), (u, via), least) -> ((rid, v), (u, via, least)));
+-let pred_filter = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq);
+-let pred = pred_filter | map((key, (u, _, _)) -> (key, u));
++let pred = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq) | map((key, (u, _, _)) -> (key, u));
+ let targets_map = request | map(((rid, _, to), ()) -> ((rid, to), ()));
+ let targets_idx = targets_map | arrange;
+-let best_idx2 = best | arrange;
+-let targets = targets_idx | join(best_idx2, (key, (), _) -> (key, ()));
++let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
+ back: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var back : ((int, int), ());
+@@ -50,8 +46,7 @@
+ let next = next_idx2 | min;
+ let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
+ let first_idx = first_map | arrange;
+-let first_idx2 = back::back | arrange;
+-let first = first_idx | join(first_idx2, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
++let first = first_idx | join(next_idx, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
+ walk: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var walk : ((int, int, List(int)), ());
+@@ -67,8 +62,7 @@
+ let targets_idx2 = targets | arrange;
+ let answer_join = answer_idx | join(targets_idx2, ((rid, node), path, ()) -> ((rid, node), path));
+ let answer_idx2 = answer_join | arrange;
+-let best_idx3 = best | arrange;
+-let answer = answer_idx2 | join(best_idx3, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
++let answer = answer_idx2 | join(best_idx, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
+ let answer_idx3 = answer | arrange;
+ -- Renderer: publish the existing arrangement.
+ export "ic14x1.answer" = answer_idx3;

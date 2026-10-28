@@ -1,0 +1,11 @@
+let edges = input 0 : (int, int);
+let seeds = input 1 : (int, ());
+outer: {
+    let starts = seeds + again;
+    inner: {
+        let step = reached | join(edges, (_, (), dst) -> (dst, ()));
+        set reached = starts + step | distinct;
+    }
+    set again = inner::reached | filter((k, ()) -> 0);
+}
+export "out" = outer::inner::reached;

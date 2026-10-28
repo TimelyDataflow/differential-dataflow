@@ -1,0 +1,367 @@
+-- Time lanes: epoch.
+let person_in = input 0 : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
+let message_in = input 1 : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
+let forum_in = input 2 : ((int, List(int), int, int), ());
+let knows_in = input 3 : ((int, int, int), ());
+let member_in = input 4 : ((int, int, int), ());
+let tag_in = input 5 : ((int, List(int), int), ());
+let tagclass_in = input 6 : ((int, List(int), int), ());
+let place_in = input 7 : ((int, List(int), List(int), int), ());
+let org_in = input 8 : ((int, List(int), List(int), int), ());
+let interest_in = input 9 : ((int, int), ());
+let mtag_in = input 10 : ((int, int), ());
+let ftag_in = input 11 : ((int, int), ());
+let likes_in = input 12 : ((int, int, int), ());
+let study_in = input 13 : ((int, int, int), ());
+let work_in = input 14 : ((int, int, int), ());
+let email_in = input 15 : ((int, List(int)), ());
+let language_in = input 16 : ((int, List(int)), ());
+let del_person = input 17 : ((int, int), ());
+let del_forum = input 18 : ((int, int), ());
+let del_message = input 19 : ((int, int), ());
+let del_knows = input 20 : ((int, int, int), ());
+let del_member = input 21 : ((int, int, int), ());
+let del_likes = input 22 : ((int, int, int), ());
+let tag = tag_in;
+let tagclass = tagclass_in;
+let place = place_in;
+let org = org_in;
+let dead_p_map = del_person | map(((id, _), ()) -> (id, ()));
+let dead_p_idx = dead_p_map | arrange;
+let dead_p = dead_p_idx | distinct;
+let owned_map = forum_in | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)));
+let owned_idx = owned_map | arrange;
+let owned = owned_idx | join(dead_p, (moderator, (id, title, created), ()) -> (id, (title, created, moderator)));
+let dead_f_map = del_forum | map(((id, _), ()) -> (id, ()));
+let dead_f_rows = owned | filter((_, (title, _, _)) -> ((((0, (title len, 6) min) range, title) gather, "Album ") eq, (((0, (title len, 5) min) range, title) gather, "Wall ") eq) any) | map((id, _) -> (id, ()));
+let dead_f_rows2 = dead_f_map + dead_f_rows;
+let dead_f_idx = dead_f_rows2 | arrange;
+let dead_f = dead_f_idx | distinct;
+let groups = owned | filter((_, (title, _, _)) -> (((0, (title len, 6) min) range, title) gather, "Group ") eq);
+let groups_idx = groups | arrange;
+let kept_join = groups_idx | join(dead_f, (id, v, ()) -> (id, v));
+let kept_neg = kept_join | negate;
+let kept = groups + kept_neg;
+let seeds_map = del_message | map(((id, _), ()) -> (id, ()));
+let seeds_map2 = message_in | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
+let seeds_idx = seeds_map2 | arrange;
+let seeds_join = seeds_idx | join(dead_p, (_, id, ()) -> (id, ()));
+let seeds_rows = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 0) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
+let seeds_idx2 = seeds_rows | arrange;
+let seeds_join2 = seeds_idx2 | join(dead_f, (_, id, ()) -> (id, ()));
+let seeds = seeds_map + seeds_join + seeds_join2;
+let children = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
+dead_m: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var dead_m : (int, ());
+    let dead_m_idx = dead_m | arrange;
+    let children_idx = ::children | arrange;
+    let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
+    let dead_m_rows = ::seeds + kids;
+    let dead_m_idx2 = dead_m_rows | arrange;
+    let dead_m_reduce = dead_m_idx2 | distinct;
+    set dead_m = dead_m_reduce;
+}
+let dead_msg = dead_m::dead_m;
+let gone_knows_map = del_knows | map(((a, b, _), ()) -> ((a, b), ()));
+let gone_knows_idx = gone_knows_map | arrange;
+let gone_knows = gone_knows_idx | distinct;
+let gone_member_map = del_member | map(((f, p, _), ()) -> ((f, p), ()));
+let gone_member_idx = gone_member_map | arrange;
+let gone_member = gone_member_idx | distinct;
+let gone_likes_map = del_likes | map(((p, x, _), ()) -> ((p, x), ()));
+let gone_likes_idx = gone_likes_map | arrange;
+let gone_likes = gone_likes_idx | distinct;
+let person_map = person_in | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
+let person_idx = person_map | arrange;
+let person_join = person_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let person_idx2 = person_join | arrange;
+let person_reduce = person_idx2 | distinct;
+let person_neg = person_reduce | negate;
+let person = person_in + person_neg;
+let message_map = message_in | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day)));
+let message_idx = message_map | arrange;
+let dead_msg_idx = dead_msg | arrange;
+let message_join = message_idx | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+let message_idx2 = message_join | arrange;
+let message_reduce = message_idx2 | distinct;
+let message_neg = message_reduce | negate;
+let message = message_in + message_neg;
+let forum_map = forum_in | map(((id, title, created, moderator), ()) -> (id, (id, title, created, moderator)));
+let forum_idx = forum_map | arrange;
+let forum_join = forum_idx | join(dead_f, (_, r, ()) -> (r, ()));
+let forum_map2 = kept | map((id, (title, created, moderator)) -> ((id, title, created, moderator), ()));
+let forum_rows = forum_join + forum_map2;
+let forum_idx2 = forum_rows | arrange;
+let forum_reduce = forum_idx2 | distinct;
+let forum_neg = forum_reduce | negate;
+let forum_map3 = kept | map((id, (title, created, _)) -> ((id, title, created, -1), ()));
+let forum = forum_in + forum_neg + forum_map3;
+let knows_map = knows_in | map(((src, dst, created), ()) -> ((src, dst), (src, dst, created)));
+let knows_idx = knows_map | arrange;
+let knows_join = knows_idx | join(gone_knows, (_, r, ()) -> (r, ()));
+let knows_map2 = knows_in | map(((src, dst, created), ()) -> (src, (src, dst, created)));
+let knows_idx2 = knows_map2 | arrange;
+let knows_join2 = knows_idx2 | join(dead_p, (_, r, ()) -> (r, ()));
+let knows_map3 = knows_in | map(((src, dst, created), ()) -> (dst, (src, dst, created)));
+let knows_idx3 = knows_map3 | arrange;
+let knows_join3 = knows_idx3 | join(dead_p, (_, r, ()) -> (r, ()));
+let knows_rows = knows_join + knows_join2 + knows_join3;
+let knows_idx4 = knows_rows | arrange;
+let knows_reduce = knows_idx4 | distinct;
+let knows_neg = knows_reduce | negate;
+let knows = knows_in + knows_neg;
+let member_map = member_in | map(((forum, person, created), ()) -> ((forum, person), (forum, person, created)));
+let member_idx = member_map | arrange;
+let member_join = member_idx | join(gone_member, (_, r, ()) -> (r, ()));
+let member_map2 = member_in | map(((forum, person, created), ()) -> (forum, (forum, person, created)));
+let member_idx2 = member_map2 | arrange;
+let member_join2 = member_idx2 | join(dead_f, (_, r, ()) -> (r, ()));
+let member_map3 = member_in | map(((forum, person, created), ()) -> (person, (forum, person, created)));
+let member_idx3 = member_map3 | arrange;
+let member_join3 = member_idx3 | join(dead_p, (_, r, ()) -> (r, ()));
+let member_rows = member_join + member_join2 + member_join3;
+let member_idx4 = member_rows | arrange;
+let member_reduce = member_idx4 | distinct;
+let member_neg = member_reduce | negate;
+let member = member_in + member_neg;
+let interest_map = interest_in | map(((person, tag), ()) -> (person, (person, tag)));
+let interest_idx = interest_map | arrange;
+let interest_join = interest_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let interest_idx2 = interest_join | arrange;
+let interest_reduce = interest_idx2 | distinct;
+let interest_neg = interest_reduce | negate;
+let interest = interest_in + interest_neg;
+let mtag_map = mtag_in | map(((message, tag), ()) -> (message, (message, tag)));
+let mtag_idx = mtag_map | arrange;
+let mtag_join = mtag_idx | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+let mtag_idx2 = mtag_join | arrange;
+let mtag_reduce = mtag_idx2 | distinct;
+let mtag_neg = mtag_reduce | negate;
+let mtag = mtag_in + mtag_neg;
+let ftag_map = ftag_in | map(((forum, tag), ()) -> (forum, (forum, tag)));
+let ftag_idx = ftag_map | arrange;
+let ftag_join = ftag_idx | join(dead_f, (_, r, ()) -> (r, ()));
+let ftag_idx2 = ftag_join | arrange;
+let ftag_reduce = ftag_idx2 | distinct;
+let ftag_neg = ftag_reduce | negate;
+let ftag = ftag_in + ftag_neg;
+let likes_map = likes_in | map(((person, message, created), ()) -> ((person, message), (person, message, created)));
+let likes_idx = likes_map | arrange;
+let likes_join = likes_idx | join(gone_likes, (_, r, ()) -> (r, ()));
+let likes_map2 = likes_in | map(((person, message, created), ()) -> (person, (person, message, created)));
+let likes_idx2 = likes_map2 | arrange;
+let likes_join2 = likes_idx2 | join(dead_p, (_, r, ()) -> (r, ()));
+let likes_map3 = likes_in | map(((person, message, created), ()) -> (message, (person, message, created)));
+let likes_idx3 = likes_map3 | arrange;
+let likes_join3 = likes_idx3 | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+let likes_rows = likes_join + likes_join2 + likes_join3;
+let likes_idx4 = likes_rows | arrange;
+let likes_reduce = likes_idx4 | distinct;
+let likes_neg = likes_reduce | negate;
+let likes = likes_in + likes_neg;
+let study_map = study_in | map(((person, org, year), ()) -> (person, (person, org, year)));
+let study_idx = study_map | arrange;
+let study_join = study_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let study_idx2 = study_join | arrange;
+let study_reduce = study_idx2 | distinct;
+let study_neg = study_reduce | negate;
+let study = study_in + study_neg;
+let work_map = work_in | map(((person, org, year), ()) -> (person, (person, org, year)));
+let work_idx = work_map | arrange;
+let work_join = work_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let work_idx2 = work_join | arrange;
+let work_reduce = work_idx2 | distinct;
+let work_neg = work_reduce | negate;
+let work = work_in + work_neg;
+let email_map = email_in | map(((person, value), ()) -> (person, (person, value)));
+let email_idx = email_map | arrange;
+let email_join = email_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let email_idx2 = email_join | arrange;
+let email_reduce = email_idx2 | distinct;
+let email_neg = email_reduce | negate;
+let email = email_in + email_neg;
+let language_map = language_in | map(((person, value), ()) -> (person, (person, value)));
+let language_idx = language_map | arrange;
+let language_join = language_idx | join(dead_p, (_, r, ()) -> (r, ()));
+let language_idx2 = language_join | arrange;
+let language_reduce = language_idx2 | distinct;
+let language_neg = language_reduce | negate;
+let language = language_in + language_neg;
+let exists_map = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ()));
+let exists_idx = exists_map | arrange;
+let exists = exists_idx | distinct;
+let either_map = knows | map(((a, b, t), ()) -> (a, (b, t)));
+let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
+let either = either_map + either_map2;
+let either_idx = either | arrange;
+let friends_join = either_idx | join(exists, (a, (b, t), ()) -> (b, (a, t)));
+let friends_idx = friends_join | arrange;
+let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
+let friends_idx2 = friends_join2 | arrange;
+let friends_reduce = friends_idx2 | distinct;
+let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
+let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
+let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+thread: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var thread : ((int, int), ());
+    let below_map = thread | map(((mid, root), ()) -> (mid, root));
+    let below_idx = below_map | arrange;
+    let replies_idx = ::replies | arrange;
+    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
+    let thread_rows = ::posts + below;
+    let thread_idx = thread_rows | arrange;
+    let thread_reduce = thread_idx | distinct;
+    set thread = thread_reduce;
+}
+let ldbc_person_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
+let ldbc_person_idx = ldbc_person_map | arrange;
+let ldbc_person_by_city_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (city, id));
+let ldbc_person_by_city_idx = ldbc_person_by_city_map | arrange;
+let ldbc_message_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day)));
+let ldbc_message_idx = ldbc_message_map | arrange;
+let ldbc_message_by_creator_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
+let ldbc_message_by_creator_idx = ldbc_message_by_creator_map | arrange;
+let ldbc_message_by_parent_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
+let ldbc_message_by_parent_idx = ldbc_message_by_parent_map | arrange;
+let ldbc_message_by_forum_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
+let ldbc_message_by_forum_idx = ldbc_message_by_forum_map | arrange;
+let ldbc_forum_map = forum | map(((id, title, created, moderator), ()) -> (id, (title, created, moderator)));
+let ldbc_forum_idx = ldbc_forum_map | arrange;
+let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
+let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
+let ldbc_knows_by_src_idx = either_map | arrange;
+let ldbc_member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
+let ldbc_member_by_forum_idx = ldbc_member_by_forum_map | arrange;
+let ldbc_member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));
+let ldbc_member_by_person_idx = ldbc_member_by_person_map | arrange;
+let ldbc_tag_map = tag_in | map(((id, name, class), ()) -> (id, (name, class)));
+let ldbc_tag_idx = ldbc_tag_map | arrange;
+let ldbc_tag_by_name_map = tag_in | map(((id, name, class), ()) -> (name, id));
+let ldbc_tag_by_name_idx = ldbc_tag_by_name_map | arrange;
+let ldbc_tag_by_class_map = tag_in | map(((id, name, class), ()) -> (class, id));
+let ldbc_tag_by_class_idx = ldbc_tag_by_class_map | arrange;
+let ldbc_tagclass_map = tagclass_in | map(((id, name, parent), ()) -> (id, (name, parent)));
+let ldbc_tagclass_idx = ldbc_tagclass_map | arrange;
+let ldbc_tagclass_by_name_map = tagclass_in | map(((id, name, parent), ()) -> (name, id));
+let ldbc_tagclass_by_name_idx = ldbc_tagclass_by_name_map | arrange;
+let ldbc_tagclass_by_parent_map = tagclass_in | map(((id, name, parent), ()) -> (parent, id));
+let ldbc_tagclass_by_parent_idx = ldbc_tagclass_by_parent_map | arrange;
+let ldbc_place_map = place_in | map(((id, name, typ, parent), ()) -> (id, (name, typ, parent)));
+let ldbc_place_idx = ldbc_place_map | arrange;
+let ldbc_place_by_name_map = place_in | map(((id, name, typ, parent), ()) -> (name, id));
+let ldbc_place_by_name_idx = ldbc_place_by_name_map | arrange;
+let ldbc_place_by_parent_map = place_in | map(((id, name, typ, parent), ()) -> (parent, id));
+let ldbc_place_by_parent_idx = ldbc_place_by_parent_map | arrange;
+let ldbc_org_map = org_in | map(((id, name, typ, place), ()) -> (id, (name, typ, place)));
+let ldbc_org_idx = ldbc_org_map | arrange;
+let ldbc_org_by_name_map = org_in | map(((id, name, typ, place), ()) -> (name, id));
+let ldbc_org_by_name_idx = ldbc_org_by_name_map | arrange;
+let ldbc_interest_by_person_map = interest | map(((person, tag), ()) -> (person, tag));
+let ldbc_interest_by_person_idx = ldbc_interest_by_person_map | arrange;
+let ldbc_interest_by_tag_map = interest | map(((person, tag), ()) -> (tag, person));
+let ldbc_interest_by_tag_idx = ldbc_interest_by_tag_map | arrange;
+let ldbc_mtag_by_message_map = mtag | map(((message, tag), ()) -> (message, tag));
+let ldbc_mtag_by_message_idx = ldbc_mtag_by_message_map | arrange;
+let ldbc_mtag_by_tag_map = mtag | map(((message, tag), ()) -> (tag, message));
+let ldbc_mtag_by_tag_idx = ldbc_mtag_by_tag_map | arrange;
+let ldbc_ftag_by_forum_map = ftag | map(((forum, tag), ()) -> (forum, tag));
+let ldbc_ftag_by_forum_idx = ldbc_ftag_by_forum_map | arrange;
+let ldbc_likes_by_person_map = likes | map(((person, message, created), ()) -> (person, (message, created)));
+let ldbc_likes_by_person_idx = ldbc_likes_by_person_map | arrange;
+let ldbc_likes_by_message_map = likes | map(((person, message, created), ()) -> (message, (person, created)));
+let ldbc_likes_by_message_idx = ldbc_likes_by_message_map | arrange;
+let ldbc_study_by_person_map = study | map(((person, org, year), ()) -> (person, (org, year)));
+let ldbc_study_by_person_idx = ldbc_study_by_person_map | arrange;
+let ldbc_work_by_person_map = work | map(((person, org, year), ()) -> (person, (org, year)));
+let ldbc_work_by_person_idx = ldbc_work_by_person_map | arrange;
+let ldbc_work_by_org_map = work | map(((person, org, year), ()) -> (org, (person, year)));
+let ldbc_work_by_org_idx = ldbc_work_by_org_map | arrange;
+let ldbc_email_by_person_map = email | map(((person, value), ()) -> (person, value));
+let ldbc_email_by_person_idx = ldbc_email_by_person_map | arrange;
+let ldbc_language_by_person_map = language | map(((person, value), ()) -> (person, value));
+let ldbc_language_by_person_idx = ldbc_language_by_person_map | arrange;
+let friends_idx3 = friends | arrange;
+let ldbc_friend_pair_map = friends | map((a, (b, _)) -> ((a, b), ()));
+let ldbc_friend_pair_idx = ldbc_friend_pair_map | arrange;
+let ldbc_message_root_map = thread::thread | map(((mid, root), ()) -> (mid, root));
+let ldbc_message_root_idx = ldbc_message_root_map | arrange;
+let ldbc_message_by_root_map = thread::thread | map(((mid, root), ()) -> (root, mid));
+let ldbc_message_by_root_idx = ldbc_message_by_root_map | arrange;
+-- Renderer: publish the existing arrangement.
+export "ldbc.person" = ldbc_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.person.by_city" = ldbc_person_by_city_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message" = ldbc_message_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message.by_creator" = ldbc_message_by_creator_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message.by_parent" = ldbc_message_by_parent_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message.by_forum" = ldbc_message_by_forum_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.forum" = ldbc_forum_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.forum.by_moderator" = ldbc_forum_by_moderator_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.knows.by_src" = ldbc_knows_by_src_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.member.by_forum" = ldbc_member_by_forum_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.member.by_person" = ldbc_member_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tag" = ldbc_tag_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tag.by_name" = ldbc_tag_by_name_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tag.by_class" = ldbc_tag_by_class_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tagclass" = ldbc_tagclass_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tagclass.by_name" = ldbc_tagclass_by_name_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.tagclass.by_parent" = ldbc_tagclass_by_parent_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.place" = ldbc_place_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.place.by_name" = ldbc_place_by_name_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.place.by_parent" = ldbc_place_by_parent_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.org" = ldbc_org_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.org.by_name" = ldbc_org_by_name_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.interest.by_person" = ldbc_interest_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.interest.by_tag" = ldbc_interest_by_tag_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.mtag.by_message" = ldbc_mtag_by_message_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.mtag.by_tag" = ldbc_mtag_by_tag_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.ftag.by_forum" = ldbc_ftag_by_forum_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.likes.by_person" = ldbc_likes_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.likes.by_message" = ldbc_likes_by_message_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.study.by_person" = ldbc_study_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.work.by_person" = ldbc_work_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.work.by_org" = ldbc_work_by_org_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.email.by_person" = ldbc_email_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.language.by_person" = ldbc_language_by_person_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.friend" = friends_idx3;
+-- Renderer: publish the existing arrangement.
+export "ldbc.friend.pair" = ldbc_friend_pair_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message.root" = ldbc_message_root_idx;
+-- Renderer: publish the existing arrangement.
+export "ldbc.message.by_root" = ldbc_message_by_root_idx;

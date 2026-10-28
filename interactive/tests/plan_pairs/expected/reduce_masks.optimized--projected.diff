@@ -1,0 +1,12 @@
+--- optimized
++++ projected
+@@ -1,7 +1,8 @@
+ -- Time lanes: epoch.
+ let rows = input 0 : ((int, int), ());
+ let rows_idx = rows | arrange;
+-let counted = rows_idx | count;
++let counted_reduce = rows_idx | count;
++let counted = counted_reduce | map(((a, _), b) -> ((a, ()), b));
+ let out_map = counted | map(((a, _), n) -> (a, n));
+ -- Renderer: build an export arrangement.
+ export "out" = out_map;

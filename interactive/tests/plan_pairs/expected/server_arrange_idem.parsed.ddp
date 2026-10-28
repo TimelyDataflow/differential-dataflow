@@ -1,0 +1,18 @@
+let node = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));
+let elems = node | map((id, _) -> (id, id));
+let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((_, cs) -> cs) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
+let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ()))) + (node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ())));
+let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, (0, cs) get));
+eqsat: {
+    let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
+    let bsig = canon | collect | map(((id, op), cs) -> ((op, cs), id));
+    let reps = bsig | min;
+    let cong = bsig | join(reps, (_, id, rep) -> (id, rep));
+    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | distinct;
+    let arr_cls = arr | map((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));
+    let rule = arr_cls | map((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));
+    let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
+    let prop = eq | join(edges, (_, l, n) -> (n, l));
+    set eq = elems + prop | min;
+}
+export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

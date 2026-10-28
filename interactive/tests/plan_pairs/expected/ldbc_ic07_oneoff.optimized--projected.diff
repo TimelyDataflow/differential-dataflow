@@ -1,0 +1,21 @@
+--- optimized
++++ projected
+@@ -21,12 +21,14 @@
+ let rows = rows_idx | join(message_idx, (m, (rid, who, liker, when), (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((who, liker), (rid, liker, when, m, ((text len, 0) gt, text, image) select, (when, created) sub)));
+ let rows_idx2 = rows | arrange;
+ let pals_idx = pals | arrange;
+-let known = rows_idx2 | join(pals_idx, (pair, row, ()) -> (pair, row));
++let known = rows_idx2 | join(pals_idx, (_, (a, b, c, d, e, f), _) -> (((), ()), (a, b, c, d, e, f)));
+ let marked_map = known | map((_, row) -> (row, 0));
+ let marked_neg = known | negate;
+-let marked_rows = rows + marked_neg;
+-let marked_map2 = marked_rows | map((_, row) -> (row, 1));
+-let marked = marked_map + marked_map2;
++let marked_map2 = rows | map((_, (a, b, c, d, e, f)) -> (((), ()), (a, b, c, d, e, f)));
++let marked_map3 = marked_neg | map((_, (a, b, c, d, e, f)) -> (((), ()), (a, b, c, d, e, f)));
++let marked_rows = marked_map2 + marked_map3;
++let marked_map4 = marked_rows | map((_, row) -> (row, 1));
++let marked = marked_map + marked_map4;
+ let ranked_map = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker, (rid, when, m, body, age, fresh)));
+ let ranked_idx = ranked_map | arrange;
+ let person_idx = person | arrange;

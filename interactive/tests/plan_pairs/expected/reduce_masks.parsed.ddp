@@ -1,0 +1,3 @@
+let rows = input 0 : ((int, int), ());
+let counted = rows | count;
+export "out" = counted | map(((a, _), n) -> (a, n));

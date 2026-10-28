@@ -1,0 +1,10 @@
+--- parsed
++++ lowered
+@@ -1 +1,6 @@
+-export "now" = import "clock" | inspect(clock);
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
++let clock = import "clock" : ((int), ());
++let now_inspect = clock | inspect(clock);
++-- Renderer: build an export arrangement.
++export "now" = now_inspect;

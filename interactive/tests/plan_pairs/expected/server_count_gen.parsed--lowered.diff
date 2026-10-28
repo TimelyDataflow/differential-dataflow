@@ -1,0 +1,14 @@
+--- parsed
++++ lowered
+@@ -1,2 +1,9 @@
+-let edges = import "random:nodes=8,edges=12";
+-export "edge_count" = edges | map(_ -> ((), ())) | count | map((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (n) in (k, _call0));
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
++let edges = import "random:nodes=8,edges=12" : ((int, int), ());
++let edge_count_map = edges | map(_ -> ((), ()));
++let edge_count_idx = edge_count_map | arrange;
++let edge_count_reduce = edge_count_idx | count;
++let edge_count_map2 = edge_count_reduce | map(((), b) -> ((), (b)));
++-- Renderer: build an export arrangement.
++export "edge_count" = edge_count_map2;

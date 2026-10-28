@@ -1,0 +1,4 @@
+-- Time lanes: epoch.
+let input0 = input 0 : (int, int);
+-- Renderer: build an export arrangement.
+export "rows" = input0;

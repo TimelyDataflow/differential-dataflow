@@ -39,7 +39,17 @@ pub struct Stage {
 /// placeholder `G = (1, [])`, as for installation at epoch 2, extended by zero scope lanes.
 /// This reports the projection-enabled path, not the server's default projection-off path.
 pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
-    catch_unwind(AssertUnwindSafe(|| build_report(text, source))).map_err(|panic| {
+    caught_report(|| build_report(crate::lower::lower_tree(crate::parse::pipe::parse(text)), ddp::Context::new(text), source))
+}
+
+/// Prepare an already lowered program, such as an explanation rewrite.
+/// Parsed syntax is unavailable for this entry point.
+pub fn report_program(program: Program, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
+    caught_report(|| build_report(program, ddp::Context::for_program(), source))
+}
+
+fn caught_report(build: impl FnOnce() -> Result<Report, String>) -> Result<Report, String> {
+    catch_unwind(AssertUnwindSafe(build)).map_err(|panic| {
         if let Some(message) = panic.downcast_ref::<String>() { message.clone() }
         else if let Some(message) = panic.downcast_ref::<&str>() { message.to_string() }
         else { "planning panicked without a text message".into() }
@@ -51,8 +61,7 @@ pub fn emit_ddp(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result
     report(text, source)?.emit_ddp()
 }
 
-fn build_report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
-    let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
+fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
     let mut catalog = BTreeMap::new();
     let mut unresolved = Vec::new();
     let mut problems = Vec::new();
@@ -141,7 +150,7 @@ fn build_report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result
             shape.map(|shape| (export.name.clone(), (shape.key, shape.val)))
         }).collect()
     } else { BTreeMap::new() };
-    Ok(Report { stages, unresolved, exports, context: ddp::Context::new(text) })
+    Ok(Report { stages, unresolved, exports, context })
 }
 
 fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dyn Fn(&Source) -> Option<RowShape>) -> Stage {

@@ -1,0 +1,15 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tag = import "ldbc.tag" : (int, (List(int), int));
+let mtag = import "ldbc.mtag.by_tag" : (int, int);
+let posts = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
+let mtag_idx = mtag | arrange;
+let tag_idx = tag | arrange;
+let tags = mtag_idx | join(tag_idx, (t, m, (name, _)) -> (m, (t, name)));
+let posts_idx = posts | arrange;
+let tags_idx = tags | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic4.s.posts" = posts_idx;
+-- Renderer: publish the existing arrangement.
+export "ic4.s.tags" = tags_idx;

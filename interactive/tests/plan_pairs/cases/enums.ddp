@@ -1,0 +1,4 @@
+type Entry = Empty | Number int | Pair (int, int);
+let rows = input 0 : (int, Entry);
+let values = rows | map((k, v) -> (k, v match (Empty (_ -> 0), Number (n -> n), Pair ((a, b) -> (a, b) add))));
+export "out" = values | map((k, n) -> (k, n inject Number));

@@ -1,0 +1,12 @@
+--- optimized
++++ projected
+@@ -23,7 +23,8 @@
+     let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
+     let best_rows = pairs + ::base;
+     let best_idx = best_rows | arrange;
+-    let best = best_idx | min;
++    let best_reduce = best_idx | min;
++    let best = best_reduce | map(((a, b, c), (_, d)) -> ((a, b, c), ((), d)));
+     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
+     let rkk = ::reads | map((rk, _) -> (rk, ()));
+     let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;

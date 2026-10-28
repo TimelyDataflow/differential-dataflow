@@ -1,0 +1,31 @@
+--- lowered
++++ optimized
+@@ -1,10 +1,7 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int, int, int), ());
+-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "ldbc.friend" : (int, (int, int));
+-let tag = import "ldbc.tag" : (int, (List(int), int));
+-let mtag = import "ldbc.mtag.by_tag" : (int, int);
+ let posts = import "ic4.s.posts" : (int, (int, int));
+ let tags = import "ic4.s.tags" : (int, (int, List(int)));
+ let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
+@@ -17,14 +14,12 @@
+ let seen_idx3 = seen_join2 | arrange;
+ let tags_idx = tags | arrange;
+ let seen = seen_idx3 | join(tags_idx, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
+-let before_filter = seen | filter((_, (_, created, start, _)) -> (created, start) lt);
+-let before_map = before_filter | map((key, _) -> (key, ()));
+-let before_idx = before_map | arrange;
++let before_rows = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ()));
++let before_idx = before_rows | arrange;
+ let before = before_idx | distinct;
+ let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
+ let during_idx = during | arrange;
+-let before_idx2 = before | arrange;
+-let fresh_join = during_idx | join(before_idx2, (key, row, ()) -> (key, row));
++let fresh_join = during_idx | join(before, (key, row, ()) -> (key, row));
+ let fresh_neg = fresh_join | negate;
+ let fresh = during + fresh_neg;
+ let counts_map = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ()));

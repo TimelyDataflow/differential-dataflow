@@ -1,0 +1,56 @@
+--- parsed
++++ lowered
+@@ -1,19 +1,42 @@
+ type Access = Owner | Edit | View;
+ type Member = User int | Group int;
++-- Time lanes: epoch.
+ let grants = input 0 : (int, (Member, Access));
+ let groups = input 1 : (int, Member);
+ let blocks = input 2 : (int, Member);
+-let members = groups | map((grp, who) -> (grp inject Member::Group, who)) | arrange;
++let members_map = groups | map((grp, who) -> (grp inject Member::Group, who));
++let members = members_map | arrange;
++barring: {
++    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
++    var barred : (Member, int);
++    let barred_idx = barred | arrange;
++    let members_idx = ::members | arrange;
++    let beyond = barred_idx | join(members_idx, (_grp, doc, who) -> (who, doc));
++    let barred_map = ::blocks | map((doc, who) -> (who, doc));
++    let barred_rows = barred_map + beyond;
++    let barred_idx2 = barred_rows | arrange;
++    -- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.
++    let barred_reduce = barred_idx2 | distinct;
++    set barred = barred_reduce;
++}
+ let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
+-barring: {
+-    var barred : (Member, int);
+-    let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
+-    set barred = (blocks | map((doc, who) -> (who, doc))) + beyond | distinct;
++sharing: {
++    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
++    var allowed : ((Member, int), Access);
++    let inherited_map = allowed | map(((who, doc), acc) -> (who, (doc, acc)));
++    let inherited_idx = inherited_map | arrange;
++    let members_idx = ::members | arrange;
++    let inherited = inherited_idx | join(members_idx, (_grp, (doc, acc), who) -> ((who, doc), acc));
++    let offered_map = ::grants | map((doc, (who, acc)) -> ((who, doc), acc));
++    let offered = offered_map + inherited;
++    let offered_idx = offered | arrange;
++    let barred_idx = ::barred | arrange;
++    let allowed_join = offered_idx | join(barred_idx, (pair, acc, ()) -> (pair, acc));
++    let allowed_neg = allowed_join | negate;
++    let allowed_rows = offered + allowed_neg;
++    let allowed_idx = allowed_rows | arrange;
++    let allowed_reduce = allowed_idx | min;
++    set allowed = allowed_reduce;
+ }
++-- Renderer: build an export arrangement.
+ export "access" = sharing::allowed;
+-sharing: {
+-    var allowed : ((Member, int), Access);
+-    set allowed = offered + (offered | join(barred, (pair, acc, ()) -> (pair, acc)) | negate) | min;
+-    let offered = (grants | map((doc, (who, acc)) -> ((who, doc), acc))) + inherited;
+-    let inherited = allowed | map(((who, doc), acc) -> (who, (doc, acc))) | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
+-}

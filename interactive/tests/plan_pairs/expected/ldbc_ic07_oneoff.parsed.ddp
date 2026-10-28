@@ -1,0 +1,13 @@
+let request = input 0 : ((int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = import "ldbc.message.by_creator" : (int, int);
+let likes = import "ldbc.likes.by_message" : (int, (int, int));
+let pals = import "ldbc.friend.pair" : ((int, int), ());
+let latest = request | map(((rid, who), ()) -> (who, rid)) | join(wrote, (who, rid, m) -> (m, (rid, who))) | join(likes, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m))) | min;
+let rows = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg))) | join(message, (m, (rid, who, liker, when), (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((who, liker), (rid, liker, when, m, ((text len, 0) gt, text, image) select, (when, created) sub)));
+let known = rows | join(pals, (pair, row, ()) -> (pair, row));
+let marked = (known | map((_, row) -> (row, 0))) + (rows + (known | negate) | map((_, row) -> (row, 1)));
+let ranked = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker, (rid, when, m, body, age, fresh))) | join(person, (liker, (rid, when, m, body, age, fresh), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((when neg, liker), (first, last, m, body, (age, 60000) div, fresh)))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) -> ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
+export "ic7x1.answer" = answer | arrange;

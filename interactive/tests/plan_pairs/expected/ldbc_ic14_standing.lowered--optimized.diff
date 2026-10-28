@@ -1,0 +1,29 @@
+--- lowered
++++ optimized
+@@ -2,9 +2,8 @@
+ -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let pals = import "ldbc.friend.pair" : ((int, int), ());
+-let answered_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);
+-let answered_map = answered_filter | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who));
+-let answered_idx = answered_map | arrange;
++let answered_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who));
++let answered_idx = answered_rows | arrange;
+ let message_idx = message | arrange;
+ let answered_join = answered_idx | join(message_idx, (_, who, (_, _, to, _, _, _, _, _, _, _, _, _, _)) -> (who, to));
+ let answered = answered_join | filter((who, to) -> (who, to) ne);
+@@ -13,11 +12,10 @@
+ let talks = talks_map + talks_map2;
+ let talks_idx = talks | arrange;
+ let weighted_reduce = talks_idx | count;
+-let weighted_idx = weighted_reduce | arrange;
+ let pals_idx = pals | arrange;
+-let weighted_join = weighted_idx | join(pals_idx, (pair, n, ()) -> (pair, n));
++let weighted_join = weighted_reduce | join(pals_idx, (pair, n, ()) -> (pair, n));
+ let weighted = weighted_join | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
+                            ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
+-let weighted_idx2 = weighted | arrange;
++let weighted_idx = weighted | arrange;
+ -- Renderer: publish the existing arrangement.
+-export "ic14.s.weighted" = weighted_idx2;
++export "ic14.s.weighted" = weighted_idx;

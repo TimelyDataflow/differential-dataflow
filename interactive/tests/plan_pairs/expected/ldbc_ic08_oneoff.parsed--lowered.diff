@@ -1,0 +1,37 @@
+--- parsed
++++ lowered
+@@ -1,8 +1,31 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int), ());
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let wrote = import "ldbc.message.by_creator" : (int, int);
+ let replies = import "ldbc.message.by_parent" : (int, int);
+-let top = request | map(((rid, who), ()) -> (who, rid)) | join(wrote, (_, rid, op) -> (op, rid)) | join(replies, (_, rid, id) -> (id, rid)) | join(message, (id, rid, (kind, created, who, _, _, _, _, _, _, _, _, _, _)) -> (rid, (kind, (created neg, id), who))) | filter((_, (kind, _, _)) -> (kind, 1) eq) | map((rid, (_, order, who)) -> (rid, (order, who))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+-let answer = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg neg, who))) | join(message, (id, (rid, rank, created, who), (_, _, _, _, content, _, _, _, _, _, _, _, _)) -> (who, (rid, rank, id, content, created))) | join(person, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
+-export "ic8x1.answer" = answer | arrange;
++let top_map = request | map(((rid, who), ()) -> (who, rid));
++let top_idx = top_map | arrange;
++let wrote_idx = wrote | arrange;
++let top_join = top_idx | join(wrote_idx, (_, rid, op) -> (op, rid));
++let top_idx2 = top_join | arrange;
++let replies_idx = replies | arrange;
++let top_join2 = top_idx2 | join(replies_idx, (_, rid, id) -> (id, rid));
++let top_idx3 = top_join2 | arrange;
++let message_idx = message | arrange;
++let top_join3 = top_idx3 | join(message_idx, (id, rid, (kind, created, who, _, _, _, _, _, _, _, _, _, _)) -> (rid, (kind, (created neg, id), who)));
++let top_filter = top_join3 | filter((_, (kind, _, _)) -> (kind, 1) eq);
++let top_map2 = top_filter | map((rid, (_, order, who)) -> (rid, (order, who)));
++let top_idx4 = top_map2 | arrange;
++let top = top_idx4 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
++let answer_map = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg neg, who)));
++let answer_idx = answer_map | arrange;
++let message_idx2 = message | arrange;
++let answer_join = answer_idx | join(message_idx2, (id, (rid, rank, created, who), (_, _, _, _, content, _, _, _, _, _, _, _, _)) -> (who, (rid, rank, id, content, created)));
++let answer_idx2 = answer_join | arrange;
++let person_idx = person | arrange;
++let answer = answer_idx2 | join(person_idx, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
++let answer_idx3 = answer | arrange;
++-- Renderer: publish the existing arrangement.
++export "ic8x1.answer" = answer_idx3;

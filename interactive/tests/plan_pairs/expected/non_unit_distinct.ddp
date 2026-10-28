@@ -1,0 +1,7 @@
+-- Time lanes: epoch.
+let input0 = input 0 : (int, int);
+let input0_idx = input0 | arrange;
+-- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.
+let out_reduce = input0_idx | distinct;
+-- Renderer: build an export arrangement.
+export "out" = out_reduce;

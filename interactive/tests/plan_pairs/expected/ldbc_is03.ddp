@@ -1,0 +1,18 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+let request = input 0 : ((int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend = import "ldbc.friend" : (int, (int, int));
+let ranked_map = request | map(((rid, who), ()) -> (who, rid));
+let ranked_idx = ranked_map | arrange;
+let friend_idx = friend | arrange;
+let ranked_join = ranked_idx | join(friend_idx, (_, rid, (f, since)) -> (f, (rid, since)));
+let ranked_idx2 = ranked_join | arrange;
+let person_idx = person | arrange;
+let ranked_join2 = ranked_idx2 | join(person_idx, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))));
+let ranked_idx3 = ranked_join2 | arrange;
+let ranked_reduce = ranked_idx3 | collect;
+let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
+let answer_idx = answer | arrange;
+-- Renderer: publish the existing arrangement.
+export "is3.answer" = answer_idx;

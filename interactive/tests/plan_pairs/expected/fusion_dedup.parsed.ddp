@@ -1,0 +1,5 @@
+let rows = input 0 : (int, int);
+let left = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
+let right = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 10) lt);
+let same = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
+export "out" = left + right + same;

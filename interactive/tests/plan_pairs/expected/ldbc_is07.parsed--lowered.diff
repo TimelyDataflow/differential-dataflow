@@ -1,0 +1,51 @@
+--- parsed
++++ lowered
+@@ -1,11 +1,43 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int), ());
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let by_parent = import "ldbc.message.by_parent" : (int, int);
+ let friend = import "ldbc.friend" : (int, (int, int));
+-let reply = request | map(((rid, m), ()) -> (m, rid)) | join(message, (m, rid, (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, op))) | join(by_parent, (_, (rid, op), id) -> (id, (rid, op))) | join(message, (id, (rid, op), (kind, created, who, _, text, _, _, _, _, _, _, _, _)) -> (kind, ((who, op), (rid, id, text, created)))) | filter((kind, _) -> (kind, 1) eq) | map((_, row) -> row);
+-let known = reply | map(((who, op), row) -> (who, (op, row))) | join(friend, (who, (op, row), (f, _)) -> ((f, op) eq, ((who, op), row))) | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ())) | distinct | map(((pair, row), ()) -> (pair, row));
+-let marked = (known | map(((who, _), row) -> (who, (row, 1)))) + (reply + (known | negate) | map(((who, _), row) -> (who, (row, 0))));
+-let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k)))) | collect | flatmap((_, entries) -> entries);
++let reply_map = request | map(((rid, m), ()) -> (m, rid));
++let reply_idx = reply_map | arrange;
++let message_idx = message | arrange;
++let reply_join = reply_idx | join(message_idx, (m, rid, (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, op)));
++let reply_idx2 = reply_join | arrange;
++let by_parent_idx = by_parent | arrange;
++let reply_join2 = reply_idx2 | join(by_parent_idx, (_, (rid, op), id) -> (id, (rid, op)));
++let reply_idx3 = reply_join2 | arrange;
++let message_idx2 = message | arrange;
++let reply_join3 = reply_idx3 | join(message_idx2, (id, (rid, op), (kind, created, who, _, text, _, _, _, _, _, _, _, _)) -> (kind, ((who, op), (rid, id, text, created))));
++let reply_filter = reply_join3 | filter((kind, _) -> (kind, 1) eq);
++let reply = reply_filter | map((_, row) -> row);
++let known_map = reply | map(((who, op), row) -> (who, (op, row)));
++let known_idx = known_map | arrange;
++let friend_idx = friend | arrange;
++let known_join = known_idx | join(friend_idx, (who, (op, row), (f, _)) -> ((f, op) eq, ((who, op), row)));
++let known_filter = known_join | filter((same, _) -> same);
++let known_map2 = known_filter | map((_, (pair, row)) -> ((pair, row), ()));
++let known_idx2 = known_map2 | arrange;
++let known_reduce = known_idx2 | distinct;
++let known = known_reduce | map(((pair, row), ()) -> (pair, row));
++let marked_map = known | map(((who, _), row) -> (who, (row, 1)));
++let marked_neg = known | negate;
++let marked_rows = reply + marked_neg;
++let marked_map2 = marked_rows | map(((who, _), row) -> (who, (row, 0)));
++let marked = marked_map + marked_map2;
++let marked_idx = marked | arrange;
++let person_idx = person | arrange;
++let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
++let ranked_idx = ranked_join | arrange;
++let ranked_reduce = ranked_idx | collect;
++let ranked = ranked_reduce | flatmap((_, entries) -> entries);
+ let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
+-export "is7.answer" = answer | arrange;
++let answer_idx = answer | arrange;
++-- Renderer: publish the existing arrangement.
++export "is7.answer" = answer_idx;

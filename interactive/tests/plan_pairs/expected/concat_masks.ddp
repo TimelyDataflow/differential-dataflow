@@ -1,0 +1,9 @@
+-- Time lanes: epoch.
+let rows = input 0 : ((int, int), ());
+let left = rows | map(((a, _), _) -> ((a, ()), ()));
+let merged_map = rows | map(((a, _), _) -> ((a, ()), ()));
+let merged_map2 = left | map(((a, _), _) -> ((a, ()), ()));
+let merged = merged_map + merged_map2;
+let out_map = merged | map(((a, _), ()) -> (a, ()));
+-- Renderer: build an export arrangement.
+export "out" = out_map;

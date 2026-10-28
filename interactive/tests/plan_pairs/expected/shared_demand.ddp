@@ -1,0 +1,13 @@
+-- Time lanes: epoch.
+let input0 = input 0 : (int, (int, int));
+let rows = input0 | map((k, v) -> (k, v));
+let first_map = rows | map((k, (a, _)) -> (k, a));
+let second_map = rows | map((k, (_, b)) -> (k, b));
+let rows_idx = rows | arrange;
+let counts_reduce = rows_idx | count;
+-- Renderer: build an export arrangement.
+export "first" = first_map;
+-- Renderer: build an export arrangement.
+export "second" = second_map;
+-- Renderer: publish the existing arrangement.
+export "counts" = counts_reduce;

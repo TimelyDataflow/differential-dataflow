@@ -1,0 +1,3 @@
+export "clock" = input 0 : ((int), ());
+export "iota:12" = input 1 : ((int), ());
+export "random:nodes=8,edges=12" = input 2 : ((int, int), ());

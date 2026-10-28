@@ -1,0 +1,74 @@
+--- parsed
++++ lowered
+@@ -1,3 +1,5 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int, List(int)), ());
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+@@ -9,10 +11,59 @@
+ let mtag = import "ldbc.mtag.by_tag" : (int, int);
+ let below_hl = import "ic12.s.below_hl" : (int, int);
+ let reply = import "ic12.s.reply" : (int, (int, int));
+-let intag = request | map(((rid, _, name), ()) -> (name, rid)) | join(classes, (_, rid, high) -> (high, rid)) | join(below_hl, (_, rid, low) -> (low, rid)) | join(by_class, (_, rid, t) -> (t, rid)) | join(tag, (t, rid, (name, _)) -> (t, (rid, name))) | join(mtag, (_, (rid, name), m) -> (m, (rid, name))) | join(message, (m, (rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, name), kind)) | filter((_, kind) -> (kind, 0) eq) | map((key, _) -> (key, ()));
+-let hits = request | map(((rid, who, _), ()) -> (who, rid)) | join(friend, (_, rid, (f, _)) -> (f, rid)) | join(reply, (f, rid, (id, parent)) -> ((rid, parent), (f, id))) | join(intag | map(((rid, m, name), ()) -> ((rid, m), name)), ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
+-let counts = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ())) | distinct | map(((rid, f, _), ()) -> ((rid, f), ())) | count;
+-let tagset = hits | map(((rid, f), (_, name)) -> ((rid, f, name), ())) | distinct | map(((rid, f, name), ()) -> ((rid, f), name)) | collect;
+-let ranked = counts | join(tagset, ((rid, f), n, list) -> (f, (rid, n, list))) | join(person, (f, (rid, n, list), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((n neg, f), (first, last, list)))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
++let intag_map = request | map(((rid, _, name), ()) -> (name, rid));
++let intag_idx = intag_map | arrange;
++let classes_idx = classes | arrange;
++let intag_join = intag_idx | join(classes_idx, (_, rid, high) -> (high, rid));
++let intag_idx2 = intag_join | arrange;
++let below_hl_idx = below_hl | arrange;
++let intag_join2 = intag_idx2 | join(below_hl_idx, (_, rid, low) -> (low, rid));
++let intag_idx3 = intag_join2 | arrange;
++let by_class_idx = by_class | arrange;
++let intag_join3 = intag_idx3 | join(by_class_idx, (_, rid, t) -> (t, rid));
++let intag_idx4 = intag_join3 | arrange;
++let tag_idx = tag | arrange;
++let intag_join4 = intag_idx4 | join(tag_idx, (t, rid, (name, _)) -> (t, (rid, name)));
++let intag_idx5 = intag_join4 | arrange;
++let mtag_idx = mtag | arrange;
++let intag_join5 = intag_idx5 | join(mtag_idx, (_, (rid, name), m) -> (m, (rid, name)));
++let intag_idx6 = intag_join5 | arrange;
++let message_idx = message | arrange;
++let intag_join6 = intag_idx6 | join(message_idx, (m, (rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, name), kind));
++let intag_filter = intag_join6 | filter((_, kind) -> (kind, 0) eq);
++let intag = intag_filter | map((key, _) -> (key, ()));
++let hits_map = request | map(((rid, who, _), ()) -> (who, rid));
++let hits_idx = hits_map | arrange;
++let friend_idx = friend | arrange;
++let hits_join = hits_idx | join(friend_idx, (_, rid, (f, _)) -> (f, rid));
++let hits_idx2 = hits_join | arrange;
++let reply_idx = reply | arrange;
++let hits_join2 = hits_idx2 | join(reply_idx, (f, rid, (id, parent)) -> ((rid, parent), (f, id)));
++let hits_idx3 = hits_join2 | arrange;
++let hits_map2 = intag | map(((rid, m, name), ()) -> ((rid, m), name));
++let hits_idx4 = hits_map2 | arrange;
++let hits = hits_idx3 | join(hits_idx4, ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
++let counts_map = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ()));
++let counts_idx = counts_map | arrange;
++let counts_reduce = counts_idx | distinct;
++let counts_map2 = counts_reduce | map(((rid, f, _), ()) -> ((rid, f), ()));
++let counts_idx2 = counts_map2 | arrange;
++let counts = counts_idx2 | count;
++let tagset_map = hits | map(((rid, f), (_, name)) -> ((rid, f, name), ()));
++let tagset_idx = tagset_map | arrange;
++let tagset_reduce = tagset_idx | distinct;
++let tagset_map2 = tagset_reduce | map(((rid, f, name), ()) -> ((rid, f), name));
++let tagset_idx2 = tagset_map2 | arrange;
++let tagset = tagset_idx2 | collect;
++let counts_idx3 = counts | arrange;
++let tagset_idx3 = tagset | arrange;
++let ranked_join = counts_idx3 | join(tagset_idx3, ((rid, f), n, list) -> (f, (rid, n, list)));
++let ranked_idx = ranked_join | arrange;
++let person_idx = person | arrange;
++let ranked_join2 = ranked_idx | join(person_idx, (f, (rid, n, list), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((n neg, f), (first, last, list))));
++let ranked_idx2 = ranked_join2 | arrange;
++let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+ let answer = ranked | map((rid, (rank, ((neg, f), (first, last, list)))) -> ((rid, rank), (f, first, last, list, neg neg)));
+-export "ic12x1.answer" = answer | arrange;
++let answer_idx = answer | arrange;
++-- Renderer: publish the existing arrangement.
++export "ic12x1.answer" = answer_idx;

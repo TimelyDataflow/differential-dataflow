@@ -1,0 +1,24 @@
+let request = input 0 : ((int, int, int), ());
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals = import "ldbc.friend.pair" : ((int, int), ());
+let weighted = import "ic14.s.weighted" : (int, (int, int));
+let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
+dist: {
+    let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost))) | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
+    set dist = starts + grow | min | map(((rid, node), cost) -> ((rid, node, cost), ()));
+}
+let best = dist::dist | map(((rid, node, cost), ()) -> ((rid, node), cost));
+let pred = dist::dist | map(((rid, u, cost), ()) -> (u, (rid, cost))) | join(weighted, (u, (rid, cost), (v, w)) -> ((rid, v), (u, (cost, w) add))) | join(best, ((rid, v), (u, via), least) -> ((rid, v), (u, via, least))) | filter((_, (_, via, least)) -> (via, least) eq) | map((key, (u, _, _)) -> (key, u));
+let targets = request | map(((rid, _, to), ()) -> ((rid, to), ())) | join(best, (key, (), _) -> (key, ()));
+back: {
+    let up = back | join(pred, ((rid, _), (), u) -> ((rid, u), ()));
+    set back = targets + up | distinct;
+}
+let next = pred | join(back::back, ((rid, v), u, ()) -> ((rid, u), v)) | min;
+let first = request | map(((rid, from, _), ()) -> ((rid, from), ())) | join(back::back, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
+walk: {
+    let step = walk | map(((rid, node, path), ()) -> ((rid, node), path)) | join(next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
+    set walk = first + step;
+}
+let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path)) | join(targets, ((rid, node), path, ()) -> ((rid, node), path)) | join(best, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
+export "ic14x1.answer" = answer | arrange;

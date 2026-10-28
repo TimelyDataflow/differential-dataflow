@@ -1,0 +1,79 @@
+--- parsed
++++ lowered
+@@ -1,25 +1,59 @@
++-- Time lanes: epoch.
+ let intents = input 0 : ((int, int, int), (int));
+-let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+-let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
++let reads_filter = intents | filter(((_, r, _), _) -> (r, 1) eq);
++let reads = reads_filter | map(((rid, _, k), (e)) -> ((rid, k), (e)));
++let wr_all_filter = intents | filter(((_, r, _), _) -> (r, 0) eq);
++let wr_all = wr_all_filter | map(((wid, _, k), (v)) -> ((wid, k), (v)));
+ let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+ res: {
+-    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+-    let writes = wid + (wr_bad | negate);
++    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
++    var rollback : ((int), ());
++    let wid_idx = ::wid | arrange;
++    let rollback_idx = rollback | arrange;
++    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
++    let writes_neg = wr_bad | negate;
++    let writes = ::wid + writes_neg;
+     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
+-    let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
+-    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v))) | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
+-    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
+-    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
++    let rk = ::reads | map(((rid, k), (e)) -> ((k), (rid, e)));
++    let rk_idx = rk | arrange;
++    let wk_idx = wk | arrange;
++    let pairs_join = rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
++    let pairs = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
++    let best_map = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v)));
++    let best_idx = best_map | arrange;
++    let best = best_idx | min;
++    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
++    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
+     let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
+-    let rkk = reads | map((rk, _) -> (rk, ()));
+-    let unseen = rkk + (seen | negate);
+-    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ())) | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
+-    set rollback = bad_seen + bad_absent | distinct;
++    let rkk = ::reads | map((rk, _) -> (rk, ()));
++    let unseen_neg = seen | negate;
++    let unseen = rkk + unseen_neg;
++    let unseen_idx = unseen | arrange;
++    let reads_idx = ::reads | arrange;
++    let bad_absent_join = unseen_idx | join(reads_idx, ((rid, _), (), (e)) -> ((rid, e), ()));
++    let bad_absent_filter = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne);
++    let bad_absent = bad_absent_filter | map(((rid, _), ()) -> ((rid), ()));
++    let rollback_rows = bad_seen + bad_absent;
++    let rollback_idx2 = rollback_rows | arrange;
++    let rollback_reduce = rollback_idx2 | distinct;
++    set rollback = rollback_reduce;
+ }
+ let rb = res::rollback;
+-let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+-let committed = wid + (wbad | negate);
+-let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
++let wid_idx = wid | arrange;
++let rb_idx = rb | arrange;
++let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
++let committed_neg = wbad | negate;
++let committed = wid + committed_neg;
++let current_map = committed | map(((wid), (k, v)) -> ((k), (wid neg, v)));
++let current_idx = current_map | arrange;
++let current = current_idx | min;
++let state_map = current | map((k, (_, v)) -> (k, (v)));
++let retire_map = current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v)));
++let retire_neg = retire_map | negate;
++let retire_rows = intents + retire_neg;
++-- Renderer: build an export arrangement.
+ export "rollback" = rb;
+-export "state" = current | map((k, (_, v)) -> (k, (v)));
+-export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);
++-- Renderer: build an export arrangement.
++export "state" = state_map;
++-- Renderer: build an export arrangement.
++export "retire" = retire_rows;

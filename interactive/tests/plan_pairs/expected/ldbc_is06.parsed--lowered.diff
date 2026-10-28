@@ -1,0 +1,28 @@
+--- parsed
++++ lowered
+@@ -1,7 +1,23 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let request = input 0 : ((int, int), ());
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let forum = import "ldbc.forum" : (int, (List(int), int, int));
+ let root_of = import "ldbc.message.root" : (int, int);
+-let answer = request | map(((rid, m), ()) -> (m, rid)) | join(root_of, (_, rid, root) -> (root, rid)) | join(message, (_, rid, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, rid)) | join(forum, (f, rid, (title, _, moderator)) -> (moderator, (rid, f, title))) | join(person, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (f, title, moderator, first, last)));
+-export "is6.answer" = answer | arrange;
++let answer_map = request | map(((rid, m), ()) -> (m, rid));
++let answer_idx = answer_map | arrange;
++let root_of_idx = root_of | arrange;
++let answer_join = answer_idx | join(root_of_idx, (_, rid, root) -> (root, rid));
++let answer_idx2 = answer_join | arrange;
++let message_idx = message | arrange;
++let answer_join2 = answer_idx2 | join(message_idx, (_, rid, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, rid));
++let answer_idx3 = answer_join2 | arrange;
++let forum_idx = forum | arrange;
++let answer_join3 = answer_idx3 | join(forum_idx, (f, rid, (title, _, moderator)) -> (moderator, (rid, f, title)));
++let answer_idx4 = answer_join3 | arrange;
++let person_idx = person | arrange;
++let answer = answer_idx4 | join(person_idx, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (f, title, moderator, first, last)));
++let answer_idx5 = answer | arrange;
++-- Renderer: publish the existing arrangement.
++export "is6.answer" = answer_idx5;

@@ -1,0 +1,25 @@
+let intents = input 0 : ((int, int, int), (int));
+let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
+let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+res: {
+    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let writes = wid + (wr_bad | negate);
+    let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
+    let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
+    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v))) | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
+    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
+    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
+    let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
+    let rkk = reads | map((rk, _) -> (rk, ()));
+    let unseen = rkk + (seen | negate);
+    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ())) | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
+    set rollback = bad_seen + bad_absent | distinct;
+}
+let rb = res::rollback;
+let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let committed = wid + (wbad | negate);
+let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+export "rollback" = rb;
+export "state" = current | map((k, (_, v)) -> (k, (v)));
+export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);

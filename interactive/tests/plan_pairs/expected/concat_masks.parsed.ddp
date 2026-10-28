@@ -1,0 +1,4 @@
+let rows = input 0 : ((int, int), ());
+let left = rows | map((row, ()) -> (row, ()));
+let merged = rows + left;
+export "out" = merged | map(((a, _), ()) -> (a, ()));

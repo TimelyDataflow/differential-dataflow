@@ -1,0 +1,38 @@
+-- Authored comparison: arrange members in the parent and share it.
+-- Access control: documents are shared with users and with groups,
+-- groups contain users and other groups, and a block on a member
+-- reaches everyone inside it.
+
+type Access = Owner | Edit | View;           -- decreasing levels of access
+type Member = User int | Group int;          -- a user, or group of members
+
+let grants = input 0 : (int, (Member, Access));   -- doc -> (member, access)
+let groups = input 1 : (int, Member);             -- group id -> member
+let blocks = input 2 : (int, Member);             -- doc -> blocked member
+
+-- Wrap group ids with the Group variant, to not match users.
+let members = groups | map((grp, who) -> (grp inject Group, who)) | arrange;
+
+-- Barrings spread from `blocks` through `groups` to their members.
+let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
+barring: {
+   var barred : (Member, int);     -- member -> doc: expanded blocked list.
+   let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
+   set barred = blocks | map((doc, who) -> (who, doc)) + beyond | distinct;
+}
+
+-- Access spreads from `grants` through `groups`, except where `barred`.
+export "access" = sharing::allowed;
+sharing: {
+   var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
+   set allowed = offered
+               - (offered | join(barred, (pair, acc, ()) -> (pair, acc)))
+               | min;
+
+   let offered = grants | map((doc, (who, acc)) -> ((who, doc), acc))
+               + inherited;
+
+   let inherited = allowed
+         | map(((who, doc), acc) -> (who, (doc, acc)))
+         | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
+}

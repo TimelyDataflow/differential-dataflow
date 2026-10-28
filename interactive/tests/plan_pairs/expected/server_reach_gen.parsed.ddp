@@ -1,0 +1,7 @@
+let edges = import "random:nodes=8,edges=12" | map(((src, dst), ()) -> ((src), (dst)));
+let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
+reach: {
+    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+    set reach = roots + proposals | distinct;
+}
+export "result" = reach::reach | inspect(reach);

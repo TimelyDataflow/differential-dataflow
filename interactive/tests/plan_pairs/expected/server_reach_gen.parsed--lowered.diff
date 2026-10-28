@@ -1,0 +1,28 @@
+--- parsed
++++ lowered
+@@ -1,7 +1,20 @@
+-let edges = import "random:nodes=8,edges=12" | map(((src, dst), ()) -> ((src), (dst)));
+-let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
++let random_nodes_8_edges_12 = import "random:nodes=8,edges=12" : ((int, int), ());
++let input0 = input 0 : ((int), ());
++let edges = random_nodes_8_edges_12 | map(((src, dst), ()) -> ((src), (dst)));
++let roots = input0 | map((n, ()) -> (n, ()));
+ reach: {
+-    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+-    set reach = roots + proposals | distinct;
++    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
++    var reach : ((int), ());
++    let reach_idx = reach | arrange;
++    let edges_idx = ::edges | arrange;
++    let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));
++    let reach_rows = ::roots + proposals;
++    let reach_idx2 = reach_rows | arrange;
++    let reach_reduce = reach_idx2 | distinct;
++    set reach = reach_reduce;
+ }
+-export "result" = reach::reach | inspect(reach);
++let result_inspect = reach::reach | inspect(reach);
++-- Renderer: build an export arrangement.
++export "result" = result_inspect;

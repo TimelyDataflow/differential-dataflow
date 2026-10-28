@@ -1,0 +1,6 @@
+-- Time lanes: epoch.
+let rows = input 0 : (int, ());
+let arranged = rows | arrange;
+let counts_reduce = arranged | count;
+-- Renderer: publish the existing arrangement.
+export "counts" = counts_reduce;
