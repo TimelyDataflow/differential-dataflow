@@ -703,6 +703,19 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.collect_types(); p.parse_program() }
 
+/// The resolved type declarations and lambda scope, retained by the plan printer.
+pub(crate) fn print_context(input: &str) -> (Vec<(String, Vec<(String, corgi::Shape)>)>, corgi::Scope, std::collections::BTreeSet<String>) {
+    let mut p = Parser::new(tokenize(input));
+    p.collect_types();
+    let scope = p.lambda_scope().clone();
+    let types = p.type_order.iter().map(|name| (name.clone(), p.types[name].clone())).collect();
+    let sources = p.tokens.iter().filter_map(|token| match token {
+        Token::Lambda { pat, body } => Some(format!("let {pat} = input in {body}")),
+        _ => None,
+    }).collect();
+    (types, scope, sources)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse, Stmt};

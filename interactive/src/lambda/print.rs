@@ -25,6 +25,10 @@ pub(crate) enum Check {
 
 /// Read the graph directly. Unknown input shapes prevent compilation and checking.
 pub(crate) fn print(lambda: &Lambda, input: Option<&Shape>, check: bool) -> Printed {
+    print_named(lambda, input, check, &[])
+}
+
+pub(crate) fn print_named(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(String, Vec<(String, Shape)>)]) -> Printed {
     let result = (|| {
         let original = lambda.graph()?;
         let Some(input) = input else {
@@ -36,7 +40,7 @@ pub(crate) fn print(lambda: &Lambda, input: Option<&Shape>, check: bool) -> Prin
         corgi::shape_of(original, input)?;
         let compiled = corgi::optimize(original);
         let graph = prepare(&compiled, input)?;
-        let mut printer = Printer::default();
+        let mut printer = Printer { types: types.to_vec(), ..Printer::default() };
         match printer.lambda(&graph, input) {
             Ok((pattern, body)) => {
                 let declarations = printer.declarations.join(" ");
@@ -136,6 +140,7 @@ fn project(b: &mut Builder<NumOp>, x: usize, input: &Shape, target: &Shape) -> R
 #[derive(Default)]
 struct Printer {
     declarations: Vec<String>,
+    types: Vec<(String, Vec<(String, Shape)>)>,
 }
 
 impl Printer {
@@ -150,8 +155,14 @@ impl Printer {
     }
 
     fn enum_name(&mut self, lanes: &[Option<Shape>]) -> Result<String, String> {
+        if let Some((name, _)) = self.types.iter().find(|(_, variants)| {
+            variants.len() == lanes.len() && variants.iter().zip(lanes).all(|((_, shape), lane)| lane.as_ref() == Some(shape))
+        }) { return Ok(name.clone()); }
         let shapes = lanes.iter().map(|s| s.as_ref().map(|s| self.shape(s)).transpose()).collect::<Result<Vec<_>, _>>()?;
-        let name = format!("S{}", self.declarations.len());
+        let mut index = self.declarations.len();
+        while self.types.iter().any(|(name, _)| *name == format!("S{index}"))
+            || self.declarations.iter().any(|d| d.starts_with(&format!("enum S{index} = "))) { index += 1; }
+        let name = format!("S{index}");
         let variants = shapes.iter().enumerate().map(|(i, s)| match s {
             Some(s) => format!("V{i} {s}"), None => format!("V{i}"),
         }).collect::<Vec<_>>().join(" | ");
@@ -260,7 +271,14 @@ impl Printer {
                 Op::Pattern(_) => return Ok(x.into()),
                 Op::Project(_) => return Err("project through a reference has no surface spelling".into()),
                 Op::Weave => return Err("weave has no surface spelling".into()),
-                Op::Inject(tag, lanes) => format!("inject {}::V{tag}", self.enum_name(lanes)?),
+                Op::Inject(tag, lanes) => {
+                    let mut resolved = lanes.clone();
+                    resolved[*tag] = Some(shape.clone());
+                    if let Some((name, variants)) = self.types.iter().find(|(_, variants)| {
+                        variants.len() == resolved.len() && variants.iter().zip(&resolved).all(|((_, s), lane)| lane.as_ref() == Some(s))
+                    }) { format!("inject {name}::{}", variants[*tag].0) }
+                    else { format!("inject {}::V{tag}", self.enum_name(lanes)?) }
+                }
                 Op::Branch(n) => format!("branch {n}"),
                 Op::Chunk(n) => format!("chunk {n}"),
                 Op::MapList(body) => {
@@ -562,7 +580,7 @@ mod tests {
         printed.text
     }
 
-    fn graph_lambda(graph: G) -> Lambda { Lambda { src: "this is deliberately not the graph".into(), graph: Ok(Arc::new(graph)) } }
+    fn graph_lambda(graph: G) -> Lambda { Lambda { src: "this is deliberately not the graph".into(), graph: Ok(Arc::new(graph)), added_by: None } }
     fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
     fn list(s: Shape) -> Shape { Shape::List(Box::new(s)) }
 

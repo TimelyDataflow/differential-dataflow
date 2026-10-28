@@ -1,4 +1,7 @@
-//! Read-only planning and diagnostic text. This is not an execution or serialization format.
+//! Read-only planning, diagnostic reports, and final-stage DDP output.
+
+pub mod ddp;
+mod compare;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -17,6 +20,7 @@ pub struct Report {
     pub unresolved: Vec<String>,
     /// Inferred exports for planning another program. Empty if preparation is incomplete.
     pub exports: BTreeMap<String, RowShape>,
+    context: ddp::Context,
 }
 
 /// One scope tree and its inferred shapes, before rendering.
@@ -42,6 +46,11 @@ pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<R
     })?
 }
 
+/// Plan a program and emit its final stage in today's DDP syntax.
+pub fn emit_ddp(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<ddp::Emitted, String> {
+    report(text, source)?.emit_ddp()
+}
+
 fn build_report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
     let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
     let mut catalog = BTreeMap::new();
@@ -50,7 +59,7 @@ fn build_report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result
     for import in &program.root.imports {
         match &import.from {
             Source::Trace(name) => {
-                let shape = catalog.entry(name.clone()).or_insert_with(|| source(name));
+                let shape = catalog.entry(name.clone()).or_insert_with(|| source(name).or_else(|| crate::server::generated_shape(name)));
                 if let Some(shape) = shape {
                     if import.shape.as_ref().is_some_and(|declared| declared != shape) {
                         return Err(format!("import {} declares {} but its provider has {}", quote(name), row(import.shape.as_ref().unwrap()), row(shape)));
@@ -132,7 +141,7 @@ fn build_report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result
             shape.map(|shape| (export.name.clone(), (shape.key, shape.val)))
         }).collect()
     } else { BTreeMap::new() };
-    Ok(Report { stages, unresolved, exports })
+    Ok(Report { stages, unresolved, exports, context: ddp::Context::new(text) })
 }
 
 fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dyn Fn(&Source) -> Option<RowShape>) -> Stage {

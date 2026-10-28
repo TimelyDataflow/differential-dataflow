@@ -198,6 +198,9 @@ pub struct Scope {
     /// for a scope built without them; a reader uses it only when it has one entry per item.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Source bindings for printing. These are not dataflow uses: fusion may erase a binding.
+    #[serde(skip)]
+    pub names: Vec<(String, Ref)>,
     pub binds: Vec<Bind>,
     pub exports: Vec<Export>,
 }
@@ -338,6 +341,15 @@ impl Scope {
         }
         for b in &mut self.binds { remap(&mut b.value); }
         for e in &mut self.exports { remap(&mut e.value); }
+        // Source names are provenance, not roots. Drop names for removed values
+        // before remapping the surviving imports and child exports.
+        self.names.retain(|(_, r)| match r {
+            Ref::Local(i) => !dead[*i],
+            Ref::Import(i) => imports[*i],
+            Ref::ChildExport(i, e) => !dead[*i] && exports[*i][*e],
+            Ref::Var(_) => true,
+        });
+        for (_, r) in &mut self.names { remap(r); }
         changed
     }
 
@@ -347,6 +359,7 @@ impl Scope {
         for item in self.items.iter_mut() { item.for_each_ref(&mut f); }
         for b in self.binds.iter_mut() { f(&mut b.value); }
         for e in self.exports.iter_mut() { f(&mut e.value); }
+        for (_, r) in &mut self.names { f(r); }
     }
 
     /// Count, for each item, the references to it (`Local` or `ChildExport`)
@@ -420,6 +433,7 @@ impl Scope {
             dead[j] = true;
             changed = true;
         }
+        self.names.retain(|(_, r)| !matches!(r, Ref::Local(k) if dead[*k]));
         changed
     }
 
@@ -589,6 +603,7 @@ mod tests {
                 Item::Op(Node::Concat(vec![Ref::Import(1), Ref::Local(0)])),
             ],
             labels: vec![],
+            names: vec![],
             binds: vec![Bind { var: 0, value: Ref::Local(1) }], // reach <- body
             exports: vec![Export { name: "reach".into(), value: Ref::Var(0), shape: None }],
         };

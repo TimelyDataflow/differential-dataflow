@@ -135,7 +135,9 @@ fn not_at(lanes: &[u64]) -> Lambda {
     for (name, lane) in names.iter().zip(lanes).skip(1) {
         body = format!("({body}, ({name}, {lane}) ne) or");
     }
-    Lambda::new(format!("let (_, (_, ({}))) = input in {body}", names.join(", ")), &corgi::Scope::default())
+    let mut lambda = Lambda::new(format!("let (_, (_, ({}))) = input in {body}", names.join(", ")), &corgi::Scope::default());
+    lambda.added_by = Some("as-of drop");
+    lambda
 }
 
 /// For each `(item, uses)`, a filter item right after `item`, read by those uses in its place.

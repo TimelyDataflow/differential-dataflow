@@ -91,7 +91,8 @@ pub use self::evaluate::evaluate;
 pub use self::sources::gen_field_seeded;
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
 use self::bind::Binding;
-use self::sources::{canonical_source_name, clock_rows, generated_shape, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
+use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
+pub(crate) use self::sources::generated_shape;
 
 /// A published export as its readers see it: a trace of corgi chunks.
 #[derive(Clone)]

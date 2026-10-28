@@ -517,6 +517,7 @@ fn lower_scope_tree(
         }
     }
     drop(deps);
+    let mut names = Vec::new();
     let mut ready: BTreeSet<usize> = (0..pending.len()).filter(|&i| remaining[i] == 0).collect();
     while let Some(pos) = ready.pop_first() {
         for &u in &users[pos] {
@@ -529,6 +530,7 @@ fn lower_scope_tree(
                 let e = lets.remove(&name).unwrap();
                 s.statement = name.clone();
                 let r = s.lower_expr(e);
+                names.push((name.clone(), r.clone()));
                 s.env.insert(RefName::Plain(name.clone()), r.clone());
                 s.env.insert(RefName::Path(PathKey { anchor: address.to_vec(), target: address.to_vec(), field: name }), r);
             },
@@ -588,7 +590,7 @@ fn lower_scope_tree(
         }
     }
 
-    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, binds, exports }
+    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, names, binds, exports }
 }
 
 #[cfg(test)]

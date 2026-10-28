@@ -46,6 +46,8 @@ pub(crate) mod print;
 pub struct Lambda {
     pub(crate) src: String,
     pub(crate) graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
+    /// Printer provenance only; it never affects compilation or equality.
+    pub(crate) added_by: Option<&'static str>,
 }
 
 impl Lambda {
@@ -54,7 +56,7 @@ impl Lambda {
     /// a type error.
     pub(crate) fn new(src: String, scope: &corgi::Scope) -> Self {
         let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
-        Lambda { src, graph }
+        Lambda { src, graph, added_by: None }
     }
     /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
     /// on an argument written over `pattern`'s names, and is bound to the name `body` is given for

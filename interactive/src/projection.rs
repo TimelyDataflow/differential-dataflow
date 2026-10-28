@@ -793,7 +793,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                         remap_ref(r, &remap);
                     }
                     if let PlannedItem::Op { output, .. } = planned {
-                        if let Some(lambda) = mask_site_lambda(&identity, output, live) {
+                        if let Some(mut lambda) = mask_site_lambda(&identity, output, live) {
+                            lambda.added_by = Some("projection pushdown");
                             let fields = output
                                 .key
                                 .iter()
@@ -835,7 +836,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             labels.push(scope.labels[i].clone());
         }
         if let Some(output) = reduced_output {
-            if let Some(lambda) = mask_site_lambda(&identity, output, live) {
+            if let Some(mut lambda) = mask_site_lambda(&identity, output, live) {
+                lambda.added_by = Some("projection pushdown");
                 let fields = output
                     .key
                     .iter()
@@ -862,6 +864,9 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
     }
     for export in &mut scope.exports {
         remap_ref(&mut export.value, &remap);
+    }
+    for (_, value) in &mut scope.names {
+        remap_ref(value, &remap);
     }
     scope.items = items;
     if labeled {
