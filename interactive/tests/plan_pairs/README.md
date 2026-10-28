@@ -45,6 +45,12 @@ schedule after introducing masks. Unit tests in `src/passes/tests.rs` evaluate
 each accepted map rewrite on generated batches of 0, 1, 17, and 64 rows. They
 cover this manifest and the 81 other checked-in review programs, including BI.
 
+`hoist-arranges` shares explicit arrangements of the same binding across scopes,
+following unchanged parent imports. It keeps a lone child arrangement in place.
+`collapse-parent-arranges` removes an arrange of an already arranged parent import,
+including trace imports and reduction results. Both rules are independently
+switchable. Hoisted statement labels retain their source name in the ancestor scope.
+
 Every emitted reduction uses `reduce(...)`, including the parsed view. Parsed
 `distinct` explicitly keys by the whole record because that view has no shape
 inference. Its extra maps can differ from the optimized unit-valued form.

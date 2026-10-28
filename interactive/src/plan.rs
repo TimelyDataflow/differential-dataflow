@@ -120,12 +120,13 @@ fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&
     let mut result = Vec::new();
     for change in changes {
         match change {
-            Change::Structural { path, action, from, to } => result.push(if *action == "removed dead" {
-                format!("{action} {path}/{}#{} (name before compaction)", quote(&from.label), from.ordinal)
-            } else {
-                format!("{action} {path}/{}#{} into {path}/{}#{} (names before compaction)",
-                    quote(&from.label), from.ordinal, quote(&to.label), to.ordinal)
-            }),
+            Change::Structural { path, action, from, to } if from.label == to.label && from.ordinal == to.ordinal => {
+                result.push(format!("{action} {path}/{}#{} (name before compaction)", quote(&from.label), from.ordinal));
+            }
+            Change::Structural { path, action, from, to } => result.push(format!(
+                "{action} {path}/{}#{} into {path}/{}#{} (names before compaction)",
+                quote(&from.label), from.ordinal, quote(&to.label), to.ordinal,
+            )),
             Change::Masked(masked) => {
                 result.push(format!("{masked} field masks and map fusions"));
                 result.extend(changed_statements(before.unwrap(), after, source, "masked"));

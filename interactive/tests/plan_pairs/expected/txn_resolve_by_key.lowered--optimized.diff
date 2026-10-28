@@ -1,6 +1,6 @@
 --- lowered
 +++ optimized
-@@ -2,12 +2,8 @@
+@@ -2,21 +2,17 @@
  -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
  let store = import "store" : ((int), (int, int));
  let intents = input 0 : ((int, int, int), (int));
@@ -15,7 +15,26 @@
  let read_entries_idx = read_entries | arrange;
  let store_idx = store | arrange;
  let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
-@@ -46,8 +42,7 @@
++let wid_idx = wid | arrange;
+ res: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var rollback;
+-    let wid_idx = ::wid | arrange;
+     let rollback_idx = rollback | arrange;
+-    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
++    let wr_bad = ::wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
+     let writes_neg = wr_bad | negate;
+     let writes = ::wid + writes_neg;
+     let write_entries = writes | map(((wid), (k, v)) -> ((k), (0, wid, v)));
+@@ -37,7 +33,6 @@
+     set rollback = rollback_reduce;
+ }
+ let rb = res::rollback;
+-let wid_idx = wid | arrange;
+ let rb_idx = rb | arrange;
+ let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
+ let committed_neg = wbad | negate;
+@@ -46,8 +41,7 @@
  let latest_idx = latest_map | arrange;
  let latest = latest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));

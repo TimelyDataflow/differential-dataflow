@@ -2,12 +2,12 @@
 let intents = input 0 : ((int, int, int), (int));
 let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
 let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
+let wid_idx = wid | arrange;
 res: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var rollback;
-    let wid_idx = ::wid | arrange;
     let rollback_idx = rollback | arrange;
-    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
+    let wr_bad = ::wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
     let writes_neg = wr_bad | negate;
     let writes = ::wid + writes_neg;
     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
@@ -32,7 +32,6 @@ res: {
     set rollback = rollback_reduce;
 }
 let rb = res::rollback;
-let wid_idx = wid | arrange;
 let rb_idx = rb | arrange;
 let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
 let committed_neg = wbad | negate;

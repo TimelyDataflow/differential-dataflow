@@ -5,10 +5,10 @@
 //!
 //! # Why a tree
 //!
-//! A scope boundary is a real semantic barrier: an operator cannot be hoisted
-//! across it, and an arrangement cannot be shared across it freely. So the
-//! boundary is structural: a `Scope` owns its items, and nothing crosses except
-//! through an explicit import or export.
+//! A scope boundary is a real semantic barrier: rewrites must account for its
+//! imports, exports, and feedback. An arrangement of an unchanged parent import
+//! can be shared through an explicit import of the arranged parent binding.
+//! A `Scope` owns its items, and nothing crosses except through an explicit edge.
 //!
 //! The guiding principle throughout: make explicit anything a consumer would
 //! otherwise have to analyze the IR to recover. Feedback variables are a

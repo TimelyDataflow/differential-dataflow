@@ -1,6 +1,7 @@
 //! Scope-tree rewrites. `run` is the preparation schedule; all host choices are inputs.
 
 mod structural;
+mod arrangements;
 mod canonical;
 pub mod projection;
 mod as_of;
@@ -45,6 +46,10 @@ type Observe<'a> = dyn FnMut(&str, &Scope, &[usize], &'static str, usize, usize)
 pub struct Config {
     /// Prune unread computations, collapse arranges, fuse linear chains, merge identical operators.
     pub structural: bool,
+    /// Remove arranges of parent bindings that already carry arrangements.
+    pub collapse_parent_arranges: bool,
+    /// Share explicit arrangements of unchanged imports across scopes.
+    pub hoist_arranges: bool,
     /// Compose adjacent maps, drop identity maps, cancel paired negations.
     pub compose_maps: bool,
     /// Remove imports, child exports, and aliases nothing reads.
@@ -61,10 +66,10 @@ impl Default for Config {
 
 impl Config {
     /// The names `parse` takes, in schedule order.
-    pub const NAMES: [&'static str; 5] = ["structural", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
+    pub const NAMES: [&'static str; 7] = ["structural", "collapse-parent-arranges", "hoist-arranges", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
 
-    pub fn all() -> Self { Self { structural: true, compose_maps: true, dead_bindings: true, projection: true, as_of_drop: true } }
-    pub fn none() -> Self { Self { structural: false, compose_maps: false, dead_bindings: false, projection: false, as_of_drop: false } }
+    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_arranges: true, compose_maps: true, dead_bindings: true, projection: true, as_of_drop: true } }
+    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_arranges: false, compose_maps: false, dead_bindings: false, projection: false, as_of_drop: false } }
 
     /// Start from the default passes and apply comma-separated words in order: `all`, `none`, a pass
     /// name to turn it on, or `-name` to turn it off. So `none`, `-projection` and
@@ -86,13 +91,15 @@ impl Config {
 
     /// The passes switched off, by name, in schedule order.
     pub fn off(&self) -> Vec<&'static str> {
-        let on = [self.structural, self.compose_maps, self.dead_bindings, self.projection, self.as_of_drop];
+        let on = [self.structural, self.collapse_parent_arranges, self.hoist_arranges, self.compose_maps, self.dead_bindings, self.projection, self.as_of_drop];
         Self::NAMES.into_iter().zip(on).filter(|(_, on)| !on).map(|(name, _)| name).collect()
     }
 
     fn flag(&mut self, name: &str) -> Option<&mut bool> {
         match name {
             "structural" => Some(&mut self.structural),
+            "collapse-parent-arranges" => Some(&mut self.collapse_parent_arranges),
+            "hoist-arranges" => Some(&mut self.hoist_arranges),
             "compose-maps" => Some(&mut self.compose_maps),
             "dead-bindings" => Some(&mut self.dead_bindings),
             "projection" => Some(&mut self.projection),
@@ -140,7 +147,7 @@ pub fn run(
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
         });
     });
-    for (on, name) in [(config.structural, "structural"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
+    for (on, name) in [(config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_arranges, "hoist-arranges"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
         if !on { changes.push(Change::Off(name)); }
     }
     observe("after optimizer", program, &changes);
@@ -203,6 +210,9 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
     loop {
         if config.structural { structural::optimize_scope(&mut program.root, "root", observe); }
         let mut changed = false;
+        if config.collapse_parent_arranges || config.hoist_arranges {
+            changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_arranges, observe);
+        }
         if config.compose_maps {
             let (shapes, _) = shapes::infer(program, source);
             changed |= canonical::canonical_linear(&mut program.root, &shapes);

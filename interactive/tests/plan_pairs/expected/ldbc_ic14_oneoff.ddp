@@ -8,8 +8,7 @@ dist: {
     var dist;
     let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
     let grow_idx = grow_map | arrange;
-    let weighted_idx = ::weighted | arrange;
-    let grow = grow_idx | join(weighted_idx, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
+    let grow = grow_idx | join(::weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
     let dist_rows = ::starts + grow;
     let dist_idx = dist_rows | arrange;
     let dist_reduce = dist_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
@@ -28,18 +27,17 @@ let pred = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq) | map((k
 let targets_map = request | map(((rid, _, to), ()) -> ((rid, to), ()));
 let targets_idx = targets_map | arrange;
 let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
+let pred_idx3 = pred | arrange;
 back: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var back;
     let back_idx = back | arrange;
-    let pred_idx = ::pred | arrange;
-    let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
+    let up = back_idx | join(::pred_idx3, ((rid, _), (), u) -> ((rid, u), ()));
     let back_rows = ::targets + up;
     let back_idx2 = back_rows | arrange;
     let back_reduce = back_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
     set back = back_reduce;
 }
-let pred_idx3 = pred | arrange;
 let next_idx = back::back | arrange;
 let next_join = pred_idx3 | join(next_idx, ((rid, v), u, ()) -> ((rid, u), v));
 let next_idx2 = next_join | arrange;
@@ -52,8 +50,7 @@ walk: {
     var walk;
     let step_map = walk | map(((rid, node, path), ()) -> ((rid, node), path));
     let step_idx = step_map | arrange;
-    let next_idx = ::next | arrange;
-    let step = step_idx | join(next_idx, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
+    let step = step_idx | join(::next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
     let walk_rows = ::first + step;
     set walk = walk_rows;
 }

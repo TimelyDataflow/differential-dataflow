@@ -9,7 +9,17 @@
  let weighted = import "ic14.s.weighted" : (int, (int, int));
  let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
  dist: {
-@@ -26,12 +24,10 @@
+@@ -10,8 +8,7 @@
+     var dist;
+     let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
+     let grow_idx = grow_map | arrange;
+-    let weighted_idx = ::weighted | arrange;
+-    let grow = grow_idx | join(weighted_idx, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
++    let grow = grow_idx | join(::weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
+     let dist_rows = ::starts + grow;
+     let dist_idx = dist_rows | arrange;
+     let dist_reduce = dist_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+@@ -26,39 +23,34 @@
  let pred_idx2 = pred_join | arrange;
  let best_idx = best | arrange;
  let pred_join2 = pred_idx2 | join(best_idx, ((rid, v), (u, via), least) -> ((rid, v), (u, via, least)));
@@ -21,10 +31,23 @@
 -let best_idx2 = best | arrange;
 -let targets = targets_idx | join(best_idx2, (key, (), _) -> (key, ()));
 +let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
++let pred_idx3 = pred | arrange;
  back: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var back;
-@@ -50,8 +46,7 @@
+     let back_idx = back | arrange;
+-    let pred_idx = ::pred | arrange;
+-    let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
++    let up = back_idx | join(::pred_idx3, ((rid, _), (), u) -> ((rid, u), ()));
+     let back_rows = ::targets + up;
+     let back_idx2 = back_rows | arrange;
+     let back_reduce = back_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+     set back = back_reduce;
+ }
+-let pred_idx3 = pred | arrange;
+ let next_idx = back::back | arrange;
+ let next_join = pred_idx3 | join(next_idx, ((rid, v), u, ()) -> ((rid, u), v));
+ let next_idx2 = next_join | arrange;
  let next = next_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
  let first_idx = first_map | arrange;
@@ -34,7 +57,15 @@
  walk: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var walk;
-@@ -67,8 +62,7 @@
+     let step_map = walk | map(((rid, node, path), ()) -> ((rid, node), path));
+     let step_idx = step_map | arrange;
+-    let next_idx = ::next | arrange;
+-    let step = step_idx | join(next_idx, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
++    let step = step_idx | join(::next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
+     let walk_rows = ::first + step;
+     set walk = walk_rows;
+ }
+@@ -67,8 +59,7 @@
  let targets_idx2 = targets | arrange;
  let answer_join = answer_idx | join(targets_idx2, ((rid, node), path, ()) -> ((rid, node), path));
  let answer_idx2 = answer_join | arrange;

@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -23,7 +23,7 @@
+@@ -22,7 +22,7 @@
      let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
      let best_rows = pairs + ::base;
      let best_idx = best_rows | arrange;

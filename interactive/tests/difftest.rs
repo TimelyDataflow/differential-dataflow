@@ -1383,7 +1383,8 @@ fn subset(seed: u64) -> Config {
     if let Ok(text) = std::env::var("DIFFTEST_PASSES") { return Config::parse(&text).unwrap(); }
     let bits = Rng(seed ^ 0x7061_7373_6573).below(32);
     Config { structural: bits & 1 != 0, compose_maps: bits & 2 != 0,
-        dead_bindings: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0 }
+        dead_bindings: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
+        ..Config::none() }
 }
 
 fn pass_names(config: Config) -> String {
@@ -1553,6 +1554,53 @@ fn passes_are_optional() {
             Outcome::Pass | Outcome::Refused(_) => {}
             Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
         }
+    }
+}
+
+/// A shared invariant trace must work through nested feedback and retractions,
+/// including when a child also reads the original collection as rows.
+#[test]
+fn shared_arrangements_across_scopes() {
+    let text = r#"
+let edges = input 0 : (int, int);
+let roots = input 1 : (int, ());
+left: {
+    var reached : (int, ());
+    let edges_idx = ::edges | arrange;
+    let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+    set reached = (::roots + step) | distinct;
+    let rows = ::edges + edges_idx;
+}
+outer: {
+    var again : (int, ());
+    let starts = ::roots + again;
+    right: {
+        var reached : (int, ());
+        let edges_idx = ::edges | arrange;
+        let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+        set reached = (outer::starts + step) | distinct;
+    }
+    set again = right::reached | filter((_, ()) -> 0);
+}
+let edges_idx = edges | arrange;
+let reduced = roots | distinct;
+reader: { let reduced_idx = ::reduced | arrange; }
+export "result" = left::reached;
+export "nested" = ::outer::right::reached;
+export "rows" = left::rows;
+export "edges" = edges_idx;
+export "roots" = reader::reduced_idx;
+-- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
+-- epoch 0, input 1: 1 diff=1
+-- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1
+-- epoch 2, input 1: 1 diff=-1 | 3 diff=1
+-- epoch 3, input 0: 2 val=3 diff=1 | 4 val=6 diff=1
+"#;
+    let mut case = parse_case(text);
+    case.seed = 2; // The worker oracle uses four workers.
+    match check(&case, &[Oracle::Optimize, Oracle::Workers, Oracle::Scratch, Oracle::Ahead]) {
+        Outcome::Pass => {},
+        other => panic!("shared arrangement regression: {other:?}"),
     }
 }
 

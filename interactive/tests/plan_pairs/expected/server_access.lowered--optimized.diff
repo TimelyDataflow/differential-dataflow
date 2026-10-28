@@ -1,0 +1,27 @@
+--- lowered
++++ optimized
+@@ -5,12 +5,12 @@
+ let groups = input 1 : (int, Member);
+ let blocks = input 2 : (int, Member);
+ let members = groups | map((grp, who) -> (grp inject Member::Group, who));
++let members_idx = members | arrange;
+ barring: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var barred : (Member, int);
+     let barred_idx = barred | arrange;
+-    let members_idx = ::members | arrange;
+-    let beyond = barred_idx | join(members_idx, (_grp, doc, who) -> (who, doc));
++    let beyond = barred_idx | join(::members_idx, (_grp, doc, who) -> (who, doc));
+     let barred_map = ::blocks | map((doc, who) -> (who, doc));
+     let barred_rows = barred_map + beyond;
+     let barred_map2 = barred_rows | map((k, v) -> ((k, v), ()));
+@@ -25,8 +25,7 @@
+     var allowed : ((Member, int), Access);
+     let inherited_map = allowed | map(((who, doc), acc) -> (who, (doc, acc)));
+     let inherited_idx = inherited_map | arrange;
+-    let members_idx = ::members | arrange;
+-    let inherited = inherited_idx | join(members_idx, (_grp, (doc, acc), who) -> ((who, doc), acc));
++    let inherited = inherited_idx | join(::members_idx, (_grp, (doc, acc), who) -> ((who, doc), acc));
+     let offered_map = ::grants | map((doc, (who, acc)) -> ((who, doc), acc));
+     let offered = offered_map + inherited;
+     let offered_idx = offered | arrange;
