@@ -139,3 +139,63 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
         for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, name).unwrap().is_empty()); }
     });
 }
+
+/// A reduce gathers only what its lambda reads: nothing of the key or the values, only the diffs,
+/// a field of each value, or a field of the key and one of each value's. Each still sees every
+/// value of non-zero net, in order, whatever it reads of them.
+#[test]
+fn lambdas_reading_part_of_their_input_match_their_definitions() {
+    timely::execute_directly(|worker| {
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
+            let x = input 0 : ((int, int, List(int)), ())
+                | map(((k, n, xs), ()) -> ((k, (k, 3) mul), (n, xs)));
+            export "keyed" = x;
+            export "lengths" = x | reduce((_, vals) -> (vals len, 1) enlist);
+            export "sums" = x | reduce((_, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);
+            export "firsts" = x | reduce((_, vals) -> vals map (((n, _), d) -> (n, d)));
+            export "sizes" = x | reduce((k, vals) -> (vals map (((_, xs), d) -> (xs len, d)), (k.1, 1) enlist) append);
+        "#));
+        interactive::passes::optimize(&mut program);
+        let mut col = Server::new();
+        col.install(worker, "col", &program).unwrap();
+        let mut net: BTreeMap<(i64, (i64, Vec<i64>)), i64> = BTreeMap::new();
+        // What each export holds for `net`: per key, its values of non-zero net in order.
+        let reference = |name: &str, net: &BTreeMap<(i64, (i64, Vec<i64>)), i64>| -> Rows {
+            let mut groups: BTreeMap<i64, Vec<(&(i64, Vec<i64>), i64)>> = BTreeMap::new();
+            for ((k, v), d) in net { groups.entry(*k).or_default().push((v, *d)); }
+            let mut rows = Vec::new();
+            for (k, vals) in groups {
+                let mut outs: BTreeMap<String, i64> = BTreeMap::new();
+                match name {
+                    "lengths" => { outs.insert(vals.len().to_string(), 1); }
+                    "sums" => { let n: i64 = vals.iter().map(|(_, d)| d).sum(); if n != 0 { outs.insert(n.to_string(), 1); } }
+                    "firsts" => for ((n, _), d) in &vals { *outs.entry(n.to_string()).or_default() += d; },
+                    _ => {
+                        for ((_, xs), d) in &vals { *outs.entry(xs.len().to_string()).or_default() += d; }
+                        *outs.entry((k * 3).to_string()).or_default() += 1;
+                    }
+                }
+                rows.extend(outs.into_iter().filter(|(_, d)| *d != 0).map(|(v, d)| (format!("tuple({k},{})", k * 3), v, d)));
+            }
+            sorted(rows)
+        };
+        // Equal first fields under one key, negative nets, and a key whose values all cancel.
+        let batches: [&[(i64, i64, &[i64], i64)]; 4] = [
+            &[(0, 5, &[1, 2], 2), (0, 5, &[1], 1), (0, -3, &[], -1), (1, 7, &[4], 1), (2, 2, &[3, 3, 3], 1)],
+            &[(0, 5, &[1, 2], -2), (0, 9, &[0], 1), (1, 7, &[4], -1), (2, 2, &[3], -1)],
+            &[(0, 5, &[1], -1), (1, 1, &[], 3), (2, 2, &[3, 3, 3], -1), (2, 2, &[3], 1)],
+            &[(0, -3, &[], 1), (0, 9, &[0], -1), (1, 1, &[], -3)],
+        ];
+        for batch in batches {
+            let lines: Vec<String> = batch.iter().map(|(k, n, xs, d)| format!("tuple({k},{n},list({})) diff={d}", join(xs.iter(), i64::to_string))).collect();
+            col.feed("col", 0, &lines.join("\n"), None).unwrap();
+            for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
+            col.tick(worker);
+            for name in ["lengths", "sums", "firsts", "sizes"] {
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net), "{name}");
+            }
+        }
+        assert!(net.is_empty());
+        for name in ["lengths", "sums", "firsts", "sizes"] { assert!(col.snapshot(worker, name).unwrap().is_empty(), "{name}"); }
+    });
+}

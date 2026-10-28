@@ -16,6 +16,8 @@
 //!   * the value callback — `reduce_lambda` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, evaluating its expression over every bracket's key and `(val, diff)` list.
 //!     The resulting `(val, diff)` lists supply the desired output columns, never DDIR rows.
+//!     Only what the expression reads is gathered: its demand on its input, found once when the
+//!     backend is built, decides whether keys are gathered, and which fields of the values.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
@@ -36,7 +38,7 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
-use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
+use corgi::{Bounds, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::col_times::{ColTime, ColTimes};
 use crate::runtime::search::matching_ranges;
@@ -71,15 +73,57 @@ fn gather_refs(columns: &[CValue], refs: impl Iterator<Item = (usize, usize)>) -
 /// each key it holds, in key order.
 type Matches = Vec<Vec<(usize, Range<usize>)>>;
 
+/// What a reduce's lambda reads of its input `(key, vals)`, `vals` a list of `(val, diff)`, as
+/// Corgi's demand analysis finds it. Each key's list keeps its length and order whatever is read.
+struct Reads {
+    /// Whether the key is read at all. A key read only in part is gathered whole.
+    key: bool,
+    /// The demand on each value: the value columns are projected by it before they are gathered.
+    value: Demand,
+    /// The demand on the input once its values are gathered so, which projects it to the shape
+    /// the narrowed graph takes.
+    argument: Demand,
+    /// That shape, `(key, vals)` projected by the lambda's demand.
+    shape: Shape,
+}
+
+impl Reads {
+    /// `demand` is the lambda's demand on `input`, its `(key, vals)` shape.
+    fn new(demand: Demand, input: &Shape) -> Self {
+        let shape = demand.projected_shape(input).expect("a demand on the reduce's input");
+        let Demand::Prod(parts) = &demand else {
+            let read = demand != Demand::None;
+            let value = if read { Demand::All } else { Demand::None };
+            return Reads { key: read, value, argument: demand, shape };
+        };
+        // The values are projected by their demand before they are gathered, so the argument then
+        // takes them whole (or not at all), with whatever it reads of the diffs.
+        let (value, list) = match &parts[1] {
+            Demand::List(element) => match &**element {
+                Demand::Prod(pair) => {
+                    let gathered = if pair[0] == Demand::None { Demand::None } else { Demand::All };
+                    (pair[0].clone(), Demand::List(Box::new(Demand::Prod(vec![gathered, pair[1].clone()]))))
+                }
+                other => (other.clone(), parts[1].clone()),
+            },
+            other => (other.clone(), other.clone()),
+        };
+        Reads { key: parts[0] != Demand::None, value, argument: Demand::Prod(vec![parts[0].clone(), list]), shape }
+    }
+}
+
 /// A corgi reduce backend for a single `Reducer`.
 ///
 /// Each retire goes: `begin`; then per window, `next_window` presents a run of keys' input and
 /// output as integer records, `reduce_corrections` computes the output each key wants and how it
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub(crate) struct CorgiReduceBackend<T> {
-    /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads.
-    graph: (Shape, Shape, Graph<NumOp>),
-    /// The current window's input values: its chunks' value columns.
+    /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads and narrowed to
+    /// what it reads of them: it takes its input projected by `reads.argument`.
+    graph: Graph<NumOp>,
+    /// What the graph reads of its input.
+    reads: Reads,
+    /// The current window's input values: its chunks' value columns, projected by `reads.value`.
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
     output: Pool,
@@ -151,8 +195,13 @@ impl<T> CorgiReduceBackend<T> {
         let Reducer::Expr(lambda) = reducer;
         let graph = compile_reduce(&lambda, &kshape, &vshape)
             .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
+        // The graph rebuilt to read only what it reads, and the demand saying what that is.
+        let input = Shape::Prod(vec![kshape, Shape::List(Box::new(Shape::Prod(vec![vshape, Shape::Int])))]);
+        let narrowed = corgi::compile(graph, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+            .unwrap_or_else(|e| panic!("reduce: narrowing a compiled graph at {input}: {e}"));
         CorgiReduceBackend {
-            graph: (kshape, vshape, graph),
+            graph: narrowed.graph,
+            reads: Reads::new(narrowed.input, &input),
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -303,9 +352,13 @@ where
         if blocks.is_empty() {
             return (CValue::Unit(0), Vec::new(), vec![0; ends.len()]);
         }
-        let vals = self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>());
+        let vals = match self.reads.value {
+            Demand::None => CValue::Unit(input.len()),
+            _ => self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>()),
+        };
         let diffs = CValue::i64(input.iter().map(|&(_, diff)| diff).collect());
-        if cfg!(debug_assertions) {
+        // Projected values may tie; whole ones ascend.
+        if cfg!(debug_assertions) && self.reads.value == Demand::All {
             let mut start = 0;
             for &(_, end) in &blocks {
                 for i in start + 1..end {
@@ -315,13 +368,12 @@ where
             }
             assert!(input.iter().all(|&(_, diff)| diff != 0), "reduce: a bracket holds a zero diff");
         }
-        let keys = recover_key(&gather_refs(&self.key_columns, key_refs.into_iter()));
-        let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
+        let keys = if self.reads.key { recover_key(&gather_refs(&self.key_columns, key_refs.into_iter())) } else { CValue::Unit(key_refs.len()) };
         let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
-
-        let (k, v, graph) = &self.graph;
-        assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator compiled at ({k}, {v})");
-        let (bounds, elems) = corgi::eval_graph(graph, CValue::Prod(vec![keys, lists])).into_list("reduce output").unwrap();
+        let argument = self.reads.argument.project(CValue::Prod(vec![keys, lists])).expect("the reduce's input has the shape its demand is on");
+        let shape = corgi::shape_of_value(&argument);
+        assert!(shape == self.reads.shape, "reduce: input read as {shape} reached an operator narrowed to {}", self.reads.shape);
+        let (bounds, elems) = corgi::eval_graph(&self.graph, argument).into_list("reduce output").unwrap();
         let mut fields = elems.into_prod("reduce output").unwrap();
         let out_diffs = fields.pop().unwrap().into_i64("reduce output diffs").unwrap().to_vec();
         let out_vals = fields.pop().unwrap();
@@ -369,7 +421,8 @@ where
             let mut held = vec![0; keys.len()];
             for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
             self.retire = Retire { keys, held, input, window: 0..0, colliding: Vec::new() };
-            self.input.columns = in_chunks.iter().map(|chunk| chunk.vals().clone()).collect();
+            let value = &self.reads.value;
+            self.input.columns = in_chunks.iter().map(|chunk| value.project(chunk.vals().clone()).expect("a chunk's values have the reduce's value shape")).collect();
             self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
             self.output_keys.clear();
             self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
@@ -801,7 +854,8 @@ mod tests {
             }
             let run = |window_size| {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
-                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Count.lambda()), shape, window_size);
+                // Distinct reads its values whole, so the input pool holds what was presented.
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
