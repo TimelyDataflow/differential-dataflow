@@ -8,7 +8,8 @@ use std::collections::VecDeque;
 
 use corgi::Shape;
 
-use crate::ir::{Lambda, LinearOp, Reducer};
+use crate::ir::{Lambda, LinearOp};
+use crate::lambda::Projection;
 use crate::scope_ir::{self as st, Item, Node, Ref, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
@@ -562,24 +563,9 @@ fn build_scope(
                             projection,
                         )?;
                     }
-                    Node::Reduce { input, reducer } => {
+                    Node::Reduce { input, .. } => {
                         let input = plan.at(input)?;
-                        match reducer {
-                            Reducer::Count => {
-                                builder.presence(&output, input);
-                                for id in output.all() {
-                                    for &key in &input.key {
-                                        builder.edge(id, key);
-                                    }
-                                }
-                            }
-                            Reducer::Distinct
-                            | Reducer::Min
-                            | Reducer::Collect
-                            | Reducer::Expr(_) => {
-                                builder.opaque(&output, &[input]);
-                            }
-                        }
+                        builder.opaque(&output, &[input]);
                     }
                     Node::Inspect { input, .. } => {
                         // Inspection is observable even if its collection has
@@ -665,7 +651,10 @@ fn mask_lambda(
     {
         return None;
     }
-    if key_facts.iter().chain(value_facts).all(|&id| live[id]) {
+    if !needs_mask(key_shape, key_facts, live) && match value_shape {
+        Some(shape) => !needs_mask(shape, value_facts, live),
+        None => live[value_facts[0]],
+    } {
         return None;
     }
     // Select live fields directly from the call result. Corgi can fold those
@@ -684,6 +673,14 @@ fn mask_lambda(
             format!("({key}, {val})")
         },
     ))
+}
+
+fn needs_mask(shape: &Shape, facts: &[usize], live: &[bool]) -> bool {
+    match shape {
+        Shape::Unit => false,
+        Shape::Prod(parts) => parts.iter().zip(facts).any(|(s, &id)| *s != Shape::Unit && !live[id]),
+        _ => !live[facts[0]],
+    }
 }
 
 fn mask_site_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
@@ -765,6 +762,14 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
+            (Item::Op(Node::Reduce { input, reducer }), PlannedItem::Op { output, .. }) => {
+                if needs_mask(&output.shape.1, &output.val, live) {
+                    let value = mask_part("input", &output.shape.1, &output.val, live);
+                    let shape = &plan.at(input).expect("reduce input").shape;
+                    *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"), &shape.0, &shape.1);
+                    masked += output.val.iter().filter(|&&id| !live[id]).count();
+                }
+            }
             (Item::Sub(child), PlannedItem::Sub(plan)) => {
                 masked += rewrite_scope(child, plan, live)
             }
@@ -825,38 +830,12 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                 }
             }
         }
-        // Distinct, min, collect, and user reductions must see their full input.
-        // Mask only the rows they emit, before any downstream consumer sees them.
-        let reduced_output = match (&item, planned) {
-            (Item::Op(Node::Reduce { .. }), PlannedItem::Op { output, .. }) => Some(output),
-            _ => None,
-        };
         items.push(item);
         if labeled {
             labels.push(scope.labels[i].clone());
         }
-        if let Some(output) = reduced_output {
-            if let Some(mut lambda) = mask_site_lambda(&identity, output, live) {
-                lambda.added_by = Some("projection pushdown");
-                let fields = output
-                    .key
-                    .iter()
-                    .chain(&output.val)
-                    .filter(|&&id| !live[id])
-                    .count();
-                let project = Item::Op(Node::Linear {
-                    input: Ref::Local(items.len() - 1),
-                    ops: vec![LinearOp::Project(lambda)],
-                });
-                remap.push(items.len());
-                items.push(project);
-                if labeled {
-                    labels.push(scope.labels[i].clone());
-                }
-                masked += fields;
-                continue;
-            }
-        }
+        // Reduce keeps its grouping key. Readers already project it as needed;
+        // concat arms receive their own mask when they need a common shape.
         remap.push(items.len() - 1);
     }
     for bind in &mut scope.binds {
@@ -873,6 +852,88 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
         scope.labels = labels;
     }
     masked
+}
+
+/// Fuse an author's value maps before computing field demand. A shared reduction, a
+/// changed key, or a map that computes anything beyond tuple wiring is left alone.
+fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -> usize {
+    let mut dead = vec![false; scope.items.len()];
+    let mut changed = 0;
+    let mut counts = scope.use_counts(&dead);
+    // Redirection can make a later map read a reduce directly. Its input shape is
+    // still the shape at its original edge, including any projection fused earlier.
+    let input_shapes: Vec<_> = scope.items.iter().map(|item| match item {
+        Item::Op(Node::Linear { input, .. }) => shapes.of(input),
+        _ => None,
+    }).collect();
+    for i in 0..scope.items.len() {
+        if let (Item::Sub(child), ItemShapes::Sub(shapes)) = (&mut scope.items[i], &shapes.items[i]) {
+            changed += fuse_reduce_maps(child, shapes, depth + 1);
+        }
+        let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { continue };
+        let j = *j;
+        if counts[j] != 1 || !matches!(&scope.items[j], Item::Op(Node::Reduce { .. })) { continue; }
+        let Some(shape) = &input_shapes[i] else { continue };
+        let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), depth) else { continue };
+        let mut projections = Vec::new();
+        for (op, (key, val)) in ops.iter().zip(&steps) {
+            let LinearOp::Project(lambda) = op else { break };
+            let Some(projection) = Projection::of(lambda).and_then(|p| p.value(key, val)) else { break };
+            projections.push(projection);
+        }
+        if projections.is_empty() { continue; }
+        let Item::Op(Node::Reduce { input, reducer }) = &mut scope.items[j] else { unreachable!() };
+        let Some(shape) = shapes.of(input) else { continue };
+        for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
+        changed += projections.len();
+        let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };
+        ops.drain(..projections.len());
+        if ops.is_empty() {
+            scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = Ref::Local(j); });
+            dead[i] = true;
+            counts = scope.use_counts(&dead);
+        }
+    }
+    scope.compact(&dead);
+    changed
+}
+
+/// A concat arm may already have the requested shape because its producer was narrowed.
+/// Check the rewritten input shapes and remove masks that are now identity.
+fn remove_identity_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) {
+    let mut dead = vec![false; scope.items.len()];
+    let mut arms = vec![false; scope.items.len()];
+    for item in &scope.items {
+        if let Item::Op(Node::Concat(refs)) = item {
+            for r in refs { if let Ref::Local(i) = r { arms[*i] = true; } }
+        }
+    }
+    for i in 0..scope.items.len() {
+        match (&mut scope.items[i], &shapes.items[i]) {
+            (Item::Sub(child), ItemShapes::Sub(shapes)) => remove_identity_maps(child, shapes, depth + 1),
+            (Item::Op(Node::Linear { input, ops }), _) if arms[i] => {
+                let Some(shape) = shapes.of(input) else { continue };
+                let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), depth) else { continue };
+                let mut at = 0;
+                ops.retain(|op| {
+                    let (key, val) = &steps[at];
+                    at += 1;
+                    let shape = Shape::Prod(vec![key.clone(), val.clone()]);
+                    match op {
+                        LinearOp::Project(lambda) => !Projection::of(lambda).is_some_and(|p| p.expanded(&shape) == Projection::Field(Vec::new()).expanded(&shape)),
+                        _ => true,
+                    }
+                });
+                if ops.is_empty() {
+                    let input = input.clone();
+                    scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = input.clone(); });
+                    dead[i] = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    scope.compact(&dead);
 }
 
 fn remap_ref(r: &mut Ref, remap: &[usize]) {
@@ -905,8 +966,9 @@ pub fn demand_graph(
     Ok(builder.graph)
 }
 
-/// Replace dead tuple fields in producer lambdas by unit. Returns the number of
-/// replaced top-level fields. On a shape disagreement the original is restored.
+/// Replace dead tuple fields in producer lambdas by unit and fuse value maps into
+/// reduces. Returns the number of field masks and fused maps. On a shape disagreement
+/// the original is restored.
 pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
@@ -916,8 +978,11 @@ pub fn pushdown(
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
+    let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
+    let (shapes, _) = shapes::infer(program, source);
     let mut builder = Builder::default();
     let Ok(plan) = build_scope(&mut builder, &program.root, &shapes, None, 0) else {
+        *program = original;
         return Ok(0);
     };
     for export in &plan.exports {
@@ -925,14 +990,15 @@ pub fn pushdown(
     }
     let live = builder.graph.closure();
     let masked = rewrite_scope(&mut program.root, &plan, &live);
-    let (_, check) = shapes::infer(program, source);
+    let (rewritten, check) = shapes::infer(program, source);
     if !check.conflicts.is_empty() || !check.unknown.is_empty() {
         *program = original;
         // A rewritten intermediate shape disagrees with a consumer. The pass
         // is optional, so keep the original program in that case.
         return Ok(0);
     }
-    Ok(masked)
+    remove_identity_maps(&mut program.root, &rewritten, 0);
+    Ok(masked + fused)
 }
 
 #[cfg(test)]
@@ -975,13 +1041,13 @@ mod tests {
     }
 
     #[test]
-    fn count_can_drop_values_but_distinct_keeps_them() {
+    fn reduction_expressions_conservatively_keep_input_values() {
         let source = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));\n";
         let count = format!("{source}export \"out\" = x | count;\n");
         let distinct = format!("{source}export \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
         let mut distinct = lower::lower_tree(parse::pipe::parse(&distinct));
-        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 0);
         assert_eq!(pushdown(&mut distinct, &|_| None).unwrap(), 0);
     }
 
@@ -999,9 +1065,8 @@ mod tests {
         let text = "let x = input 0 : ((int, int), ()) | map((k, v) -> (k, v));
                     export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        // Count still groups by both key fields; the second is masked only
-        // after the reduction, where the next map no longer reads it.
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
+        // Count still groups by both key fields. Its reader projects the key.
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
     }
 
     #[test]
@@ -1018,11 +1083,11 @@ mod tests {
             "left", "merged", "counted", "counted", "export merged", "export counts",
         ]);
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
-        // A projection inserted before each concat input, and after the reduce, takes the
-        // label of the statement it serves.
+        // The concat's already narrowed arm needs no map. The remaining concat
+        // mask keeps the statement it serves; reduce keeps its grouping key.
         assert_eq!(program.root.labels.len(), program.root.items.len());
         assert_eq!(program.root.labels, [
-            "left", "merged", "merged", "merged", "counted", "counted", "counted",
+            "left", "merged", "merged", "counted", "counted",
             "export merged", "export counts",
         ]);
     }
@@ -1037,7 +1102,7 @@ mod tests {
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         original.optimize();
         let mut projected = original.clone();
-        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 1);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 0);
         original.root.exports[0].name = "before.out".into();
         projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
@@ -1100,7 +1165,7 @@ mod tests {
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         program.optimize();
-        assert!(pushdown(&mut program, &|_| None).unwrap() >= 4);
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
     }
@@ -1117,7 +1182,7 @@ mod tests {
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         original.optimize();
         let mut projected = original.clone();
-        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 4);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
         original.root.exports[0].name = "before.out".into();
         projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {

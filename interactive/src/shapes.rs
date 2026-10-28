@@ -264,14 +264,10 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
         }
         st::Node::Reduce { input, reducer } => {
             let c = shapes.of(input)?;
-            let v = match reducer {
-                Reducer::Min | Reducer::Distinct => c.val,
-                Reducer::Count => Shape::Int,
-                Reducer::Collect => Shape::List(Box::new(c.val)),
-                Reducer::Expr(t) => match reduce_shape(t, &c.key, &c.val) {
-                    Ok(v) => v,
-                    Err(e) => return fail(e),
-                },
+            let Reducer::Expr(lambda) = reducer;
+            let v = match reduce_shape(lambda, &c.key, &c.val) {
+                Ok(v) => v,
+                Err(e) => return fail(e),
             };
             Some(CollShape::new(c.key, v, depth))
         }

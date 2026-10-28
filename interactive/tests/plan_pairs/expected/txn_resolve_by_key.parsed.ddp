@@ -18,12 +18,12 @@ res: {
             let (bid, bv) = best in
             (((bid, -1) eq, (x, -1) ne, (bv, x) ne) select, ((i), 1))) in
         (judged map ((b, _) -> b), judged map ((_, o) -> o)) zip filter);
-    set rollback = bad | map((_, (rid)) -> ((rid), ())) | distinct;
+    set rollback = bad | map((_, (rid)) -> ((rid), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 let rb = res::rollback;
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 export "rollback" = rb;

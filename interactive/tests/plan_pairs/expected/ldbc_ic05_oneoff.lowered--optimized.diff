@@ -21,7 +21,7 @@
 -let circle_idx = circle_map | arrange;
 +let circle_rows2 = circle_rows | filter((node, (_, who, _)) -> (node, who) ne) | map((node, (rid, _, date)) -> ((node, rid, date), ()));
 +let circle_idx = circle_rows2 | arrange;
- let circle_reduce = circle_idx | distinct;
+ let circle_reduce = circle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let circle = circle_reduce | map(((node, rid, date), ()) -> (node, (rid, date)));
  let circle_idx2 = circle | arrange;
  let member_idx = member | arrange;
@@ -34,7 +34,7 @@
  let busy_join = after_idx | join(posted_idx, ((_, f), rid, n) -> ((rid, f), n));
  let busy_rows = busy_join | join_function((key, n) -> ((key, ()), (0), n) enlist);
  let busy_idx = busy_rows | arrange;
- let busy = busy_idx | count;
+ let busy = busy_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -let circle_idx3 = circle | arrange;
  let first_idx = first | arrange;
 -let timed = circle_idx3 | join(first_idx, (node, (rid, date), since) -> (node, (rid, date, since)));
@@ -55,7 +55,7 @@
  let slow = slow_idx | join(slow_idx2, ((_, rid), (), f) -> ((rid, f), ()));
  let idle_rows = fast + slow;
  let idle_idx = idle_rows | arrange;
- let idle = idle_idx | distinct;
+ let idle = idle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 -let idle_idx2 = idle | arrange;
 -let busy_idx2 = busy | arrange;
 -let quiet_join = idle_idx2 | join(busy_idx2, (key, (), _) -> (key, ()));

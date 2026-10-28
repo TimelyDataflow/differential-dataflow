@@ -13,7 +13,7 @@
 -let circle_idx = circle_map | arrange;
 +let circle_rows2 = circle_rows | filter((node, (_, who, _, _)) -> (node, who) ne) | map((node, (rid, _, country, year)) -> ((node, rid, country, year), ()));
 +let circle_idx = circle_rows2 | arrange;
- let circle = circle_idx | distinct;
+ let circle = circle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let jobs_map = circle | map(((node, rid, country, year), ()) -> (node, (rid, country, year)));
  let jobs_idx = jobs_map | arrange;
 @@ -32,15 +30,12 @@
@@ -24,7 +24,7 @@
 -let jobs = jobs_filter2 | map((key, (company, _, _)) -> (key, company));
 +let jobs = jobs_join3 | filter((_, (_, country, there)) -> (country, there) eq) | map((key, (company, _, _)) -> (key, company));
  let jobs_idx4 = jobs | arrange;
- let named_reduce = jobs_idx4 | collect;
+ let named_reduce = jobs_idx4 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 -let named = named_reduce | flatmap((_, entries) -> entries);
 -let ranked_map = named | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)));
 -let ranked_idx = ranked_map | arrange;

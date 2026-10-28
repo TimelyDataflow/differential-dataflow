@@ -13,10 +13,11 @@ barring: {
     let beyond = barred_idx | join(members_idx, (_grp, doc, who) -> (who, doc));
     let barred_map = ::blocks | map((doc, who) -> (who, doc));
     let barred_rows = barred_map + beyond;
-    let barred_idx2 = barred_rows | arrange;
-    -- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.
-    let barred_reduce = barred_idx2 | distinct;
-    set barred = barred_reduce;
+    let barred_map2 = barred_rows | map((k, v) -> ((k, v), ()));
+    let barred_idx2 = barred_map2 | arrange;
+    let barred_reduce = barred_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+    let barred_map3 = barred_reduce | map((kv, ()) -> kv);
+    set barred = barred_map3;
 }
 let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
 sharing: {
@@ -34,7 +35,7 @@ sharing: {
     let allowed_neg = allowed_join | negate;
     let allowed_rows = offered + allowed_neg;
     let allowed_idx = allowed_rows | arrange;
-    let allowed_reduce = allowed_idx | min;
+    let allowed_reduce = allowed_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     set allowed = allowed_reduce;
 }
 -- Renderer: build an export arrangement.

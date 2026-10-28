@@ -29,6 +29,16 @@ pub(crate) fn print(lambda: &Lambda, input: Option<&Shape>, check: bool) -> Prin
 }
 
 pub(crate) fn print_named(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(String, Vec<(String, Shape)>)]) -> Printed {
+    print_with(lambda, input, check, types, false)
+}
+
+/// Compositions bind the immediate input fields. Keeping those shallow patterns
+/// and the list-relative zero in `head` can preserve their exact scalar graph.
+pub(crate) fn print_composed(lambda: &Lambda, input: &Shape) -> Printed {
+    print_with(lambda, Some(input), false, &[], true)
+}
+
+fn print_with(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(String, Vec<(String, Shape)>)], shallow: bool) -> Printed {
     let result = (|| {
         let original = lambda.graph()?;
         let Some(input) = input else {
@@ -40,7 +50,7 @@ pub(crate) fn print_named(lambda: &Lambda, input: Option<&Shape>, check: bool, t
         corgi::shape_of(original, input)?;
         let compiled = corgi::optimize(original);
         let graph = prepare(&compiled, input)?;
-        let mut printer = Printer { types: types.to_vec(), ..Printer::default() };
+        let mut printer = Printer { types: types.to_vec(), shallow, ..Printer::default() };
         match printer.lambda(&graph, input) {
             Ok((pattern, body)) => {
                 let declarations = printer.declarations.join(" ");
@@ -141,6 +151,7 @@ fn project(b: &mut Builder<NumOp>, x: usize, input: &Shape, target: &Shape) -> R
 struct Printer {
     declarations: Vec<String>,
     types: Vec<(String, Vec<(String, Shape)>)>,
+    shallow: bool,
 }
 
 impl Printer {
@@ -200,6 +211,7 @@ impl Printer {
         }
         uses[graph.output()] += 1;
         if let Some(p) = &paths[graph.output()] { read.insert(p.clone()); }
+        if self.shallow { read = read.into_iter().map(|p| p.into_iter().take(1).collect()).collect(); }
         let mut names = BTreeMap::new();
         let pattern = pattern(input, &mut Vec::new(), &read, &mut names);
         let mut expressions: Vec<String> = Vec::new();
@@ -223,6 +235,12 @@ impl Printer {
                         }).collect::<Result<Vec<_>, String>>()?;
                         format!("{} match ({})", expressions[*arg], arms.join(", "))
                     }
+                    NodeRef::Op(NumOp::Core(Op::Gather), i) if self.shallow && matches!(&nodes[*i], NodeRef::Tuple(fields)
+                        if fields.len() == 2 && matches!(&nodes[fields[0]], NodeRef::Op(NumOp::Core(Op::Lit(zero)), anchor)
+                            if *anchor == fields[1] && self.constant(zero, 0).ok().as_deref() == Some("0"))) => {
+                        let NodeRef::Tuple(fields) = &nodes[*i] else { unreachable!() };
+                        format!("{} head", expressions[fields[1]])
+                    }
                     NodeRef::Op(op, i) => self.op(op, &expressions[*i], &shapes[*i])?,
                 }
             };
@@ -243,9 +261,9 @@ impl Printer {
                 depth = 0;
             }
             depths.push(depth);
-            // The match spelling can inspect a predecessor's input.
+            // The match and shallow-head spellings can inspect a predecessor's input.
             // Other inputs can be released at their last reader.
-            {
+            if !self.shallow {
                 let mut release = |i: usize| {
                     remaining[i] -= 1;
                     if remaining[i] == 0 { expressions[i] = String::new(); }

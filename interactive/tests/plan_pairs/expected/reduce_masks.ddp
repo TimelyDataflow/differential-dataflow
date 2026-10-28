@@ -1,8 +1,28 @@
 -- Time lanes: epoch.
 let rows = input 0 : ((int, int), ());
+let values = input 1 : (int, (int, int));
 let rows_idx = rows | arrange;
-let counted_reduce = rows_idx | count;
-let counted = counted_reduce | map(((a, _), b) -> ((a, ()), b));
+let counted = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+let values_idx = values | arrange;
+let custom = values_idx | reduce(arg -> let _call0 = let input = arg in let (_, vals) = input in vals map ((v, d) -> (v, (d, 2) mul)) in _call0 map ((_value, _diff) -> (((), _value.1), _diff)));
 let out_map = counted | map(((a, _), n) -> (a, n));
+let minimum_reduce = values_idx | reduce((_, a) -> (a head.0, 1) enlist map ((a, b) -> (((), a.1), b)));
+let unique_map = values | map((k, v) -> ((k, v), ()));
+let unique_idx = unique_map | arrange;
+let unique_reduce = unique_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+let unique_rows = unique_reduce | map(arg -> let _call0 = let input = arg in let (kv, ()) = input in kv in (_call0.0, ((), _call0.1.1))) | map((k, (_, v)) -> (k, ((), v)));
+let counted_reduce = values_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((_, a) -> ((), a)));
+let collected_reduce = values_idx | reduce((_, a) -> (a map ((a, b) -> (a, (0, b) range) cap_list map ((a, _) -> a)) flatten.1, 1) enlist map ((_, a) -> ((), a)));
+let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
 -- Renderer: build an export arrangement.
 export "out" = out_map;
+-- Renderer: publish the existing arrangement.
+export "minimum" = minimum_reduce;
+-- Renderer: build an export arrangement.
+export "unique" = unique_rows;
+-- Renderer: publish the existing arrangement.
+export "counted" = counted_reduce;
+-- Renderer: publish the existing arrangement.
+export "collected" = collected_reduce;
+-- Renderer: build an export arrangement.
+export "custom" = custom_map;

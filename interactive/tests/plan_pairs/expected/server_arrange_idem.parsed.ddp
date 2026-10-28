@@ -5,14 +5,14 @@ let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id,
 let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, (0, cs) get));
 eqsat: {
     let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
-    let bsig = canon | collect | map(((id, op), cs) -> ((op, cs), id));
-    let reps = bsig | min;
+    let bsig = canon | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map(((id, op), cs) -> ((op, cs), id));
+    let reps = bsig | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let cong = bsig | join(reps, (_, id, rep) -> (id, rep));
-    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | distinct;
+    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
     let arr_cls = arr | map((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));
     let rule = arr_cls | map((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));
     let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
     let prop = eq | join(edges, (_, l, n) -> (n, l));
-    set eq = elems + prop | min;
+    set eq = elems + prop | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 }
 export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

@@ -2,10 +2,10 @@
 // Providers must precede their consumers. Each case gets only its named catalog.
 use super::Case;
 
-pub const FORMAT: &str = "2 (whole final DDP and successive stage diffs)";
+pub const FORMAT: &str = "3 (whole DDP and stage diffs; desugared reductions)";
 pub const LANGUAGE: &str = "DDP (interactive 0.1.0); corgi lambdas (Cargo.lock)";
 pub const BACKEND: &str = "interactive 0.1.0 corgi backend; kernels pinned in Cargo.lock";
-pub const TRANSFORMS: &str = "1: collapse arrangements, fuse linear, dedup; projection; as-of drop";
+pub const TRANSFORMS: &str = "2: desugar reductions and expand distinct; collapse arrangements, fuse linear, dedup; projection; as-of drop";
 pub const ASSUMPTIONS: &str = "arranged trace imports; projection on; as-of on; G = (1, []); install epoch 2; no data or planner seed";
 
 pub const GENERATED: &[(&str, &str)] = &[
@@ -22,33 +22,33 @@ pub const CASES: &[Case] = &[
     Case::new("ldbc_is04", "bench/ldbc/authored/plans/is04.ddp", &["ldbc_graph"]),
     Case::new("ldbc_is05", "bench/ldbc/authored/plans/is05.ddp", &["ldbc_graph"]),
     Case::new("ldbc_is06", "bench/ldbc/authored/plans/is06.ddp", &["ldbc_graph"]),
-    Case::new("ldbc_is07", "bench/ldbc/authored/plans/is07.ddp", &["ldbc_graph"]).repeat_masks([5, 5]),
+    Case::new("ldbc_is07", "bench/ldbc/authored/plans/is07.ddp", &["ldbc_graph"]),
     Case::new("ldbc_ic01_oneoff", "bench/ldbc/interactive_v2/oneoff/ic01.oneoff.ddp", &["ldbc_graph"]).request("ic1"),
-    Case::new("ldbc_ic02_standing", "bench/ldbc/interactive_v2/oneoff/ic02.standing.ddp", &["ldbc_graph"]).repeat_masks([2, 2]),
+    Case::new("ldbc_ic02_standing", "bench/ldbc/interactive_v2/oneoff/ic02.standing.ddp", &["ldbc_graph"]),
     Case::new("ldbc_ic02_oneoff", "bench/ldbc/interactive_v2/oneoff/ic02.oneoff.ddp", &["ldbc_graph", "ldbc_ic02_standing"]).request("ic2"),
     Case::new("ldbc_ic03_standing", "bench/ldbc/interactive_v2/oneoff/ic03.standing.ddp", &["ldbc_graph"]),
     Case::new("ldbc_ic03_oneoff", "bench/ldbc/interactive_v2/oneoff/ic03.oneoff.ddp", &["ldbc_graph", "ldbc_ic03_standing"]).request("ic3"),
     Case::new("ldbc_ic04_standing", "bench/ldbc/interactive_v2/oneoff/ic04.standing.ddp", &["ldbc_graph"]),
-    Case::new("ldbc_ic04_oneoff", "bench/ldbc/interactive_v2/oneoff/ic04.oneoff.ddp", &["ldbc_graph", "ldbc_ic04_standing"]).request("ic4").repeat_masks([20, 20]),
-    Case::new("ldbc_ic05_standing", "bench/ldbc/interactive_v2/oneoff/ic05.standing.ddp", &["ldbc_graph"]).repeat_masks([2, 2]),
+    Case::new("ldbc_ic04_oneoff", "bench/ldbc/interactive_v2/oneoff/ic04.oneoff.ddp", &["ldbc_graph", "ldbc_ic04_standing"]).request("ic4"),
+    Case::new("ldbc_ic05_standing", "bench/ldbc/interactive_v2/oneoff/ic05.standing.ddp", &["ldbc_graph"]),
     Case::new("ldbc_ic05_oneoff", "bench/ldbc/interactive_v2/oneoff/ic05.oneoff.ddp", &["ldbc_graph", "ldbc_ic05_standing"]).request("ic5"),
     Case::new("ldbc_ic06_oneoff", "bench/ldbc/interactive_v2/oneoff/ic06.oneoff.ddp", &["ldbc_graph"]).request("ic6"),
-    Case::new("ldbc_ic07_oneoff", "bench/ldbc/interactive_v2/oneoff/ic07.oneoff.ddp", &["ldbc_graph"]).request("ic7").repeat_masks([10, 10]),
+    Case::new("ldbc_ic07_oneoff", "bench/ldbc/interactive_v2/oneoff/ic07.oneoff.ddp", &["ldbc_graph"]).request("ic7"),
     Case::new("ldbc_ic08_oneoff", "bench/ldbc/interactive_v2/oneoff/ic08.oneoff.ddp", &["ldbc_graph"]).request("ic8"),
-    Case::new("ldbc_ic09_standing", "bench/ldbc/interactive_v2/oneoff/ic09.standing.ddp", &["ldbc_graph"]).repeat_masks([2, 2]),
-    Case::new("ldbc_ic09_oneoff", "bench/ldbc/interactive_v2/oneoff/ic09.oneoff.ddp", &["ldbc_graph", "ldbc_ic09_standing"]).request("ic9").repeat_masks([2, 2]),
+    Case::new("ldbc_ic09_standing", "bench/ldbc/interactive_v2/oneoff/ic09.standing.ddp", &["ldbc_graph"]),
+    Case::new("ldbc_ic09_oneoff", "bench/ldbc/interactive_v2/oneoff/ic09.oneoff.ddp", &["ldbc_graph", "ldbc_ic09_standing"]).request("ic9"),
     Case::new("ldbc_ic10_standing", "bench/ldbc/interactive_v2/oneoff/ic10.standing.ddp", &["ldbc_graph"]),
-    Case::new("ldbc_ic10_oneoff", "bench/ldbc/interactive_v2/oneoff/ic10.oneoff.ddp", &["ldbc_graph", "ldbc_ic10_standing"]).request("ic10").repeat_masks([6, 6]),
+    Case::new("ldbc_ic10_oneoff", "bench/ldbc/interactive_v2/oneoff/ic10.oneoff.ddp", &["ldbc_graph", "ldbc_ic10_standing"]).request("ic10"),
     Case::new("ldbc_ic11_oneoff", "bench/ldbc/interactive_v2/oneoff/ic11.oneoff.ddp", &["ldbc_graph"]).request("ic11"),
     Case::new("ldbc_ic12_standing", "bench/ldbc/interactive_v2/oneoff/ic12.standing.ddp", &["ldbc_graph"]),
-    Case::new("ldbc_ic12_oneoff", "bench/ldbc/interactive_v2/oneoff/ic12.oneoff.ddp", &["ldbc_graph", "ldbc_ic12_standing"]).request("ic12").repeat_masks([2, 2]),
+    Case::new("ldbc_ic12_oneoff", "bench/ldbc/interactive_v2/oneoff/ic12.oneoff.ddp", &["ldbc_graph", "ldbc_ic12_standing"]).request("ic12"),
     Case::new("ldbc_ic13_oneoff", "bench/ldbc/interactive_v2/oneoff/ic13.oneoff.ddp", &["ldbc_graph"]).request("ic13"),
     Case::new("ldbc_ic14_standing", "bench/ldbc/interactive_v2/oneoff/ic14.standing.ddp", &["ldbc_graph"]),
     Case::new("ldbc_ic14_oneoff", "bench/ldbc/interactive_v2/oneoff/ic14.oneoff.ddp", &["ldbc_graph", "ldbc_ic14_standing"]).request("ic14"),
     Case::new("txn_store", "bench/txn/store.ddp", &[]),
-    Case::new("txn_maintained", "bench/txn/maintained.ddp", &[]).repeat_masks([2, 2]),
-    Case::new("txn_resolve", "bench/txn/resolve.ddp", &["txn_store"]).repeat_masks([2, 2]),
-    Case::new("txn_resolve_by_key", "bench/txn/resolve_by_key.ddp", &["txn_store"]).repeat_masks([2, 2]),
+    Case::new("txn_maintained", "bench/txn/maintained.ddp", &[]),
+    Case::new("txn_resolve", "bench/txn/resolve.ddp", &["txn_store"]),
+    Case::new("txn_resolve_by_key", "bench/txn/resolve_by_key.ddp", &["txn_store"]),
     Case::new("server_sources", "tests/plan_pairs/cases/server_sources.ddp", &[]),
     Case::new("server_producer", "examples/server/programs/producer.ddp", &[]),
     Case::new("server_access", "examples/server/programs/access.ddp", &[]),
@@ -62,8 +62,8 @@ pub const CASES: &[Case] = &[
     Case::new("access_shared", "tests/plan_pairs/cases/access_shared.ddp", &[]),
     Case::new("arrange_collapse", "tests/plan_pairs/cases/arrange_collapse.ddp", &[]),
     Case::new("fusion_dedup", "tests/plan_pairs/cases/fusion_dedup.ddp", &[]),
-    Case::new("concat_masks", "tests/plan_pairs/cases/concat_masks.ddp", &[]).repeat_masks([5, 5]),
-    Case::new("reduce_masks", "tests/plan_pairs/cases/reduce_masks.ddp", &[]).repeat_masks([2, 2]),
+    Case::new("concat_masks", "tests/plan_pairs/cases/concat_masks.ddp", &[]),
+    Case::new("reduce_masks", "tests/plan_pairs/cases/reduce_masks.ddp", &[]),
     Case::new("shared_demand", "tests/plan_pairs/cases/shared_demand.ddp", &[]),
     Case::new("non_unit_distinct", "tests/plan_pairs/cases/non_unit_distinct.ddp", &[]),
     Case::new("nested", "tests/plan_pairs/cases/nested.ddp", &[]),
@@ -71,7 +71,7 @@ pub const CASES: &[Case] = &[
     Case::new("rows", "tests/plan_pairs/cases/rows.ddp", &[]),
     Case::new("as_of_strict", "tests/plan_pairs/cases/as_of_strict.ddp", &["rows"]),
     Case::new("as_of_shared", "tests/plan_pairs/cases/as_of_shared.ddp", &["rows"]),
-    Case::new("explain", "tests/plan_pairs/cases/explain.ddp", &[]).explain().repeat_masks([25, 25]),
+    Case::new("explain", "tests/plan_pairs/cases/explain.ddp", &[]).explain(),
     Case::new("rejected_export", "tests/plan_pairs/cases/rejected_export.ddp", &[]).problem("export `out`"),
     Case::new("registered", "tests/plan_pairs/cases/registered.ddp", &[]).functions("plan_pair_identity(int) -> int; pure identity"),
 ];

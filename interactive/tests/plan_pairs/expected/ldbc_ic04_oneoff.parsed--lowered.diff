@@ -11,7 +11,7 @@
  let posts = import "ic4.s.posts" : (int, (int, int));
  let tags = import "ic4.s.tags" : (int, (int, List(int)));
 -let seen = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add))) | join(friend, (_, req, (f, _)) -> (f, req)) | join(posts, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end))) | join(tags, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
--let before = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ())) | distinct;
+-let before = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
 +let seen_idx = seen_map | arrange;
 +let friend_idx = friend | arrange;
@@ -25,10 +25,10 @@
 +let before_filter = seen | filter((_, (_, created, start, _)) -> (created, start) lt);
 +let before_map = before_filter | map((key, _) -> (key, ()));
 +let before_idx = before_map | arrange;
-+let before = before_idx | distinct;
++let before = before_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
 -let fresh = during + (during | join(before, (key, row, ()) -> (key, row)) | negate);
--let counts = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ())) | count;
+-let counts = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -let ranked = counts | map(((rid, name), n) -> (rid, (n neg, name))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 +let during_idx = during | arrange;
 +let before_idx2 = before | arrange;
@@ -37,7 +37,7 @@
 +let fresh = during + fresh_neg;
 +let counts_map = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ()));
 +let counts_idx = counts_map | arrange;
-+let counts = counts_idx | count;
++let counts = counts_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +let ranked_map = counts | map(((rid, name), n) -> (rid, (n neg, name)));
 +let ranked_idx = ranked_map | arrange;
 +let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);

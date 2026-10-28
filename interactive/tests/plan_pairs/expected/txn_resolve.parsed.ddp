@@ -10,18 +10,18 @@ res: {
     let writes = wid + (wr_bad | negate);
     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
     let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v))) | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
-    let best = pairs + base | min;
+    let best = pairs + base | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
     let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
     let rkk = reads | map((rk, _) -> (rk, ()));
     let unseen = rkk + (seen | negate);
     let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ())) | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
-    set rollback = bad_seen + bad_absent | distinct;
+    set rollback = bad_seen + bad_absent | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 let rb = res::rollback;
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 export "rollback" = rb;

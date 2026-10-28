@@ -129,6 +129,18 @@ pub enum Node {
     Inspect { input: Ref, label: String },
 }
 
+impl Node {
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            Self::Linear { input, .. } | Self::Arrange(input)
+            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => f(input),
+            Self::Join { left, right, .. } => { f(left); f(right); }
+            Self::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); }
+            Self::Concat(refs) => for r in refs { f(r); },
+        }
+    }
+}
+
 /// An item in a scope's body: a pure operator or a nested child scope. The
 /// `items` vec is in dependency order, so rendering is a straight walk — no
 /// topological re-analysis. `Ref::Local`/`ChildExport` index into it.
@@ -169,13 +181,7 @@ impl Item {
     /// References read by this item, in the scope that owns it.
     fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
         match self {
-            Item::Op(node) => match node {
-                Node::Linear { input, .. } | Node::Arrange(input)
-                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
-                Node::Join { left, right, .. } => { f(left); f(right); },
-                Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
-                Node::Concat(refs) => for r in refs { f(r); },
-            },
+            Item::Op(node) => node.for_each_ref(&mut f),
             Item::Sub(child) => for imp in child.imports.iter_mut() {
                 if let Source::Parent(r) = &mut imp.from { f(r); }
             },
@@ -369,7 +375,7 @@ impl Scope {
     /// chain has partially fused (e.g. the middle of a three-op linear chain
     /// dies into its consumer, and its stale input ref still counts against
     /// the head, so the chain never finishes fusing).
-    fn use_counts(&self, dead: &[bool]) -> Vec<usize> {
+    pub(crate) fn use_counts(&self, dead: &[bool]) -> Vec<usize> {
         let mut counts = vec![0usize; self.items.len()];
         let mut tally = |r: &Ref| match r {
             Ref::Local(i) | Ref::ChildExport(i, _) => counts[*i] += 1,
@@ -462,7 +468,7 @@ impl Scope {
 
     /// Drop dead items and remap every item-indexed `Ref` to the compacted
     /// positions. Dead items have no remaining live readers.
-    fn compact(&mut self, dead: &[bool]) {
+    pub(crate) fn compact(&mut self, dead: &[bool]) {
         let mut remap = vec![usize::MAX; self.items.len()];
         let mut next = 0;
         for (i, &d) in dead.iter().enumerate() {

@@ -70,12 +70,17 @@ impl Printer<'_> {
             Expr::Join(left, right, l) => format!("{} | join({}, {})", self.expression(left)?, self.expression(right)?, self.parsed_lambda(l)?),
             Expr::HalfJoin(stream, arrangement, strict, l) => format!("{} | half_join({}, {}, {})", self.expression(stream)?, self.expression(arrangement)?, u8::from(*strict), self.parsed_lambda(l)?),
             Expr::Reduce(input, reducer) => {
-                let word = match reducer {
-                    Reducer::Min => "min".into(), Reducer::Distinct => "distinct".into(),
-                    Reducer::Count => "count".into(), Reducer::Collect => "collect".into(),
-                    Reducer::Expr(l) => format!("reduce({})", self.parsed_lambda(l)?),
-                };
-                format!("{} | {word}", self.expression(input)?)
+                let lambda = if matches!(reducer, crate::parse::Reducer::Distinct) {
+                    self.parsed_lambda(&crate::reducers::unit_distinct())?
+                } else { self.parsed_lambda(&reducer.lambda())? };
+                let input = self.expression(input)?;
+                if matches!(reducer, crate::parse::Reducer::Distinct) {
+                    // Parsed syntax has no inferred shapes. Key by the whole record,
+                    // which also preserves unit-valued distinct's meaning.
+                    format!("{input} | map((k, v) -> ((k, v), ())) | reduce({lambda}) | map((kv, ()) -> kv)")
+                } else {
+                    format!("{input} | reduce({lambda})")
+                }
             }
             Expr::Negate(input) | Expr::Lift(input) | Expr::LiftIter(input) | Expr::Arrange(input) => {
                 let word = match expr { Expr::Negate(_) => "negate", Expr::Lift(_) => "lift", Expr::LiftIter(_) => "lift_iter", _ => "arrange" };

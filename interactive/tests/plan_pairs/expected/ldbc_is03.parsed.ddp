@@ -1,6 +1,6 @@
 let request = input 0 : ((int, int), ());
 let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
 let friend = import "ldbc.friend" : (int, (int, int));
-let ranked = request | map(((rid, who), ()) -> (who, rid)) | join(friend, (_, rid, (f, since)) -> (f, (rid, since))) | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last)))) | collect | flatmap((_, entries) -> entries);
+let ranked = request | map(((rid, who), ()) -> (who, rid)) | join(friend, (_, rid, (f, since)) -> (f, (rid, since))) | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last)))) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
 export "is3.answer" = answer | arrange;

@@ -14,7 +14,7 @@ search: {
     let side1_idx = side1 | arrange;
     let best_join = side0_idx | join(side1_idx, ((rid, _), d0, d1) -> (rid, (d0, d1) add));
     let best_idx = best_join | arrange;
-    let best = best_idx | min;
+    let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let by_rid = search | map(((rid, side, node, d), ()) -> (rid, (side, node, d)));
     let met = best | map((rid, _) -> (rid, ()));
     let by_rid_idx = by_rid | arrange;
@@ -32,7 +32,7 @@ search: {
     let search_rows = ::starts + search + grow;
     let search_map = search_rows | map(((rid, side, node, d), ()) -> ((rid, side, node), d));
     let search_idx = search_map | arrange;
-    let search_reduce = search_idx | min;
+    let search_reduce = search_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let search_map2 = search_reduce | map(((rid, side, node), d) -> ((rid, side, node, d), ()));
     set search = search_map2;
 }
@@ -42,7 +42,7 @@ let side0_idx = side0 | arrange;
 let side1_idx = side1 | arrange;
 let best_join = side0_idx | join(side1_idx, ((rid, _), d0, d1) -> (rid, (d0, d1) add));
 let best_idx = best_join | arrange;
-let best = best_idx | min;
+let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 let asked = request | map(((rid, _, _), ()) -> (rid, ()));
 let asked_idx = asked | arrange;
 let never_join = asked_idx | join(best, (rid, (), _) -> (rid, ()));

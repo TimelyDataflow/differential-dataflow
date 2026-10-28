@@ -15,7 +15,6 @@ mod parsed;
 pub(crate) struct Context {
     types: Vec<(String, Vec<(String, Shape)>)>,
     scope: corgi::Scope,
-    sources: BTreeSet<String>,
     parsed: Option<Vec<Stmt>>,
 }
 
@@ -27,8 +26,8 @@ impl Context {
     }
 
     pub(super) fn new(text: &str) -> Self {
-        let (types, scope, sources) = crate::parse::pipe::print_context(text);
-        Self { types, scope, sources, parsed: Some(crate::parse::pipe::parse(text)) }
+        let (types, scope, _) = crate::parse::pipe::print_context(text);
+        Self { types, scope, parsed: Some(crate::parse::pipe::parse(text)) }
     }
 }
 
@@ -253,7 +252,7 @@ impl Printer<'_> {
         corgi::shape_of(graph, &input)?;
         let compiled = corgi::optimize(graph);
         let src = qualify(&lambda.src, &self.context.types);
-        if let Some(parsed) = corgi::parse_ml_in(&src, &self.context.scope).ok().filter(|_| self.context.sources.contains(&lambda.src)) {
+        if let Some(parsed) = corgi::parse_ml_in(&src, &self.context.scope).ok() {
             if corgi::shape_of(&parsed, &input).is_ok() && corgi::optimize(&parsed) == compiled {
                 self.counts.source += 1;
                 return Ok(slot_text(&src));
@@ -323,15 +322,10 @@ impl Printer<'_> {
                     forms.push(Form::Rows);
                 }
                 Item::Op(node) => {
-                    if let Node::Reduce { input, reducer: Reducer::Distinct } = node {
-                        if shapes.of(input).is_some_and(|s| s.val != Shape::Unit) {
-                            writeln!(out, "{indent}-- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.").unwrap();
-                        }
-                    }
                     let name = names.items[i].clone();
                     self.node(node, &name, &names, shapes, depth, &indent, out)?;
                     defined.insert(name);
-                    forms.push(super::item_form(node, shapes));
+                    forms.push(super::item_form(node));
                 }
             }
             aliases(&aliases_at[i + 1], &names, &mut defined, &indent, out);
@@ -390,7 +384,6 @@ impl Printer<'_> {
             }
             Node::Reduce { input, reducer } => {
                 let word = match reducer {
-                    Reducer::Min => "min".into(), Reducer::Distinct => "distinct".into(), Reducer::Count => "count".into(), Reducer::Collect => "collect".into(),
                     Reducer::Expr(l) => {
                         let input = shapes.of(input).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
                         format!("reduce({})", self.lambda(l, input)?)
@@ -558,12 +551,14 @@ mod tests {
     }
 
     #[test]
-    fn inserted_maps_and_as_of_filters_remain_visible_and_fail_strict_checks() {
+    fn composed_reductions_round_trip_and_repeated_as_of_filters_remain_visible() {
         let before = plan(include_str!("../../bench/txn/maintained.ddp"));
         let output = before.emit_ddp().unwrap();
-        assert!(output.text.contains("let best = best_reduce | map("));
+        assert!(output.text.contains("let best = best_idx | reduce("));
         assert!(!output.text.contains("Added by"));
-        assert!(!before.compare_final(&plan(&output.text)).is_empty(), "projection is not idempotent: do not hide the extra map");
+        assert_eq!(output.lambdas.graph_changed, 0);
+        assert!(before.compare_final(&plan(&output.text)).is_empty());
+        assert_eq!(output.text, plan(&output.text).emit_ddp().unwrap().text);
         let before = plan(r#"let a = input 0 : (int, ()); let b = input 1 : (int, ());
             export "out" = a | lift | half_join(b, 1, (k, x, _) -> (k, x));"#);
         let output = before.emit_ddp().unwrap().text;

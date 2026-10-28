@@ -17,7 +17,6 @@ struct Case {
     name: &'static str,
     input: &'static str,
     providers: &'static [&'static str],
-    repeat_masks: [usize; 2],
     request: Option<&'static str>,
     explain: bool,
     problem: Option<&'static str>,
@@ -26,9 +25,8 @@ struct Case {
 
 impl Case {
     const fn new(name: &'static str, input: &'static str, providers: &'static [&'static str]) -> Self {
-        Self { name, input, providers, repeat_masks: [0, 0], request: None, explain: false, problem: None, functions: "none" }
+        Self { name, input, providers, request: None, explain: false, problem: None, functions: "none" }
     }
-    const fn repeat_masks(mut self, counts: [usize; 2]) -> Self { self.repeat_masks = counts; self }
     const fn request(mut self, name: &'static str) -> Self { self.request = Some(name); self }
     const fn explain(mut self) -> Self { self.explain = true; self }
     const fn problem(mut self, problem: &'static str) -> Self { self.problem = Some(problem); self }
@@ -133,7 +131,7 @@ fn check_report(case: &Case, report: &Report) {
     again.optimize();
     assert_eq!(format!("{again:?}"), format!("{optimized:?}"), "{}: optimizer is not idempotent", case.name);
     if case.problem.is_none() {
-        for (index, stage) in report.stages[2..].iter().enumerate() {
+        for stage in &report.stages[2..] {
             let mut again = stage.program.clone();
             let source = |source: &Source| stage.program.root.imports.iter().zip(&stage.shapes.imports)
                 .find(|(import, _)| match (&import.from, source) {
@@ -143,11 +141,8 @@ fn check_report(case: &Case, report: &Report) {
                 })
                 .and_then(|(_, shape)| shape.as_ref().map(|s| (s.key.clone(), s.val.clone())));
             let masks = interactive::projection::pushdown(&mut again, &source).unwrap();
-            let expected = case.repeat_masks[index];
-            assert_eq!(masks, expected, "{}: {}: repeated projection count changed", case.name, stage.name);
-            if masks == 0 {
-                assert_eq!(format!("{again:?}"), format!("{:?}", stage.program), "{}: second projection changed the plan", case.name);
-            }
+            assert_eq!(masks, 0, "{}: {}: repeated projection count changed", case.name, stage.name);
+            assert_eq!(format!("{again:?}"), format!("{:?}", stage.program), "{}: second projection changed the plan", case.name);
         }
     }
 

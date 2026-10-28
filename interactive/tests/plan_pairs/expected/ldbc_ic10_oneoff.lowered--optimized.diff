@@ -26,7 +26,7 @@
 -let twohop_idx = twohop_map | arrange;
 +let twohop_rows2 = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
 +let twohop_idx = twohop_rows2 | arrange;
- let twohop_reduce = twohop_idx | min;
+ let twohop_reduce = twohop_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let twohop = twohop_reduce | filter((_, d) -> (d, 2) eq);
 -let cands_map = twohop | map(((rid, who, month, node), _) -> (node, (rid, who, month)));
 -let cands_idx = cands_map | arrange;
@@ -41,7 +41,7 @@
  let wrote_idx = wrote_map | arrange;
  let posts_idx = posts | arrange;
 @@ -52,8 +44,7 @@
- let summed = summed_idx | count;
+ let summed = summed_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
  let keys = cands | map((key, _) -> (key, ()));
  let keys_idx = keys | arrange;
 -let summed_idx2 = summed | arrange;

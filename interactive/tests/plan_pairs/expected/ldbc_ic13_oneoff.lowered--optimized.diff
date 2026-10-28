@@ -41,7 +41,7 @@
  let side1_idx = side1 | arrange;
  let best_join = side0_idx | join(side1_idx, ((rid, _), d0, d1) -> (rid, (d0, d1) add));
 @@ -52,8 +45,7 @@
- let best = best_idx | min;
+ let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let asked = request | map(((rid, _, _), ()) -> (rid, ()));
  let asked_idx = asked | arrange;
 -let best_idx2 = best | arrange;

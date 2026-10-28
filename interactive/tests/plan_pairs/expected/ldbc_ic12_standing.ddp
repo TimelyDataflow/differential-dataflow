@@ -13,7 +13,7 @@ below: {
     let step = step_join | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));
     let below_rows = ::selves + step;
     let below_idx = below_rows | arrange;
-    let below_reduce = below_idx | distinct;
+    let below_reduce = below_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
     set below = below_reduce;
 }
 let below_hl = below::below | map(((low, high), ()) -> (high, low));

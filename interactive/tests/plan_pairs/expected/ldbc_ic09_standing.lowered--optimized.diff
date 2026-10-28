@@ -12,7 +12,7 @@
 @@ -10,12 +8,10 @@
  let newest_map = by_author | map((author, (neg, _)) -> (author, neg));
  let newest_idx = newest_map | arrange;
- let newest = newest_idx | min;
+ let newest = newest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let by_author_idx2 = by_author | arrange;
  let latest_idx = latest | arrange;
 -let newest_idx2 = newest | arrange;

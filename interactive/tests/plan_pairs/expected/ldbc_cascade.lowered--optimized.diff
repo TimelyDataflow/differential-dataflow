@@ -1,7 +1,7 @@
 --- lowered
 +++ optimized
 @@ -31,33 +31,26 @@
- let dead_p = dead_p_idx | distinct;
+ let dead_p = dead_p_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let owned_map = forum_in | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)));
  let owned_idx = owned_map | arrange;
 -let dead_p_idx2 = dead_p | arrange;
@@ -15,7 +15,7 @@
 +let dead_f_rows = owned | filter((_, (title, _, _)) -> ((((0, (title len, 6) min) range, title) gather, "Album ") eq, (((0, (title len, 5) min) range, title) gather, "Wall ") eq) any) | map((id, _) -> (id, ()));
 +let dead_f_rows2 = dead_f_map + dead_f_rows;
 +let dead_f_idx = dead_f_rows2 | arrange;
- let dead_f = dead_f_idx | distinct;
+ let dead_f = dead_f_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let groups = owned | filter((_, (title, _, _)) -> (((0, (title len, 6) min) range, title) gather, "Group ") eq);
  let groups_idx = groups | arrange;
 -let dead_f_idx2 = dead_f | arrange;
@@ -45,14 +45,14 @@
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var dead_m : (int, ());
 @@ -81,8 +74,7 @@
- let gone_likes = gone_likes_idx | distinct;
+ let gone_likes = gone_likes_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let person_map = person_in | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
  let person_idx = person_map | arrange;
 -let dead_p_idx4 = dead_p | arrange;
 -let person_join = person_idx | join(dead_p_idx4, (_, r, ()) -> (r, ()));
 +let person_join = person_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let person_idx2 = person_join | arrange;
- let person_reduce = person_idx2 | distinct;
+ let person_reduce = person_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let person_neg = person_reduce | negate;
 @@ -97,8 +89,7 @@
  let message = message_in + message_neg;
@@ -83,7 +83,7 @@
 +let knows_join3 = knows_idx3 | join(dead_p, (_, r, ()) -> (r, ()));
  let knows_rows = knows_join + knows_join2 + knows_join3;
  let knows_idx4 = knows_rows | arrange;
- let knows_reduce = knows_idx4 | distinct;
+ let knows_reduce = knows_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -125,16 +113,13 @@
  let knows = knows_in + knows_neg;
  let member_map = member_in | map(((forum, person, created), ()) -> ((forum, person), (forum, person, created)));
@@ -103,7 +103,7 @@
 +let member_join3 = member_idx3 | join(dead_p, (_, r, ()) -> (r, ()));
  let member_rows = member_join + member_join2 + member_join3;
  let member_idx4 = member_rows | arrange;
- let member_reduce = member_idx4 | distinct;
+ let member_reduce = member_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -142,40 +127,34 @@
  let member = member_in + member_neg;
  let interest_map = interest_in | map(((person, tag), ()) -> (person, (person, tag)));
@@ -112,7 +112,7 @@
 -let interest_join = interest_idx | join(dead_p_idx8, (_, r, ()) -> (r, ()));
 +let interest_join = interest_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let interest_idx2 = interest_join | arrange;
- let interest_reduce = interest_idx2 | distinct;
+ let interest_reduce = interest_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let interest_neg = interest_reduce | negate;
  let interest = interest_in + interest_neg;
  let mtag_map = mtag_in | map(((message, tag), ()) -> (message, (message, tag)));
@@ -121,7 +121,7 @@
 -let mtag_join = mtag_idx | join(dead_msg_idx2, (_, r, ()) -> (r, ()));
 +let mtag_join = mtag_idx | join(dead_msg_idx, (_, r, ()) -> (r, ()));
  let mtag_idx2 = mtag_join | arrange;
- let mtag_reduce = mtag_idx2 | distinct;
+ let mtag_reduce = mtag_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let mtag_neg = mtag_reduce | negate;
  let mtag = mtag_in + mtag_neg;
  let ftag_map = ftag_in | map(((forum, tag), ()) -> (forum, (forum, tag)));
@@ -130,7 +130,7 @@
 -let ftag_join = ftag_idx | join(dead_f_idx6, (_, r, ()) -> (r, ()));
 +let ftag_join = ftag_idx | join(dead_f, (_, r, ()) -> (r, ()));
  let ftag_idx2 = ftag_join | arrange;
- let ftag_reduce = ftag_idx2 | distinct;
+ let ftag_reduce = ftag_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let ftag_neg = ftag_reduce | negate;
  let ftag = ftag_in + ftag_neg;
  let likes_map = likes_in | map(((person, message, created), ()) -> ((person, message), (person, message, created)));
@@ -150,7 +150,7 @@
 +let likes_join3 = likes_idx3 | join(dead_msg_idx, (_, r, ()) -> (r, ()));
  let likes_rows = likes_join + likes_join2 + likes_join3;
  let likes_idx4 = likes_rows | arrange;
- let likes_reduce = likes_idx4 | distinct;
+ let likes_reduce = likes_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -183,32 +162,28 @@
  let likes = likes_in + likes_neg;
  let study_map = study_in | map(((person, org, year), ()) -> (person, (person, org, year)));
@@ -159,7 +159,7 @@
 -let study_join = study_idx | join(dead_p_idx10, (_, r, ()) -> (r, ()));
 +let study_join = study_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let study_idx2 = study_join | arrange;
- let study_reduce = study_idx2 | distinct;
+ let study_reduce = study_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let study_neg = study_reduce | negate;
  let study = study_in + study_neg;
  let work_map = work_in | map(((person, org, year), ()) -> (person, (person, org, year)));
@@ -168,7 +168,7 @@
 -let work_join = work_idx | join(dead_p_idx11, (_, r, ()) -> (r, ()));
 +let work_join = work_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let work_idx2 = work_join | arrange;
- let work_reduce = work_idx2 | distinct;
+ let work_reduce = work_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let work_neg = work_reduce | negate;
  let work = work_in + work_neg;
  let email_map = email_in | map(((person, value), ()) -> (person, (person, value)));
@@ -177,7 +177,7 @@
 -let email_join = email_idx | join(dead_p_idx12, (_, r, ()) -> (r, ()));
 +let email_join = email_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let email_idx2 = email_join | arrange;
- let email_reduce = email_idx2 | distinct;
+ let email_reduce = email_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let email_neg = email_reduce | negate;
  let email = email_in + email_neg;
  let language_map = language_in | map(((person, value), ()) -> (person, (person, value)));
@@ -186,7 +186,7 @@
 -let language_join = language_idx | join(dead_p_idx13, (_, r, ()) -> (r, ()));
 +let language_join = language_idx | join(dead_p, (_, r, ()) -> (r, ()));
  let language_idx2 = language_join | arrange;
- let language_reduce = language_idx2 | distinct;
+ let language_reduce = language_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let language_neg = language_reduce | negate;
 @@ -220,18 +195,14 @@
  let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
@@ -200,7 +200,7 @@
 -let friends_join2 = friends_idx | join(exists_idx3, (b, (a, t), ()) -> ((a, b, t), ()));
 +let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
  let friends_idx2 = friends_join2 | arrange;
- let friends_reduce = friends_idx2 | distinct;
+ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
 -let posts_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq);
 -let posts = posts_filter | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));

@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,19 +1,42 @@
+@@ -1,19 +1,43 @@
  type Access = Owner | Edit | View;
  type Member = User int | Group int;
 +-- Time lanes: epoch.
@@ -18,16 +18,17 @@
 +    let beyond = barred_idx | join(members_idx, (_grp, doc, who) -> (who, doc));
 +    let barred_map = ::blocks | map((doc, who) -> (who, doc));
 +    let barred_rows = barred_map + beyond;
-+    let barred_idx2 = barred_rows | arrange;
-+    -- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.
-+    let barred_reduce = barred_idx2 | distinct;
-+    set barred = barred_reduce;
++    let barred_map2 = barred_rows | map((k, v) -> ((k, v), ()));
++    let barred_idx2 = barred_map2 | arrange;
++    let barred_reduce = barred_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
++    let barred_map3 = barred_reduce | map((kv, ()) -> kv);
++    set barred = barred_map3;
 +}
  let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
 -barring: {
 -    var barred : (Member, int);
 -    let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
--    set barred = (blocks | map((doc, who) -> (who, doc))) + beyond | distinct;
+-    set barred = (blocks | map((doc, who) -> (who, doc))) + beyond | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +sharing: {
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var allowed : ((Member, int), Access);
@@ -43,14 +44,14 @@
 +    let allowed_neg = allowed_join | negate;
 +    let allowed_rows = offered + allowed_neg;
 +    let allowed_idx = allowed_rows | arrange;
-+    let allowed_reduce = allowed_idx | min;
++    let allowed_reduce = allowed_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    set allowed = allowed_reduce;
  }
 +-- Renderer: build an export arrangement.
  export "access" = sharing::allowed;
 -sharing: {
 -    var allowed : ((Member, int), Access);
--    set allowed = offered + (offered | join(barred, (pair, acc, ()) -> (pair, acc)) | negate) | min;
+-    set allowed = offered + (offered | join(barred, (pair, acc, ()) -> (pair, acc)) | negate) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let offered = (grants | map((doc, (who, acc)) -> ((who, doc), acc))) + inherited;
 -    let inherited = allowed | map(((who, doc), acc) -> (who, (doc, acc))) | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
 -}

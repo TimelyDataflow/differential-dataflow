@@ -13,15 +13,14 @@
 //!     ids are then per real key, input and output alike: a colliding bracket is split by real key
 //!     before it is reduced, its output is matched by key as well as value, and every output id
 //!     records the row holding its key, which is what `emit` reads.
-//!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
-//!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
-//!     `Unit`, Min → the chosen input rows, Collect → a `List`, a lambda → its graph's output over
-//!     every bracket's key and `(val, diff)` list), never through DDIR rows.
+//!   * the value callback — `reduce_lambda` runs ONE crossing per wave over every `(key, time)`
+//!     bracket, evaluating its expression over every bracket's key and `(val, diff)` list.
+//!     The resulting `(val, diff)` lists supply the desired output columns, never DDIR rows.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
 //! Presentation assigns value ids in structural order (signed integers, lexicographic lists).
-//! Min/Collect reuse that order rather than sorting the candidate columns a second time.
+//! Reduction expressions read their input lists in that order.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -78,9 +77,8 @@ type Matches = Vec<Vec<(usize, Range<usize>)>>;
 /// output as integer records, `reduce_corrections` computes the output each key wants and how it
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub(crate) struct CorgiReduceBackend<T> {
-    reducer: Reducer,
     /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads.
-    graph: Option<(Shape, Shape, Graph<NumOp>)>,
+    graph: (Shape, Shape, Graph<NumOp>),
     /// The current window's input values: its chunks' value columns.
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
@@ -150,17 +148,11 @@ impl<T> CorgiReduceBackend<T> {
     /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
     /// type check keeps from being reached.
     pub(crate) fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
-        let graph = match &reducer {
-            Reducer::Expr(lambda) => {
-                let g = compile_reduce(lambda, &kshape, &vshape)
-                    .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
-                Some((kshape, vshape, g))
-            }
-            _ => None,
-        };
+        let Reducer::Expr(lambda) = reducer;
+        let graph = compile_reduce(&lambda, &kshape, &vshape)
+            .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
         CorgiReduceBackend {
-            reducer,
-            graph,
+            graph: (kshape, vshape, graph),
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -289,101 +281,7 @@ impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
-    /// The one value crossing for a wave: every `(key, time)` bracket at once. Builds a column of the
-    /// desired output values, one row each, and returns it with each bracket's end among its rows.
-    /// `input[k] = (value_id, accumulated diff)`; bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    /// As with `reduce_lambda`, the harness consolidates each bracket in ascending value-id order.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<usize>) {
-        let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
-        match self.reducer {
-            Reducer::Count => {
-                // Per-bracket sum of diffs, of either sign, as DD's `count`; a non-zero sum becomes an
-                // `Int`.
-                let mut sums: Vec<i64> = Vec::new();
-                let mut start = 0;
-                for &end in ends {
-                    let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
-                    if c != 0 {
-                        sums.push(c);
-                    }
-                    out_ends.push(sums.len());
-                    start = end;
-                }
-                (CValue::i64(sums), out_ends)
-            }
-            Reducer::Distinct => {
-                // Distinct records: each of a key's values whose net is NON-ZERO, once -- the sign
-                // does not matter. DD's `reduce` presents every value whose accumulation is
-                // non-zero, negatives included. A `> 0` test here silently drops a value that
-                // accumulates negative, which is exactly what a negated collection produces.
-                let mut reps = Vec::new();
-                let mut start = 0;
-                for &end in ends {
-                    reps.extend(input[start..end].iter().filter(|&&(_, d)| d != 0).map(|&(id, _)| id));
-                    out_ends.push(reps.len());
-                    start = end;
-                }
-                if reps.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                (self.input.gather(&reps), out_ends)
-            }
-            Reducer::Min => {
-                // The structural minimum over values with NON-ZERO net. The sign does not select
-                // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
-                // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
-                // Presentation has already ordered each real key's values. Its first non-zero
-                // value id is the minimum; gather just the winners, across all brackets at once.
-                let mut min_reps = Vec::with_capacity(ends.len());
-                let mut start = 0;
-                for &end in ends {
-                    if let Some(&(id, _)) = input[start..end].iter().find(|&&(_, diff)| diff != 0) {
-                        min_reps.push(id);
-                    }
-                    out_ends.push(min_reps.len());
-                    start = end;
-                }
-                if min_reps.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                (self.input.gather(&min_reps), out_ends)
-            }
-            Reducer::Expr(_) => unreachable!("a lambda's brackets are `reduce_lambda`'s"),
-            Reducer::Collect => {
-                // One row per bracket: the values sorted in DDIR observable order,
-                // each repeated by its diff, as a `List`. Ascending ids already give that order;
-                // element rows are taken columnar. A bracket emits iff some
-                // value has NON-ZERO net (as Distinct/Min: DD invokes the reducer only for a key
-                // with input, and the row reducer then lists the positive copies — an empty list
-                // when every net is negative). A bracket whose values all cancelled is a key with
-                // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
-                let mut elem_reps = Vec::new();
-                let mut bracket_ends = Vec::with_capacity(ends.len());
-                let mut start = 0;
-                for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        for &(id, diff) in &input[start..end] {
-                            elem_reps.extend(std::iter::repeat_n(id, diff.max(0) as usize));
-                        }
-                        bracket_ends.push(elem_reps.len());
-                    }
-                    out_ends.push(bracket_ends.len());
-                    start = end;
-                }
-                if bracket_ends.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                // A window whose lists are all empty still has an element SHAPE — the input
-                // values' — and the column must carry it, or this batch's `List<()>` meets the
-                // next batch's `List<T>` where the two are concatenated. `gather` at no indices
-                // is the empty column of that shape.
-                let elems = self.input.gather(&elem_reps);
-                (CValue::List(Bounds::offsets(bracket_ends), Box::new(elems)), out_ends)
-            }
-        }
-    }
-
-    /// As [`Self::reduce_brackets`] for `Reducer::Expr`, whose output rows carry diffs: every
+    /// The expression crossing for a wave: every
     /// bracket's key and its values, as a list of `(val, diff)`, through the lambda's graph at once.
     /// Returns the output values, their diffs, and each bracket's end among them.
     ///
@@ -421,7 +319,7 @@ where
         let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
         let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
 
-        let (k, v, graph) = self.graph.as_ref().expect("an expression reducer compiles at construction");
+        let (k, v, graph) = &self.graph;
         assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator compiled at ({k}, {v})");
         let (bounds, elems) = corgi::eval_graph(graph, CValue::Prod(vec![keys, lists])).into_list("reduce output").unwrap();
         let mut fields = elems.into_prod("reduce output").unwrap();
@@ -553,10 +451,7 @@ where
         }
         let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
         // The desired rows, and each one's diff where it is not one copy.
-        let (desired, desired_diffs, desired_ends) = match self.reducer {
-            Reducer::Expr(_) => { let (d, diffs, e) = self.reduce_lambda(in_ends, input); (d, Some(diffs), e) }
-            _ => { let (d, e) = self.reduce_brackets(in_ends, input); (d, None, e) }
-        };
+        let (desired, desired_diffs, desired_ends) = self.reduce_lambda(in_ends, input);
         let fresh = self.output.columns.len();
         let prior_refs = self.output.refs.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
@@ -642,7 +537,7 @@ where
                 alloc.clear();
                 alloc.resize(hi - lo, 0);
                 for row in lo..hi {
-                    let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
+                    let diff = desired_diffs[row];
                     match target[row - lo] {
                         Ok(i) => corr[net_start + i].1 += diff,
                         Err(r) if r == row => {
@@ -662,7 +557,7 @@ where
                     let first = if s == 0 { 0 } else { in_ends[s - 1] };
                     let (kc, kr) = self.input.refs[input[first].0 as usize];
                     for row in ds..de {
-                        let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
+                        let diff = desired_diffs[row];
                         let equal = |&(id, _): &(u64, Diff)| {
                             let (column, r) = refs[id as usize];
                             compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
@@ -819,10 +714,11 @@ mod tests {
     /// one value count together, and a new value gets a new id naming its row.
     #[test]
     fn corrections_net_by_value() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), (Shape::Int, Shape::Int));
         backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
+        backend.input.columns = vec![ints(vec![0, 1])];
         backend.key_columns = vec![ints(vec![10, 11, 12])];
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
@@ -836,8 +732,9 @@ mod tests {
     /// A changed wave's column stays alive when a later unchanged wave reuses its id.
     #[test]
     fn corrections_retain_only_named_output_columns() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), (Shape::Int, Shape::Int));
         backend.input.refs = vec![(0, 0)];
+        backend.input.columns = vec![ints(vec![0])];
         backend.key_columns = vec![ints(vec![10])];
         backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
         backend.output_keys = vec![(0, 0)];
@@ -904,7 +801,7 @@ mod tests {
             }
             let run = |window_size| {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
-                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, shape, window_size);
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Count.lambda()), shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
@@ -967,7 +864,7 @@ mod tests {
         // A lambda: the weighted sum of the values' first fields, once, and how many values, twice negated.
         let lambda = crate::ir::Lambda::new("let (_, vals) = input in \
             ((((0, vals) fold ((acc, ((a, _), d)) -> (acc, (a, d) mul) add)), 1) enlist, ((vals len), -2) enlist) append".into(), &corgi::Scope::default());
-        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(lambda)] {
+        for reducer in [Reducer::Expr(crate::parse::Reducer::Count.lambda()), Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), Reducer::Expr(crate::parse::Reducer::Min.lambda()), Reducer::Expr(crate::parse::Reducer::Collect.lambda()), Reducer::Expr(lambda)] {
             // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
             let run = |forged: bool, window_size: usize| {
                 let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {

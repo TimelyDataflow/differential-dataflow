@@ -23,7 +23,7 @@
      let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
 -    let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
 -    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v))) | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
--    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
+-    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
 +    let rk = ::reads | map(((rid, k), (e)) -> ((k), (rid, e)));
 +    let rk_idx = rk | arrange;
@@ -32,14 +32,14 @@
 +    let pairs = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
 +    let best_map = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v)));
 +    let best_idx = best_map | arrange;
-+    let best = best_idx | min;
++    let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
 +    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
      let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
 -    let rkk = reads | map((rk, _) -> (rk, ()));
 -    let unseen = rkk + (seen | negate);
 -    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ())) | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
--    set rollback = bad_seen + bad_absent | distinct;
+-    set rollback = bad_seen + bad_absent | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    let rkk = ::reads | map((rk, _) -> (rk, ()));
 +    let unseen_neg = seen | negate;
 +    let unseen = rkk + unseen_neg;
@@ -50,13 +50,13 @@
 +    let bad_absent = bad_absent_filter | map(((rid, _), ()) -> ((rid), ()));
 +    let rollback_rows = bad_seen + bad_absent;
 +    let rollback_idx2 = rollback_rows | arrange;
-+    let rollback_reduce = rollback_idx2 | distinct;
++    let rollback_reduce = rollback_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set rollback = rollback_reduce;
  }
  let rb = res::rollback;
 -let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 -let committed = wid + (wbad | negate);
--let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+-let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let wid_idx = wid | arrange;
 +let rb_idx = rb | arrange;
 +let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
@@ -64,7 +64,7 @@
 +let committed = wid + committed_neg;
 +let current_map = committed | map(((wid), (k, v)) -> ((k), (wid neg, v)));
 +let current_idx = current_map | arrange;
-+let current = current_idx | min;
++let current = current_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let state_map = current | map((k, (_, v)) -> (k, (v)));
 +let retire_map = current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v)));
 +let retire_neg = retire_map | negate;

@@ -13,7 +13,7 @@
 -let friends_idx = friends_map | arrange;
 +let friends_rows2 = friends_rows | filter((node, (_, who, _)) -> (node, who) ne) | map((node, (rid, _, max)) -> ((node, rid, max), ()));
 +let friends_idx = friends_rows2 | arrange;
- let friends_reduce = friends_idx | distinct;
+ let friends_reduce = friends_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let friends = friends_reduce | map(((node, rid, max), ()) -> (node, (rid, max)));
  let friends_idx2 = friends | arrange;
 @@ -34,9 +32,8 @@

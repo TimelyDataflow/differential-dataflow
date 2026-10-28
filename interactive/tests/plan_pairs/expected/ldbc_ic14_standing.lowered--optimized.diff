@@ -15,7 +15,7 @@
 @@ -13,11 +12,10 @@
  let talks = talks_map + talks_map2;
  let talks_idx = talks | arrange;
- let weighted_reduce = talks_idx | count;
+ let weighted_reduce = talks_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -let weighted_idx = weighted_reduce | arrange;
  let pals_idx = pals | arrange;
 -let weighted_join = weighted_idx | join(pals_idx, (pair, n, ()) -> (pair, n));

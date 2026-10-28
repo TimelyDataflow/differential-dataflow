@@ -4,14 +4,14 @@
 -let rows = input 0 : (int, (int, int)) | map((k, v) -> (k, v));
 -export "first" = rows | map((k, (a, _)) -> (k, a));
 -export "second" = rows | map((k, (_, b)) -> (k, b));
--export "counts" = rows | count;
+-export "counts" = rows | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +-- Time lanes: epoch.
 +let input0 = input 0 : (int, (int, int));
 +let rows = input0 | map((k, v) -> (k, v));
 +let first_map = rows | map((k, (a, _)) -> (k, a));
 +let second_map = rows | map((k, (_, b)) -> (k, b));
 +let rows_idx = rows | arrange;
-+let counts_reduce = rows_idx | count;
++let counts_reduce = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +-- Renderer: build an export arrangement.
 +export "first" = first_map;
 +-- Renderer: build an export arrangement.

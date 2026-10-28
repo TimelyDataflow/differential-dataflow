@@ -13,7 +13,7 @@
 -let circle_idx = circle_map | arrange;
 +let circle_rows2 = circle_rows | filter((node, (_, who)) -> (node, who) ne) | map((node, (rid, _)) -> ((rid, node), ()));
 +let circle_idx = circle_rows2 | arrange;
- let circle = circle_idx | distinct;
+ let circle = circle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let with_it_map = request | map(((rid, _, name), ()) -> (name, rid));
  let with_it_idx = with_it_map | arrange;
 @@ -35,14 +33,12 @@
@@ -31,6 +31,6 @@
 -let others_idx = others_map | arrange;
 +let others_rows = others_join | filter(((_, t, other), ()) -> (t, other) ne) | map(((rid, _, other), ()) -> ((rid, other), ()));
 +let others_idx = others_rows | arrange;
- let others = others_idx | count;
+ let others = others_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
  let ranked_map = others | map(((rid, other), n) -> (other, (rid, n)));
  let ranked_idx = ranked_map | arrange;

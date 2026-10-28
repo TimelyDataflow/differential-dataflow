@@ -24,7 +24,7 @@
 @@ -23,31 +19,25 @@
      let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
      let bsig_idx = bsig | arrange;
-     let reps = bsig_idx | min;
+     let reps = bsig_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let bsig_idx2 = bsig | arrange;
 -    let reps_idx = reps | arrange;
 -    let cong = bsig_idx2 | join(reps_idx, (_, id, rep) -> (id, rep));
@@ -34,7 +34,7 @@
 -    let arranged_join = producing_idx | join(eq_idx2, (_, _, cls) -> (cls, ()));
 +    let arranged_join = producing_idx | join(eq_idx, (_, _, cls) -> (cls, ()));
      let arranged_idx = arranged_join | arrange;
-     let arranged = arranged_idx | distinct;
+     let arranged = arranged_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
      let arr_cls_map = ::arr | map((a, c) -> (c, a));
      let arr_cls_idx = arr_cls_map | arrange;
 -    let eq_idx3 = eq | arrange;
@@ -54,9 +54,9 @@
 +    let prop = eq_idx | join(edges_idx, (_, l, n) -> (n, l));
      let eq_rows = ::elems + prop;
 -    let eq_idx5 = eq_rows | arrange;
--    let eq_reduce = eq_idx5 | min;
+-    let eq_reduce = eq_idx5 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let eq_idx2 = eq_rows | arrange;
-+    let eq_reduce = eq_idx2 | min;
++    let eq_reduce = eq_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
      set eq = eq_reduce;
  }
  let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));

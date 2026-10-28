@@ -13,7 +13,7 @@
 -let hop1 = request | map(((rid, who, name), ()) -> (who, (rid, who, name))) | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
 -let hop2 = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
 -let hop3 = hop2 | join(friend, (_, (req, _), (h, _)) -> (h, (req, 3)));
--let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | min;
+-let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let found = circle | map(((rid, node, name), d) -> (node, (rid, name, d))) | join(person, (node, (rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _)) -> ((first, name) eq, (home, (rid, node, d, last, gender, birthday, created, ip, browser)))) | filter((named, _) -> named) | map((_, row) -> row) | join(place, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) -> ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
 +let hop1_map = request | map(((rid, who, name), ()) -> (who, (rid, who, name)));
 +let hop1_idx = hop1_map | arrange;
@@ -29,7 +29,7 @@
 +let circle_filter = circle_rows | filter((node, ((_, who, _), _)) -> (node, who) ne);
 +let circle_map = circle_filter | map((node, ((rid, _, name), d)) -> ((rid, node, name), d));
 +let circle_idx = circle_map | arrange;
-+let circle = circle_idx | min;
++let circle = circle_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let found_map = circle | map(((rid, node, name), d) -> (node, (rid, name, d)));
 +let found_idx = found_map | arrange;
 +let person_idx = person | arrange;
@@ -40,10 +40,10 @@
 +let place_idx = place | arrange;
 +let found = found_idx2 | join(place_idx, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) -> ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
  let who = found | map(((rid, node), _) -> (node, rid));
--let emails = who | join(email, (node, rid, value) -> ((rid, node), value)) | collect;
--let langs = who | join(language, (node, rid, value) -> ((rid, node), value)) | collect;
--let school = who | join(study, (node, rid, (at, year)) -> (at, (rid, node, year))) | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year))) | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
--let jobs = who | join(work, (node, rid, (at, year)) -> (at, (rid, node, year))) | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year))) | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
+-let emails = who | join(email, (node, rid, value) -> ((rid, node), value)) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+-let langs = who | join(language, (node, rid, value) -> ((rid, node), value)) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+-let school = who | join(study, (node, rid, (at, year)) -> (at, (rid, node, year))) | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year))) | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+-let jobs = who | join(work, (node, rid, (at, year)) -> (at, (rid, node, year))) | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year))) | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 -let with1 = (found | join(emails, (key, row, list) -> (key, (row, list)))) + (found + (found | join(emails, (key, row, _) -> (key, row)) | negate) | map((key, row) -> (key, (row, [] : List(List(int))))));
 -let with2 = (with1 | join(langs, (key, (row, e), list) -> (key, (row, e, list)))) + (with1 + (with1 | join(langs, (key, row, _) -> (key, row)) | negate) | map((key, (row, e)) -> (key, (row, e, [] : List(List(int))))));
 -let with3 = (with2 | join(school, (key, (row, e, l), list) -> (key, (row, e, l, list)))) + (with2 + (with2 | join(school, (key, row, _) -> (key, row)) | negate) | map((key, (row, e, l)) -> (key, (row, e, l, [] : List((List(int), int, List(int)))))));
@@ -53,12 +53,12 @@
 +let email_idx = email | arrange;
 +let emails_join = who_idx | join(email_idx, (node, rid, value) -> ((rid, node), value));
 +let emails_idx = emails_join | arrange;
-+let emails = emails_idx | collect;
++let emails = emails_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 +let who_idx2 = who | arrange;
 +let language_idx = language | arrange;
 +let langs_join = who_idx2 | join(language_idx, (node, rid, value) -> ((rid, node), value));
 +let langs_idx = langs_join | arrange;
-+let langs = langs_idx | collect;
++let langs = langs_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 +let who_idx3 = who | arrange;
 +let study_idx = study | arrange;
 +let school_join = who_idx3 | join(study_idx, (node, rid, (at, year)) -> (at, (rid, node, year)));
@@ -69,7 +69,7 @@
 +let place_idx2 = place | arrange;
 +let school_join3 = school_idx2 | join(place_idx2, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where)));
 +let school_idx3 = school_join3 | arrange;
-+let school = school_idx3 | collect;
++let school = school_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 +let who_idx4 = who | arrange;
 +let work_idx = work | arrange;
 +let jobs_join = who_idx4 | join(work_idx, (node, rid, (at, year)) -> (at, (rid, node, year)));
@@ -80,7 +80,7 @@
 +let place_idx3 = place | arrange;
 +let jobs_join3 = jobs_idx2 | join(place_idx3, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where)));
 +let jobs_idx3 = jobs_join3 | arrange;
-+let jobs = jobs_idx3 | collect;
++let jobs = jobs_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 +let found_idx3 = found | arrange;
 +let emails_idx2 = emails | arrange;
 +let with1_join = found_idx3 | join(emails_idx2, (key, row, list) -> (key, (row, list)));

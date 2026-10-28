@@ -599,7 +599,7 @@ fn planning_reads_live_exports_without_installing() {
     let before = request(&mut writer, &mut reader, "before", "before list\n");
     let command = "p plan preview begin\nexport \"out\" = import \"rows\" | distinct;\np end-plan\n";
     let plan = request(&mut writer, &mut reader, "p", command);
-    assert!(plan.iter().any(|line| line.contains("map((k, v) -> ((k, v), ())) -> arrange")));
+    assert!(plan.iter().any(|line| line.contains("reduce(")));
     assert!(!plan.iter().any(|line| line.contains("Unresolved import")));
     assert_eq!(plan, request(&mut writer, &mut reader, "p", command));
     assert_eq!(before, request(&mut writer, &mut reader, "after", "after list\n"));

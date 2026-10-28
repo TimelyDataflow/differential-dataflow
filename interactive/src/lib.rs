@@ -13,6 +13,8 @@
 pub mod ir;
 // `Lambda`, and the registry of host functions: `Function`, `register`, `lookup`.
 pub mod lambda;
+// Crate-only: canonical reducer definitions and value projection composition.
+mod reducers;
 // The scope tree: `Program`, `Scope`, `Item`, `Node`, `Ref`, `Source` and their parts. Plain data,
 // so every field is public.
 pub mod scope_ir;

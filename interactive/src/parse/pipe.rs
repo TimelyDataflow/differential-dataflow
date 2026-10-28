@@ -105,7 +105,7 @@
 //!   "`Some(x)` when `c`, else `None`".
 
 use super::*;
-use crate::ir::{Lambda, Reducer};
+use crate::ir::Lambda;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {

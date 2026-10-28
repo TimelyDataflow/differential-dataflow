@@ -8,12 +8,12 @@ let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
 barring: {
     var barred : (Member, int);
     let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
-    set barred = (blocks | map((doc, who) -> (who, doc))) + beyond | distinct;
+    set barred = (blocks | map((doc, who) -> (who, doc))) + beyond | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 export "access" = sharing::allowed;
 sharing: {
     var allowed : ((Member, int), Access);
-    set allowed = offered + (offered | join(barred, (pair, acc, ()) -> (pair, acc)) | negate) | min;
+    set allowed = offered + (offered | join(barred, (pair, acc, ()) -> (pair, acc)) | negate) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let offered = (grants | map((doc, (who, acc)) -> ((who, doc), acc))) + inherited;
     let inherited = allowed | map(((who, doc), acc) -> (who, (doc, acc))) | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
 }

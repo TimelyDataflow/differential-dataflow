@@ -20,7 +20,7 @@
 -let before_idx = before_map | arrange;
 +let before_rows = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ()));
 +let before_idx = before_rows | arrange;
- let before = before_idx | distinct;
+ let before = before_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
  let during_idx = during | arrange;
 -let before_idx2 = before | arrange;

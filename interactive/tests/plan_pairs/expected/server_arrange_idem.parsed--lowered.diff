@@ -21,25 +21,25 @@
 +let arr = arr_filter | map((id, (_, cs)) -> (id, (0, cs) get));
  eqsat: {
 -    let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
--    let bsig = canon | collect | map(((id, op), cs) -> ((op, cs), id));
--    let reps = bsig | min;
+-    let bsig = canon | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map(((id, op), cs) -> ((op, cs), id));
+-    let reps = bsig | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let cong = bsig | join(reps, (_, id, rep) -> (id, rep));
--    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | distinct;
+-    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 -    let arr_cls = arr | map((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));
 -    let rule = arr_cls | map((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));
 -    let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
 -    let prop = eq | join(edges, (_, l, n) -> (n, l));
--    set eq = elems + prop | min;
+-    set eq = elems + prop | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var eq : (int, int);
 +    let pc_idx = ::pc | arrange;
 +    let eq_idx = eq | arrange;
 +    let canon = pc_idx | join(eq_idx, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
 +    let canon_idx = canon | arrange;
-+    let bsig_reduce = canon_idx | collect;
++    let bsig_reduce = canon_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 +    let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
 +    let bsig_idx = bsig | arrange;
-+    let reps = bsig_idx | min;
++    let reps = bsig_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let bsig_idx2 = bsig | arrange;
 +    let reps_idx = reps | arrange;
 +    let cong = bsig_idx2 | join(reps_idx, (_, id, rep) -> (id, rep));
@@ -47,7 +47,7 @@
 +    let eq_idx2 = eq | arrange;
 +    let arranged_join = producing_idx | join(eq_idx2, (_, _, cls) -> (cls, ()));
 +    let arranged_idx = arranged_join | arrange;
-+    let arranged = arranged_idx | distinct;
++    let arranged = arranged_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    let arr_cls_map = ::arr | map((a, c) -> (c, a));
 +    let arr_cls_idx = arr_cls_map | arrange;
 +    let eq_idx3 = eq | arrange;
@@ -64,7 +64,7 @@
 +    let prop = eq_idx4 | join(edges_idx, (_, l, n) -> (n, l));
 +    let eq_rows = ::elems + prop;
 +    let eq_idx5 = eq_rows | arrange;
-+    let eq_reduce = eq_idx5 | min;
++    let eq_reduce = eq_idx5 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    set eq = eq_reduce;
  }
 -export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

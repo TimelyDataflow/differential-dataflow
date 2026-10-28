@@ -11,7 +11,7 @@ reach: {
     let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));
     let reach_rows = ::roots + proposals;
     let reach_idx2 = reach_rows | arrange;
-    let reach_reduce = reach_idx2 | distinct;
+    let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
     set reach = reach_reduce;
 }
 let result_inspect = reach::reach | inspect(reach);

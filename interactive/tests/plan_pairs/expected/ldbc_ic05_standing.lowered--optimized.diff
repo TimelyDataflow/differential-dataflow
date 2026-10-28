@@ -13,7 +13,7 @@
 -let posted_idx = posted_map | arrange;
 +let posted_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
 +let posted_idx = posted_rows | arrange;
- let posted = posted_idx | count;
+ let posted = posted_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
  let first_map = member | map((who, (_, since)) -> (who, since));
  let first_idx = first_map | arrange;
 @@ -16,12 +12,10 @@

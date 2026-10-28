@@ -1,11 +1,12 @@
 --- parsed
 +++ lowered
-@@ -1 +1,7 @@
--export "out" = input 0 : (int, int) | distinct;
+@@ -1 +1,8 @@
+-export "out" = input 0 : (int, int) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +-- Time lanes: epoch.
 +let input0 = input 0 : (int, int);
-+let input0_idx = input0 | arrange;
-+-- Renderer: key by the whole (key, value), arrange, distinct, then restore the pair.
-+let out_reduce = input0_idx | distinct;
++let out_map = input0 | map((k, v) -> ((k, v), ()));
++let out_idx = out_map | arrange;
++let out_reduce = out_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
++let out_map2 = out_reduce | map((kv, ()) -> kv);
 +-- Renderer: build an export arrangement.
-+export "out" = out_reduce;
++export "out" = out_map2;

@@ -19,13 +19,13 @@
 -let known_idx2 = known_map2 | arrange;
 +let known_rows = known_join | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ()));
 +let known_idx2 = known_rows | arrange;
- let known_reduce = known_idx2 | distinct;
+ let known_reduce = known_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let known = known_reduce | map(((pair, row), ()) -> (pair, row));
  let marked_map = known | map(((who, _), row) -> (who, (row, 1)));
 @@ -36,8 +33,7 @@
  let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
  let ranked_idx = ranked_join | arrange;
- let ranked_reduce = ranked_idx | collect;
+ let ranked_reduce = ranked_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 -let ranked = ranked_reduce | flatmap((_, entries) -> entries);
 -let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 +let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));

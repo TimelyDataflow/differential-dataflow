@@ -114,7 +114,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
             let checked = stage("", candidate.clone(), Vec::new(), &resolve);
             if checked.problems.is_empty() && checked.shapes.exports == exports {
                 changes = changed_statements(&program, &candidate, &resolve, "masked");
-                changes.insert(0, format!("masked {masked} top-level fields (including inserted maps)"));
+                changes.insert(0, format!("{masked} field masks and map fusions"));
                 program = candidate;
             } else {
                 changes.push("projection candidate rejected by shape/export checks; kept the optimizer output".into());
@@ -337,11 +337,7 @@ fn linear(op: &LinearOp) -> String {
 
 fn reducer(reducer: &Reducer) -> String {
     match reducer {
-        Reducer::Min => "min".into(),
-        Reducer::Distinct => "distinct".into(),
-        Reducer::Count => "count".into(),
-        Reducer::Collect => "collect".into(),
-        Reducer::Expr(l) => format!("reduce({})", source_lambda(l)),
+        Reducer::Expr(l) => format!("reduce(input -> {})", l.src),
     }
 }
 
@@ -414,31 +410,22 @@ fn form(r: &Ref, imports: &[Form], items: &[Form]) -> Form {
 }
 
 // These are the representation choices in backend::render_scope, not a second renderer.
-fn item_form(node: &Node, shapes: &ScopeShapes) -> Form {
+fn item_form(node: &Node) -> Form {
     match node {
         Node::Arrange(_) => Form::Arrangement,
-        Node::Reduce { input, reducer: Reducer::Distinct } => match shapes.of(input) {
-            Some(s) if s.val == Shape::Unit => Form::Arrangement,
-            Some(_) => Form::Rows,
-            None => Form::Unknown,
-        },
         Node::Reduce { .. } => Form::Arrangement,
         _ => Form::Rows,
     }
 }
 
 /// Input reads, separating row streams from index reads (including arranging/reusing a value).
-fn reads<'a>(node: &'a Node, shapes: &ScopeShapes) -> Vec<(&'a Ref, &'static str)> {
+fn reads(node: &Node) -> Vec<(&Ref, &'static str)> {
     match node {
         Node::Linear { input, .. } | Node::Inspect { input, .. } => vec![(input, "rows")],
         Node::Concat(refs) => refs.iter().map(|r| (r, "rows")).collect(),
         Node::Arrange(input) => vec![(input, "arrange/reuse")],
         Node::Join { left, right, .. } => vec![(left, "index"), (right, "index")],
         Node::HalfJoin { stream, arrangement, .. } => vec![(stream, "rows"), (arrangement, "index")],
-        Node::Reduce { input, reducer: Reducer::Distinct } => vec![(input, match shapes.of(input) {
-            Some(s) if s.val == Shape::Unit => "index",
-            Some(_) => "rows", None => "unknown distinct read",
-        })],
         Node::Reduce { input, .. } => vec![(input, "index")],
     }
 }
@@ -462,7 +449,7 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
     let mut readers = vec![Vec::new(); imports.len()];
     for (j, item) in scope.items.iter().enumerate() {
         match item {
-            Item::Op(node) => for (r, mode) in reads(node, shapes) {
+            Item::Op(node) => for (r, mode) in reads(node) {
                 if let Ref::Import(i) = r { readers[*i].push(format!("{} ({mode})", names.items[j])); }
             },
             Item::Sub(child) => for imp in &child.imports {
@@ -499,10 +486,10 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
                 forms.push(Form::Rows);
             }
             Item::Op(op) => {
-                let repr = item_form(op, shapes);
+                let repr = item_form(op);
                 writeln!(out, "{indent}  let {} [statement {}] = {}", names.items[i], quote(&label(scope, i)), printed_node(op, &names, shapes, depth, &format!("{path}/{}", names.items[i]), slots)).unwrap();
                 writeln!(out, "{indent}    : {}; output {}", shape(shapes.of(&Ref::Local(i))), repr.text()).unwrap();
-                for (r, mode) in reads(op, shapes) {
+                for (r, mode) in reads(op) {
                     let supplied = form(r, &imports, &forms);
                     let conversion = match (mode, supplied) {
                         ("rows", Form::Arrangement) => "flatten arrangement to rows",
@@ -511,14 +498,6 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
                         _ => supplied.text(),
                     };
                     writeln!(out, "{indent}    reads {} as {mode}: {conversion}", names.of(r)).unwrap();
-                }
-                if let Node::Reduce { input, reducer: Reducer::Distinct } = op {
-                    match shapes.of(input) {
-                        Some(s) if s.val != Shape::Unit => writeln!(out,
-                            "{indent}    renderer: rows -> map((k, v) -> ((k, v), ())) -> arrange : (({}, {}), ()) -> distinct -> rows -> map((kv, ()) -> kv); output rows", s.key, s.val).unwrap(),
-                        None => writeln!(out, "{indent}    renderer: distinct expansion not shown (unknown value shape)").unwrap(),
-                        _ => {}
-                    }
                 }
                 if let Node::Linear { ops, .. } = op {
                     if ops.iter().any(|op| matches!(op, LinearOp::EnterAt(_))) {

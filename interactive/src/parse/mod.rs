@@ -9,7 +9,20 @@
 
 pub mod pipe;
 
-use crate::ir::{Lambda, Reducer};
+use crate::ir::Lambda;
+
+/// Surface reduction names. Lowering expands these into reduction expressions.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum Reducer {
+    Min,
+    /// Records with nonzero accumulated diffs, regardless of sign.
+    Distinct,
+    /// The sum of diffs, emitted only when nonzero.
+    Count,
+    /// Ordered values, each repeated by its positive diff.
+    Collect,
+    Expr(Lambda),
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {

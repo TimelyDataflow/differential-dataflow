@@ -4,8 +4,8 @@ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List
 let by_parent = import "ldbc.message.by_parent" : (int, int);
 let friend = import "ldbc.friend" : (int, (int, int));
 let reply = request | map(((rid, m), ()) -> (m, rid)) | join(message, (m, rid, (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, op))) | join(by_parent, (_, (rid, op), id) -> (id, (rid, op))) | join(message, (id, (rid, op), (kind, created, who, _, text, _, _, _, _, _, _, _, _)) -> (kind, ((who, op), (rid, id, text, created)))) | filter((kind, _) -> (kind, 1) eq) | map((_, row) -> row);
-let known = reply | map(((who, op), row) -> (who, (op, row))) | join(friend, (who, (op, row), (f, _)) -> ((f, op) eq, ((who, op), row))) | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ())) | distinct | map(((pair, row), ()) -> (pair, row));
+let known = reply | map(((who, op), row) -> (who, (op, row))) | join(friend, (who, (op, row), (f, _)) -> ((f, op) eq, ((who, op), row))) | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((pair, row), ()) -> (pair, row));
 let marked = (known | map(((who, _), row) -> (who, (row, 1)))) + (reply + (known | negate) | map(((who, _), row) -> (who, (row, 0))));
-let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k)))) | collect | flatmap((_, entries) -> entries);
+let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k)))) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 export "is7.answer" = answer | arrange;

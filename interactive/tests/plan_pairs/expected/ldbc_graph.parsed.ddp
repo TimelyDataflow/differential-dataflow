@@ -49,16 +49,16 @@ let email = input 15 : ((int, List(int)), ());
 export "ldbc.email.by_person" = email | map(((person, value), ()) -> (person, value)) | arrange;
 let language = input 16 : ((int, List(int)), ());
 export "ldbc.language.by_person" = language | map(((person, value), ()) -> (person, value)) | arrange;
-let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
+let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
-let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t))) | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct | map(((a, b, t), ()) -> (a, (b, t)));
+let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t))) | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
 export "ldbc.friend" = friends | arrange;
 export "ldbc.friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
 let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
 thread: {
     let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, root, child) -> ((child, root), ()));
-    set thread = posts + below | distinct;
+    set thread = posts + below | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 export "ldbc.message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
 export "ldbc.message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;

@@ -4,11 +4,11 @@
 +-- Time lanes: epoch.
  let rows = input 0 : (int, ());
 -let arranged = rows | arrange | arrange;
--export "counts" = arranged | count | arrange;
+-export "counts" = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | arrange;
 +let rows_idx = rows | arrange;
 +let arranged = rows_idx | arrange;
 +let arranged_idx = arranged | arrange;
-+let counts_reduce = arranged_idx | count;
++let counts_reduce = arranged_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +let counts_idx = counts_reduce | arrange;
 +-- Renderer: publish the existing arrangement.
 +export "counts" = counts_idx;

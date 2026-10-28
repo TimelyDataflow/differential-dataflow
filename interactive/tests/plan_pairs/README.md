@@ -35,9 +35,18 @@ refreshes those inputs. It checks all cases before writing expected outputs.
 
 Every run checks shapes, exports, references, dependency
 order, scope boundaries, feedback bindings, source labels, optimizer
-idempotence, and repeated planning. Projection repetition counts are explicit
-in the manifest until the reduction change removes those repeat masks.
+idempotence, and repeated planning. Projection must report zero further changes at both the projected and as-of
+stages, and the full IR must remain identical.
 Every view is compared, including during regeneration.
+
+Every emitted reduction uses `reduce(...)`, including the parsed view. Parsed
+`distinct` explicitly keys by the whole record because that view has no shape
+inference. Its extra maps can differ from the optimized unit-valued form.
+Both forms spell the resulting unit values as `()` in the reducer.
+
+Composed reducers use a graph-derived spelling only when it reparses to the exact
+optimized graph. In particular, a map over an enlisted value remains a map when
+folding it would change that graph.
 
 The test repeats planning and compares emitted bytes. The regeneration script
 also checks every corpus file against its starting bytes after each of two

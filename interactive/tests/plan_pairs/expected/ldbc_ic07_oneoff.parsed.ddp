@@ -4,7 +4,7 @@ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List
 let wrote = import "ldbc.message.by_creator" : (int, int);
 let likes = import "ldbc.likes.by_message" : (int, (int, int));
 let pals = import "ldbc.friend.pair" : ((int, int), ());
-let latest = request | map(((rid, who), ()) -> (who, rid)) | join(wrote, (who, rid, m) -> (m, (rid, who))) | join(likes, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m))) | min;
+let latest = request | map(((rid, who), ()) -> (who, rid)) | join(wrote, (who, rid, m) -> (m, (rid, who))) | join(likes, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 let rows = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg))) | join(message, (m, (rid, who, liker, when), (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((who, liker), (rid, liker, when, m, ((text len, 0) gt, text, image) select, (when, created) sub)));
 let known = rows | join(pals, (pair, row, ()) -> (pair, row));
 let marked = (known | map((_, row) -> (row, 0))) + (rows + (known | negate) | map((_, row) -> (row, 1)));

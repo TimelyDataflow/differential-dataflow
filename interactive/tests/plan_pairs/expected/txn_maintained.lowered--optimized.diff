@@ -22,7 +22,7 @@
 -    let best_idx = best_map | arrange;
 +    let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
 +    let best_idx = best_rows | arrange;
-     let best = best_idx | min;
+     let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
 -    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
 -    let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
@@ -40,10 +40,10 @@
 +    let bad_absent = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
      let rollback_rows = bad_seen + bad_absent;
      let rollback_idx2 = rollback_rows | arrange;
-     let rollback_reduce = rollback_idx2 | distinct;
+     let rollback_reduce = rollback_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -48,12 +41,11 @@
  let current_idx = current_map | arrange;
- let current = current_idx | min;
+ let current = current_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let state_map = current | map((k, (_, v)) -> (k, (v)));
 -let retire_map = current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v)));
 -let retire_neg = retire_map | negate;

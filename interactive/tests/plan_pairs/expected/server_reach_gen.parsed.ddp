@@ -2,6 +2,6 @@ let edges = import "random:nodes=8,edges=12" | map(((src, dst), ()) -> ((src), (
 let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
-    set reach = roots + proposals | distinct;
+    set reach = roots + proposals | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 export "result" = reach::reach | inspect(reach);

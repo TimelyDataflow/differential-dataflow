@@ -381,7 +381,7 @@ impl Sb {
     /// into the key and back; `distinct` keeps a key whose count is not zero, whatever its sign.
     fn presence(&mut self, input: Ref) -> Ref {
         let packed = self.project(input, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
-        let dist = self.reduce(packed, Reducer::Distinct);
+        let dist = self.reduce(packed, Reducer::Expr(crate::parse::Reducer::Distinct.lambda()));
         self.project(dist, projection(f(0, 0), f(0, 1), 2))
     }
 }
@@ -414,10 +414,9 @@ impl Sb {
         decouple::shape_preserving_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_depth)
     }
 
-    /// Keyed lookup (Reduce-style), with Min's value-narrowing.
-    fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, reducer: &Reducer) -> Ref {
-        let min = matches!(reducer, Reducer::Min);
-        decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, min)
+    /// A reduction expression may read every value at the demanded key.
+    fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, out_user_len: usize) -> Ref {
+        decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, false)
     }
 
     /// Lossy lookup (Linear[Project]), through the pair table.
@@ -960,11 +959,11 @@ impl<'a> Reverse<'a> {
             Node::Arrange(input) | Node::Inspect { input, .. } => {
                 self.push(ex, path, input, dep_this);
             }
-            Node::Reduce { input, reducer } => {
+            Node::Reduce { input, .. } => {
                 let target = resolve(self.orig, path, input);
                 let side = self.side(&target);
                 let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
-                let contrib = ex.emit_lookup_keyed(dep, &side, out_len, reducer);
+                let contrib = ex.emit_lookup_keyed(dep, &side, out_len);
                 self.contribs.entry(target).or_default().push(contrib);
             }
             // It reads its stream's whole times, as `lift` does.

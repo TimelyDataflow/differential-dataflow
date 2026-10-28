@@ -13,7 +13,7 @@ outer: {
         let step = reached_idx | join(edges_idx, (_, (), dst) -> (dst, ()));
         let reached_rows = outer::starts + step;
         let reached_idx2 = reached_rows | arrange;
-        let reached_reduce = reached_idx2 | distinct;
+        let reached_reduce = reached_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
         set reached = reached_reduce;
     }
     let again_filter = inner::reached | filter((k, ()) -> 0);

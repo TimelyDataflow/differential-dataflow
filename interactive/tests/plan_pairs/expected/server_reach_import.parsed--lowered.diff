@@ -10,7 +10,7 @@
 +let roots = input0 | map((n, ()) -> (n, ()));
  reach: {
 -    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
--    set reach = roots + proposals | distinct;
+-    set reach = roots + proposals | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var reach : ((int), ());
 +    let reach_idx = reach | arrange;
@@ -18,7 +18,7 @@
 +    let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));
 +    let reach_rows = ::roots + proposals;
 +    let reach_idx2 = reach_rows | arrange;
-+    let reach_reduce = reach_idx2 | distinct;
++    let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set reach = reach_reduce;
  }
 -export "result" = reach::reach | inspect(reach);

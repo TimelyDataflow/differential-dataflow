@@ -12,7 +12,7 @@
 -let friends_join2 = friends_idx | join(exists_idx3, (b, (a, t), ()) -> ((a, b, t), ()));
 +let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
  let friends_idx2 = friends_join2 | arrange;
- let friends_reduce = friends_idx2 | distinct;
+ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
 -let posts_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq);
 -let posts = posts_filter | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));

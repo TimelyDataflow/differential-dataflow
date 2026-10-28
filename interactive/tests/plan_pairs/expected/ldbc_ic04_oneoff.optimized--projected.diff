@@ -1,16 +1,15 @@
 --- optimized
 +++ projected
-@@ -19,9 +19,11 @@
- let before = before_idx | distinct;
+@@ -19,9 +19,10 @@
+ let before = before_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
  let during_idx = during | arrange;
 -let fresh_join = during_idx | join(before, (key, row, ()) -> (key, row));
-+let fresh_join = during_idx | join(before, ((a, _), (b, _, _, _), _) -> ((a, ()), (b, (), (), ())));
++let fresh_join = during_idx | join(before, arg -> let _call0 = let input = arg in let (key, row, ()) = input in (key, row) in ((_call0.0.0, ()), (_call0.1.0, (), (), ())));
  let fresh_neg = fresh_join | negate;
 -let fresh = during + fresh_neg;
-+let fresh_map = during | map(((a, _), (b, _, _, _)) -> ((a, ()), (b, (), (), ())));
-+let fresh_map2 = fresh_neg | map(((a, _), (b, _, _, _)) -> ((a, ()), (b, (), (), ())));
-+let fresh = fresh_map + fresh_map2;
++let fresh_map = during | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, ()), (_call0.1.0, (), (), ())));
++let fresh = fresh_map + fresh_neg;
  let counts_map = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ()));
  let counts_idx = counts_map | arrange;
- let counts = counts_idx | count;
+ let counts = counts_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

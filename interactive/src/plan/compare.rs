@@ -59,9 +59,6 @@ fn linear(a: &LinearOp, b: &LinearOp) -> bool {
 fn reducer(a: &Reducer, b: &Reducer) -> bool {
     match (a, b) {
         (Reducer::Expr(a), Reducer::Expr(b)) => lambda(a, b),
-        (Reducer::Min, Reducer::Min) | (Reducer::Distinct, Reducer::Distinct)
-        | (Reducer::Count, Reducer::Count) | (Reducer::Collect, Reducer::Collect) => true,
-        _ => false,
     }
 }
 

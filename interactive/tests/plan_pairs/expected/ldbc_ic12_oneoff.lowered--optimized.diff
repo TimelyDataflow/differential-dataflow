@@ -31,7 +31,7 @@
 @@ -55,9 +52,7 @@
  let tagset_map2 = tagset_reduce | map(((rid, f, name), ()) -> ((rid, f), name));
  let tagset_idx2 = tagset_map2 | arrange;
- let tagset = tagset_idx2 | collect;
+ let tagset = tagset_idx2 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 -let counts_idx3 = counts | arrange;
 -let tagset_idx3 = tagset | arrange;
 -let ranked_join = counts_idx3 | join(tagset_idx3, ((rid, f), n, list) -> (f, (rid, n, list)));

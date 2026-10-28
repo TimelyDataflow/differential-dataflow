@@ -25,7 +25,7 @@
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var back : ((int, int), ());
 @@ -50,8 +46,7 @@
- let next = next_idx2 | min;
+ let next = next_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
  let first_idx = first_map | arrange;
 -let first_idx2 = back::back | arrange;

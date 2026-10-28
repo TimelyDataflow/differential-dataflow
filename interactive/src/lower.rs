@@ -306,12 +306,17 @@ pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut plan = PathPlan::default();
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
-    st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true) }
+    let mut distinct = HashMap::new();
+    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut distinct) };
+    let (shapes, _) = crate::shapes::infer(&program, &|_| None);
+    crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &mut Vec::new());
+    program
 }
 
 /// Expr-lowering state for one scope. Resolves names to scope-local `Ref`s and
 /// accumulates this scope's nodes and (input/trace) imports.
 struct ScopeLower {
+    distinct: Vec<usize>,
     is_root: bool,
     items: Vec<st::Item>,
     /// Each item's statement name (see `st::Scope::labels`).
@@ -391,8 +396,13 @@ impl ScopeLower {
                 self.push(st::Node::HalfJoin { stream, arrangement: ra, strict: *strict, projection: p.clone() })
             },
             Expr::Reduce(e, red)=> {
-                let r = self.lower_expr(e); let a = self.push(st::Node::Arrange(r));
-                self.push(st::Node::Reduce { input: a, reducer: red.clone() })
+                let r = self.lower_expr(e);
+                let a = if matches!(red, Reducer::Distinct) {
+                    // Once shapes are known, lower distinct by key or by whole record.
+                    self.distinct.push(self.items.len());
+                    r
+                } else { self.push(st::Node::Arrange(r)) };
+                self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()) })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
@@ -407,9 +417,11 @@ fn lower_scope_tree(
     exports_wanted: &[PathKey],
     plan: &PathPlan,
     is_root: bool,
+    distinct: &mut HashMap<Vec<String>, Vec<usize>>,
 ) -> st::Scope {
     let scope_name = scope_label(address);
     let mut s = ScopeLower {
+        distinct: Vec::new(),
         is_root,
         items: Vec::new(),
         labels: Vec::new(),
@@ -539,7 +551,7 @@ fn lower_scope_tree(
                 let mut child_address = address.to_vec();
                 child_address.push(name.clone());
                 let wanted: Vec<PathKey> = plan.exports.get(&child_address).into_iter().flatten().cloned().collect();
-                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false);
+                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, distinct);
                 let slots = export_slots(&wanted, &child_address);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
@@ -590,6 +602,7 @@ fn lower_scope_tree(
         }
     }
 
+    distinct.insert(address.to_vec(), s.distinct);
     st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, names, binds, exports }
 }
 
@@ -961,6 +974,6 @@ mod optimize_tests {
         p.optimize();
         let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
         let linears: Vec<usize> = ops(child).iter().filter_map(|n| match n { Node::Linear { ops, .. } => Some(ops.len()), _ => None }).collect();
-        assert_eq!(linears, vec![2], "the key|filter chain fuses inside the child scope");
+        assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");
     }
 }

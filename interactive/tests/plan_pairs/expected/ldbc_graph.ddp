@@ -18,7 +18,7 @@ let email = input 15 : ((int, List(int)), ());
 let language = input 16 : ((int, List(int)), ());
 let exists_map = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ()));
 let exists_idx = exists_map | arrange;
-let exists = exists_idx | distinct;
+let exists = exists_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 let either_map = knows | map(((a, b, t), ()) -> (a, (b, t)));
 let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
 let either = either_map + either_map2;
@@ -27,7 +27,7 @@ let friends_join = either_idx | join(exists, (a, (b, t), ()) -> (b, (a, t)));
 let friends_idx = friends_join | arrange;
 let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
 let friends_idx2 = friends_join2 | arrange;
-let friends_reduce = friends_idx2 | distinct;
+let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
 let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
@@ -40,7 +40,7 @@ thread: {
     let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
     let thread_rows = ::posts + below;
     let thread_idx = thread_rows | arrange;
-    let thread_reduce = thread_idx | distinct;
+    let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
     set thread = thread_reduce;
 }
 let ldbc_person_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));

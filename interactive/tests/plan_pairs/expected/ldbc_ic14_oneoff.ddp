@@ -12,7 +12,7 @@ dist: {
     let grow = grow_idx | join(weighted_idx, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
     let dist_rows = ::starts + grow;
     let dist_idx = dist_rows | arrange;
-    let dist_reduce = dist_idx | min;
+    let dist_reduce = dist_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
     let dist_map = dist_reduce | map(((rid, node), cost) -> ((rid, node, cost), ()));
     set dist = dist_map;
 }
@@ -36,14 +36,14 @@ back: {
     let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
     let back_rows = ::targets + up;
     let back_idx2 = back_rows | arrange;
-    let back_reduce = back_idx2 | distinct;
+    let back_reduce = back_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
     set back = back_reduce;
 }
 let pred_idx3 = pred | arrange;
 let next_idx = back::back | arrange;
 let next_join = pred_idx3 | join(next_idx, ((rid, v), u, ()) -> ((rid, u), v));
 let next_idx2 = next_join | arrange;
-let next = next_idx2 | min;
+let next = next_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
 let first_idx = first_map | arrange;
 let first = first_idx | join(next_idx, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));

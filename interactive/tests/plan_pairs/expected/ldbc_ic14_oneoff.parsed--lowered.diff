@@ -10,7 +10,7 @@
  let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
  dist: {
 -    let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost))) | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
--    set dist = starts + grow | min | map(((rid, node), cost) -> ((rid, node, cost), ()));
+-    set dist = starts + grow | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist) | map(((rid, node), cost) -> ((rid, node, cost), ()));
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var dist : ((int, int, int), ());
 +    let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
@@ -19,7 +19,7 @@
 +    let grow = grow_idx | join(weighted_idx, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
 +    let dist_rows = ::starts + grow;
 +    let dist_idx = dist_rows | arrange;
-+    let dist_reduce = dist_idx | min;
++    let dist_reduce = dist_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let dist_map = dist_reduce | map(((rid, node), cost) -> ((rid, node, cost), ()));
 +    set dist = dist_map;
  }
@@ -41,7 +41,7 @@
 +let targets = targets_idx | join(best_idx2, (key, (), _) -> (key, ()));
  back: {
 -    let up = back | join(pred, ((rid, _), (), u) -> ((rid, u), ()));
--    set back = targets + up | distinct;
+-    set back = targets + up | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var back : ((int, int), ());
 +    let back_idx = back | arrange;
@@ -49,16 +49,16 @@
 +    let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
 +    let back_rows = ::targets + up;
 +    let back_idx2 = back_rows | arrange;
-+    let back_reduce = back_idx2 | distinct;
++    let back_reduce = back_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set back = back_reduce;
  }
--let next = pred | join(back::back, ((rid, v), u, ()) -> ((rid, u), v)) | min;
+-let next = pred | join(back::back, ((rid, v), u, ()) -> ((rid, u), v)) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let first = request | map(((rid, from, _), ()) -> ((rid, from), ())) | join(back::back, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
 +let pred_idx3 = pred | arrange;
 +let next_idx = back::back | arrange;
 +let next_join = pred_idx3 | join(next_idx, ((rid, v), u, ()) -> ((rid, u), v));
 +let next_idx2 = next_join | arrange;
-+let next = next_idx2 | min;
++let next = next_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
 +let first_idx = first_map | arrange;
 +let first_idx2 = back::back | arrange;
