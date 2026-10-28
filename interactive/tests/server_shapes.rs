@@ -169,7 +169,6 @@ fn dead_imports_release_provider_dependencies_but_exports_keep_them() {
         // Exercise install's optimizer too: this tree has not been optimized by the caller.
         let unused = lower::lower_tree(parse::pipe::parse(r#"
             let unused = import "edges";
-            let absent = import "absent";
             let fed = input 7 : (int, ());
         "#));
         server.install(worker, "unused", &unused).unwrap();

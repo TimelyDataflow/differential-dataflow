@@ -22,17 +22,6 @@ impl Server {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
-        // The configured passes run first, with provider shapes, which may complete maps that
-        // could not be typed before installation. Dead bindings, when on, removes unread imports
-        // before providers are resolved and dependencies recorded.
-        let mut optimized = prog.clone();
-        let as_of = self.import_as_of();
-        crate::passes::run(&mut optimized, &|source| match source {
-            st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
-                .or_else(|| super::generated_shape(t)).or_else(|| crate::diag::shape(t)),
-            _ => None,
-        }, &self.passes, &as_of, &mut |_, _, _| {});
-        let prog = &optimized;
         // The root is not a loop: a published trace holds what its program computes at each
         // epoch, not a round of an iteration. Loops live in named scopes.
         if let Some(var) = prog.root.vars.first() {
@@ -79,6 +68,20 @@ impl Server {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
             }
         }
+        self.check_shapes(name, prog)?;
+        // Validate the submitted program before any pass can remove an invalid binding.
+        // Workers have the current provider shapes and as-of. A pass panic must return
+        // an install error, before creating sources or changing the server's catalog.
+        let mut optimized = prog.clone();
+        let as_of = self.import_as_of();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::passes::run(&mut optimized, &|source| match source {
+                st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
+                    .or_else(|| super::generated_shape(t)).or_else(|| crate::diag::shape(t)),
+                _ => None,
+            }, &self.passes, &as_of, &mut |_, _, _| {});
+        })).map_err(|_| format!("program {:?} panicked during preparation", name))?;
+        let prog = &optimized;
         let (scope_shapes, export_shapes) = self.check_shapes(name, prog)?;
         for key in generated {
             if self.is_published(&key) {

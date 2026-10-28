@@ -29,8 +29,10 @@ impl Live {
 fn analyze(scope: &Scope, exports: Option<&[bool]>) -> Live {
     let mut live = Live {
         items: vec![false; scope.items.len()],
-        // Root positional inputs remain part of the client's interface.
-        imports: scope.imports.iter().map(|i| matches!(i.from, Source::Input(_))).collect(),
+        // Root inputs remain part of the client's interface. Importing the clock also
+        // publishes it in the server catalog and keeps it advancing on each tick.
+        imports: scope.imports.iter().map(|i| matches!(&i.from, Source::Input(_))
+            || matches!(&i.from, Source::Trace(name) if name == "clock")).collect(),
         exports: scope.items.iter().map(|item| match item {
             Item::Sub(child) => vec![false; child.exports.len()],
             Item::Op(_) => Vec::new(),

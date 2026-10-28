@@ -33,3 +33,23 @@ fn a_rejected_install_leaves_no_generated_sources() {
         assert!(server.snapshot(worker, recipe).is_ok());
     });
 }
+
+#[test]
+fn unread_imports_are_validated_before_passes() {
+    timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        for passes in [interactive::passes::Config::default(), interactive::passes::Config::none()] {
+            server.set_passes(passes);
+            let invalid = lower::lower_tree(parse::pipe::parse(r#"let dead = import "nope";"#));
+            let error = server.install(worker, "invalid", &invalid).unwrap_err();
+            assert!(error.contains("imports unknown trace \"nope\""), "{error}");
+
+            let clock = lower::lower_tree(parse::pipe::parse(r#"let dead = import "clock";"#));
+            server.install(worker, "clock_owner", &clock).unwrap();
+            assert!(server.trace_shape("clock").is_some());
+            assert!(server.drop_program(worker, "clock").is_err());
+            server.drop_program(worker, "clock_owner").unwrap();
+            assert!(server.trace_shape("clock").is_none());
+        }
+    });
+}
