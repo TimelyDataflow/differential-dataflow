@@ -29,6 +29,7 @@
 //! whose side nets to zero after consolidation is suppressed entirely (the harness requires
 //! keys common to both bridges).
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -39,7 +40,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, equal_idx, gather_lanes};
 use crate::runtime::search::matching_ranges;
-use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
+use corgi::{shape_of_value, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::runtime::col_times::ColTime;
@@ -54,6 +55,28 @@ const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
 pub(super) const COORD_BITS: u32 = 48;
 
+/// What the projection reads of `(key, val0, val1)`.
+struct Reads {
+    /// Each input's demand, applied to its columns before gathering.
+    columns: [Demand; 3],
+    /// Once gathered, retained inputs are taken whole; unread inputs are dropped.
+    argument: Demand,
+    /// The shape the narrowed graph takes.
+    shape: Shape,
+}
+
+impl Reads {
+    fn new(demand: Demand, input: &Shape) -> Self {
+        let shape = demand.projected_shape(input).expect("a demand on the join's input");
+        let Demand::Prod(parts) = &demand else {
+            return Reads { columns: std::array::from_fn(|_| demand.clone()), argument: demand, shape };
+        };
+        let columns = parts.clone().try_into().expect("the join's three inputs");
+        let argument = Demand::Prod(parts.iter().map(|part| if *part == Demand::None { Demand::None } else { Demand::All }).collect());
+        Reads { columns, argument, shape }
+    }
+}
+
 /// The corgi [`ProxyJoinBackend`]: holds the projection, a lambda over `(key, val0, val1)`,
 /// compiled at the shapes of the columns it meets.
 pub(crate) struct CorgiJoinBackend<T: ColTime> {
@@ -61,8 +84,10 @@ pub(crate) struct CorgiJoinBackend<T: ColTime> {
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
     colliding: Vec<i64>,
-    /// The projection, compiled at the shapes of the key and both values it reads.
-    projection: ([Shape; 3], Graph<NumOp>),
+    /// The projection, narrowed to take its input projected by `reads.argument`.
+    graph: Graph<NumOp>,
+    /// What the graph reads of its input.
+    reads: Reads,
     _t: PhantomData<T>,
 }
 
@@ -72,7 +97,10 @@ impl<T: ColTime> CorgiJoinBackend<T> {
     pub(crate) fn new(projection: &Lambda, [k, v0, v1]: [Shape; 3]) -> Self {
         let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("join projection: type error at shapes ({k}, {v0}, {v1}): {e}"));
-        CorgiJoinBackend { colliding: Vec::new(), projection: ([k, v0, v1], g), _t: PhantomData }
+        let input = Shape::Prod(vec![k, v0, v1]);
+        let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+            .unwrap_or_else(|e| panic!("join projection: narrowing a compiled graph at {input}: {e}"));
+        CorgiJoinBackend { colliding: Vec::new(), graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), _t: PhantomData }
     }
 }
 
@@ -138,9 +166,14 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
     ) {
         let chunks0 = side_chunks(&instance.batches0);
         let chunks1 = side_chunks(&instance.batches1);
-        let keys0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(recover_key_ref(c.keys()))).collect();
-        let vals0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.vals())).collect();
-        let vals1: Vec<Option<&CValue>> = chunks1.iter().map(|c| Some(c.vals())).collect();
+        // Project columns before gathering; collision checks still compare the original keys.
+        let [dk, d0, d1] = &self.reads.columns;
+        let keys0 = demanded(dk, chunks0.iter().map(|c| recover_key_ref(c.keys())));
+        let vals0 = demanded(d0, chunks0.iter().map(|c| c.vals()));
+        let vals1 = demanded(d1, chunks1.iter().map(|c| c.vals()));
+        let keys0: Vec<Option<&CValue>> = keys0.iter().map(|c| Some(&**c)).collect();
+        let vals0: Vec<Option<&CValue>> = vals0.iter().map(|c| Some(&**c)).collect();
+        let vals1: Vec<Option<&CValue>> = vals1.iter().map(|c| Some(&**c)).collect();
 
         let collision_columns: Vec<_> = if self.colliding.is_empty() { Vec::new() } else {
             chunks0.iter().chain(&chunks1).map(|c| recover_key_ref(c.keys())).collect()
@@ -209,19 +242,20 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             // identifier is not part of the projection input. A downstream arrange derives
             // the identifier for the projected key.
             let ids = &matches.ids[start..end];
-            let kc = if primitive_keys {
-                rewrap(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())
+            let rows = kept.as_ref().map_or(end - start, Vec::len);
+            let kc = if *dk == Demand::None { CValue::Unit(rows) } else if primitive_keys {
+                dk.project(rewrap(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())).expect("the join key's demand")
             } else { gather_lanes(&keys0, &tag0, &off0) };
-            let v0 = if primitive0 {
-                rewrap(chunks0[0].vals(), ids.iter().map(|x| x.1.0 as i64).collect())
+            let v0 = if *d0 == Demand::None { CValue::Unit(rows) } else if primitive0 {
+                d0.project(rewrap(chunks0[0].vals(), ids.iter().map(|x| x.1.0 as i64).collect())).expect("the join value 0's demand")
             } else { gather_lanes(&vals0, &tag0, &off0) };
-            let v1 = if primitive1 {
-                rewrap(chunks1[0].vals(), ids.iter().map(|x| x.1.1 as i64).collect())
+            let v1 = if *d1 == Demand::None { CValue::Unit(rows) } else if primitive1 {
+                d1.project(rewrap(chunks1[0].vals(), ids.iter().map(|x| x.1.1 as i64).collect())).expect("the join value 1's demand")
             } else { gather_lanes(&vals1, &tag1, &off1) };
-            let shapes = [shape_of_value(&kc), shape_of_value(&v0), shape_of_value(&v1)];
-            let (pinned, proj) = &self.projection;
-            assert!(*pinned == shapes, "join projection: inputs of shapes {shapes:?} reached a projection compiled at {pinned:?}");
-            let projected = corgi::eval_graph(proj, CValue::Prod(vec![kc, v0, v1]));
+            let argument = self.reads.argument.project(CValue::Prod(vec![kc, v0, v1])).expect("the join's input has the shape its demand is on");
+            let shape = shape_of_value(&argument);
+            assert!(shape == self.reads.shape, "join projection: input read as {shape} reached an operator narrowed to {}", self.reads.shape);
+            let projected = corgi::eval_graph(&self.graph, argument);
             let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
             let nk = cols.pop().unwrap();
@@ -240,6 +274,15 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             start = end;
         }
     }
+}
+
+/// Borrow whole columns; projecting partial ones shares their leaves and costs only their shape.
+fn demanded<'a>(demand: &Demand, cols: impl Iterator<Item = &'a CValue>) -> Vec<Cow<'a, CValue>> {
+    if *demand == Demand::None { return Vec::new(); }
+    cols.map(|col| match demand {
+        Demand::All => Cow::Borrowed(col),
+        _ => Cow::Owned(demand.project(col.clone()).expect("the join column's demand")),
+    }).collect()
 }
 
 /// Coordinates remain necessary for structured keys, including collision validation.
@@ -891,6 +934,53 @@ mod tests {
     }
 
     fn pair() -> Shape { Shape::Prod(vec![Shape::Int, Shape::Int]) }
+
+    #[test]
+    fn narrow_projection_matches_unnarrowed_join() {
+        for hashed in [false, true] {
+            let make = |wide, row| {
+                let keys = if hashed {
+                    // Same hash and first field, different unread second field.
+                    CValue::Prod(vec![ints(vec![7]), CValue::Prod(vec![ints(vec![1]), ints(vec![row])])])
+                } else { CValue::Prod(vec![ints(vec![7])]) };
+                let vals = CValue::Prod(if wide {
+                    (0..4).map(|field| ints(vec![10 * field + row])).collect()
+                } else { vec![ints(vec![row])] });
+                Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
+                    keys, vals, [row].into_iter().collect(), vec![if row == 0 { 2 } else { -3 }],
+                )]))
+            };
+            let instance = JoinInstance { batches0: vec![make(true, 0), make(true, 1)], batches1: vec![make(false, 0), make(false, 1)], lower: 5 };
+            let shapes = [if hashed { pair() } else { Shape::Prod(vec![Shape::Int]) }, Shape::Prod(vec![Shape::Int; 4]), Shape::Prod(vec![Shape::Int])];
+            for body in ["((), c)", "(k, c)", "(k, v)", "((), ())", if hashed { "let (x, y) = k in (x, c)" } else { "(k, (v, c))" }] {
+                let lambda = Lambda::new(format!("let (k, (a, b, c, d), v) = input in {body}"), &corgi::Scope::default());
+                let mut narrowed = CorgiJoinBackend::new(&lambda, shapes.clone());
+                let mut original = CorgiJoinBackend {
+                    colliding: Vec::new(), graph: compile_projection(&lambda, &shapes).unwrap(),
+                    reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), _t: PhantomData,
+                };
+                let run = |backend: &mut CorgiJoinBackend<u64>| {
+                    let (mut left, mut right) = (Vec::new(), Vec::new());
+                    backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
+                    let mut matches = JoinMatches::default();
+                    for a in &left {
+                        for b in &right {
+                            if a.0.0 == b.0.0 {
+                                matches.ids.push((a.0.0, (a.0.1, b.0.1)));
+                                matches.times.push(a.1.max(b.1));
+                                matches.diffs.push(a.2 * b.2);
+                            }
+                        }
+                    }
+                    let mut output = Vec::new();
+                    backend.cross(&instance, &mut matches, &mut output);
+                    assert_eq!(output.iter().map(|c| c.diffs.len()).sum::<usize>(), if hashed { 2 } else { 4 });
+                    output.into_iter().map(|c| (c.keys, c.vals, c.times.to_vec(), c.diffs)).collect::<Vec<_>>()
+                };
+                assert_eq!(run(&mut narrowed), run(&mut original), "hashed={hashed}, body={body}");
+            }
+        }
+    }
 
     fn cross_bridges(
         backend: &mut CorgiJoinBackend<u64>,
