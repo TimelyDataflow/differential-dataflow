@@ -15,9 +15,9 @@ the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
 trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
 (default `all,-projection`; for example `none` or `all,-projection`, with names `structural`,
-`collapse-parent-arranges`, `hoist-arranges`, `compose-maps`, `dead-bindings`,
-`projection` and `as-of-drop`). None is needed to run a
-program; the server's `plan` command reports with the same choice.
+`collapse-parent-arranges`, `hoist-invariant`, `compose-maps`, `dead-bindings`,
+`projection` and `as-of-drop`; `hoist-arranges` is an alias for `hoist-invariant`).
+None is needed to run a program; the server's `plan` command reports with the same choice.
 
 Installed programs render on the Corgi backend, and their data stays in Corgi
 columns: fed text is read into columns at each input's declared shape, exports are

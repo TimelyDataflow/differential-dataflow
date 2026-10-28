@@ -48,8 +48,8 @@ pub struct Config {
     pub structural: bool,
     /// Remove arranges of parent bindings that already carry arrangements.
     pub collapse_parent_arranges: bool,
-    /// Share explicit arrangements of unchanged imports across scopes.
-    pub hoist_arranges: bool,
+    /// Move statements whose inputs are outside the scope, preserving time and effect barriers.
+    pub hoist_invariant: bool,
     /// Compose adjacent maps, drop identity maps, cancel paired negations.
     pub compose_maps: bool,
     /// Remove imports, child exports, and aliases nothing reads.
@@ -65,15 +65,15 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The names `parse` takes, in schedule order.
-    pub const NAMES: [&'static str; 7] = ["structural", "collapse-parent-arranges", "hoist-arranges", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
+    /// The names `parse` takes, in reporting order.
+    pub const NAMES: [&'static str; 7] = ["structural", "collapse-parent-arranges", "hoist-invariant", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
 
-    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_arranges: true, compose_maps: true, dead_bindings: true, projection: true, as_of_drop: true } }
-    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_arranges: false, compose_maps: false, dead_bindings: false, projection: false, as_of_drop: false } }
+    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_invariant: true, compose_maps: true, dead_bindings: true, projection: true, as_of_drop: true } }
+    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_invariant: false, compose_maps: false, dead_bindings: false, projection: false, as_of_drop: false } }
 
     /// Start from the default passes and apply comma-separated words in order: `all`, `none`, a pass
     /// name to turn it on, or `-name` to turn it off. So `none`, `-projection` and
-    /// `none,structural` all mean what they say.
+    /// `none,structural` all mean what they say. `hoist-arranges` is an alias for `hoist-invariant`.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut config = Self::default();
         for word in text.split(',').map(str::trim).filter(|w| !w.is_empty()) {
@@ -91,7 +91,7 @@ impl Config {
 
     /// The passes switched off, by name, in schedule order.
     pub fn off(&self) -> Vec<&'static str> {
-        let on = [self.structural, self.collapse_parent_arranges, self.hoist_arranges, self.compose_maps, self.dead_bindings, self.projection, self.as_of_drop];
+        let on = [self.structural, self.collapse_parent_arranges, self.hoist_invariant, self.compose_maps, self.dead_bindings, self.projection, self.as_of_drop];
         Self::NAMES.into_iter().zip(on).filter(|(_, on)| !on).map(|(name, _)| name).collect()
     }
 
@@ -99,7 +99,7 @@ impl Config {
         match name {
             "structural" => Some(&mut self.structural),
             "collapse-parent-arranges" => Some(&mut self.collapse_parent_arranges),
-            "hoist-arranges" => Some(&mut self.hoist_arranges),
+            "hoist-invariant" | "hoist-arranges" => Some(&mut self.hoist_invariant),
             "compose-maps" => Some(&mut self.compose_maps),
             "dead-bindings" => Some(&mut self.dead_bindings),
             "projection" => Some(&mut self.projection),
@@ -147,7 +147,7 @@ pub fn run(
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
         });
     });
-    for (on, name) in [(config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_arranges, "hoist-arranges"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
+    for (on, name) in [(config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
         if !on { changes.push(Change::Off(name)); }
     }
     observe("after optimizer", program, &changes);
@@ -207,11 +207,16 @@ pub fn optimize(program: &mut Program) {
 }
 
 fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, config: &Config, observe: &mut Observe<'_>) {
+    // Move pure statements before fusion can absorb them into a time-sensitive chain.
+    // Finish dependent moves too: a hoisted arrange can expose a join, then a map.
+    if config.hoist_invariant {
+        while arrangements::run(&mut program.root, config.collapse_parent_arranges, true, observe) {}
+    }
     loop {
         if config.structural { structural::optimize_scope(&mut program.root, "root", observe); }
         let mut changed = false;
-        if config.collapse_parent_arranges || config.hoist_arranges {
-            changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_arranges, observe);
+        if config.collapse_parent_arranges || config.hoist_invariant {
+            changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, observe);
         }
         if config.compose_maps {
             let (shapes, _) = shapes::infer(program, source);

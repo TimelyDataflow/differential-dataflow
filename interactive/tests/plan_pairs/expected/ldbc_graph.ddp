@@ -31,13 +31,13 @@ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> (()
 let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
 let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+let replies_idx = replies | arrange;
 thread: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var thread;
     let below_map = thread | map(((mid, root), ()) -> (mid, root));
     let below_idx = below_map | arrange;
-    let replies_idx = ::replies | arrange;
-    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
+    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
     let thread_rows = ::posts + below;
     let thread_idx = thread_rows | arrange;
     let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

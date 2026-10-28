@@ -1381,10 +1381,10 @@ fn parse_case(text: &str) -> Case {
 /// Draw independently of generation, so minimization and new generator draws keep the subset.
 fn subset(seed: u64) -> Config {
     if let Ok(text) = std::env::var("DIFFTEST_PASSES") { return Config::parse(&text).unwrap(); }
-    let bits = Rng(seed ^ 0x7061_7373_6573).below(32);
+    let bits = Rng(seed ^ 0x7061_7373_6573).below(128);
     Config { structural: bits & 1 != 0, compose_maps: bits & 2 != 0,
         dead_bindings: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
-        ..Config::none() }
+        collapse_parent_arranges: bits & 32 != 0, hoist_invariant: bits & 64 != 0 }
 }
 
 fn pass_names(config: Config) -> String {
@@ -1601,6 +1601,42 @@ export "roots" = reader::reduced_idx;
     match check(&case, &[Oracle::Optimize, Oracle::Workers, Oracle::Scratch, Oracle::Ahead]) {
         Outcome::Pass => {},
         other => panic!("shared arrangement regression: {other:?}"),
+    }
+}
+
+#[test]
+fn invariant_statements_across_nested_feedback() {
+    let mut case = parse_case(r#"
+let edges = input 0 : (int, int);
+let roots = input 1 : (int, ());
+outer: {
+    var again : (int, ());
+    inner: {
+        var reached : (int, ());
+        let mapped = ::edges | map((src, dst) -> (dst, src));
+        let filtered = mapped | filter((_, src) -> (src, 0) ge);
+        let flat = filtered | flatmap((_, src) -> src enlist) | map((dst, (_, src)) -> (src, dst));
+        let doubled = flat + flat;
+        let once = doubled + (flat | negate);
+        let paired = once | join(::edges, (src, dst, _) -> (src, dst));
+        let reduced = paired | min;
+        let step = reached | join(reduced, (_, (), dst) -> (dst, ()));
+        set reached = (::roots + outer::again + step) | distinct;
+    }
+    set again = inner::reached | filter((_, ()) -> 0);
+}
+export "result" = ::outer::inner::reached;
+export "invariant" = ::outer::inner::reduced;
+-- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
+-- epoch 0, input 1: 1 diff=1
+-- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1
+-- epoch 2, input 1: 1 diff=-1 | 3 diff=1
+-- epoch 3, input 0: 2 val=3 diff=1 | 4 val=6 diff=1
+"#);
+    case.seed = 2; // Four workers in the worker oracle.
+    match check(&case, &[Oracle::Optimize, Oracle::Subset, Oracle::Workers, Oracle::Scratch, Oracle::Ahead]) {
+        Outcome::Pass => {},
+        other => panic!("invariant statement regression: {other:?}"),
     }
 }
 

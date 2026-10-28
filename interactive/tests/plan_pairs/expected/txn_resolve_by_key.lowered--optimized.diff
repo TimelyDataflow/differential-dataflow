@@ -11,11 +11,11 @@
 -let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 -let read_entries = reads | map(((rid, k), (e)) -> ((k), (1, rid, e)));
 +let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
++let wid_idx = wid | arrange;
 +let read_entries = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((a, _, b), (c)) -> ((b), (1, a, c)));
  let read_entries_idx = read_entries | arrange;
  let store_idx = store | arrange;
  let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
-+let wid_idx = wid | arrange;
  res: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var rollback;

@@ -26,12 +26,12 @@
 -let pred_filter = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq);
 -let pred = pred_filter | map((key, (u, _, _)) -> (key, u));
 +let pred = pred_join2 | filter((_, (_, via, least)) -> (via, least) eq) | map((key, (u, _, _)) -> (key, u));
++let pred_idx3 = pred | arrange;
  let targets_map = request | map(((rid, _, to), ()) -> ((rid, to), ()));
  let targets_idx = targets_map | arrange;
 -let best_idx2 = best | arrange;
 -let targets = targets_idx | join(best_idx2, (key, (), _) -> (key, ()));
 +let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
-+let pred_idx3 = pred | arrange;
  back: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var back;

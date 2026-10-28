@@ -25,7 +25,7 @@ fn rewrite(text: &str, config: Config, removed: usize) -> Program {
     p
 }
 
-fn hoist() -> Config { Config { hoist_arranges: true, ..Config::none() } }
+fn hoist() -> Config { Config { hoist_invariant: true, ..Config::none() } }
 fn collapse() -> Config { Config { collapse_parent_arranges: true, ..Config::none() } }
 
 #[test]
@@ -40,31 +40,36 @@ fn siblings_share_and_late_parent_peer_moves_before_children() {
             export "right" = right::idx;
         "#), hoist(), if peer.is_empty() { 1 } else { 2 });
         assert!(matches!(p.root.items[0], Item::Op(Node::Arrange(Ref::Import(0)))));
-        let Item::Sub(left) = &p.root.items[1] else { panic!() };
-        // The original rows are still imported as rows, separately from the trace.
-        assert!(left.imports.iter().any(|i| matches!(i.from, Source::Parent(Ref::Import(0)))));
-        assert!(left.imports.iter().any(|i| matches!(i.from, Source::Parent(Ref::Local(0)))));
+        // The invariant concat also moves, retaining its row and trace edges.
+        assert!(matches!(&p.root.items[1], Item::Op(Node::Concat(refs))
+            if refs == &vec![Ref::Import(0), Ref::Local(0)]));
+        let Item::Sub(left) = &p.root.items[2] else { panic!() };
+        assert!(matches!(left.exports[0].value, Ref::Import(_)));
     }
 }
 
 #[test]
-fn unshared_and_transformed_inputs_stay() {
+fn lone_arrangements_move_but_time_and_feedback_stay() {
     for child in [
         "child: { inner: { let idx = ::x | arrange; } let idx = inner::idx; }",
     ] {
         let text = format!("let x = input 0 : (int, int); {child} export \"out\" = child::idx;");
-        let before = program(&text);
         let after = rewrite(&text, hoist(), 0);
-        assert_eq!(format!("{before:?}"), format!("{after:?}"));
+        assert!(matches!(after.root.items[0], Item::Op(Node::Arrange(Ref::Import(0)))));
+        let Item::Sub(child) = &after.root.items[1] else { panic!() };
+        assert_eq!(count(child), 0);
+        assert!(child.imports.iter().any(|i| matches!(i.from, Source::Parent(Ref::Local(0)))));
     }
-    for op in ["map((k, v) -> (v, k))", "lift"] {
-        rewrite(&format!(r#"
+    for op in ["lift", "delay((_, _) -> (0, 1))"] {
+        let p = rewrite(&format!(r#"
             let x = input 0 : (int, int);
             let idx = x | arrange;
             child: {{ let idx = ::x | {op} | arrange; }}
             export "root" = idx;
             export "child" = child::idx;
         "#), hoist(), 0);
+        let Item::Sub(child) = &p.root.items[1] else { panic!() };
+        assert_eq!(child.items.len(), 2, "{op}");
     }
     rewrite(r#"
         let x = input 0 : (int, int);
@@ -105,7 +110,7 @@ fn collapse_follows_arrangements_but_not_collection_boundaries() {
 }
 
 #[test]
-fn flags_are_independent_and_unlabelled_ir_is_supported() {
+fn switches_and_unlabelled_ir() {
     let text = r#"let x = input 0 : (int, ()); let idx = x | arrange;
         child: { let same = ::idx | arrange; let shared = ::x | arrange; }
         export "same" = child::same; export "shared" = child::shared;"#;
@@ -119,4 +124,77 @@ fn flags_are_independent_and_unlabelled_ir_is_supported() {
     assert!(run(&mut p.root, true, true, &mut |_, _, _, _, _, _| {}));
     let (_, problems) = crate::shapes::infer(&p, &|_| None);
     assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
+    assert_eq!(Config::parse("none,hoist-arranges"), Config::parse("none,hoist-invariant"));
+}
+
+#[test]
+fn inspections_exports_and_feedback_stay() {
+    let p = rewrite(r#"
+        let x = input 0 : (int, int);
+        child: {
+            var looped : (int, int);
+            let mapped = ::x | map((k, v) -> (v, k));
+            let seen = mapped | inspect(keep_this_label);
+            set looped = mapped;
+        }
+        export "mapped" = child::mapped;
+        export "seen" = child::seen;
+        export "looped" = child::looped;
+    "#, hoist(), 0);
+    let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
+    assert!(matches!(&child.items[0], Item::Op(Node::Inspect { label, input: Ref::Import(_) }) if label == "keep_this_label"));
+    assert_eq!(child.vars[0].name, "looped");
+    assert!(matches!(child.binds[0].value, Ref::Import(_)));
+    assert!(child.exports.iter().any(|e| e.name == "mapped" && matches!(e.value, Ref::Import(_))));
+}
+
+#[test]
+fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
+    let p = rewrite(r#"
+        let rows = input 0 : (int, int);
+        outer: {
+            var x : (int, int);
+            let variant = x | map((k, v) -> (v, k));
+            inner: {
+                let mapped = outer::variant | map((k, v) -> (v, k));
+                let idx = mapped | arrange;
+            }
+            let mixed = variant + ::rows;
+            let joined = mixed | join(::rows, (k, l, r) -> (k, l));
+            let reduced = joined | min;
+            set x = ::rows;
+        }
+        export "out" = outer::reduced;
+        export "inner" = ::outer::inner::idx;
+    "#, hoist(), 0);
+    assert_eq!(p.root.items.len(), 2); // Only the arrange of imported rows escapes.
+    let Item::Sub(outer) = &p.root.items[1] else { panic!() };
+    assert!(matches!(outer.items[0], Item::Op(Node::Linear { input: Ref::Var(0), .. })));
+    assert!(outer.items.iter().any(|i| matches!(i, Item::Op(Node::Reduce { .. }))));
+    let inner = outer.items.iter().find_map(|i| if let Item::Sub(c) = i { Some(c) } else { None }).unwrap();
+    assert!(inner.items.is_empty());
+    let p = rewrite(r#"
+        let x = input 0 : (int, int);
+        let timed = x | map((k, v) -> (k, (v, (0, 0))));
+        child: { let out = ::timed | half_join(::x, 0, (k, l, r) -> (k, l)); }
+        export "out" = child::out;
+    "#, hoist(), 0);
+    let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
+    assert!(matches!(child.items[0], Item::Op(Node::HalfJoin { .. })));
+    for (input, removed) in [("::x", 0), ("::x | join(::x, (k, l, r) -> (k, l))", 1)] {
+        let p = rewrite(&format!(r#"
+            let x = input 0 : (int, int);
+            child: {{
+                var again : (int, int);
+                let mapped = {input} | map((k, v) -> (v, k));
+                let timed = mapped | lift;
+                set again = ::x;
+            }}
+            export "out" = child::timed;
+        "#), Config::all(), removed);
+        let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
+        assert_eq!(child.items.len(), 1);
+        assert!(matches!(&child.items[0], Item::Op(Node::Linear { input: Ref::Import(_), ops })
+            if matches!(ops.as_slice(), [LinearOp::Lift])));
+    }
 }

@@ -1027,11 +1027,11 @@ mod optimize_tests {
 
     #[test]
     fn optimizes_within_nested_scopes() {
-        // The fusible chain sits inside a scope; optimize must recurse.
+        // The feedback-dependent chain stays inside its scope; optimize must recurse.
         let src = "\
             let e = input 0 | map(((a, b), ()) -> (a, b));\n\
             s: {\n\
-                set x = e | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
+                set x = (e + x) | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
             }\n\
             export \"result\" = s::x;";
         let mut p = lower_tree(parse(src));

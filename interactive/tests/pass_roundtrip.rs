@@ -3,7 +3,7 @@
 use interactive::{explain, lower, parse, plan};
 use interactive::passes::Config;
 
-const REPROS: [(&str, &str); 5] = [
+const REPROS: [(&str, &str); 7] = [
     ("F1",
     r#"let rows = input 0 : (int, ());
         s: { set x = rows; }
@@ -26,6 +26,26 @@ const REPROS: [(&str, &str); 5] = [
         let alias = rows | map((k,v) -> (k,v));
         s: { let both = rows + alias; }
         export "out" = s::both;"#),
+    ("hoisted statements, exported aliases, and nested feedback",
+    r#"let rows = input 0 : (int, int);
+        outer: {
+            var x : (int, int);
+            inner: {
+                let mapped = ::rows | map((k, v) -> (v, k));
+                let joined = mapped | join(::rows, (k, l, r) -> (k, l));
+                let reduced = joined | min;
+            }
+            set x = inner::reduced;
+        }
+        export "out" = outer::x;
+        export "invariant" = ::outer::inner::reduced;"#),
+    ("local arrangements survive ancestor reuse without structural cleanup (seed 20864)",
+    r#"let rows = input 0 : (int, int);
+        let twice = rows | arrange | arrange;
+        let joined = rows | join(twice, (k, l, r) -> (k, l));
+        child: { let idx = ::rows | arrange; var x : (int, int); set x = idx; }
+        export "root" = joined;
+        export "child" = child::x;"#),
     ("F3 after structural cleanup (seed 16619)",
     r#"let rows = input 0 : ((int, int), ());
         let both = rows + rows;
@@ -45,7 +65,7 @@ fn roundtrip(first: plan::Report, config: Config, context: &str) {
 
 #[test]
 fn minimized_findings_roundtrip_with_every_pass_subset() {
-    // Exercise every subset of the available switches.
+    // Include invariant hoisting and parent-arrangement collapse as well as the original five.
     for mask in 0..1 << Config::NAMES.len() {
         let names = std::iter::once("none").chain(Config::NAMES.into_iter().enumerate()
             .filter(|(i, _)| mask & (1 << i) != 0).map(|(_, n)| n)).collect::<Vec<_>>().join(",");

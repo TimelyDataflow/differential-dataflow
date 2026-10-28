@@ -247,6 +247,94 @@ impl Program {
 }
 
 impl Scope {
+    /// Place selected statements after their latest input and its existing derived
+    /// statements. Indices in the returned order refer to this unchanged scope.
+    pub(crate) fn clustered_order(&self, selected: &[usize]) -> Vec<usize> {
+        let mut order: Vec<_> = (0..self.items.len()).collect();
+        let at_entry = |i: usize| {
+            let mut local = false;
+            if let Item::Op(node) = &self.items[i] {
+                node.clone().for_each_ref(|r| local |= matches!(r, Ref::Local(_) | Ref::ChildExport(_, _)));
+            }
+            !local
+        };
+        let mut positions: Vec<_> = (0..self.items.len()).collect();
+        // Keep entry operators in their original relative order, including repeated
+        // arrangements of one input when structural cleanup is disabled.
+        loop {
+            let before = order.clone();
+            let mut previous_entry = None;
+            for &moving in selected {
+                let Item::Op(node) = &self.items[moving] else { continue };
+                let mut inputs = Vec::new();
+                node.clone().for_each_ref(|r| inputs.push(r.clone()));
+                let position = |r: &Ref| match r {
+                    Ref::Local(i) | Ref::ChildExport(i, _) => positions[*i] + 1,
+                    _ => 0,
+                };
+                let Some(anchor) = inputs.iter().max_by_key(|r| position(r)).cloned() else { continue };
+                let mut target = position(&anchor);
+                if at_entry(moving) {
+                    if let Some(previous) = previous_entry {
+                        target = target.max(positions[previous] + 1);
+                        let from = positions[moving];
+                        let mut cluster = std::collections::HashSet::from([Ref::Local(previous)]);
+                        while target < from {
+                            let index = order[target];
+                            let Item::Op(node) = &self.items[index] else { break };
+                            let mut follows = false;
+                            node.clone().for_each_ref(|r| follows |= cluster.contains(r));
+                            if !follows { break; }
+                            cluster.insert(Ref::Local(index));
+                            target += 1;
+                        }
+                    }
+                    previous_entry = Some(moving);
+                }
+                let from = positions[moving];
+                if target >= from { continue; }
+                let mut derived = std::collections::HashSet::from([anchor]);
+                // The preceding entry operators may themselves derive from this
+                // anchor. Include them when recognizing the rest of its cluster.
+                for &index in &order[..target] {
+                    if let Item::Op(node) = &self.items[index] {
+                        let mut follows = false;
+                        node.clone().for_each_ref(|r| follows |= derived.contains(r));
+                        if follows { derived.insert(Ref::Local(index)); }
+                    }
+                }
+                while target < from {
+                    let index = order[target];
+                    let Item::Op(node) = &self.items[index] else { break };
+                    let mut follows = false;
+                    node.clone().for_each_ref(|r| follows |= derived.contains(r));
+                    if !follows { break; }
+                    derived.insert(Ref::Local(index));
+                    target += 1;
+                }
+                if target < from {
+                    order[target..=from].rotate_right(1);
+                    for p in target..=from { positions[order[p]] = p; }
+                }
+            }
+            if order == before { break; }
+        }
+        order
+    }
+
+    /// Apply a dependency-preserving item order, including names and child edges.
+    pub(crate) fn reorder(&mut self, order: &[usize]) {
+        let mut remap = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() { remap[old] = new; }
+        let items = std::mem::take(&mut self.items);
+        let mut items: Vec<_> = items.into_iter().map(Some).collect();
+        self.items = order.iter().map(|&i| items[i].take().unwrap()).collect();
+        if self.labels.len() == order.len() {
+            self.labels = order.iter().map(|&i| self.labels[i].clone()).collect();
+        }
+        self.for_each_ref(|r| if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = remap[*i]; });
+    }
+
     /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
     /// import edges, binds, and exports.
     pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {

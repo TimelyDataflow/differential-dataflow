@@ -46,7 +46,7 @@ impl corgi::HostKernel for Identity {
 }
 
 /// Check the tree independently of its printed text, even when accepting snapshots.
-fn check_scope(scope: &Scope, parent: Option<(&Scope, usize)>, labels: bool, origins: &mut BTreeSet<String>, arrangements: &mut BTreeSet<String>, path: &str) {
+fn check_scope(scope: &Scope, parent: Option<(&Scope, usize)>, labels: bool, origins: &mut BTreeSet<String>, path: &str) {
     if labels {
         assert_eq!(scope.labels.len(), scope.items.len(), "{path}: one label per item");
         assert!(scope.labels.iter().all(|label| !label.is_empty()), "{path}: empty label");
@@ -65,8 +65,7 @@ fn check_scope(scope: &Scope, parent: Option<(&Scope, usize)>, labels: bool, ori
     for (i, item) in scope.items.iter().enumerate() {
         if labels {
             let origin = format!("{path}/{}", scope.labels[i]);
-            origins.insert(origin.clone());
-            if matches!(item, Item::Op(Node::Arrange(_))) { arrangements.insert(origin); }
+            origins.insert(origin);
         }
         match item {
             Item::Op(node) => match node {
@@ -78,7 +77,7 @@ fn check_scope(scope: &Scope, parent: Option<(&Scope, usize)>, labels: bool, ori
             },
             Item::Sub(child) => {
                 if labels { assert_eq!(scope.labels[i], child.name, "{path}: child label"); }
-                check_scope(child, Some((scope, i)), labels, origins, arrangements, &format!("{path}/{}", child.name));
+                check_scope(child, Some((scope, i)), labels, origins, &format!("{path}/{}", child.name));
             }
         }
     }
@@ -113,17 +112,15 @@ fn check_report(case: &Case, report: &Report) {
     assert_eq!(report.stages.len(), 4, "{}: preparation stages changed", case.name);
     assert!(report.unresolved.is_empty(), "{}: missing providers: {:?}", case.name, report.unresolved);
     let mut original = BTreeSet::new();
-    let mut original_arrangements = BTreeSet::new();
     for (index, stage) in report.stages.iter().enumerate() {
         let mut origins = BTreeSet::new();
-        let mut arrangements = BTreeSet::new();
-        check_scope(&stage.program.root, None, !case.explain, &mut origins, &mut arrangements, "root");
-        if index == 0 { original = origins; original_arrangements = arrangements; }
+        check_scope(&stage.program.root, None, !case.explain, &mut origins, "root");
+        if index == 0 { original = origins; }
         else {
             // Hoisting preserves a statement label but moves it to an ancestor.
             for origin in &origins {
                 let (parent, label) = origin.rsplit_once('/').unwrap();
-                assert!(original.contains(origin) || arrangements.contains(origin) && original_arrangements.iter().any(|old| {
+                assert!(original.contains(origin) || original.iter().any(|old| {
                     let (old_parent, old_label) = old.rsplit_once('/').unwrap();
                     old_label == label && old_parent.starts_with(&format!("{parent}/"))
                 }), "{}: {} invented an origin: {origin}", case.name, stage.name);

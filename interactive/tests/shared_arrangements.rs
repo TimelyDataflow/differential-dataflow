@@ -9,9 +9,10 @@ use interactive::scope_ir::{Item, Node, Program, Ref, Scope, Source};
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn program(src: &str) -> Program {
+fn program(src: &str, hoist_invariant: bool) -> Program {
     let mut p = lower::lower_tree(parse::pipe::parse(src));
-    interactive::passes::optimize(&mut p);
+    let config = interactive::passes::Config { hoist_invariant, ..interactive::passes::Config::all() };
+    interactive::passes::run(&mut p, &|_| None, &config, &Default::default(), &mut |_, _, _| {});
     p
 }
 
@@ -55,6 +56,8 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
     let (program, epochs) = (program.clone(), epochs.to_vec());
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
+        // The programs were prepared above; preserve their different placements.
+        server.set_passes(interactive::passes::Config::none());
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
         for batch in epochs.iter() {
@@ -71,7 +74,9 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
 }
 
 fn assert_sharing_agrees(written: &str, shared: &str) {
-    let (written, shared) = (program(written), program(shared));
+    // Keep the reference's arrangements inside their loops even though hoisting
+    // now moves lone arrangements by default.
+    let (written, shared) = (program(written, false), program(shared, true));
     assert_eq!(arranged_imports(&written.root), 0);
     assert!(arranged_imports(&shared.root) > 0, "the shared variant imports no arrangement");
     let epochs = churn(8);

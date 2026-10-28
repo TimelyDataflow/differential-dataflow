@@ -1,6 +1,6 @@
 --- lowered
 +++ optimized
-@@ -1,9 +1,8 @@
+@@ -1,15 +1,14 @@
  -- Time lanes: epoch.
  -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
  let random_nodes_8_edges_12 = import "random:nodes=8,edges=12" : ((int, int), ());
@@ -8,6 +8,14 @@
 +let roots = input 0 : ((int), ());
  let edges = random_nodes_8_edges_12 | map(((src, dst), ()) -> ((src), (dst)));
 -let roots = input0 | map((n, ()) -> (n, ()));
++let edges_idx = edges | arrange;
  reach: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var reach;
+     let reach_idx = reach | arrange;
+-    let edges_idx = ::edges | arrange;
+-    let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));
++    let proposals = reach_idx | join(::edges_idx, (_, _, dst) -> (dst, ()));
+     let reach_rows = ::roots + proposals;
+     let reach_idx2 = reach_rows | arrange;
+     let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

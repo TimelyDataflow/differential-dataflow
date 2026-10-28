@@ -571,4 +571,42 @@ mod tests {
         assert!(output.contains("half_join("));
         assert!(!before.compare_final(&plan(&output)).is_empty(), "as-of currently inserts another filter on replanning");
     }
+    #[test]
+    fn hoisted_names_placement_and_aliases_are_stable() {
+        let text = r#"let rows = input 0 : (int, int);
+            let reads = rows | filter((k, _) -> (k, 0) ge);
+            let occupied = rows | negate;
+            let tail = rows | filter((k, _) -> (k, 4) ge);
+            child: {
+                let rk = ::reads | map((k, v) -> (v, k));
+                let occupied = ::reads | map((k, v) -> (k, (v, 1) add));
+                let both = rk + occupied;
+            }
+            export "out" = child::both;
+            export "tail" = tail;
+            export "occupied" = occupied;"#;
+        let output = roundtrip(text);
+        assert!(output.contains("let rk = reads | map("), "{output}");
+        assert!(output.contains("let reads_map = reads | map("), "{output}");
+        assert!(output.find("let rk =").unwrap() < output.find("let occupied =").unwrap(), "{output}");
+        let child = output.split("child: {").nth(1).unwrap().split('}').next().unwrap();
+        assert!(!child.contains("let rk") && !child.contains("let occupied"), "{output}");
+    }
+
+
+    #[test]
+    fn hoisted_joins_follow_the_latest_input() {
+        let text = r#"let rows = input 0 : (int, int);
+            let early = rows | map((k, v) -> (v, k));
+            let late = rows | filter((k, v) -> (k, v) lt);
+            let between = rows | map((k, v) -> (k, v neg));
+            child: { let pair = ::early | join(::late, (k, a, b) -> (k, (a, b))); }
+            export "out" = child::pair;
+            export "between" = between;"#;
+        let printed = roundtrip(text);
+        assert!(printed.find("let late =").unwrap() < printed.find("let pair =").unwrap(), "{printed}");
+        assert!(printed.find("let pair =").unwrap() < printed.find("let between =").unwrap(), "{printed}");
+        assert!(printed.contains("let pair = ::pair;"), "{printed}");
+    }
+
 }

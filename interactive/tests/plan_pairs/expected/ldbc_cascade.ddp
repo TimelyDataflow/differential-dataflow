@@ -47,12 +47,12 @@ let seeds_idx2 = seeds_rows | arrange;
 let seeds_join2 = seeds_idx2 | join(dead_f, (_, id, ()) -> (id, ()));
 let seeds = seeds_map + seeds_join + seeds_join2;
 let children = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
+let children_idx = children | arrange;
 dead_m: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var dead_m;
     let dead_m_idx = dead_m | arrange;
-    let children_idx = ::children | arrange;
-    let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
+    let kids = dead_m_idx | join(::children_idx, (_, (), child) -> (child, ()));
     let dead_m_rows = ::seeds + kids;
     let dead_m_idx2 = dead_m_rows | arrange;
     let dead_m_reduce = dead_m_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
@@ -199,13 +199,13 @@ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> (()
 let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
 let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
+let replies_idx = replies | arrange;
 thread: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var thread;
     let below_map = thread | map(((mid, root), ()) -> (mid, root));
     let below_idx = below_map | arrange;
-    let replies_idx = ::replies | arrange;
-    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
+    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
     let thread_rows = ::posts + below;
     let thread_idx = thread_rows | arrange;
     let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

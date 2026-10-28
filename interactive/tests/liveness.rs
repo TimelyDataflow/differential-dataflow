@@ -52,7 +52,10 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
     assert_eq!(p.root.imports[0].from, Source::Input(0));
     assert_eq!(p.root.imports[1].from, Source::Input(1));
     assert_eq!(p.op_count(), 2);
-    let Item::Sub(values) = &p.root.items[0] else { panic!() };
+    // Invariant maps can move before the child; find it by its retained name.
+    let values = p.root.items.iter().find_map(|item| match item {
+        Item::Sub(child) if child.name == "values" => Some(child), _ => None,
+    }).unwrap();
     assert_eq!(values.exports.len(), 1);
     assert_eq!(values.exports[0].name, "used");
     assert_eq!(values.imports.len(), 1);

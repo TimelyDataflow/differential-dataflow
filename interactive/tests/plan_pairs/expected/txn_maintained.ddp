@@ -1,6 +1,10 @@
 -- Time lanes: epoch.
 let intents = input 0 : ((int, int, int), (int));
 let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
+let rk_idx = rk | arrange;
+let rkk = reads | map((rk, _) -> (rk, ()));
+let reads_idx = reads | arrange;
 let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
 let wid_idx = wid | arrange;
 res: {
@@ -11,20 +15,16 @@ res: {
     let writes_neg = wr_bad | negate;
     let writes = ::wid + writes_neg;
     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
-    let rk = ::reads | map(((rid, k), (e)) -> ((k), (rid, e)));
-    let rk_idx = rk | arrange;
     let wk_idx = wk | arrange;
-    let pairs_join = rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
+    let pairs_join = ::rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
     let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
     let best_idx = best_rows | arrange;
     let best = best_idx | reduce((_, a) -> (a head.0, 1) enlist map ((a, b) -> (((), a.1), b)));
     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
-    let rkk = ::reads | map((rk, _) -> (rk, ()));
     let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
-    let unseen = rkk + unseen_rows;
+    let unseen = ::rkk + unseen_rows;
     let unseen_idx = unseen | arrange;
-    let reads_idx = ::reads | arrange;
-    let bad_absent_join = unseen_idx | join(reads_idx, ((rid, _), (), (e)) -> ((rid, e), ()));
+    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), (), (e)) -> ((rid, e), ()));
     let bad_absent = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
     let rollback_rows = bad_seen + bad_absent;
     let rollback_idx2 = rollback_rows | arrange;

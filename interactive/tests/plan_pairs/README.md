@@ -45,11 +45,17 @@ schedule after introducing masks. Unit tests in `src/passes/tests.rs` evaluate
 each accepted map rewrite on generated batches of 0, 1, 17, and 64 rows. They
 cover this manifest and the 81 other checked-in review programs, including BI.
 
-`hoist-arranges` shares explicit arrangements of the same binding across scopes,
-following unchanged parent imports. It keeps a lone child arrangement in place.
+`hoist-invariant` moves statements whose inputs are outside a child scope to the
+outermost scope where those inputs are available. Maps, filters, flatmaps, negates,
+concats, arranges, joins, and reduces can move. Variables, time operators, half joins,
+and inspections stop motion; exports and binds retain their names in the child.
+`hoist-arranges` remains a compatible spelling for this switch.
 `collapse-parent-arranges` removes an arrange of an already arranged parent import,
 including trace imports and reduction results. Both rules are independently
-switchable. Hoisted statement labels retain their source name in the ancestor scope.
+switchable. A moved statement keeps its child name when free. Otherwise its name uses its
+source binding and operation (`reads_map`, `reads_idx`, then numeric suffixes).
+It follows its latest-defined input and earlier derivatives of that input.
+Unused aliases left by hoisting are removed; child export names stay reachable.
 
 Every emitted reduction uses `reduce(...)`, including the parsed view. Parsed
 `distinct` explicitly keys by the whole record because that view has no shape
