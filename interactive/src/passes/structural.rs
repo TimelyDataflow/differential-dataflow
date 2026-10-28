@@ -23,108 +23,34 @@ pub(super) fn merge_imports(scope: &mut Scope) -> usize {
     changed
 }
 
-/// Optimize each scope to a fixed point: prune unread items and imports, collapse
-/// redundant arrangements, deduplicate, and fuse linear chains. Keep root inputs.
-/// Pruning precedes fusion so dead readers do not inflate use counts.
-/// Observations precede removal and renumbering; the result says whether this
-/// scope or any descendant contains an Inspect.
-pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super::Observe<'_>) -> bool {
-    let inspect: Vec<bool> = scope.items.iter_mut().map(|item| match item {
-        Item::Op(Node::Inspect { .. }) => true,
-        Item::Sub(child) => optimize_scope(child, &format!("{path}/{}", child.name), observe),
-        _ => false,
-    }).collect();
+/// Optimize this scope (and, recursively, its children) in place, iterating
+/// three rewrites to a fixed point:
+///
+/// - collapse an `Arrange` whose input is already an arrangement
+///   (an `Arrange` or a `Reduce`);
+/// - deduplicate structurally identical operators and child scopes;
+/// - fuse a `Linear` into its `Linear` input when it is that input's only
+///   consumer. Deduplication comes first so fusion cannot hide shared prefixes.
+///
+/// All three are *within-scope*: a scope boundary is a semantic barrier,
+/// so nothing merges or moves across one.
+/// Observations are made before items are removed or renumbered.
+pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super::Observe<'_>) {
+    for item in scope.items.iter_mut() {
+        if let Item::Sub(child) = item {
+            optimize_scope(child, &format!("{path}/{}", child.name), observe);
+        }
+    }
     let ordinals = super::item_ordinals(scope);
+    let mut note = |scope: &Scope, action: &'static str, from, to| observe(path, scope, &ordinals, action, from, to);
     let mut dead: Vec<bool> = vec![false; scope.items.len()];
     loop {
-        let pruned = prune(scope, &mut dead, &inspect, path, &ordinals, observe);
-        let mut note = |scope: &Scope, action: &'static str, from, to| observe(path, scope, &ordinals, action, from, to);
-        let changed = pruned | collapse_arranges(scope, &mut dead, &mut note)
+        let changed = collapse_arranges(scope, &mut dead, &mut note)
             | dedup(scope, &mut dead, &mut note)
             | fuse_linear(scope, &mut dead, &mut note);
-        if !changed {
-            compact(scope, &dead);
-            return inspect.iter().any(|&i| i);
-        }
+        if !changed { break; }
     }
-}
-
-/// Walk backward once: all readers of an item precede it in this walk.
-/// Retained scopes keep their feedback bindings as roots, since a variable
-/// can read a later item. Inspect also keeps its enclosing scopes alive.
-fn prune(scope: &mut Scope, dead: &mut [bool], inspect: &[bool], path: &str, ordinals: &[usize], observe: &mut super::Observe<'_>) -> bool {
-    let mut live = inspect.to_vec();
-    // Positional inputs only occur at the root. Clients can still feed an
-    // unread input, so retain its slot even when no operator reads it.
-    let mut imports: Vec<bool> = scope.imports.iter().map(|i| matches!(i.from, Source::Input(_))).collect();
-    let mut exports: Vec<Vec<bool>> = scope.items.iter().map(|item| match item {
-        Item::Sub(child) => vec![false; child.exports.len()],
-        Item::Op(_) => Vec::new(),
-    }).collect();
-    let mark = |r: &Ref, live: &mut [bool], imports: &mut [bool], exports: &mut [Vec<bool>]| match r {
-        Ref::Local(i) => live[*i] = true,
-        Ref::Import(i) => imports[*i] = true,
-        Ref::ChildExport(i, e) => { live[*i] = true; exports[*i][*e] = true; },
-        Ref::Var(_) => {}, // The retained scope's bindings are roots below.
-    };
-    for e in &scope.exports { mark(&e.value, &mut live, &mut imports, &mut exports); }
-    for b in &scope.binds { mark(&b.value, &mut live, &mut imports, &mut exports); }
-    let mut changed = false;
-    let mut export_remap = vec![Vec::new(); scope.items.len()];
-    for i in (0..scope.items.len()).rev() {
-        if dead[i] { continue; }
-        let item = &mut scope.items[i];
-        if let Item::Sub(child) = item {
-            let mut next = 0;
-            export_remap[i] = exports[i].iter().map(|&keep| {
-                if keep { let slot = next; next += 1; slot } else { usize::MAX }
-            }).collect();
-            if next != child.exports.len() {
-                let mut keep = exports[i].iter();
-                child.exports.retain(|_| *keep.next().unwrap());
-                // Only a changed set of roots needs another child pass, and a
-                // child about to be removed needs none. Inspect survives pruning,
-                // so its cached flag stays valid.
-                if live[i] { optimize_scope(child, &format!("{path}/{}", child.name), observe); }
-                changed = true;
-            }
-        }
-        if live[i] {
-            item.for_each_ref(|r| mark(r, &mut live, &mut imports, &mut exports));
-        } else {
-            observe(path, scope, ordinals, "removed dead", i, i);
-            dead[i] = true;
-            changed = true;
-        }
-    }
-    let mut next = 0;
-    let import_remap: Vec<_> = imports.iter().map(|&keep| {
-        if keep { let slot = next; next += 1; slot } else { usize::MAX }
-    }).collect();
-    changed |= next != scope.imports.len();
-    let mut keep = imports.iter();
-    scope.imports.retain(|_| *keep.next().unwrap());
-    let mut remap = |r: &mut Ref| match r {
-        Ref::Import(i) => *i = import_remap[*i],
-        Ref::ChildExport(i, e) => *e = export_remap[*i][*e],
-        _ => {},
-    };
-    // Dead holders may still refer to exports or imports already removed.
-    for (i, item) in scope.items.iter_mut().enumerate() {
-        if !dead[i] { item.for_each_ref(&mut remap); }
-    }
-    for b in &mut scope.binds { remap(&mut b.value); }
-    for e in &mut scope.exports { remap(&mut e.value); }
-    // Source names are provenance, not roots. Drop names for removed values
-    // before remapping the surviving imports and child exports.
-    scope.names.retain(|(_, r)| match r {
-        Ref::Local(i) => !dead[*i],
-        Ref::Import(i) => imports[*i],
-        Ref::ChildExport(i, e) => !dead[*i] && exports[*i][*e],
-        Ref::Var(_) => true,
-    });
-    for (_, r) in &mut scope.names { remap(r); }
-    changed
+    compact(scope, &dead);
 }
 
 /// Count, for each item, the references to it (`Local` or `ChildExport`)

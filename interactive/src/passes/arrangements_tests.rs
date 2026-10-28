@@ -125,6 +125,13 @@ fn switches_and_unlabelled_ir() {
     let (_, problems) = crate::shapes::infer(&p, &|_| None);
     assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
     assert_eq!(Config::parse("none,hoist-arranges"), Config::parse("none,hoist-invariant"));
+    let first = crate::plan::report(text, &|_| None, &hoist()).unwrap();
+    let Item::Sub(child) = first.stages.last().unwrap().program.root.items.last().unwrap() else { panic!() };
+    assert!(child.imports.iter().any(|i| i.from == Source::Parent(Ref::Import(0))));
+    let printed = first.emit_ddp().unwrap().text;
+    let second = crate::plan::report(&printed, &|_| None, &hoist()).unwrap();
+    assert!(first.compare_final(&second).is_empty());
+    assert_eq!(printed, second.emit_ddp().unwrap().text);
 }
 
 #[test]

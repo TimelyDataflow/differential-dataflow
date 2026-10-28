@@ -270,14 +270,14 @@ I didn't write it, but I find `ok bye` hilarious.
 A program moves through four parts, each using only the ones before it.
 
 1. **The language.** `parse/` reads `.ddp` text. `lower.rs` turns it into the scope-tree IR of
-   `scope_ir.rs`: scopes, items, exports, and the IR's own optimizations. `shapes.rs` infers the
+   `scope_ir.rs`: scopes, items, imports, and exports. `shapes.rs` infers the
    shape of every collection. `ir.rs` is the vocabulary all of these are written in: lambdas,
    operator steps, reducers, and registered functions. `lambda.rs` is where the expression
    language plugs in: it parses, types, compiles and composes the lambdas in a program's slots.
 2. **Rewrites** turn a program into another program. `passes/` holds the passes install runs,
-   through one entry point, `passes::run`: structural optimization, map composition, dead
-   bindings, projection (fields nothing reads become `()`), and the as-of drop. None is needed
-   to run a program, and each can be switched off: `DDIR_PASSES` on the server and
+   through one entry point, `passes::run`: dead-code removal, structural optimization, map
+   composition, arrangement sharing, invariant motion, projection (fields nothing reads
+   become `()`), and the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
    `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
    excludes projection; `all` enables every pass. `explain/` produces a
    program that explains its own outputs.
@@ -289,6 +289,15 @@ A program moves through four parts, each using only the ones before it.
    one file per concern.
    `diag.rs` turns the server's own logging into the `diag.*` collections. The `ddir-server`
    crate in `server/` is the executable that drives it all.
+
+The `dead-code` pass runs before `structural` in each optimizer round, after the
+initial invariant-hoisting phase, so dead readers cannot inflate fusion's use
+counts. Its analysis walks each scope backward once; a separate transform removes
+unread operators, child scopes, child exports, imports, and redundant source aliases.
+Exports, inspections, and feedback bindings in retained scopes are roots. Root
+program inputs remain available to clients. The pass is on by default; use
+`--passes all,-projection,-dead-code` or the same list in `DDIR_PASSES` to disable
+this cleanup. Structural optimization performs no liveness pruning of its own.
 
 The stack aims to stay generic over two things: the expression language and the backend.
 - **The expression language** is corgi today. Slots are corgi lambdas, typed and compiled to corgi

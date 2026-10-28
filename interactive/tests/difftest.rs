@@ -1383,7 +1383,7 @@ fn subset(seed: u64) -> Config {
     if let Ok(text) = std::env::var("DIFFTEST_PASSES") { return Config::parse(&text).unwrap(); }
     let bits = Rng(seed ^ 0x7061_7373_6573).below(128);
     Config { structural: bits & 1 != 0, compose_maps: bits & 2 != 0,
-        dead_bindings: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
+        dead_code: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
         collapse_parent_arranges: bits & 32 != 0, hoist_invariant: bits & 64 != 0 }
 }
 

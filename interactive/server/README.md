@@ -14,10 +14,12 @@ the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
 `peek diag.time_by_statement` reads time by program statement like any other
 trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
-(default `all,-projection`; for example `none` or `all,-projection`, with names `structural`,
-`collapse-parent-arranges`, `hoist-invariant`, `compose-maps`, `dead-bindings`,
+(default `all,-projection`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
+`collapse-parent-arranges`, `hoist-invariant`, `compose-maps`,
 `projection` and `as-of-drop`; `hoist-arranges` is an alias for `hoist-invariant`).
-None is needed to run a program; the server's `plan` command reports with the same choice.
+`dead-code` is on by default and runs before structural fusion in every optimizer
+round, removing unread computations and bindings while keeping root inputs.
+`all,-projection,-dead-code` disables that cleanup. None is needed to run a program; the server's `plan` command reports with the same choice.
 
 Installed programs render on the Corgi backend, and their data stays in Corgi
 columns: fed text is read into columns at each input's declared shape, exports are

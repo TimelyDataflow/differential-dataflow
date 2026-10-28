@@ -47,32 +47,8 @@ pub(super) fn run(scope: &mut Scope, collapse: bool, hoist: bool, timings: &mut 
         changed |= timings.pass_mut(Pass::HoistInvariant).observed(observe, |observe| {
             hoist_statements(scope, "root", observe)
                 | hoist_arranges(scope, &imports, "root", observe)
-                | prune_imports(scope)
         });
     }
-    changed
-}
-
-/// Moving a reader can leave its old parent edge unused. Remove these edges even
-/// when dead-binding cleanup is off: DDP reconstructs imports from their readers.
-/// Names count as readers here, so an explicit source alias is still preserved.
-fn prune_imports(scope: &mut Scope) -> bool {
-    let mut changed = false;
-    for item in &mut scope.items {
-        if let Item::Sub(child) = item { changed |= prune_imports(child); }
-    }
-    let mut read = vec![false; scope.imports.len()];
-    scope.for_each_ref(|r| if let Ref::Import(i) = r { read[*i] = true; });
-    let mut remap = vec![0; read.len()];
-    let imports = std::mem::take(&mut scope.imports);
-    for (i, import) in imports.into_iter().enumerate() {
-        if read[i] || !matches!(import.from, Source::Parent(_)) {
-            remap[i] = scope.imports.len();
-            scope.imports.push(import);
-        }
-    }
-    changed |= scope.imports.len() != read.len();
-    scope.for_each_ref(|r| if let Ref::Import(i) = r { *i = remap[*i]; });
     changed
 }
 

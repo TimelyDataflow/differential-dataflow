@@ -69,3 +69,38 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
         server.tick(worker);
     });
 }
+
+#[test]
+fn dead_code_switch_controls_pruning_before_fusion() {
+    use interactive::passes::{self, Config, Pass};
+    let original = program(r#"
+        let x = input 0 : (int, int);
+        let alias = x;
+        let unused = input 1 : (int, int);
+        let absent = import "absent" : (int, int);
+        let prefix = x | map((k, v) -> (k, (v, 1) add));
+        let dead = prefix | filter((_, v) -> (v, 0) gt);
+        lost: { let dead = ::absent | map((k, v) -> (v, k)); }
+        export "out" = prefix | map((k, v) -> (v, k));
+    "#);
+    let off = Config::parse("none,structural").unwrap();
+    let on = Config::parse("none,structural,dead-code").unwrap();
+    assert!(Config::default().dead_code);
+    assert!(!Config::parse("all,-dead-code").unwrap().dead_code);
+    assert!(Config::parse("dead-bindings").is_err());
+    let run = |config| {
+        let mut p = original.clone();
+        let timings = passes::run(&mut p, &|_| Some((corgi::Shape::Int, corgi::Shape::Int)),
+            &config, &timely::order::Product::new(1, Default::default()), &mut |_, _, _| {});
+        (p, timings)
+    };
+    let (kept, off_times) = run(off);
+    assert_eq!(format!("{kept:?}"), format!("{original:?}"));
+    assert_eq!(off_times.pass(Pass::DeadCode).runs, 0);
+    let (pruned, on_times) = run(on);
+    assert_eq!(pruned.root.imports.len(), 2);
+    assert!(pruned.root.imports.iter().all(|i| matches!(i.from, Source::Input(_))));
+    assert_eq!(pruned.root.items.len(), 1); // Removing the dead reader exposes fusion.
+    assert!(!pruned.root.names.iter().any(|(name, _)| name == "alias"));
+    assert!(on_times.pass(Pass::DeadCode).changes > 0);
+}

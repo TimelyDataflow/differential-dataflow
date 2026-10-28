@@ -334,7 +334,7 @@ fn all_pass_subsets() {
     let mut export_shapes = BTreeMap::new();
     for mask in 0..32 {
         // Preserve the five-pass campaign's masks; arrangement sharing is off.
-        let passes = ["structural", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
+        let passes = ["structural", "compose-maps", "dead-code", "projection", "as-of-drop"];
         let names = std::iter::once("none").chain(passes.into_iter().enumerate()
             .filter(|(i, _)| mask & (1 << i) != 0).map(|(_, n)| n)).collect::<Vec<_>>().join(",");
         let config = Config::parse(&names).unwrap();

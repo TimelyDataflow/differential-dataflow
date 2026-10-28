@@ -1,6 +1,7 @@
 //! Scope-tree rewrites. `run` is the preparation schedule; all host choices are inputs.
 
 mod structural;
+mod dead_code;
 mod arrangements;
 mod canonical;
 pub mod projection;
@@ -47,7 +48,9 @@ type Observe<'a> = dyn FnMut(&str, &Scope, &[usize], &'static str, usize, usize)
 /// language accepts, with the same answers, whichever of them ran. The default excludes projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// Prune unread computations, collapse arranges, fuse linear chains, merge identical operators.
+    /// Remove unread computations, child exports, imports, and aliases; keep root inputs.
+    pub dead_code: bool,
+    /// Collapse arranges of arrangements, fuse linear chains, merge identical operators.
     pub structural: bool,
     /// Remove arranges of parent bindings that already carry arrangements.
     pub collapse_parent_arranges: bool,
@@ -55,8 +58,6 @@ pub struct Config {
     pub hoist_invariant: bool,
     /// Compose adjacent maps, drop identity maps, cancel paired negations.
     pub compose_maps: bool,
-    /// Remove imports, child exports, and aliases nothing reads.
-    pub dead_bindings: bool,
     /// Replace fields nothing reads by `()`.
     pub projection: bool,
     /// Drop updates at the as-of time that only strict half joins would read.
@@ -69,10 +70,10 @@ impl Default for Config {
 
 impl Config {
     /// The names `parse` takes, in reporting order.
-    pub const NAMES: [&'static str; 7] = ["structural", "collapse-parent-arranges", "hoist-invariant", "compose-maps", "dead-bindings", "projection", "as-of-drop"];
+    pub const NAMES: [&'static str; 7] = ["dead-code", "structural", "collapse-parent-arranges", "hoist-invariant", "compose-maps", "projection", "as-of-drop"];
 
-    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_invariant: true, compose_maps: true, dead_bindings: true, projection: true, as_of_drop: true } }
-    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_invariant: false, compose_maps: false, dead_bindings: false, projection: false, as_of_drop: false } }
+    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_invariant: true, compose_maps: true, dead_code: true, projection: true, as_of_drop: true } }
+    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_invariant: false, compose_maps: false, dead_code: false, projection: false, as_of_drop: false } }
 
     /// Start from the default passes and apply comma-separated words in order: `all`, `none`, a pass
     /// name to turn it on, or `-name` to turn it off. So `none`, `-projection` and
@@ -94,7 +95,7 @@ impl Config {
 
     /// The passes switched off, by name, in schedule order.
     pub fn off(&self) -> Vec<&'static str> {
-        let on = [self.structural, self.collapse_parent_arranges, self.hoist_invariant, self.compose_maps, self.dead_bindings, self.projection, self.as_of_drop];
+        let on = [self.dead_code, self.structural, self.collapse_parent_arranges, self.hoist_invariant, self.compose_maps, self.projection, self.as_of_drop];
         Self::NAMES.into_iter().zip(on).filter(|(_, on)| !on).map(|(name, _)| name).collect()
     }
 
@@ -104,7 +105,7 @@ impl Config {
             "collapse-parent-arranges" => Some(&mut self.collapse_parent_arranges),
             "hoist-invariant" | "hoist-arranges" => Some(&mut self.hoist_invariant),
             "compose-maps" => Some(&mut self.compose_maps),
-            "dead-bindings" => Some(&mut self.dead_bindings),
+            "dead-code" => Some(&mut self.dead_code),
             "projection" => Some(&mut self.projection),
             "as-of-drop" => Some(&mut self.as_of_drop),
             _ => None,
@@ -165,12 +166,12 @@ pub fn run(
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
         });
     });
-    for pass in [Pass::ComposeMaps, Pass::DeadBindings, Pass::MergeImports] {
+    for pass in [Pass::DeadCode, Pass::ComposeMaps, Pass::MergeImports] {
         let count = timings.pass(pass).changes;
         if count > 0 { changes.push(Change::Rewritten { pass, count }); }
     }
     timings.optimizer.record(start.elapsed(), changes.iter().map(Change::count).sum());
-    for (on, name) in [(config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
+    for (on, name) in [(config.dead_code, "dead-code"), (config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps")] {
         if !on { changes.push(Change::Off(name)); }
     }
     timings.observe("after optimizer", program, &changes, observe);
@@ -246,19 +247,24 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
     }
     loop {
         timings.optimizer_rounds += 1;
-        if config.structural {
-            timings.pass_mut(Pass::Structural).observed(observe, |observe| structural::optimize_scope(&mut program.root, "root", observe));
-        }
         let mut changed = false;
+        // Remove dead readers before structural fusion counts uses. This shares
+        // the optimizer's fixed point; liveness itself makes one backward walk.
+        if config.dead_code {
+            changed |= timings.pass_mut(Pass::DeadCode).rewrites(|| dead_code::run(&mut program.root));
+        }
+        if config.structural {
+            let before = timings.pass(Pass::Structural).changes;
+            timings.pass_mut(Pass::Structural).observed(observe, |observe| structural::optimize_scope(&mut program.root, "root", observe));
+            // Redirects can leave redundant names for the next dead-code pass.
+            changed |= timings.pass(Pass::Structural).changes != before;
+        }
         if config.collapse_parent_arranges || config.hoist_invariant {
             changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, timings, observe);
         }
         if config.compose_maps {
             let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer(program, source);
             changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes));
-        }
-        if config.dead_bindings {
-            changed |= timings.pass_mut(Pass::DeadBindings).rewrites(|| canonical::dead_bindings(&mut program.root));
         }
         // Import slots name edges, not distinct computations. Keep them interned even
         // with optional rewrites off, including programs supplied directly as IR.

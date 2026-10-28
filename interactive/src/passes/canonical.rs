@@ -3,7 +3,7 @@
 use corgi::{Graph, NodeRef, NumOp, Op, Shape};
 use crate::ir::{Lambda, LinearOp};
 use crate::lambda::{normalize::canonical, Projection};
-use crate::scope_ir::{Item, Node, Ref, Scope, Source};
+use crate::scope_ir::{Item, Node, Ref, Scope};
 use crate::shapes::{ItemShapes, ScopeShapes};
 
 /// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
@@ -153,74 +153,6 @@ fn wiring(graph: &Graph<NumOp>) -> Option<Projection> {
         });
     }
     Some(values[graph.output()].clone())
-}
-
-/// Remove unread imports, child exports, and redundant source aliases. Exports, feedback,
-/// child import edges, and every operator (including inspect) are readers. Root exports
-/// and declared inputs always remain.
-pub(super) fn dead_bindings(scope: &mut Scope) -> usize {
-    let mut changed = 0;
-    for item in &mut scope.items {
-        if let Item::Sub(child) = item { changed += dead_bindings(child); }
-    }
-    // Names are provenance, not readers. Temporarily take them out of the ref walk.
-    let names = std::mem::take(&mut scope.names);
-    let mut read = std::collections::BTreeSet::new();
-    scope.for_each_ref(|r| { read.insert(ref_key(r)); });
-    let mut remap = vec![usize::MAX; scope.imports.len()];
-    let mut next = 0;
-    for (i, import) in scope.imports.iter().enumerate() {
-        if matches!(import.from, Source::Input(_)) || read.contains(&ref_key(&Ref::Import(i))) {
-            remap[i] = next;
-            next += 1;
-        }
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for (name, r) in names {
-        let keep = match &r {
-            Ref::Import(i) => remap[*i] != usize::MAX,
-            Ref::Local(_) => true, // The item's defining name, even if the operator is unread.
-            Ref::ChildExport(_, _) => read.contains(&ref_key(&r)),
-            Ref::Var(_) => false, // Variables already have their declared names.
-        };
-        if keep && seen.insert(ref_key(&r)) { scope.names.push((name, r)); }
-        else { changed += 1; }
-    }
-    let mut i = 0;
-    scope.imports.retain(|_| { let keep = remap[i] != usize::MAX; i += 1; keep });
-    changed += remap.len() - next;
-    scope.for_each_ref(|r| if let Ref::Import(i) = r {
-        assert_ne!(remap[*i], usize::MAX, "removed a live import");
-        *i = remap[*i];
-    });
-    // Only the parent can read a child's exports. The read set excludes source names,
-    // but includes sibling imports, feedback, and exports to this scope's own parent.
-    let mut exports = vec![Vec::new(); scope.items.len()];
-    for (i, item) in scope.items.iter_mut().enumerate() {
-        if let Item::Sub(child) = item {
-            let remap = &mut exports[i];
-            let mut next = 0;
-            child.exports.retain(|_| {
-                let keep = read.contains(&ref_key(&Ref::ChildExport(i, remap.len())));
-                remap.push(if keep { next } else { usize::MAX });
-                if keep { next += 1; }
-                keep
-            });
-            changed += remap.len() - next;
-        }
-    }
-    scope.for_each_ref(|r| if let Ref::ChildExport(i, e) = r {
-        assert_ne!(exports[*i][*e], usize::MAX, "removed a live child export");
-        *e = exports[*i][*e];
-    });
-    changed
-}
-
-fn ref_key(r: &Ref) -> (u8, usize, usize) {
-    match r {
-        Ref::Local(i) => (0, *i, 0), Ref::Import(i) => (1, *i, 0),
-        Ref::Var(i) => (2, *i, 0), Ref::ChildExport(i, e) => (3, *i, *e),
-    }
 }
 
 /// Evaluate the original sequence, not an optimized composition of it. This runs for

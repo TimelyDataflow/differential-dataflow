@@ -215,6 +215,33 @@ impl Names {
     }
 }
 
+/// Parent edges can remain unread when dead-code is off. DDP normally recreates
+/// these edges from readers, so spell an unused edge as an alias to retain it.
+fn unread_imports(scope: &Scope, names: &Names) -> Vec<(String, Ref)> {
+    if names.root { return Vec::new(); }
+    let mut read = vec![false; scope.imports.len()];
+    let mut mark = |r: &Ref| if let Ref::Import(i) = r { read[*i] = true; };
+    for (_, r) in &scope.names { mark(r); }
+    for bind in &scope.binds { mark(&bind.value); }
+    for export in &scope.exports { mark(&export.value); }
+    for item in &scope.items {
+        match item {
+            Item::Op(node) => for (r, _) in super::reads(node) { mark(r); },
+            Item::Sub(child) => for import in &child.imports {
+                if let Source::Parent(r) = &import.from { mark(r); }
+            },
+        }
+    }
+    if read.iter().all(|&read| read) { return Vec::new(); }
+    let mut used = scope.names.iter().map(|(name, _)| name.clone())
+        .chain(names.items.iter().cloned()).chain(names.vars.iter().cloned())
+        .chain(export_names(scope)).collect();
+    let mut next = BTreeMap::new();
+    read.iter().enumerate().filter(|(_, read)| !**read).map(|(i, _)| {
+        (fresh("unused_import", &mut used, &mut next), Ref::Import(i))
+    }).collect()
+}
+
 impl Printer<'_> {
     /// Declare type `i`, after any sum types first named while spelling it, so a second
     /// print of the emitted program declares them in the same order.
@@ -309,7 +336,8 @@ impl Printer<'_> {
         let exports = scope.exports.iter().zip(&local_exports)
             .filter(|(_, name)| !names.root && !name.contains("::"))
             .map(|(export, name)| (name, &export.value));
-        for (name, r) in scope.names.iter().map(|(n, r)| (n, r)).chain(exports) {
+        let unread = unread_imports(scope, &names);
+        for (name, r) in scope.names.iter().map(|(n, r)| (n, r)).chain(exports).chain(unread.iter().map(|(n, r)| (n, r))) {
             let at = match r { Ref::Local(i) | Ref::ChildExport(i, _) => i + 1, _ => 0 };
             aliases_at[at].push((name, r));
         }

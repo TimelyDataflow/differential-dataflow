@@ -48,16 +48,16 @@ impl Measurement {
 
 /// The order used by the timing table; these names do not change pass configuration.
 #[derive(Clone, Copy, Debug)]
-pub enum Pass { Structural, ComposeMaps, DeadBindings, HoistInvariant, CollapseParentArranges, MergeImports, ShapeInference }
+pub enum Pass { DeadCode, Structural, ComposeMaps, HoistInvariant, CollapseParentArranges, MergeImports, ShapeInference }
 
 impl Pass {
-    pub const ALL: [Self; 7] = [Self::Structural, Self::ComposeMaps, Self::DeadBindings, Self::HoistInvariant, Self::CollapseParentArranges, Self::MergeImports, Self::ShapeInference];
+    pub const ALL: [Self; 7] = [Self::DeadCode, Self::Structural, Self::ComposeMaps, Self::HoistInvariant, Self::CollapseParentArranges, Self::MergeImports, Self::ShapeInference];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Structural => "structural",
             Self::ComposeMaps => "compose-maps",
-            Self::DeadBindings => "dead-bindings",
+            Self::DeadCode => "dead-code",
             Self::HoistInvariant => "hoist-invariant",
             Self::CollapseParentArranges => "collapse-parent-arranges",
             Self::MergeImports => "merge_imports",
