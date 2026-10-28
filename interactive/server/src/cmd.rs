@@ -218,7 +218,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, options)))
                     .map_err(panic_message)?;
             }
-            program.optimize();
+            interactive::passes::optimize(&mut program);
             catalog.record(&id_hint, &program);
             ServerCommand::Install {
                 name: id_hint,

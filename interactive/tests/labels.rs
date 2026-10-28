@@ -22,7 +22,7 @@ export \"reach\" = reach::reach;
 
 fn program() -> Program {
     let mut p = lower::lower_tree(parse::pipe::parse(SRC));
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     p
 }
 

@@ -131,7 +131,7 @@ fn export_rows(p: &Program, inputs: &[Vec<(Row, Row)>], export: &str) -> BTreeSe
 
 fn optimized(src: &str) -> Program {
     let mut p = lowered(src);
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     p
 }
 
@@ -154,7 +154,7 @@ fn demand_for_queries(
 ) -> Vec<Vec<(Row, Row)>> {
     let tree = lowered(src);
     let mut ex = explain::explain(&tree);
-    ex.optimize();
+    interactive::passes::optimize(&mut ex);
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
     ex_inputs.push(query_rows(queries));
     let exports = evaluate(&ex, &ex_inputs);
@@ -232,7 +232,7 @@ fn clone_identity_preserves_scc_output() {
     let edges = gen_edges(50, 55);
     let p = optimized(SCC_ROW);
     let mut c = explain::clone_identity(&lowered(SCC_ROW));
-    c.optimize();
+    interactive::passes::optimize(&mut c);
     assert_eq!(
         export_rows(&p, &[edges.clone()], "result"),
         export_rows(&c, &[edges], "result"),

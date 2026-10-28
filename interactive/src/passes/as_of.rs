@@ -1,7 +1,7 @@
 //! A rewrite that uses the time a program is installed as of.
 //!
 //! A program installed at epoch `e` reads every import as of `G = (e − 1, [])`
-//! (`Server::import_as_of`), and its own inputs are fed from epoch `e` on, so every time in the
+//! and its own inputs are fed from epoch `e` on, so every time in the
 //! program, and every time an arrangement presents to a half join, is at or beyond `G`. An update
 //! at exactly `G` can then meet only arranged rows at exactly `G`, and a strict half join, which
 //! needs `t2 < t`, meets none. An update keeps its own time along a chain of half joins, so once a
@@ -10,7 +10,7 @@
 //! would carry the imports' whole history only to discard it.
 //!
 //! `drop_dead_as_of` drops those updates where the stream is lifted, with a `filter` on the time
-//! `lift` wrote into the value, so every backend runs it with the operators it has. A lift that
+//! `lift` wrote into the value. A lift that
 //! other readers share, as both paths of a self-join do, keeps its rows, and the filter goes on
 //! the edges to the readers it is dead for. It needs only
 //! that every time is at or beyond `G`, which holds in any scope: a nested scope's times extend
@@ -22,7 +22,7 @@ use crate::scope_ir::{Item, Node, Program, Ref, Scope};
 
 /// Insert, at each lifted stream all of whose paths reach a strict half join, a filter that drops
 /// its updates at `as_of`. Returns the number of filters inserted.
-pub(crate) fn drop_dead_as_of(prog: &mut Program, as_of: &Time) -> usize {
+pub(super) fn drop_dead_as_of(prog: &mut Program, as_of: &Time) -> usize {
     drop_in_scope(&mut prog.root, 0, as_of)
 }
 
@@ -58,7 +58,11 @@ fn drop_in_scope(s: &mut Scope, depth: usize, as_of: &Time) -> usize {
     let lanes: Vec<u64> = std::iter::once(as_of.outer).chain((0..depth).map(|j| as_of.inner.get(j).copied().unwrap_or(0))).collect();
 
     let uses = uses(s);
-    let mut covered: Vec<Option<bool>> = vec![None; s.items.len()];
+    let mut covered = vec![false; s.items.len()];
+    // Every reader follows its producer. Compute coverage backward without recursion.
+    for i in (0..s.items.len()).rev() {
+        covered[i] = !uses[i].is_empty() && uses[i].iter().all(|&u| dead_on(u, &covered));
+    }
     // In-place filters (item, op position), and filters on some edges only (item, the consumers to
     // move onto the filter).
     let mut in_place: Vec<(usize, usize)> = Vec::new();
@@ -67,7 +71,7 @@ fn drop_in_scope(s: &mut Scope, depth: usize, as_of: &Time) -> usize {
         let Item::Op(Node::Linear { ops, .. }) = item else { continue };
         let Some(at) = ops.iter().rposition(|op| matches!(op, LinearOp::Lift)) else { continue };
         if !ops[at + 1..].iter().all(keeps_times) || uses[i].is_empty() { continue; }
-        let dead: Vec<Use> = uses[i].iter().copied().filter(|u| dead_on(*u, &uses, &mut covered)).collect();
+        let dead: Vec<Use> = uses[i].iter().copied().filter(|u| dead_on(*u, &covered)).collect();
         // The edge filter reads the time from the row value written by `lift`. Filter and Negate
         // leave that value intact. Project, FlatMap, LiftIter and other tails may move or drop it;
         // handling them needs tracking time through lambdas or splitting the node and duplicating
@@ -112,20 +116,12 @@ fn uses(s: &Scope) -> Vec<Vec<Use>> {
 }
 
 /// Whether an update at the as-of time read through `u` produces nothing.
-fn dead_on(u: Use, uses: &[Vec<Use>], covered: &mut [Option<bool>]) -> bool {
+fn dead_on(u: Use, covered: &[bool]) -> bool {
     match u {
         Use::Stream { strict: true, .. } => true,
-        Use::Stream { at, strict: false } | Use::Linear(at) => all_dead(at, uses, covered),
+        Use::Stream { at, strict: false } | Use::Linear(at) => covered[at],
         Use::Other => false,
     }
-}
-
-/// Whether every use of item `i` is one where an update at the as-of time produces nothing.
-fn all_dead(i: usize, uses: &[Vec<Use>], covered: &mut [Option<bool>]) -> bool {
-    if let Some(known) = covered[i] { return known; }
-    let dead = !uses[i].is_empty() && uses[i].clone().into_iter().all(|u| dead_on(u, uses, covered));
-    covered[i] = Some(dead);
-    dead
 }
 
 /// A filter on a lifted row, `(key, (val, time))`, keeping it unless its time is `lanes`.
@@ -144,7 +140,8 @@ fn not_at(lanes: &[u64]) -> Lambda {
 /// The item ends in its lift or value-preserving ops, so the filter reads the row `lift` wrote.
 fn insert_edge_filters(s: &mut Scope, edges: Vec<(usize, Vec<Use>)>, lanes: &[u64]) {
     if edges.is_empty() { return; }
-    let filtered = |i: usize| edges.iter().find(|(e, _)| *e == i).map(|(_, dead)| dead);
+    let mut filtered = vec![false; s.items.len()];
+    for (i, _) in &edges { filtered[*i] = true; }
     // The new items, every reference still by old position, and each old position's new one.
     let labeled = s.labels.len() == s.items.len();
     let (mut items, mut labels, mut remap) = (Vec::new(), Vec::new(), Vec::new());
@@ -152,7 +149,7 @@ fn insert_edge_filters(s: &mut Scope, edges: Vec<(usize, Vec<Use>)>, lanes: &[u6
         remap.push(items.len());
         items.push(item);
         if labeled { labels.push(s.labels[i].clone()); }
-        if filtered(i).is_some() {
+        if filtered[i] {
             items.push(Item::Op(Node::Linear { input: Ref::Local(i), ops: vec![LinearOp::Filter(not_at(lanes))] }));
             if labeled { labels.push(s.labels[i].clone()); }
         }
@@ -188,7 +185,7 @@ mod tests {
     /// The program, optimized as install sees it, and the filters the rewrite inserts.
     fn rewrite(src: &str) -> (Program, usize) {
         let mut prog = crate::lower::lower_tree(crate::parse::pipe::parse(src));
-        prog.optimize();
+        crate::passes::optimize(&mut prog);
         let as_of = crate::server::host_time(AS_OF);
         let inserted = drop_dead_as_of(&mut prog, &as_of);
         let (_, problems) = crate::shapes::infer(&prog, &|s| match s {

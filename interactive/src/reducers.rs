@@ -169,8 +169,8 @@ mod tests {
             // must not add a mask to the output that was narrowed in the expression.
             let text = format!("export \"out\" = input 0 : (int, (int, int)) | reduce(input -> {});", lambda.src);
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(&text));
-            program.optimize();
-            assert_eq!(crate::projection::pushdown(&mut program, &|_| None).unwrap(), 0);
+            crate::passes::optimize(&mut program);
+            assert_eq!(crate::passes::projection::pushdown(&mut program, &|_| None).unwrap(), 0);
         }
         // Nonempty input with zero total count emits nothing; a negative total is retained.
         let lambda = crate::lambda::compile_reduce(&Sugar::Count.lambda(), &Shape::Int, &Shape::Int).unwrap();

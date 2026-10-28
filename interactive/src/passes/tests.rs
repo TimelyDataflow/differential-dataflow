@@ -2,7 +2,7 @@ use super::*;
 use crate::scope_ir::Program;
 
 fn program(text: &str) -> Program { crate::lower::lower_tree(crate::parse::pipe::parse(text)) }
-fn optimized(text: &str) -> Program { let mut p = program(text); p.optimize(); p }
+fn optimized(text: &str) -> Program { let mut p = program(text); crate::passes::optimize(&mut p); p }
 fn linears(scope: &Scope) -> Vec<&[LinearOp]> {
     scope.items.iter().filter_map(|item| match item {
         Item::Op(Node::Linear { ops, .. }) => Some(ops.as_slice()), _ => None,
@@ -19,13 +19,13 @@ fn composition_discards_arithmetic_and_uses_graphs() {
         let LinearOp::Project(lambda) = &mut ops[0] else { unreachable!() };
         lambda.src = "let (k, v) = input in (v, k)".into();
     }
-    p.optimize();
+    crate::passes::optimize(&mut p);
     let chains = linears(&p.root);
     let [LinearOp::Project(lambda)] = chains[0] else { panic!("{p:?}") };
     assert_eq!(lambda.src, "let (a, _) = input in (a, ())");
     assert!(!format!("{:?}", lambda.graph().unwrap()).contains("Mul"));
     let once = format!("{p:?}");
-    p.optimize();
+    crate::passes::optimize(&mut p);
     assert_eq!(once, format!("{p:?}"));
 }
 

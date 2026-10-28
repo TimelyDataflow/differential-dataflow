@@ -920,7 +920,7 @@ mod optimize_tests {
         let src = "let a = input 0 | map(((a, b), ()) -> (a, b)) | filter((a, b) -> (a, b) ne) | negate;\nexport \"result\" = a;";
         let mut p = lower_tree(parse(src));
         assert_eq!(p.op_count(), 3); // three single-op Linears
-        p.optimize();
+        crate::passes::optimize(&mut p);
         assert_eq!(p.op_count(), 1, "chain should fuse to one Linear");
         let Node::Linear { ops, .. } = ops(&p.root)[0] else { panic!("expected a Linear") };
         assert_eq!(ops.len(), 3, "fused Linear carries all three ops in order");
@@ -938,7 +938,7 @@ mod optimize_tests {
             let j2 = a | join(b, (_, x, y) -> (y, x));\n\
             export \"result\" = j1 + j2;";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         let arranges = ops(&p.root).iter().filter(|n| matches!(n, Node::Arrange(_))).count();
         assert_eq!(arranges, 2, "one shared arrangement per distinct input (a, b)");
     }
@@ -951,7 +951,7 @@ mod optimize_tests {
             let b = input 0 | map(((a, b), ()) -> (a, b));\n\
             export \"result\" = a | join(b, (_, x, _) -> (x, ()));";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         // No Arrange may target a Reduce item.
         for n in ops(&p.root) {
             if let Node::Arrange(Ref::Local(j)) = n {
@@ -971,7 +971,7 @@ mod optimize_tests {
             }\n\
             export \"result\" = s::x;";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
         let linears: Vec<usize> = ops(child).iter().filter_map(|n| match n { Node::Linear { ops, .. } => Some(ops.len()), _ => None }).collect();
         assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");

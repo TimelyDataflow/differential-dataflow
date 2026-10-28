@@ -451,7 +451,7 @@ fn qualify(src: &str, types: &[(String, Vec<(String, Shape)>)]) -> String {
 mod tests {
     use super::*;
 
-    fn plan(text: &str) -> Report { super::super::report(text, &|_| None).unwrap() }
+    fn plan(text: &str) -> Report { super::super::report(text, &crate::server::generated_shape).unwrap() }
 
     fn roundtrip(text: &str) -> String {
         let before = plan(text);

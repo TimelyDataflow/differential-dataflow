@@ -25,11 +25,12 @@ impl Server {
         // Provider shapes may complete maps that could not be typed before installation.
         // Dead imports are removed before resolving providers and recording dependencies.
         let mut optimized = prog.clone();
-        optimized.optimize_with(&|source| match source {
+        let as_of = self.import_as_of();
+        crate::passes::run(&mut optimized, &|source| match source {
             st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
-                .or_else(|| super::generated_shape(t)),
+                .or_else(|| super::generated_shape(t)).or_else(|| crate::diag::shape(t)),
             _ => None,
-        }, &mut |_, _, _, _, _| {});
+        }, std::env::var_os("DDIR_PROJECTION").is_some(), self.as_of_drop.then_some(&as_of), &mut |_, _, _| {});
         let prog = &optimized;
         // The root is not a loop: a published trace holds what its program computes at each
         // epoch, not a round of an iteration. Loops live in named scopes.
@@ -77,7 +78,7 @@ impl Server {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
             }
         }
-        let (mut scope_shapes, export_shapes) = self.check_shapes(name, prog)?;
+        let (scope_shapes, export_shapes) = self.check_shapes(name, prog)?;
         for key in generated {
             if self.is_published(&key) {
                 continue; // imported twice
@@ -91,50 +92,6 @@ impl Server {
                 self.install_generated(worker, &key, recipe);
             }
         }
-
-        // Run the optional rewrite only after the original program has passed
-        // install's checks and generated imports have their published shapes.
-        // A rejected candidate must never turn a valid install into an error.
-        let projected = if std::env::var_os("DDIR_PROJECTION").is_some() {
-            let mut candidate = prog.clone();
-            let masked = crate::projection::pushdown(&mut candidate, &|source| match source {
-                st::Source::Trace(trace_name) => self.shapes.get(&canonical_source_name(trace_name)).cloned(),
-                _ => None,
-            }).unwrap_or(0);
-            if masked > 0 {
-                match self.check_shapes(name, &candidate) {
-                    Ok((shapes, exports)) if exports == export_shapes => {
-                        scope_shapes = shapes;
-                        Some(candidate)
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let prog = projected.as_ref().unwrap_or(prog);
-
-        // Updates at the as-of time that only paths through a strict half join read produce
-        // nothing there (see `as_of`); drop them where they are lifted. The rewrite adds filters,
-        // so the shapes are inferred again, and a candidate that fails that is not used.
-        let as_of = self.import_as_of();
-        let mut dropped = prog.clone();
-        let inserted = if self.as_of_drop { crate::as_of::drop_dead_as_of(&mut dropped, &as_of) } else { 0 };
-        let dropped = if inserted > 0 {
-            match self.check_shapes(name, &dropped) {
-                Ok((shapes, exports)) if exports == export_shapes => {
-                    scope_shapes = shapes;
-                    Some(dropped)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let prog = dropped.as_ref().unwrap_or(prog);
 
         let import_names: Vec<String> = prog
             .root

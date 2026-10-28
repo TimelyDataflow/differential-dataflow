@@ -12,7 +12,7 @@ fn feed_validates_before_staging_one_epoch() {
         let mut program = lower::lower_tree(parse::pipe::parse(
             "let rows = input 0 : ((int), (int)); export \"rows\" = rows;",
         ));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
 
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
@@ -44,7 +44,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
             let mut program = lower::lower_tree(parse::pipe::parse(
                 "let rows = input 0 : ((int), ()); export \"rows\" = rows;",
             ));
-            program.optimize();
+            interactive::passes::optimize(&mut program);
             let mut server = Server::new();
             server.install(worker, "world", &program).unwrap();
             for epoch in 0..6 {
@@ -73,7 +73,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     server.install(worker, "world", &program).unwrap();
 }
 

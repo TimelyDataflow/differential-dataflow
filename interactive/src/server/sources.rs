@@ -231,7 +231,7 @@ pub fn gen_field_seeded(seed: u64, edge_index: u64, nodes: u64, col: usize) -> i
 }
 
 /// The shape of a generated source's rows, by its canonical name.
-pub(crate) fn generated_shape(name: &str) -> Option<RowShape> {
+pub fn generated_shape(name: &str) -> Option<RowShape> {
     if name == "clock" { Some(clock_shape()) } else { Recipe::parse(name).map(|r| r.shape()) }
 }
 

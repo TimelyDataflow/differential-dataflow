@@ -1,5 +1,5 @@
 //! Field demand over the scope IR, computed in Rust so that an installed program can be
-//! rewritten without starting a second dataflow inside `Server::install`.
+//! rewritten using an in-process demand closure.
 //!
 //! Lambda input demand comes from Corgi's typed demand transform. Unknown or
 //! unsupported lambda shapes conservatively read their entire input.
@@ -102,7 +102,7 @@ pub struct DemandGraph {
 }
 
 impl DemandGraph {
-    /// The in-process mirror of `demand.ddp`, for opt-in server installs.
+    /// The in-process mirror of `demand.ddp`.
     pub fn closure(&self) -> Vec<bool> {
         let mut next = vec![Vec::new(); self.facts];
         for &(from, to) in &self.edges {
@@ -859,7 +859,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
 fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -> usize {
     let mut dead = vec![false; scope.items.len()];
     let mut changed = 0;
-    let mut counts = scope.use_counts(&dead);
+    let mut counts = super::structural::use_counts(scope, &dead);
     // Redirection can make a later map read a reduce directly. Its input shape is
     // still the shape at its original edge, including any projection fused earlier.
     let input_shapes: Vec<_> = scope.items.iter().map(|item| match item {
@@ -891,10 +891,10 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -
         if ops.is_empty() {
             scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = Ref::Local(j); });
             dead[i] = true;
-            counts = scope.use_counts(&dead);
+            counts = super::structural::use_counts(scope, &dead);
         }
     }
-    scope.compact(&dead);
+    super::structural::compact(scope, &dead);
     changed
 }
 
@@ -962,7 +962,7 @@ pub fn pushdown(
     if masked + fused > 0 {
         // Projection can expose adjacent maps and identity masks. Use the same
         // optimizer schedule so the emitted result is already canonical.
-        program.optimize_with(source, &mut |_, _, _, _, _| {});
+        super::optimize_with(program, source, &mut |_, _, _, _, _, _| {});
     }
     Ok(masked + fused)
 }
@@ -1044,7 +1044,7 @@ mod tests {
                     export \"merged\" = merged | map((row, ()) -> (row.0, ()));
                     export \"counts\" = counted | map(((a, _), n) -> (a, n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
+        crate::passes::optimize(&mut program);
         assert_eq!(program.root.labels, [
             "merged", "counted", "counted", "export merged", "export counts",
         ]);
@@ -1066,7 +1066,7 @@ mod tests {
                     export \"out\" = x | distinct
                     | map((row, ()) -> (row.0, ())) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
-        original.optimize();
+        crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 0);
         original.root.exports[0].name = "before.out".into();
@@ -1096,7 +1096,7 @@ mod tests {
                     }
                     export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
+        crate::passes::optimize(&mut program);
         assert!(pushdown(&mut program, &|_| None).unwrap() >= 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
@@ -1130,7 +1130,7 @@ mod tests {
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
+        crate::passes::optimize(&mut program);
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
@@ -1146,7 +1146,7 @@ mod tests {
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
-        original.optimize();
+        crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
         original.root.exports[0].name = "before.out".into();

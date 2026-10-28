@@ -34,7 +34,7 @@ fn run() -> Result<(), String> {
     let mut out = io::stdout().lock();
     for (i, file) in files.iter().enumerate() {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
-        let report = interactive::plan::report(&text, &|name| catalog.get(name).cloned()).map_err(|e| format!("{file}: {e}"))?;
+        let report = interactive::plan::report(&text, &|name| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name))).map_err(|e| format!("{file}: {e}"))?;
         if emit_ddp {
             // Earlier files supply imports. Only the requested (last) program is emitted.
             if i + 1 == files.len() {
@@ -43,7 +43,7 @@ fn run() -> Result<(), String> {
                 eprintln!("Lambdas: source={}, graph={}, graph_changed={}", printed.lambdas.source, printed.lambdas.graph, printed.lambdas.graph_changed);
                 if options.check_lambdas { incomplete |= printed.lambdas.graph_changed != 0; }
                 if check_roundtrip {
-                    let reparsed = interactive::plan::report(&printed.text, &|name| catalog.get(name).cloned())?;
+                    let reparsed = interactive::plan::report(&printed.text, &|name| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name)))?;
                     let differences = report.compare_final(&reparsed);
                     let stable = reparsed.emit_ddp_at(stage)?.text == printed.text;
                     eprintln!("Round trip: plan={}, text={}", if differences.is_empty() { "same" } else { "different" }, if stable { "stable" } else { "changed" });

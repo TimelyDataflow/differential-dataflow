@@ -90,7 +90,7 @@ fn assert_matches_expected(prog: &str) {
     register_test_functions();
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
-    tree.optimize();
+    interactive::passes::optimize(&mut tree);
     let inputs = inputs_for(prog);
     let recorded = path.replace(".ddp", ".expected");
     let want = std::fs::read_to_string(&recorded)
@@ -276,7 +276,7 @@ fn register_test_functions() {
 #[test]
 fn filter_requires_an_int_predicate() {
     let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int), ()) | filter((k, ()) -> k);"#));
-    tree.optimize();
+    interactive::passes::optimize(&mut tree);
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
     assert!(result.is_err(), "accepted a tuple filter predicate");
@@ -289,7 +289,7 @@ fn call_argument_shapes_are_checked() {
     // `blend` takes a pair; pass it an Int.
     let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int), ()) | map(((n), ()) -> ((n), (n call blend)));"#
 ));
-    tree.optimize();
+    interactive::passes::optimize(&mut tree);
     let inputs = vec![rows(&[&[1], &[2]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
     assert!(result.is_err(), "ran a call with a mis-shaped argument");

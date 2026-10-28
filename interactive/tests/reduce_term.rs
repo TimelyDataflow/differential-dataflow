@@ -32,7 +32,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
         for tick in 0..4 {

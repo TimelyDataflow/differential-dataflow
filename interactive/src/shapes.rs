@@ -98,7 +98,10 @@ pub fn infer(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shap
 fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at: &str, problems: &mut Problems) -> ScopeShapes {
     // A declared variable starts at its declared shape; any other takes the shape bound to it.
     let mut vars: Vec<Option<CollShape>> = s.vars.iter().map(|v| v.shape.clone().map(|(k, v)| CollShape::new(k, v, depth))).collect();
-    // Iterate until the variables' shapes stop changing; report only the last pass's errors.
+    if vars.iter().any(Option::is_none) {
+        vars = infer_variables(s, &imports, vars, depth, at);
+    }
+    // Report diagnostics in source order once feedback shapes have settled.
     loop {
         let mut pass = Problems::default();
         let mut shapes = ScopeShapes { imports: imports.clone(), vars: vars.clone(), items: Vec::new(), exports: Vec::new() };
@@ -148,6 +151,80 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
         problems.conflicts.extend(pass.conflicts);
         return shapes;
     }
+}
+
+/// Propagate new shapes only to their readers. Rescanning the whole scope per
+/// feedback variable takes quadratic time even for `set a = b` chains.
+fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Option<CollShape>>, depth: usize, at: &str) -> Vec<Option<CollShape>> {
+    use std::collections::VecDeque;
+    let count = s.items.len();
+    let mut readers = vec![Vec::new(); count + s.vars.len()];
+    let mut edge = |r: &st::Ref, reader| {
+        let source = match r {
+            st::Ref::Local(i) | st::Ref::ChildExport(i, _) => *i,
+            st::Ref::Var(v) => count + v,
+            st::Ref::Import(_) => return,
+        };
+        readers[source].push(reader);
+    };
+    for (i, item) in s.items.iter().enumerate() {
+        match item {
+            st::Item::Op(node) => for r in node.refs() { edge(r, i); },
+            st::Item::Sub(child) => for import in &child.imports {
+                if let st::Source::Parent(r) = &import.from { edge(r, i); }
+            },
+        }
+    }
+    let mut binds = vec![None; s.vars.len()];
+    for bind in &s.binds {
+        binds[bind.var] = Some(&bind.value);
+        edge(&bind.value, count + bind.var);
+    }
+    let mut shapes = ScopeShapes { imports: imports.to_vec(), vars,
+        items: vec![ItemShapes::Op(None); count], exports: Vec::new() };
+    let mut pending: VecDeque<_> = (0..readers.len()).collect();
+    let mut queued = vec![true; readers.len()];
+    while let Some(i) = pending.pop_front() {
+        queued[i] = false;
+        let mut ignored = Problems::default();
+        let changed = if i >= count {
+            let var = i - count;
+            if shapes.vars[var].is_some() { false }
+            else if let Some(value) = binds[var].and_then(|r| shapes.of(r)) {
+                shapes.vars[var] = Some(value);
+                true
+            } else { false }
+        } else {
+            match &s.items[i] {
+                st::Item::Op(node) => {
+                    let next = infer_node(node, &shapes, depth, at, &mut ignored);
+                    let ItemShapes::Op(old) = &mut shapes.items[i] else { unreachable!() };
+                    let changed = *old != next;
+                    *old = next;
+                    changed
+                }
+                st::Item::Sub(child) => {
+                    let imports = child.imports.iter().map(|import| match &import.from {
+                        st::Source::Parent(r) => shapes.of(r).map(|c| CollShape::new(c.key, c.val, depth + 1)),
+                        _ => None,
+                    }).collect();
+                    let next = infer_scope(child, imports, depth + 1, at, &mut ignored);
+                    let changed = match &shapes.items[i] {
+                        ItemShapes::Sub(old) => old.exports != next.exports,
+                        _ => true,
+                    };
+                    shapes.items[i] = ItemShapes::Sub(next);
+                    changed
+                }
+            }
+        };
+        if changed {
+            for &reader in &readers[i] {
+                if !queued[reader] { pending.push_back(reader); queued[reader] = true; }
+            }
+        }
+    }
+    shapes.vars
 }
 
 /// The shape of a time at scope depth `depth` as data: the epoch and one coordinate per scope.
@@ -281,7 +358,7 @@ mod tests {
 
     fn shapes_of(src: &str) -> (ScopeShapes, Problems) {
         let mut p = lower::lower_tree(parse::pipe::parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         infer(&p, &|_| None)
     }
 
@@ -294,6 +371,20 @@ mod tests {
         }
         export "result" = reach::reach | map(_ -> ((), ())) | arrange;
     "#;
+
+    #[test]
+    fn feedback_aliases_in_both_orders_reach_the_same_shapes() {
+        for reverse in [false, true] {
+            let mut bindings: Vec<_> = (0..128).map(|i| {
+                format!("set v{i} = {};", if i == 0 { "::x".into() } else { format!("v{}", i - 1) })
+            }).collect();
+            if reverse { bindings.reverse(); }
+            let text = format!("let x = input 0 : (int, int); s: {{ {} }} export \"out\" = s::v127;", bindings.join(" "));
+            let (shapes, problems) = shapes_of(&text);
+            assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
+            assert_eq!(shapes.exports[0], Some(CollShape::new(Shape::Int, Shape::Int, 0)));
+        }
+    }
 
     #[test]
     fn declared_sources_shape_every_collection() {

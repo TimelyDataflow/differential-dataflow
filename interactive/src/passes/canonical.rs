@@ -8,7 +8,7 @@ use crate::shapes::{ItemShapes, ScopeShapes};
 
 /// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
 /// Structural fusion has already respected shared edges. No other operator is crossed.
-pub(crate) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool {
+pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool {
     let mut changed = false;
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
         match (item, shape) {
@@ -88,7 +88,7 @@ pub(crate) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool 
         }
     }
     scope.for_each_ref(|r| if let Ref::Local(i) = r { *r = remap[*i].clone(); });
-    scope.compact(&dead);
+    super::structural::compact(scope, &dead);
     changed
 }
 
@@ -157,7 +157,7 @@ fn wiring(graph: &Graph<NumOp>) -> Option<Projection> {
 
 /// Remove unread imports and redundant source aliases. Exports, feedback, child edges,
 /// and every operator (including inspect) are readers. Declared inputs always remain.
-pub(crate) fn dead_bindings(scope: &mut Scope) -> bool {
+pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
     let mut changed = false;
     for item in &mut scope.items {
         if let Item::Sub(child) = item { changed |= dead_bindings(child); }
@@ -221,4 +221,5 @@ fn check_maps(before: &[&Lambda], after: Option<&Lambda>, shape: &Shape) {
 }
 
 #[cfg(test)]
+#[path = "tests.rs"]
 mod tests;

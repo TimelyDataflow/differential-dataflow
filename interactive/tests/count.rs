@@ -17,7 +17,7 @@ const PROGRAM: &str = r#"
 #[test]
 fn counts_carry_their_sign() {
     let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     // Key 1 has two values, key 2 one.
     let rows: Vec<String> = ["1,10", "1,20", "2,30"].map(String::from).to_vec();
     let count = |k: i64, c: i64| ((format!("tuple({k})"), c.to_string()), 1);

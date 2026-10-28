@@ -135,7 +135,7 @@ pub fn run_worker(
     if let Some(diagnostics) = &diagnostics {
         server.set_diagnostics(Rc::clone(diagnostics));
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         server.install(worker, "diag", &program).expect("the diagnostics program installs");
     }
     // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
@@ -397,7 +397,7 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report(&program, &|trace| server.trace_shape(trace)).map(|report| {
+                interactive::plan::report(&program, &|trace| server.trace_shape(trace).or_else(|| interactive::server::generated_shape(trace))).map(|report| {
                     for line in report.print().lines() { send(response, reqid, "data", line.to_string()); }
                     let incomplete = !report.unresolved.is_empty() || report.stages.iter().any(|s| !s.problems.is_empty());
                     format!("planned {:?} ({})", name, if incomplete { "incomplete; see report" } else { "4 stages" })

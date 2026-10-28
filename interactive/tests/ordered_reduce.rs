@@ -60,7 +60,7 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
             export "distinct" = x | distinct;
         "#,
         ));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
         let (key, val) = (|k: &i64| k.to_string(), |(n, xs): &(i64, Vec<i64>)| format!("tuple({n},list({}))", join(xs, i64::to_string)));
@@ -121,7 +121,7 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
             export "collected" = x | collect;
             export "counted" = x | count;
         "#));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
         let (key, val) = (|(k, k7): &(i64, i64)| format!("tuple({k},{k7})"), |xs: &Vec<i64>| format!("list({})", join(xs, i64::to_string)));

@@ -27,7 +27,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
         let mut program = lower::lower_tree(parse::pipe::parse(
             "let rows = input 0 : ((int), ()); export \"rows\" = rows;",
         ));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
         let outcome = server.load(worker, "world", 0, &path, 1);
@@ -75,7 +75,7 @@ fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
         let install = |server: &mut Server, worker: &mut _, name: &str| {
             let text = format!("let rows = input 0 : ((int), ()); export \"{name}.rows\" = rows;");
             let mut program = lower::lower_tree(parse::pipe::parse(&text));
-            program.optimize();
+            interactive::passes::optimize(&mut program);
             server.install(worker, name, &program).unwrap();
         };
         let mut server = Server::new();

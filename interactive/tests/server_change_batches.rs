@@ -16,7 +16,7 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
             export "tagged" = pairs | map((a, b) -> (a, b inject C));
 
         "#));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         let mut server = Server::new();
         server.set_export_taps(true);
         server.install(worker, "taps", &program).unwrap();

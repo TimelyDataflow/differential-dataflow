@@ -1,7 +1,7 @@
 //! Projection changes what reduce stores, without changing which input wins.
 
 use corgi::Shape;
-use interactive::{ir::{LinearOp, Reducer}, lower, parse, projection};
+use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::projection};
 use interactive::scope_ir::{Item, Node, Ref};
 use interactive::server::Server;
 
@@ -13,7 +13,7 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
         export "answer" = best | map((k, (_, v)) -> (k, ((), v)));
     "#;
     let mut original = lower::lower_tree(parse::pipe::parse(text));
-    original.optimize();
+    interactive::passes::optimize(&mut original);
     let mut projected = original.clone();
     assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
     let Ref::Local(index) = projected.root.exports[0].value else { panic!("a local reduce") };
@@ -57,7 +57,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
         export "answer" = reduced | map((k, (_, b)) -> ((k, b), ()));
     "#;
     let mut original = lower::lower_tree(parse::pipe::parse(text));
-    original.optimize();
+    interactive::passes::optimize(&mut original);
     let mut projected = original.clone();
     assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
     assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
@@ -93,7 +93,7 @@ fn fusion_requires_one_reader_an_unchanged_key_and_a_value_projection() {
     ] {
         let text = format!("let rows = input 0 : (int, (int, int)); let best = rows | min; export \"out\" = best | map({map}); {extra}");
         let mut program = lower::lower_tree(parse::pipe::parse(&text));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         projection::pushdown(&mut program, &|_| None).unwrap();
         let Ref::Local(index) = program.root.exports[0].value else { panic!("local output") };
         assert_eq!(matches!(&program.root.items[index], Item::Op(Node::Reduce { .. })), fused, "{map}; {extra}");

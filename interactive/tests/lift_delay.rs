@@ -33,7 +33,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
-        program.optimize();
+        interactive::passes::optimize(&mut program);
         server.install(worker, "p", &program).unwrap();
         for tick in 0..3 {
             if worker.index() == 0 {
@@ -96,7 +96,7 @@ fn ill_shaped_times_are_refused_at_install() {
             (r#"export "a" = input 0 : ((int, int), ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
-            program.optimize();
+            interactive::passes::optimize(&mut program);
             let error = Server::new().install(worker, "p", &program).unwrap_err();
             assert!(error.contains(says), "{src}: {error}");
         }

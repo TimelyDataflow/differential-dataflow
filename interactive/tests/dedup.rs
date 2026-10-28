@@ -12,7 +12,7 @@ fn alpha_renamed_maps_keep_the_first_text_and_label() {
     "#);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
     let original = format!("{ops:?}");
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     assert_eq!(p.op_count(), 1);
     assert_eq!(p.root.labels, ["a"]);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
@@ -42,7 +42,7 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
     src += r#"reader: { let both = a::out_a + b::out_b; } export "both" = reader::both;"#;
     let original = program(&src);
     let mut optimized = original.clone();
-    optimized.optimize();
+    interactive::passes::optimize(&mut optimized);
     assert_eq!(optimized.root.items.iter().filter(|i| matches!(i, Item::Sub(_))).count(), 3);
     assert!(optimized.op_count() < original.op_count());
     assert_eq!(optimized.root.exports[0].value, optimized.root.exports[2].value);

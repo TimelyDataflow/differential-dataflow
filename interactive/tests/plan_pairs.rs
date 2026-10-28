@@ -128,7 +128,7 @@ fn check_report(case: &Case, report: &Report) {
     }
     let optimized = &report.stages[1].program;
     let mut again = optimized.clone();
-    again.optimize();
+    interactive::passes::optimize(&mut again);
     assert_eq!(format!("{again:?}"), format!("{optimized:?}"), "{}: optimizer is not idempotent", case.name);
     if case.problem.is_none() {
         for stage in &report.stages[2..] {
@@ -140,7 +140,7 @@ fn check_report(case: &Case, report: &Report) {
                     _ => false,
                 })
                 .and_then(|(_, shape)| shape.as_ref().map(|s| (s.key.clone(), s.val.clone())));
-            let masks = interactive::projection::pushdown(&mut again, &source).unwrap();
+            let masks = interactive::passes::projection::pushdown(&mut again, &source).unwrap();
             assert_eq!(masks, 0, "{}: {}: repeated projection count changed", case.name, stage.name);
             assert_eq!(format!("{again:?}"), format!("{:?}", stage.program), "{}: second projection changed the plan", case.name);
         }
@@ -277,7 +277,7 @@ fn reviewed_plan_pairs() {
             // The replacement in interactive_v2/systems.py, with request id fixed to 1.
             text = text.replace(&original, &format!("export \"{name}x1.answer\""));
         }
-        let source = |name: &str| catalog.get(name).cloned();
+        let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
         let report = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
             plan::report_program(interactive::explain::explain(&program), &source)

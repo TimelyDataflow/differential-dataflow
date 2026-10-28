@@ -8,7 +8,7 @@ use interactive::{lower, parse};
 
 fn program(src: &str) -> Program {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     program
 }
 

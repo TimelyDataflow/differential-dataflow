@@ -27,15 +27,11 @@ pub mod lower;
 // `infer`, every collection's shape (`CollShape`, `ScopeShapes`, `Problems`), and `linear_shapes`.
 pub mod shapes;
 
-// Analyses and rewrites over the scope tree.
-// Crate-only: canonical linear chains and dead bindings.
-mod passes;
-// `explain`, `explain_with`, `Options`, `clone_identity`.
+// Scope-tree rewriting: one module, with `passes::run` as the preparation entry point.
+// `optimize` runs just the optimizer; `projection` also exposes the demand analysis.
+pub mod passes;
+// Explanation construction: `explain`, `explain_with`, `Options`, `clone_identity`.
 pub mod explain;
-// `pushdown`, the optional field-demand pass, and `demand_graph` (`DemandGraph`).
-pub mod projection;
-// Crate-only: the rewrite install makes once it knows the program's as-of time.
-mod as_of;
 
 // `report`: read-only planning stages, and their diagnostic printer.
 pub mod plan;
@@ -52,5 +48,5 @@ pub mod runtime;
 // The host: installing, feeding and reading programs.
 // `register`: the server's own diagnostics as `diag.*` collections, kept in a `Diagnostics`.
 pub mod diag;
-// `Server`, `evaluate`, and the host's time and container types.
+// `Server`, `evaluate`, `generated_shape`, and the host's time and container types.
 pub mod server;

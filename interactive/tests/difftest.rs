@@ -872,7 +872,7 @@ fn program(src: &str, optimize: bool) -> Result<Program, String> {
     let src = src.to_string();
     quietly(move || {
         let mut p = lower::lower_tree(parse::pipe::parse(&src));
-        if optimize { p.optimize(); }
+        if optimize { interactive::passes::optimize(&mut p); }
         p
     })
 }
@@ -1288,7 +1288,7 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
     // Explain rewrites the lowered program, before optimizing; its query input follows the
     // program's largest positional input.
     let lowered = program(&case.render(false), false)?;
-    let ex = quietly(|| { let mut ex = explain::explain(&lowered); ex.optimize(); ex }).map_err(|e| format!("explain panicked: {e}"))?;
+    let ex = quietly(|| { let mut ex = explain::explain(&lowered); interactive::passes::optimize(&mut ex); ex }).map_err(|e| format!("explain panicked: {e}"))?;
     let used: Vec<usize> = lowered.root.imports.iter().filter_map(|imp| match imp.from {
         interactive::scope_ir::Source::Input(i) => Some(i),
         _ => None,

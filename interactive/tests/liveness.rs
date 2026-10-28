@@ -19,7 +19,7 @@ fn unread_operators_and_recursive_scopes_are_removed() {
         export "out" = used;
     "#);
     let mut optimized = original.clone();
-    optimized.optimize();
+    interactive::passes::optimize(&mut optimized);
     assert_eq!(optimized.root.imports.len(), 1);
     assert_eq!(optimized.root.imports[0].from, Source::Input(0));
     assert_eq!(optimized.root.items.len(), 1);
@@ -46,7 +46,7 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
             inner: { let seen = values::used | inspect(seen); }
         }
     "#);
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     assert!(p.root.exports.is_empty());
     assert_eq!(p.root.imports.len(), 2);
     assert_eq!(p.root.imports[0].from, Source::Input(0));

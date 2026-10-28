@@ -34,7 +34,7 @@ pub struct Stage {
 }
 
 /// Parse, lower, optimize, project, and apply the install-time as-of drop without installing.
-/// `source` supplies published trace shapes; a declaration alone does not resolve an import.
+/// `source` supplies published and generated trace shapes; a declaration alone does not resolve an import.
 /// Lambdas use the same registered functions as the DDP parser. The as-of time is the fixed
 /// placeholder `G = (1, [])`, as for installation at epoch 2, extended by zero scope lanes.
 /// This reports the projection-enabled path, not the server's default projection-off path.
@@ -68,7 +68,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
     for import in &program.root.imports {
         match &import.from {
             Source::Trace(name) => {
-                let shape = catalog.entry(name.clone()).or_insert_with(|| source(name).or_else(|| crate::server::generated_shape(name)));
+                let shape = catalog.entry(name.clone()).or_insert_with(|| source(name));
                 if let Some(shape) = shape {
                     if import.shape.as_ref().is_some_and(|declared| declared != shape) {
                         return Err(format!("import {} declares {} but its provider has {}", quote(name), row(import.shape.as_ref().unwrap()), row(shape)));
@@ -90,64 +90,23 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         Source::Trace(name) => catalog.get(name).cloned().flatten(),
         _ => None,
     };
-    let mut stages = vec![stage("as lowered", program.clone(), Vec::new(), &resolve)];
-    let mut changes = Vec::new();
-    let mut names = BTreeMap::new();
-    program.optimize_with(&resolve, &mut |path, scope, action, from, to| {
-        let entry = names.entry(path.to_string()).or_insert_with(|| (scope.items.len(), Names::new(scope)));
-        if entry.0 != scope.items.len() { *entry = (scope.items.len(), Names::new(scope)); }
-        let names = &entry.1;
-        changes.push(if from == to {
-            format!("{action} {path}/{} (name before compaction)", names.items[from])
-        } else {
-            format!("{action} {path}/{} into {path}/{} (names before compaction)", names.items[from], names.items[to])
-        });
+    let mut stages: Vec<Stage> = Vec::new();
+    crate::passes::run(&mut program, &resolve, true, Some(&crate::ir::Time::new(1, Default::default())), &mut |name, program, changes| {
+        let previous = stages.last().map(|stage| &stage.program);
+        let changes = stage_changes(name, changes, previous, program, &resolve);
+        let name = match name {
+            "after projection" => "after projection (off by default; enabled for this report)",
+            "after as-of drop" => "after as-of drop (on by default; G = (1, []), placeholder install epoch 2)",
+            name => name,
+        };
+        stages.push(stage(name, program.clone(), changes, &resolve));
     });
-    stages.push(stage("after optimizer", program.clone(), changes, &resolve));
     let live_traces: BTreeSet<_> = program.root.imports.iter().filter_map(|i| match &i.from {
         Source::Trace(name) => Some(name.as_str()), _ => None,
     }).collect();
     unresolved.retain(|name| live_traces.contains(name.as_str()));
     let valid = problems.is_empty() && unresolved.is_empty() && stages[1].problems.is_empty();
     let exports = stages[1].shapes.exports.clone();
-    let mut changes = Vec::new();
-    if valid {
-        let mut candidate = program.clone();
-        let masked = crate::projection::pushdown(&mut candidate, &resolve).unwrap_or(0);
-        if masked > 0 {
-            let checked = stage("", candidate.clone(), Vec::new(), &resolve);
-            if checked.problems.is_empty() && checked.shapes.exports == exports {
-                changes = changed_statements(&program, &candidate, &resolve, "masked");
-                changes.insert(0, format!("{masked} field masks and map fusions"));
-                program = candidate;
-            } else {
-                changes.push("projection candidate rejected by shape/export checks; kept the optimizer output".into());
-            }
-        } else {
-            changes.push("no fields masked (the pass also returns zero for unsupported or rejected candidates)".into());
-        }
-    } else {
-        changes.push("skipped: unresolved imports or invalid/unknown shapes prevent installation".into());
-    }
-    stages.push(stage("after projection (off by default; enabled for this report)", program.clone(), changes, &resolve));
-    let mut changes = Vec::new();
-    if valid {
-        let mut candidate = program.clone();
-        let inserted = crate::as_of::drop_dead_as_of(&mut candidate, &crate::ir::Time::new(1, Default::default()));
-        if inserted > 0 {
-            let checked = stage("", candidate.clone(), Vec::new(), &resolve);
-            if checked.problems.is_empty() && checked.shapes.exports == exports {
-                changes = changed_statements(&program, &candidate, &resolve, "added as-of filter to");
-                changes.insert(0, format!("inserted {inserted} filters dropping G where continuing paths reach a strict half join"));
-                program = candidate;
-            } else {
-                changes.push("as-of candidate rejected by shape/export checks; kept the projection output".into());
-            }
-        }
-    } else {
-        changes.push("skipped: unresolved imports or invalid/unknown shapes prevent installation".into());
-    }
-    stages.push(stage("after as-of drop (on by default; G = (1, []), placeholder install epoch 2)", program, changes, &resolve));
     for stage in &mut stages { stage.problems.extend(problems.iter().cloned()); }
     let exports = if valid {
         stages.last().unwrap().program.root.exports.iter().zip(exports).filter_map(|(export, shape)| {
@@ -155,6 +114,37 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         }).collect()
     } else { BTreeMap::new() };
     Ok(Report { stages, unresolved, exports, context })
+}
+
+fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&Program>, after: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -> Vec<String> {
+    use crate::passes::Change;
+    let mut result = Vec::new();
+    for change in changes {
+        match change {
+            Change::Structural { path, action, from, to } => result.push(if *action == "removed dead" {
+                format!("{action} {path}/{}#{} (name before compaction)", quote(&from.label), from.ordinal)
+            } else {
+                format!("{action} {path}/{}#{} into {path}/{}#{} (names before compaction)",
+                    quote(&from.label), from.ordinal, quote(&to.label), to.ordinal)
+            }),
+            Change::Masked(masked) => {
+                result.push(format!("{masked} field masks and map fusions"));
+                result.extend(changed_statements(before.unwrap(), after, source, "masked"));
+            }
+            Change::AsOf(inserted) => {
+                result.push(format!("inserted {inserted} filters dropping G where continuing paths reach a strict half join"));
+                result.extend(changed_statements(before.unwrap(), after, source, "added as-of filter to"));
+            }
+            Change::NoProjection => result.push("no fields masked (the pass also returns zero for unsupported or rejected candidates)".into()),
+            Change::Rejected => result.push(if name == "after projection" {
+                "projection candidate rejected by shape/export checks; kept the optimizer output"
+            } else {
+                "as-of candidate rejected by shape/export checks; kept the projection output"
+            }.into()),
+            Change::Skipped => result.push("skipped: unresolved imports or invalid/unknown shapes prevent installation".into()),
+        }
+    }
+    result
 }
 
 fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dyn Fn(&Source) -> Option<RowShape>) -> Stage {
