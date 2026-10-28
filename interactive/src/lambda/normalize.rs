@@ -4,7 +4,7 @@ use corgi::{Builder, Graph, NodeRef, NumOp, Op, OpLike, Shape, Value};
 
 type G = Graph<NumOp>;
 
-/// Rebuild checked patterns as identities, and spell projection with fields, units and bodies.
+/// Rebuild checked patterns as identities after their shapes have been checked.
 /// The caller must typecheck the original graph before dropping any checks.
 pub(crate) fn prepare(graph: &G, input: &Shape) -> Result<G, String> {
     prepare_inner(graph, input, false)
@@ -35,7 +35,6 @@ fn prepare_inner(graph: &G, input: &Shape, rewrite: bool) -> Result<G, String> {
                     // and unit need only that count, not the computed payload. Corgi's
                     // DCE otherwise keeps dead arithmetic through these anchor edges.
                     NumOp::Core(Op::Unit | Op::Lit(_)) if rewrite => builder.add(op.clone(), vec![root]),
-                    NumOp::Core(Op::Project(target)) => project(&mut builder, ids[i], &shapes[i], target)?,
                     _ => {
                         let op = match op {
                             NumOp::Core(Op::MapList(body)) => {
@@ -66,38 +65,6 @@ fn prepare_inner(graph: &G, input: &Shape, rewrite: bool) -> Result<G, String> {
     let graph = corgi::optimize(&builder.finish(ids[graph.output()]));
     Ok(if rewrite { ordered(&graph) } else { graph })
 }
-
-fn project(b: &mut Builder<NumOp>, x: usize, input: &Shape, target: &Shape) -> Result<usize, String> {
-    if input == target { return Ok(x); }
-    Ok(match (input, target) {
-        (_, Shape::Unit) => b.add(Op::Unit, vec![x]),
-        (Shape::Prod(fs), Shape::Prod(ts)) => {
-            let fields = fs.iter().zip(ts).enumerate().map(|(i, (f, t))| {
-                let field = b.add(Op::Field(i), vec![x]);
-                project(b, field, f, t)
-            }).collect::<Result<_, _>>()?;
-            b.tuple(fields)
-        }
-        (Shape::List(f), Shape::List(t)) => {
-            let mut body = Builder::default();
-            let input = body.input();
-            let output = project(&mut body, input, f, t)?;
-            b.add(Op::MapList(Box::new(body.finish(output))), vec![x])
-        }
-        (Shape::Sum(fs), Shape::Sum(ts)) => {
-            let arms = fs.iter().zip(ts).enumerate().filter(|(_, (f, t))| f != t).map(|(i, (f, t))| {
-                let mut body = Builder::default();
-                let input = body.input();
-                let output = project(&mut body, input, f, t)?;
-                Ok((i, body.finish(output)))
-            }).collect::<Result<_, String>>()?;
-            b.add(Op::MapSum(arms), vec![x])
-        }
-        // Keep the kernel for the fallback: copying a referenced arena would change its graph.
-        _ => b.add(Op::Project(target.clone()), vec![x]),
-    })
-}
-
 
 /// Number live nodes by their first use from the output. Equal wiring can otherwise
 /// differ only in the order independent nodes were built during composition.

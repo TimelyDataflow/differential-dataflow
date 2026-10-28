@@ -5,7 +5,7 @@
      let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
      let best_idx = best_rows | arrange;
 -    let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
-+    let best = best_idx | reduce((_, a) -> (a head.0, 1) enlist map ((a, b) -> (((), a.1), b)));
++    let best = best_idx | reduce((_, a) -> (((), a head.0.1), 1) enlist);
      let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
      let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
      let unseen = ::rkk + unseen_rows;

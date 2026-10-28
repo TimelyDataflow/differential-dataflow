@@ -172,11 +172,12 @@ impl Projection {
         strip(&parts[1])
     }
 
-    pub(crate) fn of(lambda: &Lambda) -> Option<Self> {
+    pub(crate) fn of(lambda: &Lambda, input: &Shape) -> Option<Self> {
         let projection = Self::parse(&lambda.src)?;
         // Composed graphs are authoritative. Never optimize from diagnostic source alone.
         let parsed = corgi::parse_ml(&lambda.src).ok()?;
-        (corgi::optimize(&parsed) == corgi::optimize(lambda.graph().ok()?)).then_some(projection)
+        (corgi::compile(parsed, input).ok()?.graph()
+            == corgi::compile(lambda.graph().ok()?.as_ref().clone(), input).ok()?.graph()).then_some(projection)
     }
 
     /// A deliberately small subset of Corgi: bindings, tuple patterns, field selections,
@@ -385,9 +386,9 @@ pub(crate) fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
 /// kernel runs on every batch of these shapes.
 fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let output = slot_shape(lambda, shapes)?;
-    // Optimized only now that it types: among corgi's passes, a field of a tuple the lambda built
-    // becomes the field itself, and common subexpressions merge.
-    Ok((corgi::optimize(lambda.graph()?), output))
+    // Typed compilation removes proven patterns before normalizing the executable graph.
+    let compiled = corgi::compile(lambda.graph()?.as_ref().clone(), &Shape::Prod(shapes.to_vec()))?;
+    Ok((compiled.graph().clone(), output))
 }
 
 /// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is

@@ -329,15 +329,15 @@ fn all_lambda_fields(shapes: &[Shape]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn output_projection(shape: &Shape, path: &[usize]) -> Option<Shape> {
+fn output_demand(shape: &Shape, path: &[usize]) -> Option<corgi::Demand> {
     let Some((&field, tail)) = path.split_first() else {
-        return Some(shape.clone());
+        return Some(corgi::Demand::All);
     };
     let Shape::Prod(parts) = shape else {
         return None;
     };
-    let chosen = output_projection(parts.get(field)?, tail)?;
-    Some(Shape::Prod(
+    let chosen = output_demand(parts.get(field)?, tail)?;
+    Some(corgi::Demand::Prod(
         parts
             .iter()
             .enumerate()
@@ -345,7 +345,7 @@ fn output_projection(shape: &Shape, path: &[usize]) -> Option<Shape> {
                 if i == field {
                     chosen.clone()
                 } else {
-                    Shape::Unit
+                    corgi::Demand::None
                 }
             })
             .collect(),
@@ -363,40 +363,36 @@ fn graph_fields(lambda: &Lambda, shapes: &[Shape], output_path: &[usize]) -> Vec
     let Ok(output_shape) = corgi::shape_of(graph, &input_shape) else {
         return all();
     };
-    let Some(projection) = output_projection(&output_shape, output_path) else {
+    let Some(demand) = output_demand(&output_shape, output_path) else {
         return all();
     };
-    // demand_transform prunes the unobserved outputs and calls Corgi's
-    // demand_projection on the result.
-    let Ok(transform) = corgi::demand_transform(graph, &input_shape, &projection) else {
+    // Prove patterns at the original type before asking which input fields are read.
+    let Ok(compiled) = corgi::compile(graph.as_ref().clone(), &input_shape) else {
         return all();
     };
-    let Ok(projected_input) = transform.input_demand.to_shape(&input_shape) else {
+    let Ok(analysis) = corgi::analyze_demand(compiled.graph(), &input_shape, &demand) else {
         return all();
     };
-    let Shape::Prod(slots) = projected_input else {
-        return if projected_input == Shape::Unit {
-            Vec::new()
-        } else {
-            all()
-        };
-    };
-    if slots.len() != shapes.len() {
-        return all();
+    // Requests retain original field positions; projected_shape compacts them.
+    // Inspect each original field separately so dropping an earlier field cannot
+    // renumber the dependency edges used by DDIR's masks.
+    fn field(demand: &corgi::Demand, index: usize) -> &corgi::Demand {
+        match demand {
+            corgi::Demand::Prod(fields) => &fields[index],
+            other => other,
+        }
     }
     let mut fields = Vec::new();
-    for (slot, (original, projected_slot)) in shapes.iter().zip(&slots).enumerate() {
-        match (original, projected_slot) {
-            (Shape::Unit, Shape::Unit) | (_, Shape::Unit) => {}
-            (Shape::Prod(parts), Shape::Prod(kept)) if parts.len() == kept.len() => {
-                fields.extend(
-                    kept.iter().enumerate().filter_map(|(field, shape)| {
-                        (shape != &Shape::Unit).then_some((slot, field))
-                    }),
-                );
+    for (slot, original) in shapes.iter().enumerate() {
+        let demand = field(analysis.input_demand(), slot);
+        let parts = match original { Shape::Prod(parts) => parts.as_slice(), other => std::slice::from_ref(other) };
+        for (index, part) in parts.iter().enumerate() {
+            let need = if matches!(original, Shape::Prod(_)) { field(demand, index) } else { demand };
+            match need.projected_shape(part) {
+                Ok(Shape::Unit) => {},
+                Ok(_) => fields.push((slot, index)),
+                Err(_) => return all(),
             }
-            (Shape::Prod(_), _) => return all(),
-            _ => fields.push((slot, 0)),
         }
     }
     fields
@@ -880,7 +876,7 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -
         let mut projections = Vec::new();
         for (op, (key, val)) in ops.iter().zip(&steps) {
             let LinearOp::Project(lambda) = op else { break };
-            let Some(projection) = Projection::of(lambda).and_then(|p| p.value(key, val)) else { break };
+            let Some(projection) = Projection::of(lambda, &Shape::Prod(vec![key.clone(), val.clone()])).and_then(|p| p.value(key, val)) else { break };
             projections.push(projection);
         }
         if projections.is_empty() { continue; }

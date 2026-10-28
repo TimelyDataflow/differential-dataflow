@@ -123,7 +123,8 @@ impl Reducer {
             format!("{} map ((_value, _diff) -> ({}, _diff))", names[0], projection.text("_value"))
         });
         // Source is only a spelling. Keep the composed graph, and accept the graph
-        // printer's spelling only when reparsing gives that exact optimized graph.
+        // printer's spelling only when reparsing gives the same graph compiled at
+        // this input type, which proves and removes the patterns in either spelling.
         let input = corgi::Shape::Prod(vec![key.clone(), corgi::Shape::List(Box::new(corgi::Shape::Prod(vec![val.clone(), corgi::Shape::Int])))]);
         let spelling = (|| {
             let printed = crate::lambda::print::print_composed(&composed, &input);
@@ -134,8 +135,8 @@ impl Reducer {
             for f in crate::lambda::registered() { words.word(f.name(), crate::lambda::function_word(&f)).ok()?; }
             let parsed = corgi::parse_ml_in(&src, &words).ok()?;
             let graph = composed.graph().ok()?;
-            if corgi::shape_of(&parsed, &input).ok()? != corgi::shape_of(graph, &input).ok()?
-                || corgi::optimize(&parsed) != corgi::optimize(graph) { return None; }
+            if corgi::compile(parsed, &input).ok()?.graph()
+                != corgi::compile(graph.as_ref().clone(), &input).ok()?.graph() { return None; }
             Some(src)
         })();
         if let Some(src) = spelling { composed.src = src; }
@@ -161,11 +162,16 @@ mod tests {
         assert!(readable.src.contains("head"));
         assert_eq!(readable.graph().unwrap(), mechanical.graph().unwrap());
         let parsed = Lambda::new(readable.src.clone(), &corgi::Scope::default());
-        assert_eq!(corgi::optimize(readable.graph().unwrap()), corgi::optimize(parsed.graph().unwrap()));
-        // A shallow spelling would drop this authored nested pattern check.
+        let val = Shape::Prod(vec![Shape::Int, Shape::Int]);
+        assert_eq!(crate::lambda::compile_reduce(&readable, &Shape::Int, &val).unwrap(),
+            crate::lambda::compile_reduce(&parsed, &Shape::Int, &val).unwrap());
+        // The known input type also proves authored nested pattern checks.
         let base = Lambda::new("let ((k, _), vals) = input in (vals head.0, 1) enlist".into(), &corgi::Scope::default());
         let Reducer::Expr(kept) = Reducer::Expr(base).project(&projection, &Shape::Prod(vec![Shape::Int, Shape::Int]), &Shape::Prod(vec![Shape::Int, Shape::Int]));
-        assert!(kept.src.contains("_call0"));
+        assert!(!kept.src.contains("_call0"), "{}", kept.src);
+        let parsed = Lambda::new(kept.src.clone(), &corgi::Scope::default());
+        assert_eq!(crate::lambda::compile_reduce(&kept, &val, &val).unwrap(),
+            crate::lambda::compile_reduce(&parsed, &val, &val).unwrap());
     }
 
     #[test]

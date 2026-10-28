@@ -1,5 +1,5 @@
 //! Compare final stages with a bijection of items, imports, variables, and child exports.
-//! Scalar equality is equality of compiled graphs, including shape checks, not sampled values.
+//! Scalar equality is equality of graphs compiled at the known input type, not sampled values.
 
 use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
@@ -8,7 +8,7 @@ use super::Report;
 
 impl Report {
     /// Differences after renaming scope-local items. Exported trace names remain observable.
-    /// This deliberately does not optimize either final stage again or erase scalar patterns.
+    /// Collection topology is compared as given; scalar compilation proves pattern checks.
     pub fn compare_final(&self, other: &Report) -> Vec<String> {
         let mut differences = Vec::new();
         if !self.unresolved.is_empty() || !other.unresolved.is_empty() {
@@ -39,37 +39,66 @@ impl Mapping {
     }
 }
 
-fn lambda(a: &Lambda, b: &Lambda) -> bool {
-    match (a.graph(), b.graph()) {
-        (Ok(a), Ok(b)) => corgi::optimize(a) == corgi::optimize(b),
+fn lambda(a: &Lambda, b: &Lambda, input: Option<&corgi::Shape>) -> bool {
+    let Some(input) = input else { return false };
+    let compile = |lambda: &Lambda| corgi::compile(lambda.graph()?.as_ref().clone(), input);
+    match (compile(a), compile(b)) {
+        (Ok(a), Ok(b)) => a.graph() == b.graph(),
         _ => false,
     }
 }
 
-fn linear(a: &LinearOp, b: &LinearOp) -> bool {
+/// Input types for each scalar slot, including each step of a linear chain.
+fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> {
+    use corgi::Shape;
+    Some(match node {
+        Node::Linear { input, ops } => {
+            let shape = shapes.of(input)?;
+            let mut steps = crate::shapes::linear_shapes(ops, shape.key, shape.val, shape.time - 1).ok()?;
+            steps.pop();
+            steps.into_iter().map(|(k, v)| Shape::Prod(vec![k, v])).collect()
+        }
+        Node::Join { left, right, .. } => {
+            let (l, r) = (shapes.of(left)?, shapes.of(right)?);
+            vec![Shape::Prod(vec![l.key, l.val, r.val])]
+        }
+        Node::HalfJoin { stream, arrangement, .. } => {
+            let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
+            let Shape::Prod(fields) = s.val else { return None };
+            vec![Shape::Prod(vec![s.key, fields.first()?.clone(), a.val])]
+        }
+        Node::Reduce { input, .. } => {
+            let shape = shapes.of(input)?;
+            vec![Shape::Prod(vec![shape.key, Shape::List(Box::new(Shape::Prod(vec![shape.val, Shape::Int])))])]
+        }
+        _ => Vec::new(),
+    })
+}
+
+fn linear(a: &LinearOp, b: &LinearOp, input: Option<&corgi::Shape>) -> bool {
     match (a, b) {
         (LinearOp::Project(a), LinearOp::Project(b)) | (LinearOp::Filter(a), LinearOp::Filter(b))
         | (LinearOp::EnterAt(a), LinearOp::EnterAt(b)) | (LinearOp::FlatMap(a), LinearOp::FlatMap(b))
-        | (LinearOp::JoinFunction(a), LinearOp::JoinFunction(b)) => lambda(a, b),
+        | (LinearOp::JoinFunction(a), LinearOp::JoinFunction(b)) => lambda(a, b, input),
         (LinearOp::Negate, LinearOp::Negate) | (LinearOp::Lift, LinearOp::Lift) | (LinearOp::LiftIter, LinearOp::LiftIter) => true,
         _ => false,
     }
 }
 
-fn reducer(a: &Reducer, b: &Reducer) -> bool {
+fn reducer(a: &Reducer, b: &Reducer, input: Option<&corgi::Shape>) -> bool {
     match (a, b) {
-        (Reducer::Expr(a), Reducer::Expr(b)) => lambda(a, b),
+        (Reducer::Expr(a), Reducer::Expr(b)) => lambda(a, b, input),
     }
 }
 
-fn node(a: &Node, b: &Node, map: &Mapping, scalar: bool) -> bool {
+fn node(a: &Node, b: &Node, map: &Mapping, scalar: bool, inputs: &[corgi::Shape]) -> bool {
     match (a, b) {
-        (Node::Linear { input: a, ops: x }, Node::Linear { input: b, ops: y }) => map.same(a, b) && (!scalar || (x.len() == y.len() && x.iter().zip(y).all(|(a, b)| linear(a, b)))),
+        (Node::Linear { input: a, ops: x }, Node::Linear { input: b, ops: y }) => map.same(a, b) && (!scalar || (x.len() == y.len() && x.iter().zip(y).enumerate().all(|(i, (a, b))| linear(a, b, inputs.get(i))))),
         (Node::Concat(a), Node::Concat(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| map.same(a, b)),
         (Node::Arrange(a), Node::Arrange(b)) => map.same(a, b),
-        (Node::Join { left: a, right: b, projection: p }, Node::Join { left: c, right: d, projection: q }) => map.same(a, c) && map.same(b, d) && (!scalar || lambda(p, q)),
-        (Node::HalfJoin { stream: a, arrangement: b, strict: s, projection: p }, Node::HalfJoin { stream: c, arrangement: d, strict: t, projection: q }) => map.same(a, c) && map.same(b, d) && s == t && (!scalar || lambda(p, q)),
-        (Node::Reduce { input: a, reducer: x }, Node::Reduce { input: b, reducer: y }) => map.same(a, b) && (!scalar || reducer(x, y)),
+        (Node::Join { left: a, right: b, projection: p }, Node::Join { left: c, right: d, projection: q }) => map.same(a, c) && map.same(b, d) && (!scalar || lambda(p, q, inputs.first())),
+        (Node::HalfJoin { stream: a, arrangement: b, strict: s, projection: p }, Node::HalfJoin { stream: c, arrangement: d, strict: t, projection: q }) => map.same(a, c) && map.same(b, d) && s == t && (!scalar || lambda(p, q, inputs.first())),
+        (Node::Reduce { input: a, reducer: x }, Node::Reduce { input: b, reducer: y }) => map.same(a, b) && (!scalar || reducer(x, y, inputs.first())),
         (Node::Inspect { input: a, label: x }, Node::Inspect { input: b, label: y }) => map.same(a, b) && x == y,
         _ => false,
     }
@@ -97,8 +126,9 @@ fn compare(a: &Scope, ash: &ScopeShapes, b: &Scope, bsh: &ScopeShapes, parent: O
         let at = format!("{path}/{label}[{i}]");
         match item {
             Item::Op(op) => {
+                let inputs = input_shapes(op, ash).unwrap_or_default();
                 let find = |scalar| b.items.iter().enumerate().position(|(j, other)| !used[j] && match other {
-                    Item::Op(other) => node(op, other, &map, scalar), _ => false,
+                    Item::Op(other) => node(op, other, &map, scalar, &inputs), _ => false,
                 });
                 let exact = find(true);
                 let found = exact.or_else(|| find(false));
@@ -107,7 +137,7 @@ fn compare(a: &Scope, ash: &ScopeShapes, b: &Scope, bsh: &ScopeShapes, parent: O
                     if exact.is_none() {
                         let detail = if let (Node::Linear { ops: x, .. }, Item::Op(Node::Linear { ops: y, .. })) = (op, &b.items[j]) {
                             if x.len() != y.len() { format!("linear chain length {} -> {}", x.len(), y.len()) }
-                            else { format!("compiled scalar graph changed at slots {:?}", x.iter().zip(y).enumerate().filter(|(_, (x, y))| !linear(x, y)).map(|(i, _)| i).collect::<Vec<_>>()) }
+                            else { format!("compiled scalar graph changed at slots {:?}", x.iter().zip(y).enumerate().filter(|(i, (x, y))| !linear(x, y, inputs.get(*i))).map(|(i, _)| i).collect::<Vec<_>>()) }
                         } else { "compiled scalar graph or reducer changed".into() };
                         diff.push(format!("{at}: {detail}"));
                     }

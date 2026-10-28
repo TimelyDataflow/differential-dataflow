@@ -32,8 +32,7 @@ pub(crate) fn print_named(lambda: &Lambda, input: Option<&Shape>, check: bool, t
     print_with(lambda, input, check, types, false)
 }
 
-/// Compositions bind the immediate input fields. Keeping those shallow patterns
-/// and the list-relative zero in `head` can preserve their exact scalar graph.
+/// Compositions bind the immediate input fields.
 pub(crate) fn print_composed(lambda: &Lambda, input: &Shape) -> Printed {
     print_with(lambda, Some(input), false, &[], true)
 }
@@ -48,7 +47,9 @@ fn print_with(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(Str
             });
         };
         corgi::shape_of(original, input)?;
-        let compiled = corgi::optimize(original);
+        // Spell the canonical graph: each constant and unit counts rows from the input,
+        // so nothing survives only as an anchor the surface syntax cannot write.
+        let compiled = corgi::compile(original.as_ref().clone(), input)?.graph().clone();
         let graph = prepare(&compiled, input)?;
         let mut printer = Printer { types: types.to_vec(), shallow, ..Printer::default() };
         match printer.lambda(&graph, input) {
@@ -160,8 +161,8 @@ impl Printer {
                         format!("{} match ({})", expressions[*arg], arms.join(", "))
                     }
                     NodeRef::Op(NumOp::Core(Op::Gather), i) if self.shallow && matches!(&nodes[*i], NodeRef::Tuple(fields)
-                        if fields.len() == 2 && matches!(&nodes[fields[0]], NodeRef::Op(NumOp::Core(Op::Lit(zero)), anchor)
-                            if *anchor == fields[1] && self.constant(zero, 0).ok().as_deref() == Some("0"))) => {
+                        if fields.len() == 2 && matches!(&nodes[fields[0]], NodeRef::Op(NumOp::Core(Op::Lit(zero)), _)
+                            if self.constant(zero, 0).ok().as_deref() == Some("0"))) => {
                         let NodeRef::Tuple(fields) = &nodes[*i] else { unreachable!() };
                         format!("{} head", expressions[fields[1]])
                     }
@@ -177,8 +178,9 @@ impl Printer {
             // Keep generated scalar syntax within the parser's recursion budget.
             // Short expressions retain their existing spelling. Naming an intermediate
             // changes no graph edges and also bounds repeated string copying.
-            // Field paths cost no computation. All other shared values keep one explicit binding.
-            if (uses[index] > 1 || depth > max_depth) && paths[index].is_none() && !matches!(node, NodeRef::Op(NumOp::Core(Op::Unit), _)) {
+            // Field paths, units and constants cost no computation; writing them twice
+            // compiles to the same graph. All other shared values keep one explicit binding.
+            if (uses[index] > 1 || depth > max_depth) && paths[index].is_none() && !matches!(node, NodeRef::Op(NumOp::Core(Op::Unit | Op::Lit(_)), _)) {
                 let name = format!("v{next}"); next += 1;
                 bindings += &format!("let {name} = {expression} in ");
                 expression = name;
@@ -211,7 +213,6 @@ impl Printer {
                 Op::Lit(v) => return self.constant(v, 0),
                 Op::Unit => return Ok("()".into()),
                 Op::Pattern(_) => return Ok(x.into()),
-                Op::Project(_) => return Err("project through a reference has no surface spelling".into()),
                 Op::Weave => return Err("weave has no surface spelling".into()),
                 Op::Inject(tag, lanes) => {
                     let mut resolved = lanes.clone();
@@ -262,10 +263,10 @@ impl Printer {
             NumOp::Cmp(c) => match c {
                 CmpOp::Rel(p) => pred(*p).into(),
                 CmpOp::RelImm(p, c) => return Ok(pair(scalar(*c)?, pred(*p), false)),
-                CmpOp::ListImm(p, c) => {
+                CmpOp::ListImm(ne, c) => {
                     let v = Value::Prim(c.clone());
                     let list = Value::List(vec![v.len()].into(), Box::new(v));
-                    return Ok(pair(self.constant(&list, 0)?, pred(*p), false));
+                    return Ok(pair(self.constant(&list, 0)?, if *ne { "ne" } else { "eq" }, false));
                 }
                 CmpOp::Min => "min".into(), CmpOp::Max => "max".into(),
                 CmpOp::MinImm(c) => return Ok(pair(scalar(*c)?, "min", false)),
@@ -388,7 +389,6 @@ fn graph_text(graph: &G) -> String {
                 match op {
                     NumOp::Core(Op::Lit(value)) => format!("constant {}", value_text(value)),
                     NumOp::Core(Op::Pattern(p)) => format!("{x} check {p}"),
-                    NumOp::Core(Op::Project(s)) => format!("{x} project to {s}"),
                     NumOp::Core(Op::Weave) => format!("{x} weave"),
                     NumOp::Core(Op::Inject(tag, lanes)) => format!("{x} inject lane {tag} of [{}]", lanes.iter().map(|s| s.as_ref().map(ToString::to_string).unwrap_or_else(|| "payload shape".into())).collect::<Vec<_>>().join(", ")),
                     NumOp::Core(Op::MapList(body) | Op::Fold(body) | Op::FoldScan(body)) => {
@@ -402,7 +402,7 @@ fn graph_text(graph: &G) -> String {
                     NumOp::Cmp(CmpOp::RelImm(p, c)) => format!("({x}, {}) {}", graph_scalar(*c), pred(*p)),
                     NumOp::Cmp(CmpOp::MinImm(c)) => format!("({x}, {}) min", graph_scalar(*c)),
                     NumOp::Cmp(CmpOp::MaxImm(c)) => format!("({x}, {}) max", graph_scalar(*c)),
-                    NumOp::Cmp(CmpOp::ListImm(p, c)) => format!("({x}, constant list {}) {}", value_text(&Value::Prim(c.clone())), pred(*p)),
+                    NumOp::Cmp(CmpOp::ListImm(ne, c)) => format!("({x}, constant list {}) {}", value_text(&Value::Prim(c.clone())), if *ne { "ne" } else { "eq" }),
                     NumOp::Text(TextOp::Split(byte)) => format!("{x} split byte {byte}"),
                     _ => Printer::default().op(op, &x, &Shape::Unit).expect("all remaining kernels have a shape-independent surface spelling"),
                 }
@@ -451,8 +451,9 @@ fn check_text(original: &G, shape: &Shape, text: &str) -> Check {
         let expected = corgi::shape_of(original, shape)?;
         let actual = corgi::shape_of(parsed, shape).map_err(|e| format!("printed text did not type at {shape}: {e}"))?;
         if expected != actual { return Err(format!("output shape changed from {expected} to {actual}")); }
-        let parsed = corgi::optimize(parsed);
-        if *original == parsed { return Ok(Check::Exact); }
+        let parsed = corgi::compile(parsed.clone(), shape)?;
+        let parsed = parsed.graph();
+        if corgi::compile(original.clone(), shape)?.graph() == parsed { return Ok(Check::Exact); }
         let mut seed = 0x5eed_d1ff_c0de_2026;
         for rows in [0, 1, 17, 64] {
             let input = generated(shape, rows, &mut seed);
@@ -536,7 +537,12 @@ mod tests {
         composed.src = "let arg = input in ()".into();
         assert_eq!(checked_lambda(&composed, shape.clone()), "((a, b, c), (_, d)) -> ((a, b, c), ((), d))");
         let mut b = Builder::default(); let x = b.input();
-        let out = b.add(Op::Project(Shape::Prod(vec![ints(3), Shape::Prod(vec![Shape::Unit, Shape::Int])])), vec![x]);
+        let key = b.add(Op::Field(0), vec![x]);
+        let val = b.add(Op::Field(1), vec![x]);
+        let kept = b.add(Op::Field(1), vec![val]);
+        let unit = b.add(Op::Unit, vec![x]);
+        let val = b.tuple(vec![unit, kept]);
+        let out = b.tuple(vec![key, val]);
         assert_eq!(checked_lambda(&graph_lambda(b.finish(out)), shape), "(a, (_, b)) -> (a, ((), b))");
     }
 
@@ -551,6 +557,14 @@ mod tests {
     fn operators_and_immediates_keep_operand_order() {
         checked("(3, input) sub", Shape::Int);
         checked("(1.25, input) div", Shape::Float);
+        for (word, ne) in [("eq", false), ("ne", true)] {
+            let graph = corgi::optimize(&corgi::parse_ml(&format!("(input, [1, 2, 3]) {word}")).unwrap());
+            assert!(graph.nodes().any(|node| matches!(node,
+                NodeRef::Op(NumOp::Cmp(CmpOp::ListImm(flag, _)), _) if *flag == ne)));
+            assert!(graph_text(&graph).contains(&format!(") {word}")));
+            let text = checked_lambda(&graph_lambda(graph), list(Shape::Int));
+            assert!(text.ends_with(word), "{text}");
+        }
     }
 
     #[test]

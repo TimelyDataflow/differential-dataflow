@@ -24,7 +24,7 @@ res: {
     let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
     let best_rows = pairs + ::base;
     let best_idx = best_rows | arrange;
-    let best = best_idx | reduce((_, a) -> (a head.0, 1) enlist map ((a, b) -> (((), a.1), b)));
+    let best = best_idx | reduce((_, a) -> (((), a head.0.1), 1) enlist);
     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
     let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
     let unseen = ::rkk + unseen_rows;

@@ -276,11 +276,10 @@ impl Printer<'_> {
     fn lambda(&mut self, lambda: &Lambda, input: Option<Shape>) -> Result<String, String> {
         let input = input.ok_or("lambda input shape is unknown")?;
         let graph = lambda.graph()?;
-        corgi::shape_of(graph, &input)?;
-        let compiled = corgi::optimize(graph);
+        let compiled = corgi::compile(graph.as_ref().clone(), &input)?;
         let src = qualify(&lambda.src, &self.context.types);
         if let Some(parsed) = corgi::parse_ml_in(&src, &self.context.scope).ok() {
-            if corgi::shape_of(&parsed, &input).is_ok() && corgi::optimize(&parsed) == compiled {
+            if corgi::compile(parsed, &input).is_ok_and(|parsed| parsed.graph() == compiled.graph()) {
                 self.counts.source += 1;
                 return Ok(slot_text(&src));
             }
@@ -290,7 +289,7 @@ impl Printer<'_> {
         self.counts.graph += 1;
         let (pat, body) = printed.text.split_once(" -> ").ok_or("graph printer did not produce a slot")?;
         let parsed = corgi::parse_ml_in(&format!("let {pat} = input in {body}"), &self.context.scope)?;
-        if corgi::optimize(&parsed) != compiled { self.counts.graph_changed += 1; }
+        if corgi::compile(parsed, &input)?.graph() != compiled.graph() { self.counts.graph_changed += 1; }
         Ok(printed.text)
     }
 
