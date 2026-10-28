@@ -46,7 +46,7 @@ fn run() -> Result<(), String> {
                 if options.timings { eprint!("{}", report.timing_table(Some(("DDP printing", start.elapsed())))); }
                 write!(out, "{}", printed.text).map_err(|e| e.to_string())?;
                 eprintln!("Lambdas: source={}, graph={}, graph_changed={}", printed.lambdas.source, printed.lambdas.graph, printed.lambdas.graph_changed);
-                if options.check_lambdas { incomplete |= printed.lambdas.graph_changed != 0; }
+                incomplete |= printed.lambdas.graph_changed != 0;
                 if check_roundtrip {
                     let reparsed = interactive::plan::report(&printed.text, &|name| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name)), &passes)?;
                     let differences = report.compare_final(&reparsed);

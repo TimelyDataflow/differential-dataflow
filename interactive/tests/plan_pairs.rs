@@ -22,12 +22,16 @@ struct Case {
     explain: bool,
     problem: Option<&'static str>,
     functions: &'static str,
+    parsed_distinct: bool,
 }
 
 impl Case {
     const fn new(name: &'static str, input: &'static str, providers: &'static [&'static str]) -> Self {
-        Self { name, input, providers, request: None, explain: false, problem: None, functions: "none" }
+        Self { name, input, providers, request: None, explain: false, problem: None, functions: "none", parsed_distinct: false }
     }
+    // Parsed output expands distinct before shapes are known; lowering the original
+    // can instead use the unit-valued fast path. Their collection graphs differ.
+    const fn parsed_distinct(mut self) -> Self { self.parsed_distinct = true; self }
     const fn request(mut self, name: &'static str) -> Self { self.request = Some(name); self }
     const fn explain(mut self) -> Self { self.explain = true; self }
     const fn problem(mut self, problem: &'static str) -> Self { self.problem = Some(problem); self }
@@ -205,13 +209,25 @@ fn emitted(case: &Case, report: &Report, source: &dyn Fn(&str) -> Option<RowShap
             continue;
         }
         let text = match report.emit_ddp_at(stage) {
-            Ok(printed) => printed.text,
+            Ok(printed) => {
+                assert_eq!(printed.lambdas.graph_changed, 0, "{}: {}: printed scalar graph changed", case.name, stage.name());
+                printed.text
+            },
             Err(error) => panic!("{}: {}: {error}", case.name, stage.name()),
         };
         let replanned = plan::report(&text, source, &Config::all()).unwrap_or_else(|e| panic!("{}: {}: emitted DDP does not replan: {e}", case.name, stage.name()));
         if case.problem.is_none() {
             assert!(replanned.unresolved.is_empty(), "{}: {}: emitted imports are unresolved", case.name, stage.name());
             assert!(replanned.stages.iter().all(|s| s.problems.is_empty()), "{}: {}: emitted DDP has shape problems", case.name, stage.name());
+            let differences = report.compare_final(&replanned);
+            let stable = replanned.emit_ddp_at(stage).unwrap().text == text;
+            if stage == DdpStage::Parsed && case.parsed_distinct {
+                assert!(!differences.is_empty(), "{}: parsed distinct allowance is no longer needed", case.name);
+                assert!(stable, "{}: parsed distinct text changed", case.name);
+            } else if !differences.is_empty() || !stable {
+                assert!(stage == DdpStage::AsOf && as_of_reinsertion(report, &text, source, &Config::all()).unwrap(),
+                    "{}: {}: final plan differs: {differences:?}; text stable={stable}", case.name, stage.name());
+            }
         }
         if stage == DdpStage::Parsed || (case.explain && stage == DdpStage::Lowered) {
             output.push((format!("{}.{}.ddp", case.name, stage.name()), text.clone()));
@@ -322,6 +338,21 @@ fn reviewed_plan_pairs() {
     println!("{} plan pairs; {bytes} bytes under tests/plan_pairs", manifest::CASES.len());
 }
 
+/// The as-of pass can append the same filter again. With structural cleanup off,
+/// printing and lowering also splits its fused linear node. Normalize that grouping
+/// on both sides before classifying the known repeated insertion; compare the whole
+/// graph, including every scalar, with as-of insertion disabled on the second plan.
+fn as_of_reinsertion(report: &Report, text: &str, source: &dyn Fn(&str) -> Option<RowShape>, config: &Config) -> Result<bool, String> {
+    if !config.as_of_drop || report.timings.as_of_drop.changes == 0 { return Ok(false); }
+    let without = plan::report(text, source, &Config { as_of_drop: false, ..*config })?;
+    if report.compare_final(&without).is_empty() && without.emit_ddp()?.text == text { return Ok(true); }
+    if config.structural { return Ok(false); }
+    let normalize = Config { structural: true, ..Config::none() };
+    let first = plan::report_program(report.stages.last().unwrap().program.clone(), source, &normalize)?;
+    let second = plan::report_program(without.stages.last().unwrap().program.clone(), source, &normalize)?;
+    Ok(first.compare_final(&second).is_empty())
+}
+
 /// Exercise the reviewed providers and consumers with every optional-pass configuration.
 /// Keep snapshots untouched; DIFFTEST_OUT retains both sides of each failing round trip.
 #[test]
@@ -374,10 +405,7 @@ fn all_pass_subsets() {
                 second_text = again.emit_ddp()?.text;
                 let differences = report.compare_final(&again);
                 if differences.is_empty() && first_text == second_text { return Ok(false); }
-                if config.as_of_drop {
-                    let without = plan::report(&first_text, &source, &Config { as_of_drop: false, ..config })?;
-                    if report.compare_final(&without).is_empty() && without.emit_ddp()?.text == first_text { return Ok(true); }
-                }
+                if as_of_reinsertion(&report, &first_text, &source, &config)? { return Ok(true); }
                 Err(format!("text stable={}; {}", first_text == second_text, differences.join("; ")))
             })();
             let status = match &result {
