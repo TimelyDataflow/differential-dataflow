@@ -1,0 +1,8 @@
+-- Two half joins differ only in strictness. Their arrangements can merge, but
+-- the half joins cannot, and read-back must preserve both projections and flags.
+let stream = input 0 : (int ; (int, (int)));
+let matches = input 1 : (int ; int);
+let loose = stream | half_join(matches, 0, (k, v, w) -> (k, (v, w)));
+let strict = stream | half_join(matches, 1, (k, v, w) -> (k, (v, w)));
+export "loose" = loose;
+export "strict" = strict;
