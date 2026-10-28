@@ -463,6 +463,8 @@ fn build_scope(
         }
     }
     for (var, site) in scope.vars.iter().zip(&plan.vars) {
+        // A declaration constrains every feedback binding. Masking those fields would
+        // violate that contract; an inferred shape does not impose the same demand.
         if var.shape.is_some() {
             builder.graph.seeds.extend(site.all());
         }
@@ -854,7 +856,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
     masked
 }
 
-/// Fuse an author's value maps before computing field demand. A shared reduction, a
+/// Fuse value maps before computing field demand. A shared reduction, a
 /// changed key, or a map that computes anything beyond tuple wiring is left alone.
 fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -> usize {
     let mut dead = vec![false; scope.items.len()];
@@ -929,44 +931,78 @@ pub fn demand_graph(
 }
 
 /// Replace dead tuple fields in producer lambdas by unit and fuse value maps into
-/// reduces. Returns the number of field masks and fused maps. On a shape disagreement
-/// the original is restored. Masks can leave adjacent maps and identity masks behind;
-/// `run` follows this pass with the optimizer passes it runs.
+/// reduces, alternating to a fixed point. Returns the number of field masks and fused
+/// maps. On a shape disagreement or failure to converge within 16 rounds the original
+/// is restored. Masks can leave adjacent maps and identity masks behind; `run` follows
+/// this pass with the optimizer passes it runs.
 pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<usize, String> {
     let original = program.clone();
-    let (shapes, problems) = shapes::infer(program, source);
+    let (mut shapes, problems) = shapes::infer(program, source);
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
-    let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
-    let (shapes, _) = shapes::infer(program, source);
-    let mut builder = Builder::default();
-    let Ok(plan) = build_scope(&mut builder, &program.root, &shapes, None, 0) else {
-        *program = original;
-        return Ok(0);
-    };
-    for export in &plan.exports {
-        builder.graph.seeds.extend(export.all());
+    let exports = shapes.exports.clone();
+    let mut changed = 0;
+    for _ in 0..16 {
+        let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
+        let (checked, problems) = shapes::infer(program, source);
+        if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
+        let mut builder = Builder::default();
+        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, 0) else { break };
+        for export in &plan.exports {
+            builder.graph.seeds.extend(export.all());
+        }
+        let live = builder.graph.closure();
+        let masked = rewrite_scope(&mut program.root, &plan, &live);
+        let (checked, problems) = shapes::infer(program, source);
+        if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
+        changed += fused + masked;
+        if fused + masked == 0 { return Ok(changed); }
+        shapes = checked;
     }
-    let live = builder.graph.closure();
-    let masked = rewrite_scope(&mut program.root, &plan, &live);
-    let (_, check) = shapes::infer(program, source);
-    if !check.conflicts.is_empty() || !check.unknown.is_empty() {
-        *program = original;
-        // A rewritten intermediate shape disagrees with a consumer. The pass
-        // is optional, so keep the original program in that case.
-        return Ok(0);
-    }
-    Ok(masked + fused)
+    // Projection is optional. Never leave a rejected or partially converged rewrite.
+    *program = original;
+    Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{lower, parse};
+
+    #[test]
+    fn masking_and_reduce_fusion_reach_a_fixed_point() {
+        let text = r#"let rows = input 0 : (int, int);
+            let dead = rows | map((k,v) -> ((k,v),v)) | distinct;
+            export "out" = rows;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        let exports = shapes::infer(&program, &|_| None).0.exports;
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let once = format!("{program:?}");
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+        assert_eq!(once, format!("{program:?}"));
+        assert_eq!(exports, shapes::infer(&program, &|_| None).0.exports);
+    }
+
+    #[test]
+    fn declared_feedback_shapes_keep_their_fields() {
+        let text = r#"let rows = input 0 : (int, int);
+            s: { var x : (int, int); set x = rows | map((k,v) -> (k,v)); }
+            let dead = rows | map((k,v) -> (v,k));
+            export "out" = rows;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        // The unrelated map can still be masked; violating the feedback declaration
+        // would reject the whole candidate, including the unrelated field masks.
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let (shapes, problems) = shapes::infer(&program, &|_| None);
+        assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
+        let ItemShapes::Sub(child) = &shapes.items[0] else { panic!("expected child") };
+        let shape = child.vars[0].as_ref().unwrap();
+        assert_eq!((&shape.key, &shape.val), (&Shape::Int, &Shape::Int));
+    }
 
     #[test]
     fn graph_reads_selected_tuple_fields() {

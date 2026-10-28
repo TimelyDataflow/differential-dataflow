@@ -7,6 +7,7 @@ let item_reduce = item_idx | reduce((_, vals) -> let diffs = vals map ((_, d) ->
 explain: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var demand_set_0 : (int, int);
+    let demand_input0 = demand_set_0;
     let item_map = ::input0 | map((k, v) -> ((k, v), ()));
     let item_idx = item_map | arrange;
     let item_reduce = item_idx | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
@@ -94,7 +95,6 @@ explain: {
     let item_reduce13 = item_idx21 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
     let item_map45 = item_reduce13 | map((k, v) -> (k.0, k.1));
     set demand_set_0 = item_map45;
-    let demand_input0 = demand_set_0;
 }
 -- Renderer: build an export arrangement.
 export "demand:input0" = explain::demand_input0;

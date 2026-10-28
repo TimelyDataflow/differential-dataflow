@@ -155,8 +155,9 @@ fn wiring(graph: &Graph<NumOp>) -> Option<Projection> {
     Some(values[graph.output()].clone())
 }
 
-/// Remove unread imports and redundant source aliases. Exports, feedback, child edges,
-/// and every operator (including inspect) are readers. Declared inputs always remain.
+/// Remove unread imports, child exports, and redundant source aliases. Exports, feedback,
+/// child import edges, and every operator (including inspect) are readers. Root exports
+/// and declared inputs always remain.
 pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
     let mut changed = false;
     for item in &mut scope.items {
@@ -191,6 +192,26 @@ pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
     scope.for_each_ref(|r| if let Ref::Import(i) = r {
         assert_ne!(remap[*i], usize::MAX, "removed a live import");
         *i = remap[*i];
+    });
+    // Only the parent can read a child's exports. The read set excludes source names,
+    // but includes sibling imports, feedback, and exports to this scope's own parent.
+    let mut exports = vec![Vec::new(); scope.items.len()];
+    for (i, item) in scope.items.iter_mut().enumerate() {
+        if let Item::Sub(child) = item {
+            let remap = &mut exports[i];
+            let mut next = 0;
+            child.exports.retain(|_| {
+                let keep = read.contains(&ref_key(&Ref::ChildExport(i, remap.len())));
+                remap.push(if keep { next } else { usize::MAX });
+                if keep { next += 1; }
+                keep
+            });
+            changed |= next != remap.len();
+        }
+    }
+    scope.for_each_ref(|r| if let Ref::ChildExport(i, e) = r {
+        assert_ne!(exports[*i][*e], usize::MAX, "removed a live child export");
+        *e = exports[*i][*e];
     });
     changed
 }

@@ -10,7 +10,7 @@ let producing = producing_map + producing_rows;
 let arr = producing_filter | map((id, (_, cs)) -> (id, (0, cs) get));
 eqsat: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var eq : (int, int);
+    var eq;
     let pc_idx = ::pc | arrange;
     let eq_idx = eq | arrange;
     let canon = pc_idx | join(eq_idx, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));

@@ -47,7 +47,7 @@ pub struct Config {
     pub structural: bool,
     /// Compose adjacent maps, drop identity maps, cancel paired negations.
     pub compose_maps: bool,
-    /// Remove imports and aliases nothing reads.
+    /// Remove imports, child exports, and aliases nothing reads.
     pub dead_bindings: bool,
     /// Replace fields nothing reads by `()`.
     pub projection: bool,
@@ -120,6 +120,8 @@ pub enum Change {
 /// and every stage, even one that is switched off, has no changes, or is skipped.
 /// All row and arrangement times must be at or beyond `as_of`.
 ///
+/// Identical import slots are always interned, as in lowering, even with all optional
+/// passes off. This also normalizes programs supplied directly as IR.
 /// Optimization runs before checking providers so unread imports can disappear.
 /// Projection and as-of candidates must infer without problems and preserve the optimizer's
 /// export shapes. A rejected candidate leaves the last accepted program in place.
@@ -158,15 +160,23 @@ pub fn run(
     if !config.projection { changes.push(Change::Off("projection")); }
     else if valid {
         let mut candidate = program.clone();
-        let masked = projection::pushdown(&mut candidate, source).unwrap_or(0);
-        if masked > 0 {
-            // Masks can expose adjacent maps and identity masks for the optimizer passes.
+        let mut masked = 0;
+        let mut converged = false;
+        for _ in 0..16 {
+            let count = projection::pushdown(&mut candidate, source).unwrap_or(0);
+            if count == 0 { converged = true; break; }
+            // Masks expose optimizer rewrites. In turn, merging identical masks can
+            // give a reduce one reader and make its remaining map fusible.
             optimize_with(&mut candidate, source, config, &mut |_, _, _, _, _, _| {});
-            if accept(&candidate) {
+            if !accept(&candidate) { break; }
+            masked += count;
+        }
+        if converged {
+            if masked > 0 {
                 changes.push(Change::Masked(masked));
                 *program = candidate;
-            } else { changes.push(Change::Rejected); }
-        } else { changes.push(Change::NoProjection); }
+            } else { changes.push(Change::NoProjection); }
+        } else { changes.push(Change::Rejected); }
     } else { changes.push(Change::Skipped); }
     observe("after projection", program, &changes);
     changes.clear();
@@ -198,6 +208,9 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
             changed |= canonical::canonical_linear(&mut program.root, &shapes);
         }
         if config.dead_bindings { changed |= canonical::dead_bindings(&mut program.root); }
+        // Import slots name edges, not distinct computations. Keep them interned even
+        // with optional rewrites off, including programs supplied directly as IR.
+        changed |= structural::merge_imports(&mut program.root);
         if !changed { break; }
     }
 }

@@ -9,7 +9,7 @@
  explain: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var demand_set_0 : (int, int);
-@@ -12,88 +10,52 @@
+@@ -13,88 +11,52 @@
      let item_reduce = item_idx | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
      let item_map2 = item_reduce | map((k, v) -> (k.0, k.1));
      let item_map3 = item_map2 | map((k, v) -> (k, (v)));
@@ -139,6 +139,6 @@
 +    let item_reduce8 = item_idx14 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
 +    let item_map21 = item_reduce8 | map((k, v) -> (k.0, k.1));
 +    set demand_set_0 = item_map21;
-     let demand_input0 = demand_set_0;
  }
  -- Renderer: build an export arrangement.
+ export "demand:input0" = explain::demand_input0;

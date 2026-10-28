@@ -3,11 +3,11 @@ let edges = input 0 : (int, int);
 let seeds = input 1 : (int, ());
 outer: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var again : (int, ());
+    var again;
     let starts = ::seeds + again;
     inner: {
         -- Time lanes: epoch, then 2 scope coordinates; this scope enters at zero.
-        var reached : (int, ());
+        var reached;
         let reached_idx = reached | arrange;
         let edges_idx = ::edges | arrange;
         let step = reached_idx | join(edges_idx, (_, (), dst) -> (dst, ()));

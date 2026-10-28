@@ -5,7 +5,7 @@ let roots = input 0 : ((int), ());
 let edges = random_nodes_8_edges_12 | map(((src, dst), ()) -> ((src), (dst)));
 reach: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var reach : ((int), ());
+    var reach;
     let reach_idx = reach | arrange;
     let edges_idx = ::edges | arrange;
     let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));

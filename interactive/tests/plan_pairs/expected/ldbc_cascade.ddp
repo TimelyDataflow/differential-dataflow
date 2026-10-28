@@ -49,7 +49,7 @@ let seeds = seeds_map + seeds_join + seeds_join2;
 let children = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
 dead_m: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var dead_m : (int, ());
+    var dead_m;
     let dead_m_idx = dead_m | arrange;
     let children_idx = ::children | arrange;
     let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
@@ -201,7 +201,7 @@ let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ())
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
 thread: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var thread : ((int, int), ());
+    var thread;
     let below_map = thread | map(((mid, root), ()) -> (mid, root));
     let below_idx = below_map | arrange;
     let replies_idx = ::replies | arrange;

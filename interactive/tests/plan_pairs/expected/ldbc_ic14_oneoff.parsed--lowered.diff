@@ -12,7 +12,7 @@
 -    let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost))) | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
 -    set dist = starts + grow | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist) | map(((rid, node), cost) -> ((rid, node, cost), ()));
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var dist : ((int, int, int), ());
++    var dist;
 +    let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
 +    let grow_idx = grow_map | arrange;
 +    let weighted_idx = ::weighted | arrange;
@@ -43,7 +43,7 @@
 -    let up = back | join(pred, ((rid, _), (), u) -> ((rid, u), ()));
 -    set back = targets + up | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var back : ((int, int), ());
++    var back;
 +    let back_idx = back | arrange;
 +    let pred_idx = ::pred | arrange;
 +    let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
@@ -67,7 +67,7 @@
 -    let step = walk | map(((rid, node, path), ()) -> ((rid, node), path)) | join(next, ((rid, _), path, v) -> ((rid, v, (path, v enlist) append), ()));
 -    set walk = first + step;
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var walk : ((int, int, List(int)), ());
++    var walk;
 +    let step_map = walk | map(((rid, node, path), ()) -> ((rid, node), path));
 +    let step_idx = step_map | arrange;
 +    let next_idx = ::next | arrange;

@@ -22,7 +22,7 @@
 +let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
  thread: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var thread : ((int, int), ());
+     var thread;
 @@ -63,8 +59,7 @@
  let ldbc_forum_idx = ldbc_forum_map | arrange;
  let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));

@@ -13,7 +13,7 @@
 -    let step = below | map(((low, high), ()) -> (high, low)) | join(tagclass, (_, low, (_, parent)) -> (low, parent)) | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));
 -    set below = selves + step | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var below : ((int, int), ());
++    var below;
 +    let step_map = below | map(((low, high), ()) -> (high, low));
 +    let step_idx = step_map | arrange;
 +    let tagclass_idx = ::tagclass | arrange;

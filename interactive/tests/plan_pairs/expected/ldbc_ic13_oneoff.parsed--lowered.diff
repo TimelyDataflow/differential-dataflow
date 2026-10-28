@@ -14,7 +14,7 @@
 -    let side1 = search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
 -    let best = side0 | join(side1, ((rid, _), d0, d1) -> (rid, (d0, d1) add)) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var search : ((int, int, int, int), ());
++    var search;
 +    let side0_filter = search | filter(((_, side, _, _), ()) -> (side, 0) eq);
 +    let side0 = side0_filter | map(((rid, _, node, d), ()) -> ((rid, node), d));
 +    let side1_filter = search | filter(((_, side, _, _), ()) -> (side, 1) eq);

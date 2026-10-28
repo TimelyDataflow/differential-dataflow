@@ -116,7 +116,7 @@
 +let children = children_filter | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
 +dead_m: {
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var dead_m : (int, ());
++    var dead_m;
 +    let dead_m_idx = dead_m | arrange;
 +    let children_idx = ::children | arrange;
 +    let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
@@ -292,7 +292,7 @@
 -    let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, root, child) -> ((child, root), ()));
 -    set thread = posts + below | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var thread : ((int, int), ());
++    var thread;
 +    let below_map = thread | map(((mid, root), ()) -> (mid, root));
 +    let below_idx = below_map | arrange;
 +    let replies_idx = ::replies | arrange;

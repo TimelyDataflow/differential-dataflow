@@ -23,7 +23,7 @@
 +let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
  back: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var back : ((int, int), ());
+     var back;
 @@ -50,8 +46,7 @@
  let next = next_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let first_map = request | map(((rid, from, _), ()) -> ((rid, from), ()));
@@ -33,7 +33,7 @@
 +let first = first_idx | join(next_idx, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
  walk: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var walk : ((int, int, List(int)), ());
+     var walk;
 @@ -67,8 +62,7 @@
  let targets_idx2 = targets | arrange;
  let answer_join = answer_idx | join(targets_idx2, ((rid, node), path, ()) -> ((rid, node), path));

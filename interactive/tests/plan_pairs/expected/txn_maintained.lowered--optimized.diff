@@ -12,7 +12,7 @@
 +let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
  res: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var rollback : ((int), ());
+     var rollback;
 @@ -18,21 +15,17 @@
      let rk_idx = rk | arrange;
      let wk_idx = wk | arrange;

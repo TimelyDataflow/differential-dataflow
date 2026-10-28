@@ -10,7 +10,7 @@ let store_idx = store | arrange;
 let base = rk_idx | join(store_idx, ((k), (rid, e), (sw, v)) -> ((k, rid, e), (sw neg, v)));
 res: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var rollback : ((int), ());
+    var rollback;
     let wid_idx = ::wid | arrange;
     let rollback_idx = rollback | arrange;
     let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));

@@ -13,7 +13,7 @@
 -    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
 -    set reach = roots + proposals | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var reach : ((int), ());
++    var reach;
 +    let reach_idx = reach | arrange;
 +    let edges_idx = ::edges | arrange;
 +    let proposals = reach_idx | join(edges_idx, (_, _, dst) -> (dst, ()));

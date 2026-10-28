@@ -52,7 +52,7 @@
 +let children = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
  dead_m: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var dead_m : (int, ());
+     var dead_m;
 @@ -81,8 +70,7 @@
  let gone_likes = gone_likes_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let person_map = person_in | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
@@ -219,7 +219,7 @@
 +let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
  thread: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var thread : ((int, int), ());
+     var thread;
 @@ -260,8 +227,7 @@
  let ldbc_forum_idx = ldbc_forum_map | arrange;
  let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));

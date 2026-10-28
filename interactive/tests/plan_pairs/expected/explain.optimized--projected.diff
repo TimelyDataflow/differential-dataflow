@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -40,10 +40,10 @@
+@@ -41,10 +41,10 @@
      let item_reduce7 = item_reduce6 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
      let item_rows2 = item_map3 + item_map9;
      let item_map15 = item_rows2 | map((k, v) -> let _call0 = let input = (k, v) in let (k, v) = input in let _call0 = let input = (k, v.0) in let (src, dst) = input in (dst, ()) in _call0 in (_call0.0, (k, v.0)));

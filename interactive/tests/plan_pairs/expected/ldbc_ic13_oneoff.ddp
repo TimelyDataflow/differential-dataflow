@@ -7,7 +7,7 @@ let starts_map2 = request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ()));
 let starts = starts_map + starts_map2;
 search: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var search : ((int, int, int, int), ());
+    var search;
     let side0 = search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
     let side1 = search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));
     let side0_idx = side0 | arrange;

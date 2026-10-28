@@ -2,6 +2,27 @@
 
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 
+/// Intern identical imports, as lowering does for repeated parent references. Names
+/// are provenance; the source edge and declared shape determine the imported value.
+/// Walk parents first because redirecting an import can expose duplicates in a child.
+pub(super) fn merge_imports(scope: &mut Scope) -> bool {
+    let imports = std::mem::take(&mut scope.imports);
+    let mut remap = Vec::with_capacity(imports.len());
+    let mut seen = std::collections::HashMap::new();
+    for import in imports {
+        let next = scope.imports.len();
+        let index = *seen.entry((import.from.clone(), import.shape.clone())).or_insert(next);
+        if index == next { scope.imports.push(import); }
+        remap.push(index);
+    }
+    let mut changed = scope.imports.len() != remap.len();
+    scope.for_each_ref(|r| if let Ref::Import(i) = r { *i = remap[*i]; });
+    for item in &mut scope.items {
+        if let Item::Sub(child) = item { changed |= merge_imports(child); }
+    }
+    changed
+}
+
 /// Optimize each scope to a fixed point: prune unread items and imports, collapse
 /// redundant arrangements, deduplicate, and fuse linear chains. Keep root inputs.
 /// Pruning precedes fusion so dead readers do not inflate use counts.

@@ -298,15 +298,18 @@ impl Printer<'_> {
                 Source::Parent(_) => {},
             }
         }
-        for (i, var) in scope.vars.iter().enumerate() {
-            let shape = var.shape.clone().or_else(|| shapes.vars[i].as_ref().map(|s| (s.key.clone(), s.val.clone())));
-            let shape = shape.as_ref().map(|s| self.row(s).map(|s| format!(" : {s}"))).transpose()?.unwrap_or_default();
+        for var in &scope.vars {
+            let shape = var.shape.as_ref().map(|s| self.row(s).map(|s| format!(" : {s}"))).transpose()?.unwrap_or_default();
             writeln!(out, "{indent}var {}{shape};", var.name).unwrap();
             defined.insert(var.name.clone());
         }
-        // Schedule authored aliases at their definitions in source order.
+        let local_exports = export_names(scope);
+        // Schedule aliases at their defining item, preserving authored-then-export order.
         let mut aliases_at = vec![Vec::new(); scope.items.len() + 1];
-        for (name, r) in &scope.names {
+        let exports = scope.exports.iter().zip(&local_exports)
+            .filter(|(_, name)| !names.root && !name.contains("::"))
+            .map(|(export, name)| (name, &export.value));
+        for (name, r) in scope.names.iter().map(|(n, r)| (n, r)).chain(exports) {
             let at = match r { Ref::Local(i) | Ref::ChildExport(i, _) => i + 1, _ => 0 };
             aliases_at[at].push((name, r));
         }
@@ -333,7 +336,7 @@ impl Printer<'_> {
         for bind in &scope.binds {
             writeln!(out, "{indent}set {} = {};", names.vars[bind.var], names.of(&bind.value)).unwrap();
         }
-        for (export, local) in scope.exports.iter().zip(export_names(scope)) {
+        for (export, local) in scope.exports.iter().zip(local_exports) {
             let value = names.of(&export.value);
             if depth == 0 {
                 let storage = match super::form(&export.value, &imports, &forms) {

@@ -9,4 +9,4 @@
 +let roots = input 0 : ((int), ());
  reach: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var reach : ((int), ());
+     var reach;

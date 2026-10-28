@@ -5,7 +5,7 @@ let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
 let selves = tagclass | map((id, _) -> ((id, id), ()));
 below: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var below : ((int, int), ());
+    var below;
     let step_map = below | map(((low, high), ()) -> (high, low));
     let step_idx = step_map | arrange;
     let tagclass_idx = ::tagclass | arrange;

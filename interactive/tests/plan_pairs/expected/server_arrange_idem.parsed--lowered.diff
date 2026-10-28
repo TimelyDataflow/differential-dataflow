@@ -31,7 +31,7 @@
 -    let prop = eq | join(edges, (_, l, n) -> (n, l));
 -    set eq = elems + prop | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-+    var eq : (int, int);
++    var eq;
 +    let pc_idx = ::pc | arrange;
 +    let eq_idx = eq | arrange;
 +    let canon = pc_idx | join(eq_idx, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));

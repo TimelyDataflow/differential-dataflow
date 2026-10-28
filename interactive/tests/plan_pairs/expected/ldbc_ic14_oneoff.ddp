@@ -5,7 +5,7 @@ let weighted = import "ic14.s.weighted" : (int, (int, int));
 let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
 dist: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var dist : ((int, int, int), ());
+    var dist;
     let grow_map = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)));
     let grow_idx = grow_map | arrange;
     let weighted_idx = ::weighted | arrange;
@@ -30,7 +30,7 @@ let targets_idx = targets_map | arrange;
 let targets = targets_idx | join(best_idx, (key, (), _) -> (key, ()));
 back: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var back : ((int, int), ());
+    var back;
     let back_idx = back | arrange;
     let pred_idx = ::pred | arrange;
     let up = back_idx | join(pred_idx, ((rid, _), (), u) -> ((rid, u), ()));
@@ -49,7 +49,7 @@ let first_idx = first_map | arrange;
 let first = first_idx | join(next_idx, ((rid, from), (), ()) -> ((rid, from, from enlist), ()));
 walk: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-    var walk : ((int, int, List(int)), ());
+    var walk;
     let step_map = walk | map(((rid, node, path), ()) -> ((rid, node), path));
     let step_idx = step_map | arrange;
     let next_idx = ::next | arrange;

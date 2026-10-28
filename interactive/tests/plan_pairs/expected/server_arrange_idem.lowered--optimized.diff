@@ -20,7 +20,7 @@
 +let arr = producing_filter | map((id, (_, cs)) -> (id, (0, cs) get));
  eqsat: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
-     var eq : (int, int);
+     var eq;
 @@ -23,31 +19,25 @@
      let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
      let bsig_idx = bsig | arrange;
