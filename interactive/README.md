@@ -345,6 +345,22 @@ published trace's shape. `Report::print` prints all stages; `Stage::print` print
 one. Reports assume arranged imports, enable projection (off by default on the
 server), and use placeholder as-of time `(1, [])`, for installation at epoch 2.
 They ignore environment switches. The output is diagnostic text, not yet
-parseable DDP. Lambda text may differ from its compiled graph after composition.
-Renderer notes describe known storage conversions and non-unit distinct; other
-expansions and scalar compilation are not shown.
+parseable DDP. Renderer notes describe known storage conversions and non-unit
+distinct; other renderer expansions are not shown.
+
+Lambdas print from the typed, optimized corgi graph, using the public
+`Graph::nodes` and `Graph::output` methods in the pinned dependency.
+
+`ddir-plan --check-lambdas file.ddp` reparses every printed slot at its input
+shape. It compares compiled graphs first. If they differ, it compares outputs
+on 82 generated rows, in batches of 0, 1, 17 and 64, with a fixed seed. This is a
+sample check, not a proof. It may evaluate registered functions. Each stage
+reports printed, checked, failed, fallback, exact and sampled counts. A failed
+or unavailable check makes the tool exit unsuccessfully. Unsupported nodes use
+a marked, readable graph form; this form is not executable DDP.
+
+`--lambda-source` displays the old source for comparison. Checks still concern
+the graph printer's text. The library equivalents are `Report::print_with` and
+`Stage::print_with`, using `PrintOptions`. Plain `print` does not evaluate rows.
+Generated input names and local sum declarations do not recover erased source
+names. Lambda serialization still stores source and is unchanged.

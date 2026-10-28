@@ -31,6 +31,8 @@
 
 use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Value as CValue};
 
+pub(crate) mod print;
+
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
 /// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
 /// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:

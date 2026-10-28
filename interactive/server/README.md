@@ -85,7 +85,8 @@ Planning always enables projection, assumes arranged imports, and uses the
 fixed placeholder as-of time `(1, [])` for epoch 2. These assumptions are printed;
 they do not change the server's settings or current time. Reports are not yet
 parseable DDP. Command-line load bindings and the explain transform are not
-options of `plan`.
+options of `plan`. The report prints compiled lambda graphs.
+The command does not run the optional generated-row checks.
 
 ## Reads: text, or binary frames
 

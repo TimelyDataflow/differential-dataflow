@@ -144,16 +144,53 @@ fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dy
     Stage { name, program, shapes, changes, problems: problems.conflicts.into_iter().chain(problems.unknown).collect(), unresolved }
 }
 
+/// Display options. Evaluation is opt-in because registered words can be expensive.
+#[derive(Clone, Copy, Default)]
+pub struct PrintOptions {
+    pub lambda_source: bool,
+    pub check_lambdas: bool,
+}
+
+/// Counts refer to operator slots, including all nested scalar bodies in each check.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct LambdaCounts {
+    pub printed: usize,
+    pub checked: usize,
+    pub failed: usize,
+    pub fallback: usize,
+    pub exact: usize,
+    pub sampled: usize,
+}
+
+impl LambdaCounts {
+    fn add(&mut self, other: Self) {
+        self.printed += other.printed; self.checked += other.checked;
+        self.failed += other.failed; self.fallback += other.fallback;
+        self.exact += other.exact; self.sampled += other.sampled;
+    }
+    fn line(&self) -> String {
+        format!("printed={}, checked={}, failed={}, fallback={}, exact={}, sampled={}", self.printed, self.checked, self.failed, self.fallback, self.exact, self.sampled)
+    }
+}
+
+pub struct PrintedPlan {
+    pub text: String,
+    pub lambdas: LambdaCounts,
+}
+
 impl Report {
     /// Print all stages and their changes, with no runtime identities or wall-clock values.
-    pub fn print(&self) -> String {
+    pub fn print(&self) -> String { self.print_with(PrintOptions::default()).text }
+
+    pub fn print_with(&self, options: PrintOptions) -> PrintedPlan {
         let mut out = String::from("Not yet parseable DDP. Read-only plan report.\n");
         out.push_str("Assumptions: trace imports use arrangements; projection enabled; as-of drop enabled.\n");
         out.push_str("G = (1, []) is a placeholder as-of time, for install epoch 2; nested lanes are zero.\n");
         out.push_str("Imported histories advance to G; fed inputs start at epoch 2. No frontier checks or installation.\n");
-        out.push_str("Lambda text is diagnostic source, not the compiled graph. Composition/masking may make them differ.\n");
-        out.push_str("Scalar compilation and other renderer internals are not shown. Type variant names and erased aliases are not retained.\n");
+        out.push_str("Lambda checks compare compiled graphs, then generated rows if the graphs differ. Sampling is not a proof.\n");
+        out.push_str("Other renderer internals are not shown. Type variant names and erased aliases are not retained.\n");
         for name in &self.unresolved { writeln!(out, "Unresolved import: {} (a declared shape is not a provider)", quote(name)).unwrap(); }
+        let mut lambdas = LambdaCounts::default();
         for stage in &self.stages {
             writeln!(out, "\n=== {} ===", stage.name).unwrap();
             if stage.changes.is_empty() { out.push_str("Changes: none\n"); }
@@ -161,22 +198,59 @@ impl Report {
                 out.push_str("Changes:\n");
                 for change in &stage.changes { writeln!(out, "  - {change}").unwrap(); }
             }
-            out.push_str(&stage.print());
+            let printed = stage.print_with(options);
+            out.push_str(&printed.text);
+            lambdas.add(printed.lambdas);
         }
-        out
+        writeln!(out, "Lambda total: {}", lambdas.line()).unwrap();
+        PrintedPlan { text: out, lambdas }
     }
 }
 
 impl Stage {
     /// Print one stage in dependency order. Generated item suffixes are local ordinals within
     /// a statement, not runtime identities; compaction may renumber them between stages.
-    pub fn print(&self) -> String {
-        let mut out = String::from("Not yet parseable DDP. Lambdas show source text; composed text may differ from its graph.\n");
+    pub fn print(&self) -> String { self.print_with(PrintOptions::default()).text }
+
+    pub fn print_with(&self, options: PrintOptions) -> PrintedPlan {
+        let mut out = String::from("Not yet parseable DDP.\n");
+        if options.lambda_source { out.push_str("Lambdas show diagnostic source; it may differ from the graph. Checks still use graph output.\n"); }
+        else { out.push_str("Lambdas show compiled graphs as DDP expressions; graph fallbacks are marked.\n"); }
         for problem in &self.problems { writeln!(out, "Problem: {problem}").unwrap(); }
-        out.push_str("Renderer notes assume arranged trace imports. Other expansions and scalar compilation are not shown.\n");
+        out.push_str("Renderer notes assume arranged trace imports.\n");
+        let mut slots = Slots { options, counts: LambdaCounts::default(), notes: Vec::new() };
         let unresolved = self.unresolved.iter().cloned().collect();
-        print_scope(&self.program.root, &self.shapes, None, &unresolved, 0, &mut out);
-        out
+        print_scope(&self.program.root, &self.shapes, None, &unresolved, 0, "root", &mut slots, &mut out);
+        for note in slots.notes { writeln!(out, "{note}").unwrap(); }
+        writeln!(out, "Lambdas: {}", slots.counts.line()).unwrap();
+        PrintedPlan { text: out, lambdas: slots.counts }
+    }
+}
+
+struct Slots {
+    options: PrintOptions,
+    counts: LambdaCounts,
+    notes: Vec<String>,
+}
+
+impl Slots {
+    fn lambda(&mut self, lambda: &Lambda, input: Option<Shape>, at: &str) -> String {
+        self.counts.printed += 1;
+        use crate::lambda::print::Check;
+        let printed = crate::lambda::print::print(lambda, input.as_ref(), self.options.check_lambdas);
+        self.counts.fallback += usize::from(printed.fallback);
+        match printed.check {
+            Check::Exact => { self.counts.checked += 1; self.counts.exact += 1; }
+            Check::Sampled => { self.counts.checked += 1; self.counts.sampled += 1; }
+            Check::Failed(error) => {
+                self.counts.checked += 1; self.counts.failed += 1;
+                self.notes.push(format!("Lambda check FAILED at {at}: {error}"));
+            }
+            Check::Unchecked(why) if self.options.check_lambdas => self.notes.push(format!("Lambda unchecked at {at}: {why}")),
+            Check::Unchecked(_) => {}
+        }
+        if self.options.lambda_source { return source_lambda(lambda); }
+        printed.text
     }
 }
 
@@ -228,18 +302,18 @@ fn label(scope: &Scope, i: usize) -> String {
     else { format!("unlabeled item {i}") }
 }
 
-fn lambda(lambda: &Lambda) -> String { format!("lambda {{ {} }}", lambda.src) }
+fn source_lambda(lambda: &Lambda) -> String { format!("lambda {{ {} }}", lambda.src) }
 
 fn linear(op: &LinearOp) -> String {
     match op {
-        LinearOp::Project(l) => format!("map({})", lambda(l)),
-        LinearOp::Filter(l) => format!("filter({})", lambda(l)),
+        LinearOp::Project(l) => format!("map({})", source_lambda(l)),
+        LinearOp::Filter(l) => format!("filter({})", source_lambda(l)),
         LinearOp::Negate => "negate".into(),
-        LinearOp::EnterAt(l) => format!("enter_at({})", lambda(l)),
+        LinearOp::EnterAt(l) => format!("enter_at({})", source_lambda(l)),
         LinearOp::LiftIter => "lift_iter".into(),
-        LinearOp::FlatMap(l) => format!("flatmap({})", lambda(l)),
+        LinearOp::FlatMap(l) => format!("flatmap({})", source_lambda(l)),
         LinearOp::Lift => "lift".into(),
-        LinearOp::JoinFunction(l) => format!("join_function({})", lambda(l)),
+        LinearOp::JoinFunction(l) => format!("join_function({})", source_lambda(l)),
     }
 }
 
@@ -249,7 +323,7 @@ fn reducer(reducer: &Reducer) -> String {
         Reducer::Distinct => "distinct".into(),
         Reducer::Count => "count".into(),
         Reducer::Collect => "collect".into(),
-        Reducer::Expr(l) => format!("reduce({})", lambda(l)),
+        Reducer::Expr(l) => format!("reduce({})", source_lambda(l)),
     }
 }
 
@@ -258,10 +332,53 @@ fn node(node: &Node, names: &Names) -> String {
         Node::Linear { input, ops } => format!("{} | linear [ {} ]", names.of(input), ops.iter().map(linear).collect::<Vec<_>>().join(" | ")),
         Node::Concat(refs) => format!("concat({})", refs.iter().map(|r| names.of(r)).collect::<Vec<_>>().join(", ")),
         Node::Arrange(input) => format!("{} | arrange", names.of(input)),
-        Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), lambda(projection)),
-        Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), lambda(projection)),
+        Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), source_lambda(projection)),
+        Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), source_lambda(projection)),
         Node::Reduce { input, reducer: r } => format!("{} | {}", names.of(input), reducer(r)),
         Node::Inspect { input, label } => format!("{} | inspect({})", names.of(input), quote(label)),
+    }
+}
+
+// Slot inputs mirror shapes::linear_shapes and the join/reduce typing rules. In particular a
+// half join's lambda sees neither the lifted time nor the arrangement's time.
+fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, at: &str, slots: &mut Slots) -> String {
+    match node {
+        Node::Linear { input, ops } => {
+            let mut input = shapes.of(input).map(|s| (s.key, s.val));
+            let mut printed = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                let shape = input.as_ref().map(|(k, v)| Shape::Prod(vec![k.clone(), v.clone()]));
+                let name = match op {
+                    LinearOp::Project(_) => "map", LinearOp::Filter(_) => "filter", LinearOp::EnterAt(_) => "enter_at",
+                    LinearOp::FlatMap(_) => "flatmap", LinearOp::JoinFunction(_) => "join_function",
+                    LinearOp::Negate => "negate", LinearOp::Lift => "lift", LinearOp::LiftIter => "lift_iter",
+                };
+                printed.push(match op {
+                    LinearOp::Project(l) | LinearOp::Filter(l) | LinearOp::EnterAt(l) | LinearOp::FlatMap(l) | LinearOp::JoinFunction(l) =>
+                        format!("{name}({})", slots.lambda(l, shape, &format!("{at}/{name}[{i}]"))),
+                    _ => name.into(),
+                });
+                input = input.and_then(|(k, v)| shapes::linear_shapes(std::slice::from_ref(op), k, v, depth).ok()?.pop());
+            }
+            let Node::Linear { input, .. } = node else { unreachable!() };
+            format!("{} | linear [ {} ]", names.of(input), printed.join(" | "))
+        }
+        Node::Join { left, right, projection } => {
+            let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, l.val, r.val]));
+            format!("{} | join({}, {})", names.of(left), names.of(right), slots.lambda(projection, input, &format!("{at}/join")))
+        }
+        Node::HalfJoin { stream, arrangement, strict, projection } => {
+            let input = shapes.of(stream).zip(shapes.of(arrangement)).and_then(|(s, a)| {
+                let Shape::Prod(fs) = s.val else { return None };
+                (fs.len() == 2).then(|| Shape::Prod(vec![s.key, fs[0].clone(), a.val]))
+            });
+            format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), slots.lambda(projection, input, &format!("{at}/half_join")))
+        }
+        Node::Reduce { input, reducer: Reducer::Expr(l) } => {
+            let input_shape = shapes.of(input).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
+            format!("{} | reduce({})", names.of(input), slots.lambda(l, input_shape, &format!("{at}/reduce")))
+        }
+        _ => self::node(node, names)
     }
 }
 
@@ -308,7 +425,7 @@ fn reads<'a>(node: &'a Node, shapes: &ScopeShapes) -> Vec<(&'a Ref, &'static str
     }
 }
 
-fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Form])>, unresolved: &BTreeSet<String>, depth: usize, out: &mut String) {
+fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Form])>, unresolved: &BTreeSet<String>, depth: usize, path: &str, slots: &mut Slots, out: &mut String) {
     let names = Names::new(scope);
     let indent = "  ".repeat(depth);
     writeln!(out, "{indent}scope {} {{", quote(&scope.name)).unwrap();
@@ -360,12 +477,12 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
                 let entering: Vec<_> = child.imports.iter().map(|imp| match &imp.from {
                     Source::Parent(r) => form(r, &imports, &forms), _ => Form::Unknown,
                 }).collect();
-                print_scope(child, child_shapes, Some((&names, &entering)), unresolved, depth + 1, out);
+                print_scope(child, child_shapes, Some((&names, &entering)), unresolved, depth + 1, &format!("{path}/{}", child.name), slots, out);
                 forms.push(Form::Rows);
             }
             Item::Op(op) => {
                 let repr = item_form(op, shapes);
-                writeln!(out, "{indent}  let {} [statement {}] = {}", names.items[i], quote(&label(scope, i)), node(op, &names)).unwrap();
+                writeln!(out, "{indent}  let {} [statement {}] = {}", names.items[i], quote(&label(scope, i)), printed_node(op, &names, shapes, depth, &format!("{path}/{}", names.items[i]), slots)).unwrap();
                 writeln!(out, "{indent}    : {}; output {}", shape(shapes.of(&Ref::Local(i))), repr.text()).unwrap();
                 for (r, mode) in reads(op, shapes) {
                     let supplied = form(r, &imports, &forms);
@@ -429,8 +546,8 @@ fn statements(program: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -
                     entry.shapes.push(shape(shapes.of(&Ref::Local(i))));
                     match op {
                         Node::Linear { ops, .. } => entry.lambdas.extend(ops.iter().map(linear)),
-                        Node::Join { projection, .. } | Node::HalfJoin { projection, .. } => entry.lambdas.push(lambda(projection)),
-                        Node::Reduce { reducer: Reducer::Expr(l), .. } => entry.lambdas.push(lambda(l)),
+                        Node::Join { projection, .. } | Node::HalfJoin { projection, .. } => entry.lambdas.push(source_lambda(projection)),
+                        Node::Reduce { reducer: Reducer::Expr(l), .. } => entry.lambdas.push(source_lambda(l)),
                         _ => {}
                     }
                 }
@@ -480,7 +597,7 @@ mod tests {
         let plan = report(text, &|name| provider.exports.get(name).cloned()).unwrap();
         assert!(plan.unresolved.is_empty());
         assert!(plan.stages[3].changes.iter().any(|s| s.contains("inserted 1 filters")));
-        assert!(plan.print().contains("(t0, 1) ne"));
+        assert!(plan.print_with(PrintOptions { lambda_source: true, ..PrintOptions::default() }).text.contains("(t0, 1) ne"));
         assert_eq!(plan.print(), report(text, &|name| provider.exports.get(name).cloned()).unwrap().print());
         assert!(report(text, &|_| Some((Shape::Unit, Shape::Unit))).is_err());
     }
