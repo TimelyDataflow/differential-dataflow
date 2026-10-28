@@ -405,7 +405,7 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report(&program, &|trace| server.trace_shape(trace).or_else(|| interactive::server::generated_shape(trace)), &server.passes()).map(|report| {
+                interactive::plan::report_at(&program, &|trace| server.trace_shape(trace).or_else(|| interactive::server::generated_shape(trace)), &server.passes(), server.import_as_of().outer).map(|report| {
                     for line in report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() }).text.lines() { send(response, reqid, "data", line.to_string()); }
                     let incomplete = !report.unresolved.is_empty() || report.stages.iter().any(|s| !s.problems.is_empty());
                     format!("planned {:?} ({})", name, if incomplete { "incomplete; see report" } else { "4 stages" })

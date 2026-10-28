@@ -1,7 +1,7 @@
 --- lowered
 +++ optimized
 @@ -2,9 +2,8 @@
- -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
  let pals = import "ldbc.friend.pair" : ((int, int), ());
 -let answered_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);

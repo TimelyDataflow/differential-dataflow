@@ -27,6 +27,7 @@ pub struct Report {
     /// Inferred exports for planning another program. Empty if preparation is incomplete.
     pub exports: BTreeMap<String, RowShape>,
     context: ddp::Context,
+    as_of: u64,
 }
 
 /// One scope tree and its inferred shapes, before rendering.
@@ -41,9 +42,14 @@ pub struct Stage {
 
 /// Parse, lower, and run the passes `passes` switches on, as install would, without installing.
 /// `source` supplies published and generated trace shapes; a declaration alone does not resolve an import.
-/// Lambdas use the same registered functions as the DDP parser. The as-of time is the fixed
-/// placeholder `G = (1, [])`, as for installation at epoch 2, extended by zero scope lanes.
+/// Lambdas use the same registered functions as the DDP parser. The default as-of is
+/// zero, matching a fresh server; use `report_at` for a different import frontier.
 pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
+    report_at(text, source, passes, 0)
+}
+
+/// Plan with an explicit root as-of time, extended by zero lanes in nested scopes.
+pub fn report_at(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config, as_of: u64) -> Result<Report, String> {
     caught_report(|| {
         let start = Instant::now();
         let parsed = crate::parse::pipe::parse(text);
@@ -57,7 +63,7 @@ pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Co
         let context = ddp::Context::new(text);
         let mut context_time = Measurement::default();
         context_time.record(start.elapsed(), 0);
-        let mut report = build_report(program, context, source, passes)?;
+        let mut report = build_report(program, context, source, passes, as_of)?;
         report.parsing = parsing;
         report.timings.lowering = lowering;
         report.context_time = context_time;
@@ -68,7 +74,12 @@ pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Co
 /// Prepare an already lowered program, such as an explanation rewrite.
 /// Parsed syntax is unavailable for this entry point.
 pub fn report_program(program: Program, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
-    caught_report(|| build_report(program, ddp::Context::for_program(), source, passes))
+    report_program_at(program, source, passes, 0)
+}
+
+/// Prepare an already lowered program with an explicit root as-of time.
+pub fn report_program_at(program: Program, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config, as_of: u64) -> Result<Report, String> {
+    caught_report(|| build_report(program, ddp::Context::for_program(), source, passes, as_of))
 }
 
 fn caught_report(build: impl FnOnce() -> Result<Report, String>) -> Result<Report, String> {
@@ -84,7 +95,7 @@ pub fn emit_ddp(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &
     report(text, source, passes)?.emit_ddp()
 }
 
-fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
+fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config, as_of: u64) -> Result<Report, String> {
     let mut catalog = BTreeMap::new();
     let mut unresolved = Vec::new();
     let mut problems = Vec::new();
@@ -114,13 +125,9 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         _ => None,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(1, Default::default()), &mut |name, program, changes| {
+    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(as_of, Default::default()), &mut |name, program, changes| {
         let previous = stages.last().map(|stage| &stage.program);
         let changes = stage_changes(name, changes, previous, program, &resolve);
-        let name = match name {
-            "after as-of drop" => "after as-of drop (G = (1, []), placeholder install epoch 2)",
-            name => name,
-        };
         stages.push(stage(name, program.clone(), changes, &resolve));
     });
     let live_traces: BTreeSet<_> = program.root.imports.iter().filter_map(|i| match &i.from {
@@ -135,7 +142,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
             shape.map(|shape| (export.name.clone(), (shape.key, shape.val)))
         }).collect()
     } else { BTreeMap::new() };
-    Ok(Report { stages, timings, parsing: Measurement::default(), context_time: Measurement::default(), unresolved, exports, context })
+    Ok(Report { stages, timings, parsing: Measurement::default(), context_time: Measurement::default(), unresolved, exports, context, as_of })
 }
 
 fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&Program>, after: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -> Vec<String> {
@@ -225,8 +232,8 @@ impl Report {
         let start = Instant::now();
         let mut out = String::from("Not yet parseable DDP. Read-only plan report.\n");
         out.push_str("Assumptions: trace imports use arrangements; projection enabled; as-of drop enabled.\n");
-        out.push_str("G = (1, []) is a placeholder as-of time, for install epoch 2; nested lanes are zero.\n");
-        out.push_str("Imported histories advance to G; fed inputs start at epoch 2. No frontier checks or installation.\n");
+        writeln!(out, "Imported histories advance to G = ({}, []); nested lanes are zero.", self.as_of).unwrap();
+        out.push_str("All updates must be at or beyond G. No frontier checks or installation.\n");
         out.push_str("Lambda checks compare compiled graphs, then generated rows if the graphs differ. Sampling is not a proof.\n");
         out.push_str("Other renderer internals are not shown. Type variant names and erased aliases are not retained.\n");
         for name in &self.unresolved { writeln!(out, "Unresolved import: {} (a declared shape is not a provider)", quote(name)).unwrap(); }
@@ -645,7 +652,7 @@ mod tests {
         let plan = report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap();
         assert!(plan.unresolved.is_empty());
         assert!(plan.stages[3].changes.iter().any(|s| s.contains("inserted 1 filters")));
-        assert!(plan.print_with(PrintOptions { lambda_source: true, ..PrintOptions::default() }).text.contains("(t0, 1) ne"));
+        assert!(plan.print_with(PrintOptions { lambda_source: true, ..PrintOptions::default() }).text.contains("(t0, 0) ne"));
         assert_eq!(plan.print(), report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap().print());
         assert!(report(text, &|_| Some((Shape::Unit, Shape::Unit)), &Config::all()).is_err());
     }

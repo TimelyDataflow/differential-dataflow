@@ -6,7 +6,7 @@ pub(super) const FORMAT: &str = "3 (whole DDP and stage diffs; desugared reducti
 pub(super) const LANGUAGE: &str = "DDP (interactive 0.1.0); corgi lambdas (Cargo.lock)";
 pub(super) const BACKEND: &str = "interactive 0.1.0 corgi backend; kernels pinned in Cargo.lock";
 pub(super) const TRANSFORMS: &str = "6: desugar reductions and expand distinct; dead-code before structural; collapse arrangements, fuse linear, dedup; collapse parent arrangements; hoist invariant statements; canonical linear chains; projection; as-of drop";
-pub(super) const ASSUMPTIONS: &str = "arranged trace imports; projection on; as-of on; G = (1, []); install epoch 2; no data or planner seed";
+pub(super) const ASSUMPTIONS: &str = "arranged trace imports; projection on; as-of on; G = (0, []); fresh server; no data or planner seed";
 
 pub(super) const GENERATED: &[(&str, &str)] = &[
     ("graph", "generated/graph.ddp"),

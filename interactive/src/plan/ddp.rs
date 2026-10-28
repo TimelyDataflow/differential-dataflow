@@ -81,7 +81,7 @@ impl Report {
 
     /// Emit one whole program. The parsed view walks the AST; the others walk the actual IR.
     pub fn emit_ddp_at(&self, view: DdpStage) -> Result<Emitted, String> {
-        let mut printer = Printer { context: &self.context, types: self.context.types.clone(), counts: LambdaCounts::default() };
+        let mut printer = Printer { as_of: self.as_of, context: &self.context, types: self.context.types.clone(), counts: LambdaCounts::default() };
         let mut body = String::new();
         if let Some(index) = view.ir_index() {
             let stage = self.stages.get(index).ok_or("missing preparation stage")?;
@@ -100,6 +100,7 @@ impl Report {
 }
 
 struct Printer<'a> {
+    as_of: u64,
     context: &'a Context,
     types: Vec<(String, Vec<(String, Shape)>)>,
     counts: LambdaCounts,
@@ -303,7 +304,7 @@ impl Printer<'_> {
             Source::Parent(r) => parent.map(|(_, _, imports, forms)| super::form(r, imports, forms)).unwrap_or(Form::Unknown),
         }).collect();
         if depth == 0 && scope.imports.iter().any(|i| matches!(i.from, Source::Trace(_))) {
-            writeln!(out, "-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.").unwrap();
+            writeln!(out, "-- Trace imports use provider arrangements; history advances to G = ({}, []).", self.as_of).unwrap();
         }
         let mut defined = BTreeSet::new();
         for (i, imp) in scope.imports.iter().enumerate() {
@@ -574,7 +575,7 @@ mod tests {
     #[test]
     fn graph_wins_over_stale_source_and_uses_declared_sums() {
         let report = plan("type Member = User int | Group int; let x = input 0 : (int, Member); export \"out\" = x | map((k, v) -> (k inject Group, v));");
-        let mut printer = Printer { context: &report.context, types: report.context.types.clone(), counts: LambdaCounts::default() };
+        let mut printer = Printer { as_of: report.as_of, context: &report.context, types: report.context.types.clone(), counts: LambdaCounts::default() };
         let mut lambda = Lambda::new("let (k, v) = input in (k inject Group, v)".into(), &report.context.scope);
         lambda.src = "let (k, v) = input in (k, v)".into();
         let text = printer.lambda(&lambda, Some(Shape::Prod(vec![Shape::Int, Shape::Sum(vec![Shape::Int, Shape::Int])]))).unwrap();

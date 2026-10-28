@@ -1,5 +1,5 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+-- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, List(int), List(int), int, int), ());
 let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
 let friend = import "ldbc.friend" : (int, (int, int));
