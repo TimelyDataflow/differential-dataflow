@@ -254,7 +254,7 @@ impl Scope {
         let at_entry = |i: usize| {
             let mut local = false;
             if let Item::Op(node) = &self.items[i] {
-                node.clone().for_each_ref(|r| local |= matches!(r, Ref::Local(_) | Ref::ChildExport(_, _)));
+                local = node.refs().any(|r| matches!(r, Ref::Local(_) | Ref::ChildExport(_, _)));
             }
             !local
         };
@@ -266,13 +266,12 @@ impl Scope {
             let mut previous_entry = None;
             for &moving in selected {
                 let Item::Op(node) = &self.items[moving] else { continue };
-                let mut inputs = Vec::new();
-                node.clone().for_each_ref(|r| inputs.push(r.clone()));
+                let inputs = node.refs();
                 let position = |r: &Ref| match r {
                     Ref::Local(i) | Ref::ChildExport(i, _) => positions[*i] + 1,
                     _ => 0,
                 };
-                let Some(anchor) = inputs.iter().max_by_key(|r| position(r)).cloned() else { continue };
+                let Some(anchor) = inputs.max_by_key(|r| position(r)).cloned() else { continue };
                 let mut target = position(&anchor);
                 if at_entry(moving) {
                     if let Some(previous) = previous_entry {
@@ -282,8 +281,7 @@ impl Scope {
                         while target < from {
                             let index = order[target];
                             let Item::Op(node) = &self.items[index] else { break };
-                            let mut follows = false;
-                            node.clone().for_each_ref(|r| follows |= cluster.contains(r));
+                            let follows = node.refs().any(|r| cluster.contains(r));
                             if !follows { break; }
                             cluster.insert(Ref::Local(index));
                             target += 1;
@@ -298,16 +296,14 @@ impl Scope {
                 // anchor. Include them when recognizing the rest of its cluster.
                 for &index in &order[..target] {
                     if let Item::Op(node) = &self.items[index] {
-                        let mut follows = false;
-                        node.clone().for_each_ref(|r| follows |= derived.contains(r));
+                        let follows = node.refs().any(|r| derived.contains(r));
                         if follows { derived.insert(Ref::Local(index)); }
                     }
                 }
                 while target < from {
                     let index = order[target];
                     let Item::Op(node) = &self.items[index] else { break };
-                    let mut follows = false;
-                    node.clone().for_each_ref(|r| follows |= derived.contains(r));
+                    let follows = node.refs().any(|r| derived.contains(r));
                     if !follows { break; }
                     derived.insert(Ref::Local(index));
                     target += 1;

@@ -81,9 +81,7 @@ impl MovedNames {
 fn moved_name(scope: &Scope, names: &mut MovedNames, preferred: Option<&str>, node: &Node) -> String {
     let used = &mut names.used;
     if let Some(name) = preferred { if used.insert(name.into()) { return name.into(); } }
-    let mut inputs = Vec::new();
-    node.clone().for_each_ref(|r| inputs.push(r.clone()));
-    let source = inputs.first().map(|r| names.bindings.get(r).cloned().unwrap_or_else(|| binding(scope, r))).unwrap_or_else(|| "rows".into());
+    let source = node.refs().next().map(|r| names.bindings.get(r).cloned().unwrap_or_else(|| binding(scope, r))).unwrap_or_else(|| "rows".into());
     let role = match node {
         Node::Arrange(_) => "idx", Node::Join { .. } => "join", Node::Reduce { .. } => "reduce",
         Node::Linear { ops, .. } => match ops.as_slice() {
@@ -129,20 +127,17 @@ fn hoist_statements(scope: &mut Scope, path: &str, observe: &mut Observe<'_>) ->
                 Node::Arrange(_) | Node::HalfJoin { .. } | Node::Inspect { .. } => false,
             };
             if !movable { continue; }
-            let mut node = node.clone();
-            let mut invariant = true;
-            node.for_each_ref(|r| {
-                if let Ref::Local(k) = r { *r = remap[*k].clone(); }
+            let parent = |r: &Ref| {
+                let r = if let Ref::Local(k) = r { &remap[*k] } else { r };
                 if let Ref::Import(k) = r {
-                    if let Source::Parent(parent) = &child.imports[*k].from {
-                        *r = parent.clone();
-                        return;
-                    }
+                    if let Source::Parent(parent) = &child.imports[*k].from { return Some(parent.clone()); }
                 }
-                invariant = false;
-            });
-            if !invariant { continue; }
+                None
+            };
+            if !node.refs().all(|r| parent(r).is_some()) { continue; }
             observe(&child_path, child, &ordinals, "hoisted invariant statement", j, j);
+            let Item::Op(mut node) = std::mem::replace(&mut child.items[j], Item::Op(Node::Concat(Vec::new()))) else { unreachable!() };
+            node.for_each_ref(|r| *r = parent(r).unwrap());
             let label = child.labels.get(j).cloned().unwrap_or_else(|| "invariant".into());
             let import = child.imports.len();
             child.imports.push(Import {
@@ -250,43 +245,143 @@ fn sites(scope: &Scope, imports: &[Option<Ref>], path: &[usize], groups: &mut BT
     }
 }
 
-/// Redirect a group's uses, adding separate imports so existing row readers keep
-/// their collection edge. Child items are compacted before returning; the caller
-/// compacts this scope after moving the surviving arrangement into dependency order.
-fn replace(scope: &mut Scope, sites: &[Site], to: Ref, name: &str, path: &str, observe: &mut Observe<'_>) -> Vec<bool> {
+/// All groups use the original item indices until the whole scope has been rewritten.
+#[derive(Default)]
+struct Replacements {
+    items: Vec<(usize, usize)>,
+    children: BTreeMap<usize, Replacements>,
+    groups: std::collections::BTreeSet<usize>,
+}
+
+impl Replacements {
+    fn add(&mut self, site: &Site, group: usize) {
+        let mut at = self;
+        for &child in &site.path {
+            at = at.children.entry(child).or_default();
+            at.groups.insert(group);
+        }
+        at.items.push((site.item, group));
+    }
+}
+
+/// Redirect every group in one walk, adding imports once and compacting each child once.
+fn replace(scope: &mut Scope, sites: Replacements, targets: &std::collections::HashMap<usize, Ref>, names: &[String], path: &str, observe: &mut Observe<'_>) -> Vec<bool> {
     let mut dead = vec![false; scope.items.len()];
+    let mut unnamed = vec![false; scope.items.len()];
     let ordinals = item_ordinals(scope);
     let mut remap: Vec<_> = (0..scope.items.len()).map(Ref::Local).collect();
-    let mut nested: BTreeMap<usize, Vec<Site>> = BTreeMap::new();
-    for site in sites {
-        if let Some((&i, path)) = site.path.split_first() {
-            nested.entry(i).or_default().push(Site { path: path.to_vec(), item: site.item });
-            continue;
-        }
-        if key(&Ref::Local(site.item)) != key(&to) {
+    for (item, group) in sites.items {
+        let to = &targets[&group];
+        if *to != Ref::Local(item) {
             let action = if matches!(to, Ref::Import(_)) { "shared arrangement from ancestor" } else { "shared local arrangement" };
-            observe(path, scope, &ordinals, action, site.item, site.item);
-            remap[site.item] = to.clone();
-            dead[site.item] = true;
+            observe(path, scope, &ordinals, action, item, item);
+            remap[item] = to.clone();
+            dead[item] = true;
+            unnamed[item] = matches!(to, Ref::Import(_));
         }
     }
-    if matches!(to, Ref::Import(_)) {
-        scope.names.retain(|(_, r)| !matches!(r, Ref::Local(i) if dead[*i]));
+    // One group's source can itself be another group's redundant arrangement.
+    for i in 0..remap.len() {
+        let mut to = remap[i].clone();
+        while let Ref::Local(j) = to {
+            if remap[j] == to { break; }
+            to = remap[j].clone();
+        }
+        remap[i] = to;
     }
-    scope.for_each_ref(|r| if let Ref::Local(i) = r { *r = remap[*i].clone(); });
-    for (i, sites) in nested {
-        let item = &mut scope.items[i];
-        let Item::Sub(child) = item else { continue };
-        let import = child.imports.iter().position(|i| matches!(&i.from, Source::Parent(r) if key(r) == key(&to)))
-            .unwrap_or_else(|| {
+    scope.names.retain(|(_, r)| !matches!(r, Ref::Local(i) if unnamed[*i]));
+    let redirect = |r: &mut Ref| if let Ref::Local(i) = r { *r = remap[*i].clone(); };
+    scope.for_each_ref(redirect);
+    for (i, sites) in sites.children {
+        let Item::Sub(child) = &mut scope.items[i] else { unreachable!() };
+        let mut imports = std::collections::HashMap::new();
+        for (i, import) in child.imports.iter().enumerate() {
+            if let Source::Parent(r) = &import.from { imports.entry(r.clone()).or_insert(i); }
+        }
+        let mut nested = std::collections::HashMap::new();
+        for &group in &sites.groups {
+            let mut to = targets[&group].clone();
+            redirect(&mut to);
+            let import = *imports.entry(to.clone()).or_insert_with(|| {
                 let i = child.imports.len();
-                child.imports.push(Import { name: format!("::{name}"), from: Source::Parent(to.clone()), shape: None });
+                child.imports.push(Import { name: format!("::{}", names[group]), from: Source::Parent(to), shape: None });
                 i
             });
-        let dead = replace(child, &sites, Ref::Import(import), name, &format!("{path}/{}", child.name), observe);
+            nested.insert(group, Ref::Import(import));
+        }
+        let dead = replace(child, sites, &nested, names, &format!("{path}/{}", child.name), observe);
         compact(child, &dead);
     }
     dead
+}
+
+/// Cluster arrangements without shifting the item vector for each group. Their
+/// sources are not selected arrangements: those were reused above. The other
+/// items therefore retain their relative order throughout this walk.
+fn cluster_arranges(scope: &Scope, selected: &[usize]) -> Vec<usize> {
+    let count = scope.items.len();
+    let mut next: Vec<_> = (1..=count).collect();
+    let mut prev: Vec<_> = (0..count).map(|i| i.checked_sub(1).unwrap_or(count)).collect();
+    let mut head = if count == 0 { count } else { 0 };
+    let mut rank: Vec<_> = (0..=count).collect();
+    loop {
+        let mut changed = false;
+        let mut previous_entry = None;
+        for &moving in selected {
+            let Item::Op(Node::Arrange(anchor)) = &scope.items[moving] else { unreachable!() };
+            let mut target = match anchor {
+                Ref::Local(i) | Ref::ChildExport(i, _) => next[*i],
+                _ => head,
+            };
+            if matches!(anchor, Ref::Import(_) | Ref::Var(_)) {
+                if let Some(previous) = previous_entry {
+                    target = next[previous];
+                    let mut memo = std::collections::HashMap::new();
+                    while rank[target] <= rank[moving] && target != moving
+                        && derives(scope, target, &Ref::Local(previous), &mut memo) {
+                        target = next[target];
+                    }
+                }
+                previous_entry = Some(moving);
+            }
+            let mut memo = std::collections::HashMap::new();
+            while rank[target] <= rank[moving] && target != moving
+                && derives(scope, target, anchor, &mut memo) {
+                target = next[target];
+            }
+            if target == moving || rank[target] > rank[moving] { continue; }
+            // Unlink and insert before target; no other item's position needs updating.
+            if prev[moving] == count { head = next[moving]; }
+            else { next[prev[moving]] = next[moving]; }
+            if next[moving] != count { prev[next[moving]] = prev[moving]; }
+            prev[moving] = prev[target];
+            next[moving] = target;
+            if prev[target] == count { head = moving; }
+            else { next[prev[target]] = moving; }
+            prev[target] = moving;
+            rank[moving] = rank[target];
+            changed = true;
+        }
+        let mut order = Vec::with_capacity(count);
+        let mut at = head;
+        while at != count {
+            rank[at] = order.len();
+            order.push(at);
+            at = next[at];
+        }
+        if !changed { return order; }
+    }
+}
+
+/// Only operators extend a cluster. A child scope is a boundary, even if its
+/// imports depend on the anchor. Cache the earlier operators visited for a group.
+fn derives(scope: &Scope, item: usize, anchor: &Ref, memo: &mut std::collections::HashMap<usize, bool>) -> bool {
+    if let Some(&answer) = memo.get(&item) { return answer; }
+    let answer = if let Some(Item::Op(node)) = scope.items.get(item) {
+        node.refs().any(|r| r == anchor || matches!(r, Ref::Local(i) if derives(scope, *i, anchor, memo)))
+    } else { false };
+    memo.insert(item, answer);
+    answer
 }
 
 fn hoist_arranges(scope: &mut Scope, imports: &[bool], path: &str, observe: &mut Observe<'_>) -> bool {
@@ -298,78 +393,85 @@ fn hoist_arranges(scope: &mut Scope, imports: &[bool], path: &str, observe: &mut
             changed |= hoist_arranges(child, &imports, &format!("{path}/{}", child.name), observe);
         }
     }
-    loop {
-        let mut groups = BTreeMap::new();
-        sites(scope, &[], &[], &mut groups);
-        let group = groups.into_values().find(|(_, sites)| sites.iter().any(|s| !s.path.is_empty()));
-        let Some((source, sites)) = group else { break };
-        // Reuse an arrangement already available here. In particular, lowering a
-        // printed child join may have inserted an arrange on its parent import.
-        if arranged(scope, imports, &source) {
+    let mut groups = BTreeMap::new();
+    sites(scope, &[], &[], &mut groups);
+    let mut replacements = Replacements::default();
+    let mut targets = std::collections::HashMap::new();
+    let mut names = Vec::new();
+    let mut moved_names = MovedNames::new(scope);
+    let count = scope.items.len();
+    let labelled = scope.labels.len() == count;
+    let mut before = vec![Vec::new(); count];
+    let mut moved = vec![false; count];
+    let mut selected = Vec::new();
+    for (source, sites) in groups.into_values() {
+        if !sites.iter().any(|s| !s.path.is_empty()) { continue; }
+        let group = names.len();
+        // Reuse an arrangement already available here. Local redundant arrangements
+        // remain for structural cleanup, just as they do without descendant readers.
+        let (target, name) = if arranged(scope, imports, &source) {
             let name = match &source {
                 Ref::Local(i) => scope.labels.get(*i).cloned().unwrap_or_else(|| "arrangement".into()),
                 Ref::Import(i) => scope.imports[*i].name.clone(),
                 _ => unreachable!(),
             };
-            // Only descendant sites move. Leave redundant local arrangements to
-            // structural cleanup; a re-lowered child join's implicit arrange must
-            // not make an explicit local arrange disappear on the second plan.
-            let descendants = sites.into_iter().filter(|s| !s.path.is_empty()).collect::<Vec<_>>();
-            let dead = replace(scope, &descendants, source, &name, path, observe);
-            compact(scope, &dead);
-            changed = true;
-            continue;
-        }
-        // Even a lone descendant arrangement belongs beside the binding it arranges.
-        let first = sites.iter().map(|s| s.path.first().copied().unwrap_or(s.item)).min().unwrap();
-        let existing = sites.iter().find(|s| s.path.is_empty()).map(|s| s.item);
-        let labels = scope.labels.len() == scope.items.len();
-        let index = existing.unwrap_or_else(|| {
-            let site = &sites[0];
-            let mut child = &*scope;
-            for &i in &site.path {
-                let Item::Sub(next) = &child.items[i] else { unreachable!() };
-                child = next;
-            }
-            let label = child.labels.get(site.item).cloned().unwrap_or_else(|| "arrangement".into());
-            let preferred = child.names.iter().find(|(_, r)| *r == Ref::Local(site.item)).map(|(n, _)| n.clone());
-            let node = Node::Arrange(source.clone());
-            let name = moved_name(scope, &mut MovedNames::new(scope), preferred.as_deref(), &node);
-            let index = scope.items.len();
-            scope.names.push((name, Ref::Local(index)));
-            scope.items.push(Item::Op(node));
-            if labels { scope.labels.push(label); }
-            index
-        });
-        let name = scope.labels.get(index).cloned().unwrap_or_else(|| "arrangement".into());
-        let mut dead = replace(scope, &sites, Ref::Local(index), &name, path, observe);
-        // The source precedes every original user, so inserting before the earliest
-        // user keeps all dependencies backward, even when the parent peer was later.
-        if index > first {
-            let item = scope.items.remove(index);
-            scope.items.insert(first, item);
-            if labels {
-                let label = scope.labels.remove(index);
-                scope.labels.insert(first, label);
-            }
-            let removed = dead.remove(index);
-            dead.insert(first, removed);
-            scope.for_each_ref(|r| match r {
-                Ref::Local(i) | Ref::ChildExport(i, _) => {
-                    if *i == index { *i = first; }
-                    else if (first..index).contains(i) { *i += 1; }
+            for site in sites.iter().filter(|s| !s.path.is_empty()) { replacements.add(site, group); }
+            (source, name)
+        } else {
+            let first = sites.iter().map(|s| s.path.first().copied().unwrap_or(s.item)).min().unwrap();
+            let existing = sites.iter().find(|s| s.path.is_empty()).map(|s| s.item);
+            let index = existing.unwrap_or_else(|| {
+                let site = &sites[0];
+                let mut child = &*scope;
+                for &i in &site.path {
+                    let Item::Sub(next) = &child.items[i] else { unreachable!() };
+                    child = next;
                 }
-                _ => {},
+                let label = child.labels.get(site.item).cloned().unwrap_or_else(|| "arrangement".into());
+                let preferred = child.names.iter().find(|(_, r)| *r == Ref::Local(site.item)).map(|(n, _)| n.as_str());
+                let node = Node::Arrange(source);
+                let name = moved_name(scope, &mut moved_names, preferred, &node);
+                let index = scope.items.len();
+                moved_names.bindings.insert(Ref::Local(index), name.clone());
+                scope.names.push((name, Ref::Local(index)));
+                scope.items.push(Item::Op(node));
+                if labelled { scope.labels.push(label); }
+                index
             });
-        }
-        let survivor = if index > first { first } else { index };
-        let survivor = (0..survivor).filter(|&i| !dead[i]).count();
-        compact(scope, &dead);
-        let order = scope.clustered_order(&[survivor]);
-        scope.reorder(&order);
-        changed = true;
+            if index > first {
+                before[first].push(index);
+                if index < count { moved[index] = true; }
+            }
+            selected.push(index);
+            for site in &sites { replacements.add(site, group); }
+            (Ref::Local(index), scope.labels.get(index).cloned().unwrap_or_else(|| "arrangement".into()))
+        };
+        targets.insert(group, target);
+        names.push(name);
     }
-    changed
+    if names.is_empty() { return changed; }
+    let dead = replace(scope, replacements, &targets, &names, path, observe);
+    let mut remap = vec![0; dead.len()];
+    let mut next = 0;
+    for (i, &dead) in dead.iter().enumerate() {
+        remap[i] = next;
+        if !dead { next += 1; }
+    }
+    let mut order = Vec::with_capacity(next);
+    for i in 0..count {
+        for &j in &before[i] { if !dead[j] { order.push(remap[j]); } }
+        if !moved[i] && !dead[i] { order.push(remap[i]); }
+    }
+    selected.retain(|&i| !dead[i]);
+    for i in &mut selected { *i = remap[*i]; }
+    compact(scope, &dead);
+    let mut positions = vec![0; order.len()];
+    for (new, &old) in order.iter().enumerate() { positions[old] = new; }
+    for i in &mut selected { *i = positions[*i]; }
+    scope.reorder(&order);
+    let order = cluster_arranges(scope, &selected);
+    scope.reorder(&order);
+    true
 }
 
 #[cfg(test)]
