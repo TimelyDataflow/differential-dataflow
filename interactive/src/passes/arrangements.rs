@@ -52,13 +52,14 @@ pub(super) fn run(scope: &mut Scope, collapse: bool, hoist: bool, timings: &mut 
     changed
 }
 
+// Authored names have already been indexed by MovedNames.
 fn binding(scope: &Scope, r: &Ref) -> String {
-    scope.names.iter().find(|(_, value)| value == r).map(|(name, _)| name.clone()).unwrap_or_else(|| match r {
+    match r {
         Ref::Local(i) => scope.labels.get(*i).cloned().unwrap_or_else(|| "rows".into()),
         Ref::Import(i) => scope.imports[*i].name.rsplit("::").next().unwrap().into(),
         Ref::Var(i) => scope.vars[*i].name.clone(),
         Ref::ChildExport(i, e) => if let Item::Sub(child) = &scope.items[*i] { child.exports[*e].name.clone() } else { unreachable!() },
-    })
+    }
 }
 
 struct MovedNames {
@@ -103,16 +104,18 @@ fn moved_name(scope: &Scope, names: &mut MovedNames, preferred: Option<&str>, no
 /// the two walks, so hoisting a map exposes its arrange, which can expose a join.
 fn hoist_statements(scope: &mut Scope, path: &str, observe: &mut Observe<'_>) -> bool {
     let mut changed = false;
-    let mut i = 0;
-    while i < scope.items.len() {
-        let count = scope.items.len();
-        let labelled = scope.labels.len() == count;
-        let Item::Sub(child) = &mut scope.items[i] else { i += 1; continue };
+    let count = scope.items.len();
+    let labelled = scope.labels.len() == count;
+    let mut moved = Vec::new();
+    let mut labels = Vec::new();
+    let mut authored = Vec::new();
+    let mut groups = Vec::new();
+    let mut order = Vec::new();
+    for i in 0..count {
+        let Item::Sub(child) = &mut scope.items[i] else { order.push(i); continue };
+        let start = count + moved.len();
         let child_path = format!("{path}/{}", child.name);
         changed |= hoist_statements(child, &child_path, observe);
-        let mut moved = Vec::new();
-        let mut labels = Vec::new();
-        let mut authored = Vec::new();
         let mut dead = vec![false; child.items.len()];
         let ordinals = item_ordinals(child);
         let mut remap: Vec<_> = (0..child.items.len()).map(Ref::Local).collect();
@@ -153,37 +156,102 @@ fn hoist_statements(scope: &mut Scope, path: &str, observe: &mut Observe<'_>) ->
         child.names.retain(|(_, r)| !matches!(r, Ref::Local(j) if dead[*j]));
         child.for_each_ref(|r| if let Ref::Local(j) = r { *r = remap[*j].clone(); });
         compact(child, &dead);
-        let n = moved.len();
-        if n > 0 {
-            // All sources precede this child. Insert the moved statements before it,
-            // preserving their dependency order and remapping every parent edge.
-            let mut names = MovedNames::new(scope);
-            for (k, item) in moved.into_iter().enumerate() {
-                let Item::Op(node) = &item else { unreachable!() };
-                let name = moved_name(scope, &mut names, authored[k].as_deref(), node);
-                names.bindings.entry(Ref::Local(count + k)).or_insert_with(|| name.clone());
-                scope.names.push((name, Ref::Local(count + k)));
-                scope.items.push(item);
-            }
-            scope.items[i..].rotate_right(n);
-            if labelled {
-                scope.labels.extend(labels);
-                scope.labels[i..].rotate_right(n);
-            }
-            scope.for_each_ref(|r| match r {
-                Ref::Local(k) | Ref::ChildExport(k, _) if *k >= count => *k = i + (*k - count),
-                Ref::Local(k) | Ref::ChildExport(k, _) if *k >= i => *k += n,
-                _ => {},
-            });
-            let order = scope.clustered_order(&(i..i + n).collect::<Vec<_>>());
-            let child_index = order.iter().position(|&old| old == i + n).unwrap();
-            scope.reorder(&order);
-            i = child_index;
-            changed = true;
+        let range = start..count + moved.len();
+        order.extend(range.clone());
+        order.push(i);
+        if !range.is_empty() { groups.push(range); }
+    }
+    if !moved.is_empty() {
+        // Keep the original parent indices until every child has contributed its
+        // moves. Allocate names once, then apply one order to items and all edges.
+        let mut names = MovedNames::new(scope);
+        for (k, item) in moved.into_iter().enumerate() {
+            let Item::Op(node) = &item else { unreachable!() };
+            let name = moved_name(scope, &mut names, authored[k].as_deref(), node);
+            names.bindings.entry(Ref::Local(count + k)).or_insert_with(|| name.clone());
+            scope.names.push((name, Ref::Local(count + k)));
+            scope.items.push(item);
         }
-        i += 1;
+        if labelled { scope.labels.extend(labels); }
+        let order = cluster_statements(scope, &order, &groups);
+        scope.reorder(&order);
+        changed = true;
     }
     changed
+}
+
+/// Cluster each child's moves in the same order as the individual-child rewrite.
+/// Only linked indices move here; items and references are renumbered once afterwards.
+fn cluster_statements(scope: &Scope, order: &[usize], groups: &[std::ops::Range<usize>]) -> Vec<usize> {
+    let count = order.len();
+    let mut next = vec![count; count];
+    let mut prev = vec![count; count];
+    let mut rank = vec![0; count + 1];
+    rank[count] = count;
+    for (position, &item) in order.iter().enumerate() {
+        rank[item] = position;
+        if position > 0 { prev[item] = order[position - 1]; }
+        if position + 1 < count { next[item] = order[position + 1]; }
+    }
+    let mut head = order[0];
+    // Moving before an item takes its rank. Ranks stay ordered; ties are resolved
+    // by walking only that rank's linked items, including dependencies moved earlier.
+    let before = |mut a: usize, b: usize, rank: &[usize], next: &[usize]| {
+        if rank[a] != rank[b] { return rank[a] < rank[b]; }
+        while a != count && a != b && rank[a] == rank[b] { a = next[a]; }
+        a == b
+    };
+    for group in groups {
+        loop {
+            // A round can move several statements and still restore its starting
+            // order. This group's neighbors determine whether that happened.
+            let before_links: Vec<_> = group.clone().map(|i| (prev[i], next[i])).collect();
+            let mut previous_entry = None;
+            for moving in group.clone() {
+                let Item::Op(node) = &scope.items[moving] else { unreachable!() };
+                let position = |r: &Ref| match r {
+                    Ref::Local(i) | Ref::ChildExport(i, _) => Some(*i),
+                    _ => None,
+                };
+                let Some(anchor) = node.refs().max_by(|a, b| match (position(a), position(b)) {
+                    (Some(a), Some(b)) if a != b => if before(a, b, &rank, &next) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater },
+                    (a, b) => a.cmp(&b),
+                }) else { continue };
+                let mut target = position(anchor).map_or(head, |i| next[i]);
+                if position(anchor).is_none() {
+                    if let Some(previous) = previous_entry {
+                        target = next[previous];
+                        let mut memo = std::collections::HashMap::new();
+                        while target != moving && before(target, moving, &rank, &next)
+                            && derives(scope, target, &Ref::Local(previous), &mut memo) {
+                            target = next[target];
+                        }
+                    }
+                    previous_entry = Some(moving);
+                }
+                let mut memo = std::collections::HashMap::new();
+                while target != moving && before(target, moving, &rank, &next)
+                    && derives(scope, target, anchor, &mut memo) {
+                    target = next[target];
+                }
+                if target == moving || !before(target, moving, &rank, &next) { continue; }
+                if prev[moving] == count { head = next[moving]; }
+                else { next[prev[moving]] = next[moving]; }
+                if next[moving] != count { prev[next[moving]] = prev[moving]; }
+                prev[moving] = prev[target];
+                next[moving] = target;
+                if prev[target] == count { head = moving; }
+                else { next[prev[target]] = moving; }
+                prev[target] = moving;
+                rank[moving] = rank[target];
+            }
+            if group.clone().map(|i| (prev[i], next[i])).eq(before_links) { break; }
+        }
+    }
+    let mut order = Vec::with_capacity(count);
+    let mut at = head;
+    while at != count { order.push(at); at = next[at]; }
+    order
 }
 
 /// An arrangement remains one on entry, including entry into an iterative scope.

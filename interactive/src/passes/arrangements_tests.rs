@@ -156,6 +156,33 @@ fn inspections_exports_and_feedback_stay() {
 }
 
 #[test]
+fn batched_statements_keep_sibling_names_and_dependencies() {
+    let p = rewrite(r#"
+        let x = input 0 : (int, int);
+        first: {
+            let a = ::x | map((k, v) -> (k, (v, 1) add));
+            let b = ::x | map((k, v) -> (v, k));
+            let c = a + b;
+        }
+        second: {
+            let a = ::x | map((k, v) -> (k, (v, 2) add));
+            let b = ::x | map((k, v) -> (k, v neg));
+            let c = a + b;
+        }
+        third: { let a = first::c | join(second::c, (k, a, b) -> (k, (a, b) add)); }
+        export "first" = first::c;
+        export "second" = second::c;
+        export "third" = third::a;
+    "#, hoist(), 0);
+    let names: Vec<_> = p.root.items.iter().enumerate().map(|(i, item)| match item {
+        Item::Sub(child) => child.name.as_str(),
+        Item::Op(_) => p.root.names.iter().find(|(_, r)| *r == Ref::Local(i)).unwrap().0.as_str(),
+    }).collect();
+    assert_eq!(names, ["a", "b", "c", "x_map", "x_map2", "x_map_rows",
+        "first", "c_idx", "second", "c_idx2", "c_idx_join", "third"]);
+}
+
+#[test]
 fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
     let p = rewrite(r#"
         let rows = input 0 : (int, int);
