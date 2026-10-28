@@ -13,6 +13,7 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--timings" => options.timings = true,
             "--lambda-source" => options.lambda_source = true,
             "--check-lambdas" => options.check_lambdas = true,
             "--emit-ddp" => emit_ddp = true,
@@ -28,7 +29,7 @@ fn run() -> Result<(), String> {
             _ => files.push(arg),
         }
     }
-    if files.is_empty() { return Err("usage: ddir-plan [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] file.ddp [more.ddp ...]".into()); }
+    if files.is_empty() { return Err("usage: ddir-plan [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] file.ddp [more.ddp ...]".into()); }
     if emit_ddp && options.lambda_source { return Err("--emit-ddp always checks source against the compiled graph".into()); }
     if check_roundtrip && !emit_ddp { return Err("--check-roundtrip requires --emit-ddp".into()); }
     let mut catalog = BTreeMap::new();
@@ -40,7 +41,9 @@ fn run() -> Result<(), String> {
         if emit_ddp {
             // Earlier files supply imports. Only the requested (last) program is emitted.
             if i + 1 == files.len() {
+                let start = std::time::Instant::now();
                 let printed = report.emit_ddp_at(stage)?;
+                if options.timings { eprint!("{}", report.timing_table(Some(("DDP printing", start.elapsed())))); }
                 write!(out, "{}", printed.text).map_err(|e| e.to_string())?;
                 eprintln!("Lambdas: source={}, graph={}, graph_changed={}", printed.lambdas.source, printed.lambdas.graph, printed.lambdas.graph_changed);
                 if options.check_lambdas { incomplete |= printed.lambdas.graph_changed != 0; }

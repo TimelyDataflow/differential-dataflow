@@ -345,6 +345,26 @@ their inferred export shapes to later files. No dataflow or generated source is
 installed. A missing provider is unresolved even if its import declares a shape;
 the tool prints the partial report and exits unsuccessfully.
 
+`ddir-plan --timings file.ddp` adds wall times, call counts, rewrite counts, and
+fixed-point rounds. The table separates parsing, lowering, preparation stages,
+report snapshots/diffs, source context, and printing. Pass totals include calls
+made by projection, including rejected candidates; they are subtotals of the
+stages, so do not add both. Shape inference includes schedule and projection
+checks; inference for report snapshots stays in the snapshot row. Times exclude
+file I/O. With `--emit-ddp`, the table goes to stderr, leaving DDP stdout unchanged.
+Default reports, stage diffs, and plan-pairs snapshots never contain timings.
+
+Changes use the stage's `Change` observations: structural rewrites count one per
+observation, map canonicalization counts one per rewrite (a bulk composition is
+one), binding/import cleanup counts removed bindings, and projection/as-of count
+masks/fusions and inserted filters. Pass counts include attempted rewrites; stage
+counts describe accepted changes. Disabled passes have zero calls. A disabled
+projection stage still checks providers and shapes. Fixed-point rounds include
+the final stable round; optimizer totals include projection's optimizer calls.
+`passes::run` returns `Timings`; because it receives lowered IR, the plan frontend
+supplies the lowering measurement. `report_program` leaves parse and lowering
+counts at zero. Collection uses clocks around calls, never around individual items.
+
 The library entry point is `plan::report(text, source, passes)`, where `source` looks up a
 published trace's shape and `passes` says which passes run. `Report::print` prints all
 stages; `Stage::print` prints one. Reports assume arranged imports and use placeholder

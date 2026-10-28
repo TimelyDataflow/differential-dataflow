@@ -71,11 +71,11 @@ fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
         export "out" = republished;
         export "child" = child::result;
     "#);
-    assert!(dead_bindings(&mut p.root));
+    assert!(dead_bindings(&mut p.root) > 0);
     assert!(p.root.imports.iter().any(|i| matches!(i.from, Source::Input(7))));
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
-    assert!(!dead_bindings(&mut p.root));
+    assert_eq!(dead_bindings(&mut p.root), 0);
     let report = crate::plan::report(r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
     assert!(report.unresolved.is_empty());
     assert!(report.emit_ddp().is_ok());
@@ -93,7 +93,7 @@ fn dead_child_exports_remap_parent_and_sibling_readers() {
         t: { set x = s::b; let observed = s::c | inspect(observed); }
         export "out" = s::b;
     "#);
-    assert!(dead_bindings(&mut p.root));
+    assert!(dead_bindings(&mut p.root) > 0);
     let Item::Sub(s) = &p.root.items[0] else { panic!("expected s") };
     assert_eq!(s.exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["b", "c"]);
     assert_eq!(p.root.exports[0].value, Ref::ChildExport(0, 0));
@@ -102,7 +102,7 @@ fn dead_child_exports_remap_parent_and_sibling_readers() {
     assert_eq!(t.imports[1].from, Source::Parent(Ref::ChildExport(0, 1)));
     assert!(!p.root.names.iter().any(|(name, _)| name == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
-    assert!(!dead_bindings(&mut p.root));
+    assert_eq!(dead_bindings(&mut p.root), 0);
 }
 
 #[test]
@@ -119,13 +119,13 @@ fn identical_imports_merge_but_different_contracts_remain() {
     p.root.names.push(("alias".into(), Ref::Import(1)));
     let Item::Sub(child) = &mut p.root.items[0] else { panic!("expected child") };
     child.imports[0].from = Source::Parent(Ref::Import(1));
-    assert!(crate::passes::structural::merge_imports(&mut p.root));
+    assert!(crate::passes::structural::merge_imports(&mut p.root) > 0);
     assert_eq!(p.root.imports.len(), 2);
     assert_eq!(p.root.exports[0].value, Ref::Import(0));
     assert_eq!(p.root.names.last().unwrap().1, Ref::Import(0));
     let Item::Sub(child) = &p.root.items[0] else { panic!("expected child") };
     assert_eq!(child.imports[0].from, Source::Parent(Ref::Import(0)));
-    assert!(!crate::passes::structural::merge_imports(&mut p.root));
+    assert_eq!(crate::passes::structural::merge_imports(&mut p.root), 0);
 }
 
 #[test]

@@ -85,6 +85,11 @@ is an `<id> data` reply, followed by `<id> ok planned ...`. The name labels the
 reply; it does not reserve a name or install anything. Unresolved imports and
 shape problems appear in the report and mark the reply incomplete.
 
+Add `--timings` as `plan <name> from <path> --timings` or
+`plan <name> --timings begin` to include per-stage and per-pass wall times,
+call/change counts, and fixed-point rounds. Timings are a display option;
+ordinary plan replies remain deterministic.
+
 Planning always enables projection, assumes arranged imports, and uses the
 fixed placeholder as-of time `(1, [])` for epoch 2. These assumptions are printed;
 they do not change the server's settings or current time. Reports are not yet

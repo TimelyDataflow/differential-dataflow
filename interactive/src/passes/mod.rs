@@ -5,10 +5,13 @@ mod arrangements;
 mod canonical;
 pub mod projection;
 mod as_of;
+mod timing;
+pub use timing::{Measurement, Pass, Timings};
+
+use std::time::Instant;
 
 use crate::ir::Time;
 use crate::scope_ir::{Item, Program, RowShape, Scope, Source};
-use crate::shapes;
 
 /// A statement label and its operator ordinal before compaction.
 pub struct ItemName {
@@ -112,6 +115,8 @@ impl Config {
 /// Changes made by a stage. Statement-level display diffs belong to the observer.
 pub enum Change {
     Structural { path: String, action: &'static str, from: ItemName, to: ItemName },
+    /// Aggregate rewrites without statement-level display diffs.
+    Rewritten { pass: Pass, count: usize },
     Masked(usize),
     AsOf(usize),
     NoProjection,
@@ -119,6 +124,17 @@ pub enum Change {
     Skipped,
     /// The named pass is switched off.
     Off(&'static str),
+}
+
+impl Change {
+    /// Rewrite events, field masks, and inserted filters; status messages count zero.
+    pub fn count(&self) -> usize {
+        match self {
+            Self::Structural { .. } => 1,
+            Self::Rewritten { count, .. } | Self::Masked(count) | Self::AsOf(count) => *count,
+            _ => 0,
+        }
+    }
 }
 
 /// Run the optimizer, projection, and the as-of drop, in that order, each as `config` says.
@@ -138,20 +154,28 @@ pub fn run(
     config: &Config,
     as_of: &Time,
     observe: &mut dyn FnMut(&'static str, &Program, &[Change]),
-) {
-    observe("as lowered", program, &[]);
+) -> Timings {
+    let mut timings = Timings::default();
+    timings.observe("as lowered", program, &[], observe);
+    let start = Instant::now();
     let mut changes = Vec::new();
-    optimize_with(program, source, config, &mut |path, scope, ordinals, action, from, to| {
+    optimize_with(program, source, config, &mut timings, &mut |path, scope, ordinals, action, from, to| {
         changes.push(Change::Structural {
             path: path.into(), action,
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
         });
     });
+    for pass in [Pass::ComposeMaps, Pass::DeadBindings, Pass::MergeImports] {
+        let count = timings.pass(pass).changes;
+        if count > 0 { changes.push(Change::Rewritten { pass, count }); }
+    }
+    timings.optimizer.record(start.elapsed(), changes.iter().map(Change::count).sum());
     for (on, name) in [(config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps"), (config.dead_bindings, "dead-bindings")] {
         if !on { changes.push(Change::Off(name)); }
     }
-    observe("after optimizer", program, &changes);
-    let (shapes, problems) = shapes::infer(program, source);
+    timings.observe("after optimizer", program, &changes, observe);
+    let start = Instant::now();
+    let (shapes, problems) = timings.pass_mut(Pass::ShapeInference).infer(program, source);
     let valid = problems.conflicts.is_empty() && problems.unknown.is_empty()
         && program.root.vars.is_empty()
         && program.root.imports.iter().all(|import| match &import.from {
@@ -159,8 +183,8 @@ pub fn run(
             Source::Input(_) => import.shape.is_some(),
             Source::Parent(_) => false,
         });
-    let accept = |candidate: &Program| {
-        let (checked, problems) = shapes::infer(candidate, source);
+    let accept = |candidate: &Program, timings: &mut Timings| {
+        let (checked, problems) = timings.pass_mut(Pass::ShapeInference).infer(candidate, source);
         problems.conflicts.is_empty() && problems.unknown.is_empty() && checked.exports == shapes.exports
     };
     changes.clear();
@@ -170,12 +194,13 @@ pub fn run(
         let mut masked = 0;
         let mut converged = false;
         for _ in 0..16 {
-            let count = projection::pushdown(&mut candidate, source).unwrap_or(0);
+            timings.projection_rounds += 1;
+            let count = projection::pushdown_timed(&mut candidate, source, timings.pass_mut(Pass::ShapeInference)).unwrap_or(0);
             if count == 0 { converged = true; break; }
             // Masks expose optimizer rewrites. In turn, merging identical masks can
             // give a reduce one reader and make its remaining map fusible.
-            optimize_with(&mut candidate, source, config, &mut |_, _, _, _, _, _| {});
-            if !accept(&candidate) { break; }
+            optimize_with(&mut candidate, source, config, &mut timings, &mut |_, _, _, _, _, _| {});
+            if !accept(&candidate, &mut timings) { break; }
             masked += count;
         }
         if converged {
@@ -185,47 +210,59 @@ pub fn run(
             } else { changes.push(Change::NoProjection); }
         } else { changes.push(Change::Rejected); }
     } else { changes.push(Change::Skipped); }
-    observe("after projection", program, &changes);
+    timings.projection.record(start.elapsed(), changes.iter().map(Change::count).sum());
+    timings.observe("after projection", program, &changes, observe);
+    let start = Instant::now();
     changes.clear();
     if !config.as_of_drop { changes.push(Change::Off("as-of-drop")); }
     else if valid {
         let mut candidate = program.clone();
         let inserted = as_of::drop_dead_as_of(&mut candidate, as_of);
         if inserted > 0 {
-            if accept(&candidate) {
+            if accept(&candidate, &mut timings) {
                 changes.push(Change::AsOf(inserted));
                 *program = candidate;
             } else { changes.push(Change::Rejected); }
         }
     } else { changes.push(Change::Skipped); }
-    observe("after as-of drop", program, &changes);
+    timings.as_of_drop.record(start.elapsed(), changes.iter().map(Change::count).sum());
+    timings.observe("after as-of drop", program, &changes, observe);
+    timings
 }
 
 /// Optimize every scope in place with every optimizer pass, without provider shapes.
 pub fn optimize(program: &mut Program) {
-    optimize_with(program, &|_| None, &Config::all(), &mut |_, _, _, _, _, _| {});
+    optimize_with(program, &|_| None, &Config::all(), &mut Timings::default(), &mut |_, _, _, _, _, _| {});
 }
 
-fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, config: &Config, observe: &mut Observe<'_>) {
+fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, config: &Config, timings: &mut Timings, observe: &mut Observe<'_>) {
     // Move pure statements before fusion can absorb them into a time-sensitive chain.
     // Finish dependent moves too: a hoisted arrange can expose a join, then a map.
     if config.hoist_invariant {
-        while arrangements::run(&mut program.root, config.collapse_parent_arranges, true, observe) {}
+        loop {
+            timings.hoist_rounds += 1;
+            if !arrangements::run(&mut program.root, config.collapse_parent_arranges, true, timings, observe) { break; }
+        }
     }
     loop {
-        if config.structural { structural::optimize_scope(&mut program.root, "root", observe); }
+        timings.optimizer_rounds += 1;
+        if config.structural {
+            timings.pass_mut(Pass::Structural).observed(observe, |observe| structural::optimize_scope(&mut program.root, "root", observe));
+        }
         let mut changed = false;
         if config.collapse_parent_arranges || config.hoist_invariant {
-            changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, observe);
+            changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, timings, observe);
         }
         if config.compose_maps {
-            let (shapes, _) = shapes::infer(program, source);
-            changed |= canonical::canonical_linear(&mut program.root, &shapes);
+            let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer(program, source);
+            changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes));
         }
-        if config.dead_bindings { changed |= canonical::dead_bindings(&mut program.root); }
+        if config.dead_bindings {
+            changed |= timings.pass_mut(Pass::DeadBindings).rewrites(|| canonical::dead_bindings(&mut program.root));
+        }
         // Import slots name edges, not distinct computations. Keep them interned even
         // with optional rewrites off, including programs supplied directly as IR.
-        changed |= structural::merge_imports(&mut program.root);
+        changed |= timings.pass_mut(Pass::MergeImports).rewrites(|| structural::merge_imports(&mut program.root));
         if !changed { break; }
     }
 }

@@ -8,11 +8,11 @@ use crate::shapes::{ItemShapes, ScopeShapes};
 
 /// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
 /// Structural fusion has already respected shared edges. No other operator is crossed.
-pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool {
-    let mut changed = false;
+pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> usize {
+    let mut changed = 0;
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
         match (item, shape) {
-            (Item::Sub(child), ItemShapes::Sub(shapes)) => changed |= canonical_linear(child, shapes),
+            (Item::Sub(child), ItemShapes::Sub(shapes)) => changed += canonical_linear(child, shapes),
             (Item::Op(Node::Linear { input, ops }), _) => {
                 let steps = shapes.of(input).and_then(|s| {
                     crate::shapes::linear_shapes(ops, s.key, s.val, s.time - 1).ok()
@@ -22,9 +22,9 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool 
                     let input = steps.as_ref().map(|s| Shape::Prod(vec![s[i].0.clone(), s[i].1.clone()]));
                     if matches!(op, LinearOp::Negate) && matches!(pending.last(), Some((LinearOp::Negate, _))) {
                         pending.pop();
-                        changed = true;
+                        changed += 1;
                     } else if matches!((&op, &input), (LinearOp::Project(map), Some(input)) if identity(map, input)) {
-                        changed = true;
+                        changed += 1;
                     } else { pending.push((op, input)); }
                 }
                 let mut result: Vec<(LinearOp, Option<Shape>)> = Vec::new();
@@ -47,7 +47,7 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool 
                             if !identity(&composed, start) {
                                 result.push((LinearOp::Project(composed), Some(start.clone())));
                             }
-                            changed = true;
+                            changed += 1;
                             continue;
                         }
                         // Preserve the pairwise fallback at unsupported scalar kernels.
@@ -62,7 +62,7 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool 
                                     if !identity(&composed, &start) {
                                         result.push((LinearOp::Project(composed), Some(start)));
                                     }
-                                    changed = true;
+                                    changed += 1;
                                     continue;
                                 }
                             }
@@ -83,7 +83,7 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> bool 
             if ops.is_empty() {
                 remap[i] = if let Ref::Local(j) = input { remap[*j].clone() } else { input.clone() };
                 dead[i] = true;
-                changed = true;
+                changed += 1;
             }
         }
     }
@@ -158,10 +158,10 @@ fn wiring(graph: &Graph<NumOp>) -> Option<Projection> {
 /// Remove unread imports, child exports, and redundant source aliases. Exports, feedback,
 /// child import edges, and every operator (including inspect) are readers. Root exports
 /// and declared inputs always remain.
-pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
-    let mut changed = false;
+pub(super) fn dead_bindings(scope: &mut Scope) -> usize {
+    let mut changed = 0;
     for item in &mut scope.items {
-        if let Item::Sub(child) = item { changed |= dead_bindings(child); }
+        if let Item::Sub(child) = item { changed += dead_bindings(child); }
     }
     // Names are provenance, not readers. Temporarily take them out of the ref walk.
     let names = std::mem::take(&mut scope.names);
@@ -184,11 +184,11 @@ pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
             Ref::Var(_) => false, // Variables already have their declared names.
         };
         if keep && seen.insert(ref_key(&r)) { scope.names.push((name, r)); }
-        else { changed = true; }
+        else { changed += 1; }
     }
     let mut i = 0;
     scope.imports.retain(|_| { let keep = remap[i] != usize::MAX; i += 1; keep });
-    changed |= next != remap.len();
+    changed += remap.len() - next;
     scope.for_each_ref(|r| if let Ref::Import(i) = r {
         assert_ne!(remap[*i], usize::MAX, "removed a live import");
         *i = remap[*i];
@@ -206,7 +206,7 @@ pub(super) fn dead_bindings(scope: &mut Scope) -> bool {
                 if keep { next += 1; }
                 keep
             });
-            changed |= next != remap.len();
+            changed += remap.len() - next;
         }
     }
     scope.for_each_ref(|r| if let Ref::ChildExport(i, e) = r {

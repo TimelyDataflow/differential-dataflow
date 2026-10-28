@@ -5,7 +5,7 @@ use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 /// Intern identical imports, as lowering does for repeated parent references. Names
 /// are provenance; the source edge and declared shape determine the imported value.
 /// Walk parents first because redirecting an import can expose duplicates in a child.
-pub(super) fn merge_imports(scope: &mut Scope) -> bool {
+pub(super) fn merge_imports(scope: &mut Scope) -> usize {
     let imports = std::mem::take(&mut scope.imports);
     let mut remap = Vec::with_capacity(imports.len());
     let mut seen = std::collections::HashMap::new();
@@ -15,10 +15,10 @@ pub(super) fn merge_imports(scope: &mut Scope) -> bool {
         if index == next { scope.imports.push(import); }
         remap.push(index);
     }
-    let mut changed = scope.imports.len() != remap.len();
+    let mut changed = remap.len() - scope.imports.len();
     scope.for_each_ref(|r| if let Ref::Import(i) = r { *i = remap[*i]; });
     for item in &mut scope.items {
-        if let Item::Sub(child) = item { changed |= merge_imports(child); }
+        if let Item::Sub(child) = item { changed += merge_imports(child); }
     }
     changed
 }

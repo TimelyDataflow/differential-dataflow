@@ -92,7 +92,7 @@ pub enum Cmd {
         explain: Option<bool>,
     },
     /// Print preparation stages without installing, using the live export catalog.
-    Plan { name: String, program: String },
+    Plan { name: String, program: String, timings: bool },
     /// Drop the named dataflow. Fails if any export of this dataflow is
     /// still imported by another live dataflow or held by a reader.
     Drop { name: String },
@@ -159,7 +159,7 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
-    Plan { name: String, program: String },
+    Plan { name: String, program: String, timings: bool },
     Peek { name: String, key: Option<String>, format: ReadFormat },
     Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
@@ -224,7 +224,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 program,
             }
         }
-        Cmd::Plan { name, program } => return Ok(PreparedCommand::Plan { name, program }),
+        Cmd::Plan { name, program, timings } => return Ok(PreparedCommand::Plan { name, program, timings }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
         Cmd::Peek { name, key, format } => return Ok(PreparedCommand::Peek { name, key, format }),
@@ -356,6 +356,7 @@ fn max_feed_bytes() -> usize {
 
 struct PendingLoad {
     plan: bool,
+    timings: bool,
     reqid: ReqId,
     id_hint: String,
     bindings: BTreeMap<String, String>,
@@ -477,7 +478,7 @@ impl LineParser {
                     return Some((
                         done.reqid,
                         Ok(if done.plan {
-                            Cmd::Plan { name: done.id_hint, program: done.body }
+                            Cmd::Plan { name: done.id_hint, program: done.body, timings: done.timings }
                         } else {
                             Cmd::Load {
                                 id_hint: done.id_hint,
@@ -532,12 +533,14 @@ impl LineParser {
             ParseOutcome::Err(e) => Some((reqid, Err(e))),
             ParseOutcome::BeginLoad {
                 plan,
+                timings,
                 id_hint,
                 bindings,
                 explain,
             } => {
                 self.pending_load = Some(PendingLoad {
                     plan,
+                    timings,
                     reqid,
                     id_hint,
                     bindings,
@@ -602,6 +605,7 @@ enum ParseOutcome {
     Err(String),
     BeginLoad {
         plan: bool,
+        timings: bool,
         id_hint: String,
         bindings: BTreeMap<String, String>,
         explain: Option<bool>,
@@ -629,15 +633,24 @@ fn read_format<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], ReadFormat) {
 
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
     match cmd {
-        "plan" => match args {
-            [name, "from", path] => match std::fs::read_to_string(path) {
-                Ok(program) => ParseOutcome::Cmd(Cmd::Plan { name: (*name).into(), program }),
-                Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
-            },
-            [name, "begin"] => ParseOutcome::BeginLoad {
-                plan: true, id_hint: (*name).into(), bindings: BTreeMap::new(), explain: None,
-            },
-            _ => ParseOutcome::Err("plan: expected `<name> from <path>` or `<name> begin`".into()),
+        "plan" => {
+            const USAGE: &str = "plan: expected `<name> from <path> [--timings]` or `<name> [--timings] begin`";
+            let (name, path, timings) = match args {
+                [name, "from", path] => (*name, Some(*path), false),
+                [name, "from", path, "--timings"] => (*name, Some(*path), true),
+                [name, "begin"] => (*name, None, false),
+                [name, "--timings", "begin"] => (*name, None, true),
+                _ => return ParseOutcome::Err(USAGE.into()),
+            };
+            match path {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(program) => ParseOutcome::Cmd(Cmd::Plan { name: name.into(), program, timings }),
+                    Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
+                },
+                None => ParseOutcome::BeginLoad {
+                    plan: true, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None,
+                },
+            }
         },
         "load" => {
             // Two forms. `load <name> from <path> [options]` installs a program
@@ -687,6 +700,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 },
                 None => ParseOutcome::BeginLoad {
                     plan: false,
+                    timings: false,
                     id_hint,
                     bindings,
                     explain,
@@ -960,9 +974,10 @@ mod tests {
         let got = feed_all(&mut p, &[
             "r0 plan preview begin", "export \"out\" = input 0 : (int, ());", "r0 end-plan",
         ]);
-        let [(_, Ok(Cmd::Plan { name, program }))] = &got[..] else { panic!("expected Plan: {got:?}") };
+        let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
         assert_eq!(name, "preview");
-        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone() }, &p.catalog).unwrap();
+        assert!(!timings);
+        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings }, &p.catalog).unwrap();
         assert!(matches!(prepared, PreparedCommand::Plan { .. }));
         assert!(p.catalog.shape("preview", 0).is_err());
         assert!(matches!(p.feed("plan p from /nonexistent/plan.ddp"), Some((_, Err(e))) if e.starts_with("plan: cannot read")));
@@ -971,6 +986,21 @@ mod tests {
         assert!(p.feed("export \"out\" = input 0;").is_none());
         assert!(matches!(p.feed("p end-plan"), Some((_, Err(e))) if e.starts_with("plan: program body exceeds")));
         assert!(matches!(p.feed("list"), Some((_, Ok(Cmd::List)))));
+    }
+
+    #[test]
+    fn plan_timings_survive_framing_and_preparation() {
+        let mut p = LineParser::new(Catalog::default());
+        let got = feed_all(&mut p, &[
+            "r0 plan preview --timings begin", "export \"out\" = input 0 : (int, ());", "r0 end-plan",
+        ]);
+        let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
+        assert!(*timings);
+        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings }, &p.catalog).unwrap();
+        assert!(matches!(prepared, PreparedCommand::Plan { timings: true, .. }));
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/plan_pairs/cases/as_of_shared.ddp");
+        assert!(matches!(p.feed(&format!("plan p from {path} --timings")), Some((_, Ok(Cmd::Plan { timings: true, .. })))));
+        assert!(matches!(p.feed("plan p --typo begin"), Some((_, Err(e))) if e.starts_with("plan: expected")));
     }
 
     #[test]

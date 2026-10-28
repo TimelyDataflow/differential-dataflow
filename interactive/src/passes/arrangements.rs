@@ -12,7 +12,7 @@ use crate::ir::LinearOp;
 use crate::scope_ir::{Import, Item, Node, Ref, Scope, Source};
 use super::structural::compact;
 
-use super::{Observe, item_ordinals};
+use super::{Observe, Pass, Timings, item_ordinals};
 
 fn key(r: &Ref) -> (u8, usize, usize) {
     match r {
@@ -37,14 +37,18 @@ fn child_imports(scope: &Scope, imports: &[bool], child: &Scope) -> Vec<bool> {
     }).collect()
 }
 
-pub(super) fn run(scope: &mut Scope, collapse: bool, hoist: bool, observe: &mut Observe<'_>) -> bool {
+pub(super) fn run(scope: &mut Scope, collapse: bool, hoist: bool, timings: &mut Timings, observe: &mut Observe<'_>) -> bool {
     let imports = scope.imports.iter().map(|i| matches!(i.from, Source::Trace(_))).collect::<Vec<_>>();
     let mut changed = false;
-    if collapse { changed |= collapse_parent_arranges(scope, &imports, "root", observe); }
+    if collapse {
+        changed |= timings.pass_mut(Pass::CollapseParentArranges).observed(observe, |observe| collapse_parent_arranges(scope, &imports, "root", observe));
+    }
     if hoist {
-        changed |= hoist_statements(scope, "root", observe);
-        changed |= hoist_arranges(scope, &imports, "root", observe);
-        changed |= prune_imports(scope);
+        changed |= timings.pass_mut(Pass::HoistInvariant).observed(observe, |observe| {
+            hoist_statements(scope, "root", observe)
+                | hoist_arranges(scope, &imports, "root", observe)
+                | prune_imports(scope)
+        });
     }
     changed
 }

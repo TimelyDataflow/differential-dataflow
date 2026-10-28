@@ -939,8 +939,16 @@ pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<usize, String> {
+    pushdown_timed(program, source, &mut super::Measurement::default())
+}
+
+pub(super) fn pushdown_timed(
+    program: &mut st::Program,
+    source: &dyn Fn(&Source) -> Option<st::RowShape>,
+    inference: &mut super::Measurement,
+) -> Result<usize, String> {
     let original = program.clone();
-    let (mut shapes, problems) = shapes::infer(program, source);
+    let (mut shapes, problems) = inference.infer(program, source);
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
@@ -948,7 +956,7 @@ pub fn pushdown(
     let mut changed = 0;
     for _ in 0..16 {
         let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
-        let (checked, problems) = shapes::infer(program, source);
+        let (checked, problems) = inference.infer(program, source);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         let mut builder = Builder::default();
         let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, 0) else { break };
@@ -957,7 +965,7 @@ pub fn pushdown(
         }
         let live = builder.graph.closure();
         let masked = rewrite_scope(&mut program.root, &plan, &live);
-        let (checked, problems) = shapes::infer(program, source);
+        let (checked, problems) = inference.infer(program, source);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         changed += fused + masked;
         if fused + masked == 0 { return Ok(changed); }

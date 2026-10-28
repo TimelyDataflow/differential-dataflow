@@ -9,7 +9,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use corgi::Shape;
 use crate::ir::{Lambda, LinearOp, Reducer};
-use crate::passes::Config;
+use crate::passes::{Config, Measurement, Pass, Timings};
+use std::time::Instant;
 use crate::scope_ir::{Item, Node, Program, Ref, RowShape, Scope, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
@@ -17,6 +18,10 @@ use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 /// A stage whose pass is switched off still appears, unchanged, and says so.
 pub struct Report {
     pub stages: Vec<Stage>,
+    pub timings: Timings,
+    pub parsing: Measurement,
+    /// Recovering source spellings for the DDP emitter (includes its syntax parse).
+    pub context_time: Measurement,
     /// Missing providers, even when the import declares a shape.
     pub unresolved: Vec<String>,
     /// Inferred exports for planning another program. Empty if preparation is incomplete.
@@ -39,7 +44,25 @@ pub struct Stage {
 /// Lambdas use the same registered functions as the DDP parser. The as-of time is the fixed
 /// placeholder `G = (1, [])`, as for installation at epoch 2, extended by zero scope lanes.
 pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
-    caught_report(|| build_report(crate::lower::lower_tree(crate::parse::pipe::parse(text)), ddp::Context::new(text), source, passes))
+    caught_report(|| {
+        let start = Instant::now();
+        let parsed = crate::parse::pipe::parse(text);
+        let mut parsing = Measurement::default();
+        parsing.record(start.elapsed(), 0);
+        let start = Instant::now();
+        let program = crate::lower::lower_tree(parsed);
+        let mut lowering = Measurement::default();
+        lowering.record(start.elapsed(), 0);
+        let start = Instant::now();
+        let context = ddp::Context::new(text);
+        let mut context_time = Measurement::default();
+        context_time.record(start.elapsed(), 0);
+        let mut report = build_report(program, context, source, passes)?;
+        report.parsing = parsing;
+        report.timings.lowering = lowering;
+        report.context_time = context_time;
+        Ok(report)
+    })
 }
 
 /// Prepare an already lowered program, such as an explanation rewrite.
@@ -91,7 +114,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         _ => None,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(1, Default::default()), &mut |name, program, changes| {
+    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(1, Default::default()), &mut |name, program, changes| {
         let previous = stages.last().map(|stage| &stage.program);
         let changes = stage_changes(name, changes, previous, program, &resolve);
         let name = match name {
@@ -112,7 +135,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
             shape.map(|shape| (export.name.clone(), (shape.key, shape.val)))
         }).collect()
     } else { BTreeMap::new() };
-    Ok(Report { stages, unresolved, exports, context })
+    Ok(Report { stages, timings, parsing: Measurement::default(), context_time: Measurement::default(), unresolved, exports, context })
 }
 
 fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&Program>, after: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -> Vec<String> {
@@ -127,6 +150,8 @@ fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&
                 "{action} {path}/{}#{} into {path}/{}#{} (names before compaction)",
                 quote(&from.label), from.ordinal, quote(&to.label), to.ordinal,
             )),
+            // Aggregate counters are for timings, not deterministic statement diffs.
+            Change::Rewritten { .. } => {},
             Change::Masked(masked) => {
                 result.push(format!("{masked} field masks and map fusions"));
                 result.extend(changed_statements(before.unwrap(), after, source, "masked"));
@@ -162,6 +187,7 @@ fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dy
 pub struct PrintOptions {
     pub lambda_source: bool,
     pub check_lambdas: bool,
+    pub timings: bool,
 }
 
 /// Counts refer to operator slots, including all nested scalar bodies in each check.
@@ -196,6 +222,7 @@ impl Report {
     pub fn print(&self) -> String { self.print_with(PrintOptions::default()).text }
 
     pub fn print_with(&self, options: PrintOptions) -> PrintedPlan {
+        let start = Instant::now();
         let mut out = String::from("Not yet parseable DDP. Read-only plan report.\n");
         out.push_str("Assumptions: trace imports use arrangements; projection enabled; as-of drop enabled.\n");
         out.push_str("G = (1, []) is a placeholder as-of time, for install epoch 2; nested lanes are zero.\n");
@@ -216,8 +243,37 @@ impl Report {
             lambdas.add(printed.lambdas);
         }
         writeln!(out, "Lambda total: {}", lambdas.line()).unwrap();
+        if options.timings { out.push_str(&self.timing_table(Some(("plan printing", start.elapsed())))); }
         PrintedPlan { text: out, lambdas }
     }
+
+    /// Display-only wall times. Pass rows are subtotals, not additional stage time.
+    /// `printing` lets the CLI report DDP emission separately, on stderr.
+    pub fn timing_table(&self, printing: Option<(&str, std::time::Duration)>) -> String {
+        let mut out = String::from("\nPlanning timings (wall seconds):\n");
+        writeln!(out, "{:<32} {:>10} {:>7} {:>9}", "stage / pass", "seconds", "runs", "changes").unwrap();
+        let mut row = |name: &str, measurement: &Measurement| {
+            writeln!(out, "{name:<32} {:>10.6} {:>7} {:>9}", measurement.elapsed.as_secs_f64(), measurement.runs, measurement.changes).unwrap();
+        };
+        for (name, measurement) in [
+            ("parse", &self.parsing), ("lowering", &self.timings.lowering),
+            ("optimizer", &self.timings.optimizer), ("projection", &self.timings.projection),
+            ("as-of drop", &self.timings.as_of_drop), ("report snapshots and diffs", &self.timings.observers),
+            ("DDP source context", &self.context_time),
+        ] { row(name, measurement); }
+        if let Some((name, elapsed)) = printing {
+            row(name, &Measurement { elapsed, runs: 1, changes: 0 });
+        }
+        for pass in Pass::ALL { row(&format!("  {}", pass.name()), self.timings.pass(pass)); }
+        writeln!(out, "Fixed-point rounds: optimizer={}, initial hoisting={}, projection={}",
+            self.timings.optimizer_rounds, self.timings.hoist_rounds, self.timings.projection_rounds).unwrap();
+        out.push_str("Pass totals include projection's optimizer calls and rejected candidates. Do not add them to stages.\n");
+        out.push_str("Shape inference includes schedule and projection checks; snapshot inference is in report snapshots.\n");
+        out.push_str("Changes count rewrite observations (bulk compositions count once); stage changes count accepted rewrites.\n");
+        out.push_str("Zero runs means not called. Projection includes provider/shape checks even when switched off.\n");
+        out
+    }
+
 }
 
 impl Stage {
