@@ -76,7 +76,7 @@ fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
     assert!(!dead_bindings(&mut p.root));
-    let report = crate::plan::report(r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, &|_| None).unwrap();
+    let report = crate::plan::report(r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
     assert!(report.unresolved.is_empty());
     assert!(report.emit_ddp().is_ok());
 }

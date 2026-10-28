@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use interactive::passes::Config;
 use interactive::plan::{self, Report};
 use interactive::plan::ddp::DdpStage;
 use interactive::scope_ir::{Item, Node, Ref, RowShape, Scope, Source};
@@ -195,7 +196,7 @@ fn emitted(case: &Case, report: &Report, source: &dyn Fn(&str) -> Option<RowShap
             Ok(printed) => printed.text,
             Err(error) => panic!("{}: {}: {error}", case.name, stage.name()),
         };
-        let replanned = plan::report(&text, source).unwrap_or_else(|e| panic!("{}: {}: emitted DDP does not replan: {e}", case.name, stage.name()));
+        let replanned = plan::report(&text, source, &Config::all()).unwrap_or_else(|e| panic!("{}: {}: emitted DDP does not replan: {e}", case.name, stage.name()));
         if case.problem.is_none() {
             assert!(replanned.unresolved.is_empty(), "{}: {}: emitted imports are unresolved", case.name, stage.name());
             assert!(replanned.stages.iter().all(|s| s.problems.is_empty()), "{}: {}: emitted DDP has shape problems", case.name, stage.name());
@@ -280,14 +281,14 @@ fn reviewed_plan_pairs() {
         let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
         let report = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
-            plan::report_program(interactive::explain::explain(&program), &source)
-        } else { plan::report(&text, &source) }.unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            plan::report_program(interactive::explain::explain(&program), &source, &Config::all())
+        } else { plan::report(&text, &source, &Config::all()) }.unwrap_or_else(|e| panic!("{}: {e}", case.name));
         check_report(case, &report);
 
         let repeated = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
-            plan::report_program(interactive::explain::explain(&program), &source)
-        } else { plan::report(&text, &source) }.unwrap();
+            plan::report_program(interactive::explain::explain(&program), &source, &Config::all())
+        } else { plan::report(&text, &source, &Config::all()) }.unwrap();
         assert!(case.problem.is_some() || report.compare_final(&repeated).is_empty(), "{}: planning changed on repetition", case.name);
         let out = emitted(case, &report, &source);
         assert_eq!(out, emitted(case, &repeated, &source), "{}: emitted bytes changed on repetition", case.name);

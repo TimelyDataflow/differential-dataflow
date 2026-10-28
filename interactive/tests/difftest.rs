@@ -13,7 +13,7 @@
 //! computing them:
 //! - `workers`: two to five workers, against one.
 //! - `scratch`: the accumulated input evaluated in one go, against the incremental run.
-//! - `optimize`: the program unoptimized.
+//! - `optimize`: the program unoptimized, installed with every pass switched off.
 //! - `delta`: every `join` written as a delta join (two `half_join`s, delayed to their data times).
 //! - `asof`: the delta form, installed after its input traces have history, with and without
 //!   dropping dead as-of updates.
@@ -49,6 +49,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use interactive::passes::Config;
 use interactive::scope_ir::Program;
 use interactive::server::{self, Server};
 use interactive::{explain, lower, parse};
@@ -907,18 +908,18 @@ struct RunOptions {
     arranged: bool,
     ahead: bool,
     cycle: Option<(usize, usize)>,
-    as_of_drop: bool,
+    passes: Config,
 }
 
 /// [`run_programs`], and once the last program is installed, each `(trace, input)` of `binds`
 /// bound to that input of it. With `cycle`, `(d, r)`, the last program is dropped before epoch `d`
 /// and installed again before epoch `r`.
 fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, arranged: bool, ahead: bool, cycle: Option<(usize, usize)>) -> Result<Vec<Exports>, String> {
-    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, as_of_drop: true })
+    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, passes: Config::all() })
 }
 
 fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, options: RunOptions) -> Result<Vec<Exports>, String> {
-    let RunOptions { arranged, ahead, cycle, as_of_drop } = options;
+    let RunOptions { arranged, ahead, cycle, passes } = options;
     let programs = programs.to_vec();
     let binds = binds.to_vec();
     let epochs = case.epochs.clone();
@@ -926,7 +927,7 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
     let guards = timely::execute(timely::Config::process(workers), move |worker| -> Result<Vec<Exports>, String> {
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
-        server.set_as_of_drop(as_of_drop);
+        server.set_passes(passes);
         // On one worker, every export's tapped changes are checked against its contents.
         let single = worker.peers() == 1;
         server.set_export_taps(single);
@@ -1237,7 +1238,9 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
             },
             Oracle::Scratch if case.timed => continue,
             Oracle::Scratch => scratch(&opt, case),
-            Oracle::Optimize => program(&src, false).and_then(|p| run(&p, 1, case)),
+            Oracle::Optimize => program(&src, false).and_then(|p| {
+                run_with_options(&[("p".to_string(), p, 0)], &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::none() })
+            }),
             Oracle::Delta => {
                 if !case.has_joins() { continue; }
                 program(&case.render(true), true).and_then(|p| run(&p, 1, case))
@@ -1245,8 +1248,8 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
             Oracle::AsOf => {
                 if case.raw.is_some() { continue; }
                 asof_programs(case).and_then(|programs| {
-                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: true })?;
-                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: false })?;
+                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::all() })?;
+                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config { as_of_drop: false, ..Config::all() } })?;
                     match differ(&on, &off) {
                         Some(d) => Err(format!("with versus without as-of rewrite: {d}")),
                         None => Ok(base.clone()),
@@ -1479,6 +1482,18 @@ fn late_install_regressions() {
         match check(&generate(seed), &oracles) {
             Outcome::Pass => {}
             Outcome::Refused(e) => panic!("seed {seed} refused: {e}"),
+            Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
+        }
+    }
+}
+
+/// The passes are optional: a program installed with every pass off, unoptimized, computes what
+/// it computes with every pass on, on a small sweep of generated cases.
+#[test]
+fn passes_are_optional() {
+    for seed in 0..24 {
+        match check(&generate(seed), &[Oracle::Optimize]) {
+            Outcome::Pass | Outcome::Refused(_) => {}
             Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
         }
     }

@@ -9,11 +9,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use corgi::Shape;
 use crate::ir::{Lambda, LinearOp, Reducer};
+use crate::passes::Config;
 use crate::scope_ir::{Item, Node, Program, Ref, RowShape, Scope, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
 /// The four preparation stages. Imports are assumed to use the producer's arrangement.
-/// Projection is deliberately enabled, independent of the process environment.
+/// A stage whose pass is switched off still appears, unchanged, and says so.
 pub struct Report {
     pub stages: Vec<Stage>,
     /// Missing providers, even when the import declares a shape.
@@ -33,19 +34,18 @@ pub struct Stage {
     unresolved: Vec<String>,
 }
 
-/// Parse, lower, optimize, project, and apply the install-time as-of drop without installing.
+/// Parse, lower, and run the passes `passes` switches on, as install would, without installing.
 /// `source` supplies published and generated trace shapes; a declaration alone does not resolve an import.
 /// Lambdas use the same registered functions as the DDP parser. The as-of time is the fixed
 /// placeholder `G = (1, [])`, as for installation at epoch 2, extended by zero scope lanes.
-/// This reports the projection-enabled path, not the server's default projection-off path.
-pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
-    caught_report(|| build_report(crate::lower::lower_tree(crate::parse::pipe::parse(text)), ddp::Context::new(text), source))
+pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
+    caught_report(|| build_report(crate::lower::lower_tree(crate::parse::pipe::parse(text)), ddp::Context::new(text), source, passes))
 }
 
 /// Prepare an already lowered program, such as an explanation rewrite.
 /// Parsed syntax is unavailable for this entry point.
-pub fn report_program(program: Program, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
-    caught_report(|| build_report(program, ddp::Context::for_program(), source))
+pub fn report_program(program: Program, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
+    caught_report(|| build_report(program, ddp::Context::for_program(), source, passes))
 }
 
 fn caught_report(build: impl FnOnce() -> Result<Report, String>) -> Result<Report, String> {
@@ -57,11 +57,11 @@ fn caught_report(build: impl FnOnce() -> Result<Report, String>) -> Result<Repor
 }
 
 /// Plan a program and emit its final stage in today's DDP syntax.
-pub fn emit_ddp(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<ddp::Emitted, String> {
-    report(text, source)?.emit_ddp()
+pub fn emit_ddp(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<ddp::Emitted, String> {
+    report(text, source, passes)?.emit_ddp()
 }
 
-fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
+fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
     let mut catalog = BTreeMap::new();
     let mut unresolved = Vec::new();
     let mut problems = Vec::new();
@@ -91,12 +91,11 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         _ => None,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    crate::passes::run(&mut program, &resolve, true, Some(&crate::ir::Time::new(1, Default::default())), &mut |name, program, changes| {
+    crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(1, Default::default()), &mut |name, program, changes| {
         let previous = stages.last().map(|stage| &stage.program);
         let changes = stage_changes(name, changes, previous, program, &resolve);
         let name = match name {
-            "after projection" => "after projection (off by default; enabled for this report)",
-            "after as-of drop" => "after as-of drop (on by default; G = (1, []), placeholder install epoch 2)",
+            "after as-of drop" => "after as-of drop (G = (1, []), placeholder install epoch 2)",
             name => name,
         };
         stages.push(stage(name, program.clone(), changes, &resolve));
@@ -139,9 +138,10 @@ fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&
             Change::Rejected => result.push(if name == "after projection" {
                 "projection candidate rejected by shape/export checks; kept the optimizer output"
             } else {
-                "as-of candidate rejected by shape/export checks; kept the projection output"
+                "as-of candidate rejected by shape/export checks; kept the previous stage"
             }.into()),
             Change::Skipped => result.push("skipped: unresolved imports or invalid/unknown shapes prevent installation".into()),
+            Change::Off(pass) => result.push(format!("{pass} switched off")),
         }
     }
     result
@@ -577,19 +577,19 @@ mod tests {
 
     #[test]
     fn providers_are_required_and_as_of_filters_are_visible() {
-        let provider = report(r#"export "rows" = input 0 : (int, int);"#, &|_| None).unwrap();
+        let provider = report(r#"export "rows" = input 0 : (int, int);"#, &|_| None, &Config::all()).unwrap();
         let text = r#"
             let rows = import "rows" : (int, int);
             export "out" = rows | lift | half_join(rows, 1, (k, v, w) -> (k, v));
         "#;
-        let missing = report(text, &|_| None).unwrap();
+        let missing = report(text, &|_| None, &Config::all()).unwrap();
         assert_eq!(missing.unresolved, ["rows"]);
         assert!(missing.exports.is_empty());
-        let plan = report(text, &|name| provider.exports.get(name).cloned()).unwrap();
+        let plan = report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap();
         assert!(plan.unresolved.is_empty());
         assert!(plan.stages[3].changes.iter().any(|s| s.contains("inserted 1 filters")));
         assert!(plan.print_with(PrintOptions { lambda_source: true, ..PrintOptions::default() }).text.contains("(t0, 1) ne"));
-        assert_eq!(plan.print(), report(text, &|name| provider.exports.get(name).cloned()).unwrap().print());
-        assert!(report(text, &|_| Some((Shape::Unit, Shape::Unit))).is_err());
+        assert_eq!(plan.print(), report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap().print());
+        assert!(report(text, &|_| Some((Shape::Unit, Shape::Unit)), &Config::all()).is_err());
     }
 }

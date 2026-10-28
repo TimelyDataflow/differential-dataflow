@@ -212,13 +212,12 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
             }))
             .map_err(panic_message)?;
             apply_bindings(&mut program, &bindings)?;
-            // The rewrite precedes optimization (its rules assume single-op Linears).
+            // The rewrite precedes the passes, which install runs (its rules assume single-op Linears).
             if let Some(debug) = explain {
                 let options = interactive::explain::Options { debug_inspects: debug };
                 program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, options)))
                     .map_err(panic_message)?;
             }
-            interactive::passes::optimize(&mut program);
             catalog.record(&id_hint, &program);
             ServerCommand::Install {
                 name: id_hint,

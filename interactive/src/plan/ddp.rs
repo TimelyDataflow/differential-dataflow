@@ -451,7 +451,7 @@ fn qualify(src: &str, types: &[(String, Vec<(String, Shape)>)]) -> String {
 mod tests {
     use super::*;
 
-    fn plan(text: &str) -> Report { super::super::report(text, &crate::server::generated_shape).unwrap() }
+    fn plan(text: &str) -> Report { super::super::report(text, &crate::server::generated_shape, &crate::passes::Config::all()).unwrap() }
 
     fn roundtrip(text: &str) -> String {
         let before = plan(text);
@@ -506,10 +506,10 @@ mod tests {
     #[test]
     fn unnamed_sum_imports_get_valid_declarations() {
         let source = |_: &str| Some((Shape::Sum(vec![Shape::Int, Shape::Unit]), Shape::Unit));
-        let before = super::super::report("export \"out\" = import \"sum\";", &source).unwrap();
+        let before = super::super::report("export \"out\" = import \"sum\";", &source, &crate::passes::Config::all()).unwrap();
         let text = before.emit_ddp().unwrap().text;
         assert!(text.contains("type Sum0 = V0 int | V1;"));
-        let after = super::super::report(&text, &source).unwrap();
+        let after = super::super::report(&text, &source, &crate::passes::Config::all()).unwrap();
         assert!(before.compare_final(&after).is_empty());
         assert_eq!(text, after.emit_ddp().unwrap().text);
     }

@@ -274,9 +274,13 @@ A program moves through four parts, each using only the ones before it.
    shape of every collection. `ir.rs` is the vocabulary all of these are written in: lambdas,
    operator steps, reducers, and registered functions. `lambda.rs` is where the expression
    language plugs in: it parses, types, compiles and composes the lambdas in a program's slots.
-2. **Analyses** rewrite a program into another program. `explain/` produces one that explains its
-   own outputs. `projection.rs`, on with `DDIR_PROJECTION`, replaces fields that nothing reads
-   by `()`.
+2. **Rewrites** turn a program into another program. `passes/` holds the passes install runs,
+   through one entry point, `passes::run`: structural optimization, map composition, dead
+   bindings, projection (fields nothing reads become `()`), and the as-of drop. None is needed
+   to run a program, and each can be switched off: `DDIR_PASSES` on the server and
+   `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
+   excludes projection; `all` enables every pass. `explain/` produces a
+   program that explains its own outputs.
 3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
    trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's
    backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
@@ -335,15 +339,16 @@ I would not recommend relying on any of this yet.
 ## Plan without running
 
 `cargo run -p interactive --bin ddir-plan -- file.ddp [more.ddp ...]` prints
-lowering, optimization, projection, and as-of-drop stages. Earlier files supply
+lowering, optimization, projection, and as-of-drop stages. `--passes LIST` switches
+passes off as the server's `DDIR_PASSES` does; a switched-off stage is shown unchanged. Earlier files supply
 their inferred export shapes to later files. No dataflow or generated source is
 installed. A missing provider is unresolved even if its import declares a shape;
 the tool prints the partial report and exits unsuccessfully.
 
-The library entry point is `plan::report(text, source)`, where `source` looks up a
-published trace's shape. `Report::print` prints all stages; `Stage::print` prints
-one. Reports assume arranged imports, enable projection (off by default on the
-server), and use placeholder as-of time `(1, [])`, for installation at epoch 2.
+The library entry point is `plan::report(text, source, passes)`, where `source` looks up a
+published trace's shape and `passes` says which passes run. `Report::print` prints all
+stages; `Stage::print` prints one. Reports assume arranged imports and use placeholder
+as-of time `(1, [])`, for installation at epoch 2.
 They ignore environment switches. The output is diagnostic text, not yet
 parseable DDP. Renderer notes describe known storage conversions and non-unit
 distinct; other renderer expansions are not shown.

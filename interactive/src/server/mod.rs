@@ -256,8 +256,8 @@ pub struct Server {
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
     arranged_imports: bool,
-    /// Apply the as-of rewrite to programs installed afterwards (default on).
-    as_of_drop: bool,
+    /// The passes install runs on programs installed afterwards (default all except projection).
+    passes: crate::passes::Config,
     /// This worker's diagnostics, when they are on: the source of the `diag.*` collections.
     diagnostics: Option<Rc<RefCell<crate::diag::Diagnostics>>>,
 }
@@ -275,7 +275,7 @@ impl Server {
             bindings: Vec::new(),
             epoch: 0,
             arranged_imports: true,
-            as_of_drop: true,
+            passes: crate::passes::Config::default(),
             diagnostics: None,
         }
     }
@@ -309,9 +309,15 @@ impl Server {
         self.arranged_imports = on;
     }
 
-    /// Drop dead as-of updates on programs installed afterwards (default on).
-    pub fn set_as_of_drop(&mut self, on: bool) {
-        self.as_of_drop = on;
+    /// The passes install runs on programs installed afterwards (default all except projection). None of them is
+    /// needed to run a program; they change how, not what, it computes.
+    pub fn set_passes(&mut self, passes: crate::passes::Config) {
+        self.passes = passes;
+    }
+
+    /// The passes install runs, for reports that describe an install.
+    pub fn passes(&self) -> crate::passes::Config {
+        self.passes
     }
 
     /// Also keep each export's new batches for [`Server::take_changes`] (default off). Affects

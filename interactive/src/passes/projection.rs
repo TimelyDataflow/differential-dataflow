@@ -930,7 +930,8 @@ pub fn demand_graph(
 
 /// Replace dead tuple fields in producer lambdas by unit and fuse value maps into
 /// reduces. Returns the number of field masks and fused maps. On a shape disagreement
-/// the original is restored.
+/// the original is restored. Masks can leave adjacent maps and identity masks behind;
+/// `run` follows this pass with the optimizer passes it runs.
 pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
@@ -958,11 +959,6 @@ pub fn pushdown(
         // A rewritten intermediate shape disagrees with a consumer. The pass
         // is optional, so keep the original program in that case.
         return Ok(0);
-    }
-    if masked + fused > 0 {
-        // Projection can expose adjacent maps and identity masks. Use the same
-        // optimizer schedule so the emitted result is already canonical.
-        super::optimize_with(program, source, &mut |_, _, _, _, _, _| {});
     }
     Ok(masked + fused)
 }
@@ -1049,6 +1045,7 @@ mod tests {
             "merged", "counted", "counted", "export merged", "export counts",
         ]);
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        crate::passes::optimize(&mut program);
         // Both concat arms read the source after identity removal and share one
         // mask. It keeps the statement it serves; reduce keeps its grouping key.
         assert_eq!(program.root.labels.len(), program.root.items.len());

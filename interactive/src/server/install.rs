@@ -22,15 +22,16 @@ impl Server {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
-        // Provider shapes may complete maps that could not be typed before installation.
-        // Dead imports are removed before resolving providers and recording dependencies.
+        // The configured passes run first, with provider shapes, which may complete maps that
+        // could not be typed before installation. Dead bindings, when on, removes unread imports
+        // before providers are resolved and dependencies recorded.
         let mut optimized = prog.clone();
         let as_of = self.import_as_of();
         crate::passes::run(&mut optimized, &|source| match source {
             st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
                 .or_else(|| super::generated_shape(t)).or_else(|| crate::diag::shape(t)),
             _ => None,
-        }, std::env::var_os("DDIR_PROJECTION").is_some(), self.as_of_drop.then_some(&as_of), &mut |_, _, _| {});
+        }, &self.passes, &as_of, &mut |_, _, _| {});
         let prog = &optimized;
         // The root is not a loop: a published trace holds what its program computes at each
         // epoch, not a round of an iteration. Loops live in named scopes.

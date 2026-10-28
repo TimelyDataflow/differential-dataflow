@@ -118,6 +118,10 @@ fn main() {
         })
         .unwrap_or(1);
     assert!(workers > 0, "DDIR_WORKERS must be positive");
+    if let Err(error) = control_loop::passes_from_env() {
+        eprintln!("DDIR_PASSES: {error}");
+        std::process::exit(2);
+    }
 
     let (event_tx, event_rx) = channel::<ControlEvent>();
     let (activation_tx, activation_rx) = sync_channel(1);
