@@ -10,7 +10,7 @@
 -let wr_all = wr_all_filter | map(((wid, _, k), (v)) -> ((wid, k), (v)));
 -let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 +let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
-+let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v))) | map(((wid, k), (v)) -> ((wid), (k, v)));
++let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
  let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
  let rk_idx = rk | arrange;
  let store_idx = store | arrange;

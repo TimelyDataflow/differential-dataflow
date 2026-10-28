@@ -2,8 +2,8 @@
 -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
 let store = import "store" : ((int), (int, int));
 let intents = input 0 : ((int, int, int), (int));
-let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v))) | map(((wid, k), (v)) -> ((wid), (k, v)));
-let read_entries = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e))) | map(((rid, k), (e)) -> ((k), (1, rid, e)));
+let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
+let read_entries = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((a, _, b), (c)) -> ((b), (1, a, c)));
 let read_entries_idx = read_entries | arrange;
 let store_idx = store | arrange;
 let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));

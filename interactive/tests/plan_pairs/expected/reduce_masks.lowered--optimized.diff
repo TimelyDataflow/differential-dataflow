@@ -15,7 +15,7 @@
 -let unique_map3 = unique_map2 | map((k, (_, v)) -> (k, ((), v)));
 -let values_idx3 = values | arrange;
 -let counted_reduce = values_idx3 | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
-+let unique_rows = unique_reduce | map((kv, ()) -> kv) | map((k, (_, v)) -> (k, ((), v)));
++let unique_map2 = unique_reduce | map(((a, (_, b)), _) -> (a, ((), b)));
 +let counted_reduce = values_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
  let counted_map = counted_reduce | map((k, _) -> (k, ()));
 -let values_idx4 = values | arrange;
@@ -29,7 +29,7 @@
  export "minimum" = minimum_map;
  -- Renderer: build an export arrangement.
 -export "unique" = unique_map3;
-+export "unique" = unique_rows;
++export "unique" = unique_map2;
  -- Renderer: build an export arrangement.
  export "counted" = counted_map;
  -- Renderer: build an export arrangement.

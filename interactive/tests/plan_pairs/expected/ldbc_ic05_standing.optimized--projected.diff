@@ -1,12 +1,17 @@
 --- optimized
 +++ projected
-@@ -10,8 +10,7 @@
+@@ -10,12 +10,10 @@
  let first = first_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let lowest_map = member | map((who, (f, _)) -> (who, f));
  let lowest_idx = lowest_map | arrange;
 -let lowest_reduce = lowest_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 -let lowest = lowest_reduce | map((who, (_, f)) -> (who, f));
+-let lowest_idx2 = lowest | arrange;
 +let lowest = lowest_idx | reduce(arg -> let _call0 = let input = arg in let (_, vals) = input in let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1 in _call0 map ((_value, _diff) -> (_value.1, _diff)));
- let lowest_idx2 = lowest | arrange;
  -- Renderer: publish the existing arrangement.
  export "ic5.s.posted" = posted;
+ -- Renderer: publish the existing arrangement.
+ export "ic5.s.first" = first;
+ -- Renderer: publish the existing arrangement.
+-export "ic5.s.lowest" = lowest_idx2;
++export "ic5.s.lowest" = lowest;

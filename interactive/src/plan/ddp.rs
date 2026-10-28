@@ -487,7 +487,8 @@ mod tests {
             export "out" = result;
         "#);
         assert!(output.contains("let result_idx ="));
-        assert!(output.contains("| filter((k, _) -> (k, 0) gt) | map("));
+        assert!(output.contains("| filter((k, _) -> (k, 0) gt)"));
+        assert!(!output.contains("map((k, v) -> (k, v))"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -3,8 +3,7 @@
+@@ -3,15 +3,13 @@
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
  let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));
  let by_author_idx = by_author | arrange;
@@ -10,3 +10,11 @@
  let newest_map = by_author | map((author, (neg, _)) -> (author, neg));
  let newest_idx = newest_map | arrange;
  let newest = newest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let latest_idx = latest | arrange;
+ -- Renderer: publish the existing arrangement.
+ export "ic2.s.by_author" = by_author_idx;
+ -- Renderer: publish the existing arrangement.
+-export "ic2.s.latest" = latest_idx;
++export "ic2.s.latest" = latest;
+ -- Renderer: publish the existing arrangement.
+ export "ic2.s.newest" = newest;

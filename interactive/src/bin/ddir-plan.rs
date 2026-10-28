@@ -58,7 +58,8 @@ fn run() -> Result<(), String> {
             }
             writeln!(out, "Program {}\n{}", i + 1, printed.text).map_err(|e| e.to_string())?;
         }
-        incomplete |= !report.unresolved.is_empty() || report.stages.iter().any(|s| !s.problems.is_empty());
+        // Lowered diagnostics can mention an unread import that cleanup removed.
+        incomplete |= !report.unresolved.is_empty() || !report.stages.last().unwrap().problems.is_empty();
         for (name, shape) in report.exports {
             if catalog.insert(name.clone(), shape).is_some() { return Err(format!("duplicate export {name:?}")); }
         }

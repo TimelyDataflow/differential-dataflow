@@ -1,6 +1,15 @@
 --- lowered
 +++ optimized
-@@ -31,33 +31,26 @@
+@@ -22,42 +22,31 @@
+ let del_knows = input 20 : ((int, int, int), ());
+ let del_member = input 21 : ((int, int, int), ());
+ let del_likes = input 22 : ((int, int, int), ());
+-let tag = tag_in;
+-let tagclass = tagclass_in;
+-let place = place_in;
+-let org = org_in;
+ let dead_p_map = del_person | map(((id, _), ()) -> (id, ()));
+ let dead_p_idx = dead_p_map | arrange;
  let dead_p = dead_p_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let owned_map = forum_in | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)));
  let owned_idx = owned_map | arrange;
@@ -44,7 +53,7 @@
  dead_m: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var dead_m : (int, ());
-@@ -81,8 +74,7 @@
+@@ -81,8 +70,7 @@
  let gone_likes = gone_likes_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let person_map = person_in | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
  let person_idx = person_map | arrange;
@@ -54,7 +63,7 @@
  let person_idx2 = person_join | arrange;
  let person_reduce = person_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let person_neg = person_reduce | negate;
-@@ -97,8 +89,7 @@
+@@ -97,8 +85,7 @@
  let message = message_in + message_neg;
  let forum_map = forum_in | map(((id, title, created, moderator), ()) -> (id, (id, title, created, moderator)));
  let forum_idx = forum_map | arrange;
@@ -64,7 +73,7 @@
  let forum_map2 = kept | map((id, (title, created, moderator)) -> ((id, title, created, moderator), ()));
  let forum_rows = forum_join + forum_map2;
  let forum_idx2 = forum_rows | arrange;
-@@ -108,16 +99,13 @@
+@@ -108,16 +95,13 @@
  let forum = forum_in + forum_neg + forum_map3;
  let knows_map = knows_in | map(((src, dst, created), ()) -> ((src, dst), (src, dst, created)));
  let knows_idx = knows_map | arrange;
@@ -84,7 +93,7 @@
  let knows_rows = knows_join + knows_join2 + knows_join3;
  let knows_idx4 = knows_rows | arrange;
  let knows_reduce = knows_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
-@@ -125,16 +113,13 @@
+@@ -125,16 +109,13 @@
  let knows = knows_in + knows_neg;
  let member_map = member_in | map(((forum, person, created), ()) -> ((forum, person), (forum, person, created)));
  let member_idx = member_map | arrange;
@@ -104,7 +113,7 @@
  let member_rows = member_join + member_join2 + member_join3;
  let member_idx4 = member_rows | arrange;
  let member_reduce = member_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
-@@ -142,40 +127,34 @@
+@@ -142,40 +123,34 @@
  let member = member_in + member_neg;
  let interest_map = interest_in | map(((person, tag), ()) -> (person, (person, tag)));
  let interest_idx = interest_map | arrange;
@@ -151,7 +160,7 @@
  let likes_rows = likes_join + likes_join2 + likes_join3;
  let likes_idx4 = likes_rows | arrange;
  let likes_reduce = likes_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
-@@ -183,32 +162,28 @@
+@@ -183,32 +158,28 @@
  let likes = likes_in + likes_neg;
  let study_map = study_in | map(((person, org, year), ()) -> (person, (person, org, year)));
  let study_idx = study_map | arrange;
@@ -188,7 +197,7 @@
  let language_idx2 = language_join | arrange;
  let language_reduce = language_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let language_neg = language_reduce | negate;
-@@ -220,18 +195,14 @@
+@@ -220,18 +191,14 @@
  let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
  let either = either_map + either_map2;
  let either_idx = either | arrange;
@@ -211,7 +220,7 @@
  thread: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var thread : ((int, int), ());
-@@ -260,8 +231,7 @@
+@@ -260,8 +227,7 @@
  let ldbc_forum_idx = ldbc_forum_map | arrange;
  let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
  let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;

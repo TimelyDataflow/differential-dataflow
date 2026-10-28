@@ -2,18 +2,18 @@
 // Providers must precede their consumers. Each case gets only its named catalog.
 use super::Case;
 
-pub const FORMAT: &str = "3 (whole DDP and stage diffs; desugared reductions)";
-pub const LANGUAGE: &str = "DDP (interactive 0.1.0); corgi lambdas (Cargo.lock)";
-pub const BACKEND: &str = "interactive 0.1.0 corgi backend; kernels pinned in Cargo.lock";
-pub const TRANSFORMS: &str = "2: desugar reductions and expand distinct; collapse arrangements, fuse linear, dedup; projection; as-of drop";
-pub const ASSUMPTIONS: &str = "arranged trace imports; projection on; as-of on; G = (1, []); install epoch 2; no data or planner seed";
+pub(super) const FORMAT: &str = "3 (whole DDP and stage diffs; desugared reductions)";
+pub(super) const LANGUAGE: &str = "DDP (interactive 0.1.0); corgi lambdas (Cargo.lock)";
+pub(super) const BACKEND: &str = "interactive 0.1.0 corgi backend; kernels pinned in Cargo.lock";
+pub(super) const TRANSFORMS: &str = "3: desugar reductions and expand distinct; collapse arrangements, fuse linear, dedup; canonical linear chains; dead bindings; projection; as-of drop";
+pub(super) const ASSUMPTIONS: &str = "arranged trace imports; projection on; as-of on; G = (1, []); install epoch 2; no data or planner seed";
 
-pub const GENERATED: &[(&str, &str)] = &[
+pub(super) const GENERATED: &[(&str, &str)] = &[
     ("graph", "generated/graph.ddp"),
     ("cascade", "generated/cascade.ddp"),
 ];
 
-pub const CASES: &[Case] = &[
+pub(super) const CASES: &[Case] = &[
     Case::new("ldbc_graph", "tests/plan_pairs/generated/graph.ddp", &[]),
     Case::new("ldbc_cascade", "tests/plan_pairs/generated/cascade.ddp", &[]),
     Case::new("ldbc_is01", "bench/ldbc/authored/plans/is01.ddp", &["ldbc_graph"]),

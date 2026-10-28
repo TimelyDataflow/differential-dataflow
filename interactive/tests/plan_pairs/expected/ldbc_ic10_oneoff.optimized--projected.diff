@@ -1,17 +1,18 @@
 --- optimized
 +++ projected
-@@ -36,9 +36,11 @@
+@@ -35,10 +35,11 @@
+ let liked_idx3 = liked_join2 | arrange;
  let liked = liked_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let points_map = liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1));
- let points_neg = liked | negate;
+-let points_neg = liked | negate;
 -let points_rows = wrote + points_neg;
 -let points_map2 = points_rows | map(((rid, who, node, _), ()) -> ((rid, who, node), -1));
 -let points = points_map + points_map2;
 +let points_map2 = wrote | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, _call0.0.1, _call0.0.2, ()), ()));
-+let points_map3 = points_neg | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, _call0.0.1, _call0.0.2, ()), ()));
-+let points_rows = points_map2 + points_map3;
-+let points_map4 = points_rows | map(((rid, who, node, _), ()) -> ((rid, who, node), -1));
-+let points = points_map + points_map4;
++let points_rows = liked | negate | map(arg -> let _call0 = let input = arg in input in ((_call0.0.0, _call0.0.1, _call0.0.2, ()), ()));
++let points_rows2 = points_map2 + points_rows;
++let points_map3 = points_rows2 | map(((rid, who, node, _), ()) -> ((rid, who, node), -1));
++let points = points_map + points_map3;
  let summed_rows = points | join_function((key, p) -> ((key, ()), (0), p) enlist);
  let summed_idx = summed_rows | arrange;
  let summed = summed_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

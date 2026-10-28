@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use corgi::{ArithOp, BinOp, BitOp, Builder, CmpOp, Graph, NodeRef, NumOp, Op, OpLike, Pred, Red, Scalar, Shape, ShiftOp, TextOp, Value};
-use super::Lambda;
+use super::{Lambda, normalize::prepare};
 
 type G = Graph<NumOp>;
 
@@ -68,82 +68,6 @@ fn print_with(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(Str
     })();
     result.unwrap_or_else(|error: String| Printed {
         text: format!("graph unavailable ({error})"), fallback: true, check: Check::Failed(error),
-    })
-}
-
-/// Rebuild checked patterns as identities, and spell projection with fields, units and bodies.
-/// These are display rewrites only. Checking always uses the original compiled graph.
-fn prepare(graph: &G, input: &Shape) -> Result<G, String> {
-    let mut builder = Builder::default();
-    let mut ids = Vec::new();
-    let mut shapes: Vec<Shape> = Vec::new();
-    for node in graph.nodes() {
-        let (id, shape) = match node {
-            NodeRef::Input => (builder.input(), input.clone()),
-            NodeRef::Tuple(fields) => (builder.tuple(fields.iter().map(|&i| ids[i]).collect()), Shape::Prod(fields.iter().map(|&i| shapes[i].clone()).collect())),
-            NodeRef::Op(op, i) => {
-                let shape = corgi::shape_of_value(&op.eval(Value::empty(&shapes[i]))?);
-                let id = match op {
-                    NumOp::Core(Op::Pattern(_)) => ids[i],
-                    NumOp::Core(Op::Project(target)) => project(&mut builder, ids[i], &shapes[i], target)?,
-                    _ => {
-                        let op = match op {
-                            NumOp::Core(Op::MapList(body)) => {
-                                let Shape::List(elem) = &shapes[i] else { return Err("map input is not a list".into()) };
-                                Op::MapList(Box::new(prepare(body, elem)?)).into()
-                            }
-                            NumOp::Core(Op::Fold(body) | Op::FoldScan(body)) => {
-                                let Shape::Prod(pair) = &shapes[i] else { return Err("fold input is not a pair".into()) };
-                                let Shape::List(elem) = &pair[1] else { return Err("fold input has no list".into()) };
-                                let body = Box::new(prepare(body, &Shape::Prod(vec![pair[0].clone(), *elem.clone()]))?);
-                                if matches!(op, NumOp::Core(Op::Fold(_))) { Op::Fold(body).into() } else { Op::FoldScan(body).into() }
-                            }
-                            NumOp::Core(Op::MapSum(arms)) => {
-                                let Shape::Sum(lanes) = &shapes[i] else { return Err("match input is not a sum".into()) };
-                                Op::MapSum(arms.iter().map(|(tag, body)| Ok((*tag, prepare(body, &lanes[*tag])?))).collect::<Result<_, String>>()?).into()
-                            }
-                            other => other.clone(),
-                        };
-                        builder.add(op, vec![ids[i]])
-                    }
-                };
-                (id, shape)
-            }
-        };
-        ids.push(id);
-        shapes.push(shape);
-    }
-    Ok(corgi::optimize(&builder.finish(ids[graph.output()])))
-}
-
-fn project(b: &mut Builder<NumOp>, x: usize, input: &Shape, target: &Shape) -> Result<usize, String> {
-    if input == target { return Ok(x); }
-    Ok(match (input, target) {
-        (_, Shape::Unit) => b.add(Op::Unit, vec![x]),
-        (Shape::Prod(fs), Shape::Prod(ts)) => {
-            let fields = fs.iter().zip(ts).enumerate().map(|(i, (f, t))| {
-                let field = b.add(Op::Field(i), vec![x]);
-                project(b, field, f, t)
-            }).collect::<Result<_, _>>()?;
-            b.tuple(fields)
-        }
-        (Shape::List(f), Shape::List(t)) => {
-            let mut body = Builder::default();
-            let input = body.input();
-            let output = project(&mut body, input, f, t)?;
-            b.add(Op::MapList(Box::new(body.finish(output))), vec![x])
-        }
-        (Shape::Sum(fs), Shape::Sum(ts)) => {
-            let arms = fs.iter().zip(ts).enumerate().filter(|(_, (f, t))| f != t).map(|(i, (f, t))| {
-                let mut body = Builder::default();
-                let input = body.input();
-                let output = project(&mut body, input, f, t)?;
-                Ok((i, body.finish(output)))
-            }).collect::<Result<_, String>>()?;
-            b.add(Op::MapSum(arms), vec![x])
-        }
-        // Keep the kernel for the fallback: copying a referenced arena would change its graph.
-        _ => b.add(Op::Project(target.clone()), vec![x]),
     })
 }
 
@@ -554,7 +478,7 @@ fn check_text(original: &G, shape: &Shape, text: &str) -> Check {
     }
 }
 
-fn generated(shape: &Shape, rows: usize, seed: &mut u64) -> Value {
+pub(crate) fn generated(shape: &Shape, rows: usize, seed: &mut u64) -> Value {
     fn next(seed: &mut u64) -> u64 {
         *seed ^= *seed << 13; *seed ^= *seed >> 7; *seed ^= *seed << 17; *seed
     }

@@ -219,9 +219,20 @@ pub struct Program {
 }
 
 impl Program {
-    /// Optimize every scope in place. See `Scope::optimize`.
+    /// Optimize every scope in place: structural fusion, canonical chains, and dead bindings.
     pub fn optimize(&mut self) {
-        self.root.optimize();
+        self.optimize_with(&|_| None, &mut |_, _, _, _, _| {});
+    }
+
+    /// The optimizer schedule, with provider shapes and observations of structural rewrites.
+    pub(crate) fn optimize_with(&mut self, source: &dyn Fn(&Source) -> Option<RowShape>, observe: &mut dyn FnMut(&str, &Scope, &str, usize, usize)) {
+        loop {
+            self.root.optimize_with("root", observe);
+            let (shapes, _) = crate::shapes::infer(self, source);
+            let changed = crate::passes::canonical_linear(&mut self.root, &shapes)
+                | crate::passes::dead_bindings(&mut self.root);
+            if !changed { break; }
+        }
     }
 
     /// Print the tree as indented structural text (readability, not
@@ -253,10 +264,6 @@ impl Scope {
     ///   consumer. Deduplication comes first so fusion cannot hide shared prefixes.
     ///
     /// A scope boundary is a semantic barrier: nothing merges or moves across one.
-    pub(crate) fn optimize(&mut self) {
-        self.optimize_with(&self.name.clone(), &mut |_, _, _, _, _| {});
-    }
-
     /// Observe rewrites before removal or renumbering. Return whether this scope
     /// contains an Inspect, including in its children.
     pub(crate) fn optimize_with(&mut self, path: &str, observe: &mut dyn FnMut(&str, &Scope, &str, usize, usize)) -> bool {

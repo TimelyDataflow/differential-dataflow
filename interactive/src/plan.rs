@@ -93,7 +93,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
     let mut stages = vec![stage("as lowered", program.clone(), Vec::new(), &resolve)];
     let mut changes = Vec::new();
     let mut names = BTreeMap::new();
-    program.root.optimize_with("root", &mut |path, scope, action, from, to| {
+    program.optimize_with(&resolve, &mut |path, scope, action, from, to| {
         let entry = names.entry(path.to_string()).or_insert_with(|| (scope.items.len(), Names::new(scope)));
         if entry.0 != scope.items.len() { *entry = (scope.items.len(), Names::new(scope)); }
         let names = &entry.1;
@@ -104,6 +104,10 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         });
     });
     stages.push(stage("after optimizer", program.clone(), changes, &resolve));
+    let live_traces: BTreeSet<_> = program.root.imports.iter().filter_map(|i| match &i.from {
+        Source::Trace(name) => Some(name.as_str()), _ => None,
+    }).collect();
+    unresolved.retain(|name| live_traces.contains(name.as_str()));
     let valid = problems.is_empty() && unresolved.is_empty() && stages[1].problems.is_empty();
     let exports = stages[1].shapes.exports.clone();
     let mut changes = Vec::new();

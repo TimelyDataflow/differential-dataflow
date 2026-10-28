@@ -7,11 +7,11 @@
 -let known = rows_idx2 | join(pals_idx, (pair, row, ()) -> (pair, row));
 +let known = rows_idx2 | join(pals_idx, arg -> let _call0 = let input = arg in let (pair, row, ()) = input in (pair, row) in (((), ()), (_call0.1.0, _call0.1.1, _call0.1.2, _call0.1.3, _call0.1.4, _call0.1.5)));
  let marked_map = known | map((_, row) -> (row, 0));
++let marked_map2 = rows | map(arg -> let _call0 = let input = arg in input in (((), ()), (_call0.1.0, _call0.1.1, _call0.1.2, _call0.1.3, _call0.1.4, _call0.1.5)));
  let marked_neg = known | negate;
 -let marked_rows = rows + marked_neg;
 -let marked_map2 = marked_rows | map((_, row) -> (row, 1));
 -let marked = marked_map + marked_map2;
-+let marked_map2 = rows | map(arg -> let _call0 = let input = arg in input in (((), ()), (_call0.1.0, _call0.1.1, _call0.1.2, _call0.1.3, _call0.1.4, _call0.1.5)));
 +let marked_rows = marked_map2 + marked_neg;
 +let marked_map3 = marked_rows | map((_, row) -> (row, 1));
 +let marked = marked_map + marked_map3;

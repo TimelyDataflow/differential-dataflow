@@ -50,6 +50,39 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
 }
 
 #[test]
+fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
+    let text = r#"
+        let rows = input 0 : ((int, int, int), ()) | map(((k, a, b), ()) -> (k, (a, b)));
+        let reduced = rows | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
+        export "answer" = reduced | map((k, (_, b)) -> ((k, b), ()));
+    "#;
+    let mut original = lower::lower_tree(parse::pipe::parse(text));
+    original.optimize();
+    let mut projected = original.clone();
+    assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
+    assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
+    let (shapes, problems) = interactive::shapes::infer(&projected, &|_| None);
+    assert!(problems.conflicts.is_empty());
+    for (i, item) in projected.root.items.iter().enumerate() {
+        if matches!(item, Item::Op(Node::Reduce { .. })) {
+            assert_eq!(shapes.of(&Ref::Local(i)).unwrap().val, Shape::Prod(vec![Shape::Unit, Shape::Int]));
+        }
+    }
+    original.root.exports[0].name = "before".into();
+    projected.root.exports[0].name = "after".into();
+    timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        server.install(worker, "before", &original).unwrap();
+        server.install(worker, "after", &projected).unwrap();
+        for rows in ["1,10,7\n1,20,7 diff=-2", "1,10,7 diff=-1\n1,20,7 diff=2"] {
+            for name in ["before", "after"] { server.feed(name, 0, rows, None).unwrap(); }
+            server.tick(worker);
+            assert_eq!(server.snapshot(worker, "before").unwrap().rows(), server.snapshot(worker, "after").unwrap().rows());
+        }
+    });
+}
+
+#[test]
 fn fusion_requires_one_reader_an_unchanged_key_and_a_value_projection() {
     for (map, extra, fused) in [
         ("(k, (a, b)) -> (k, (b, a, b))", "", true),

@@ -10,7 +10,7 @@ let minimum_reduce = values_idx | reduce((_, a) -> (a head.0, 1) enlist map ((a,
 let unique_map = values | map((k, v) -> ((k, v), ()));
 let unique_idx = unique_map | arrange;
 let unique_reduce = unique_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
-let unique_rows = unique_reduce | map(arg -> let _call0 = let input = arg in let (kv, ()) = input in kv in (_call0.0, ((), _call0.1.1))) | map((k, (_, v)) -> (k, ((), v)));
+let unique_map2 = unique_reduce | map(((a, (_, b)), _) -> (a, ((), b)));
 let counted_reduce = values_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((_, a) -> ((), a)));
 let collected_reduce = values_idx | reduce((_, a) -> (a map ((a, b) -> (a, (0, b) range) cap_list map ((a, _) -> a)) flatten.1, 1) enlist map ((_, a) -> ((), a)));
 let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
@@ -19,7 +19,7 @@ export "out" = out_map;
 -- Renderer: publish the existing arrangement.
 export "minimum" = minimum_reduce;
 -- Renderer: build an export arrangement.
-export "unique" = unique_rows;
+export "unique" = unique_map2;
 -- Renderer: publish the existing arrangement.
 export "counted" = counted_reduce;
 -- Renderer: publish the existing arrangement.

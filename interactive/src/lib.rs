@@ -28,6 +28,8 @@ pub mod lower;
 pub mod shapes;
 
 // Analyses and rewrites over the scope tree.
+// Crate-only: canonical linear chains and dead bindings.
+mod passes;
 // `explain`, `explain_with`, `Options`, `clone_identity`.
 pub mod explain;
 // `pushdown`, the optional field-demand pass, and `demand_graph` (`DemandGraph`).

@@ -898,44 +898,6 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -
     changed
 }
 
-/// A concat arm may already have the requested shape because its producer was narrowed.
-/// Check the rewritten input shapes and remove masks that are now identity.
-fn remove_identity_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) {
-    let mut dead = vec![false; scope.items.len()];
-    let mut arms = vec![false; scope.items.len()];
-    for item in &scope.items {
-        if let Item::Op(Node::Concat(refs)) = item {
-            for r in refs { if let Ref::Local(i) = r { arms[*i] = true; } }
-        }
-    }
-    for i in 0..scope.items.len() {
-        match (&mut scope.items[i], &shapes.items[i]) {
-            (Item::Sub(child), ItemShapes::Sub(shapes)) => remove_identity_maps(child, shapes, depth + 1),
-            (Item::Op(Node::Linear { input, ops }), _) if arms[i] => {
-                let Some(shape) = shapes.of(input) else { continue };
-                let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), depth) else { continue };
-                let mut at = 0;
-                ops.retain(|op| {
-                    let (key, val) = &steps[at];
-                    at += 1;
-                    let shape = Shape::Prod(vec![key.clone(), val.clone()]);
-                    match op {
-                        LinearOp::Project(lambda) => !Projection::of(lambda).is_some_and(|p| p.expanded(&shape) == Projection::Field(Vec::new()).expanded(&shape)),
-                        _ => true,
-                    }
-                });
-                if ops.is_empty() {
-                    let input = input.clone();
-                    scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = input.clone(); });
-                    dead[i] = true;
-                }
-            }
-            _ => {}
-        }
-    }
-    scope.compact(&dead);
-}
-
 fn remap_ref(r: &mut Ref, remap: &[usize]) {
     match r {
         Ref::Local(i) | Ref::ChildExport(i, _) => {
@@ -990,14 +952,18 @@ pub fn pushdown(
     }
     let live = builder.graph.closure();
     let masked = rewrite_scope(&mut program.root, &plan, &live);
-    let (rewritten, check) = shapes::infer(program, source);
+    let (_, check) = shapes::infer(program, source);
     if !check.conflicts.is_empty() || !check.unknown.is_empty() {
         *program = original;
         // A rewritten intermediate shape disagrees with a consumer. The pass
         // is optional, so keep the original program in that case.
         return Ok(0);
     }
-    remove_identity_maps(&mut program.root, &rewritten, 0);
+    if masked + fused > 0 {
+        // Projection can expose adjacent maps and identity masks. Use the same
+        // optimizer schedule so the emitted result is already canonical.
+        program.optimize_with(source, &mut |_, _, _, _, _| {});
+    }
     Ok(masked + fused)
 }
 
@@ -1080,14 +1046,14 @@ mod tests {
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         program.optimize();
         assert_eq!(program.root.labels, [
-            "left", "merged", "counted", "counted", "export merged", "export counts",
+            "merged", "counted", "counted", "export merged", "export counts",
         ]);
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
-        // The concat's already narrowed arm needs no map. The remaining concat
-        // mask keeps the statement it serves; reduce keeps its grouping key.
+        // Both concat arms read the source after identity removal and share one
+        // mask. It keeps the statement it serves; reduce keeps its grouping key.
         assert_eq!(program.root.labels.len(), program.root.items.len());
         assert_eq!(program.root.labels, [
-            "left", "merged", "merged", "counted", "counted",
+            "merged", "merged", "counted", "counted",
             "export merged", "export counts",
         ]);
     }
@@ -1131,7 +1097,7 @@ mod tests {
                     export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         program.optimize();
-        assert!(pushdown(&mut program, &|_| None).unwrap() >= 3);
+        assert!(pushdown(&mut program, &|_| None).unwrap() >= 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
         assert!(check.unknown.is_empty(), "{:?}", check.unknown);

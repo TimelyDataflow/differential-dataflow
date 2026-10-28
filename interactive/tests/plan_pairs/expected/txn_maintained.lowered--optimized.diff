@@ -9,7 +9,7 @@
 -let wr_all = wr_all_filter | map(((wid, _, k), (v)) -> ((wid, k), (v)));
 -let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 +let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
-+let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v))) | map(((wid, k), (v)) -> ((wid), (k, v)));
++let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
  res: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var rollback : ((int), ());

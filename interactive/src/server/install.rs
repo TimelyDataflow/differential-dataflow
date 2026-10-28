@@ -22,6 +22,15 @@ impl Server {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
+        // Provider shapes may complete maps that could not be typed before installation.
+        // Dead imports are removed before resolving providers and recording dependencies.
+        let mut optimized = prog.clone();
+        optimized.optimize_with(&|source| match source {
+            st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
+                .or_else(|| super::generated_shape(t)),
+            _ => None,
+        }, &mut |_, _, _, _, _| {});
+        let prog = &optimized;
         // The root is not a loop: a published trace holds what its program computes at each
         // epoch, not a round of an iteration. Loops live in named scopes.
         if let Some(var) = prog.root.vars.first() {

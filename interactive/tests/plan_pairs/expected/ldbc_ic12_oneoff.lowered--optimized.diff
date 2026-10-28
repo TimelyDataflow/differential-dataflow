@@ -23,7 +23,7 @@
  let hits_idx3 = hits_join2 | arrange;
 -let hits_map2 = intag | map(((rid, m, name), ()) -> ((rid, m), name));
 -let hits_idx4 = hits_map2 | arrange;
-+let hits_rows = intag_join6 | filter((_, kind) -> (kind, 0) eq) | map((key, _) -> (key, ())) | map(((rid, m, name), ()) -> ((rid, m), name));
++let hits_rows = intag_join6 | filter((_, kind) -> (kind, 0) eq) | map(((a, b, c), _) -> ((a, b), c));
 +let hits_idx4 = hits_rows | arrange;
  let hits = hits_idx3 | join(hits_idx4, ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
  let counts_map = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ()));

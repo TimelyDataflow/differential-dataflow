@@ -7,7 +7,7 @@ fn program(src: &str) -> Program { lower::lower_tree(parse::pipe::parse(src)) }
 fn alpha_renamed_maps_keep_the_first_text_and_label() {
     let mut p = program(r#"
         let x = input 0 : (int, int);
-        let a = x | map((k, v) -> (k, v)); let b = x | map((p, q) -> (p, q));
+        let a = x | map((k, v) -> (v, k)); let b = x | map((p, q) -> (q, p));
         export "a" = a; export "b" = b;
     "#);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };

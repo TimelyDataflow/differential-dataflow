@@ -1,26 +1,15 @@
 --- optimized
 +++ projected
-@@ -30,7 +30,7 @@
-     let item_idx6 = item_map9 | arrange;
-     let item_reduce5 = item_idx6 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
-     let item_rows4 = item_map4 + item_map8;
--    let item_rows5 = item_reduce5 | map((k, v) -> (k.0, k.1)) | map((k, v) -> (k, ((), v.1)));
-+    let item_rows5 = item_reduce5 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k.0, k.1) in (_call0.0, ((), _call0.1.1))) | map((k, v) -> (k, ((), v.1)));
-     let item_idx7 = item_rows5 | arrange;
-     let item_idx8 = item_rows4 | arrange;
-     let item_join2 = item_idx7 | join(item_idx8, (k, v, r) -> (k, (r.0, v.1)));
-@@ -42,11 +42,11 @@
-     let item_reduce7 = item_idx10 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
-     let item_rows8 = item_map3 + item_map7;
-     let item_map10 = item_rows8 | map((k, v) -> let _call0 = let input = (k, v) in let (k, v) = input in let _call0 = let input = (k, v.0) in let (src, dst) = input in (dst, ()) in _call0 in (_call0.0, (k, v.0)));
--    let item_rows9 = item_reduce7 | map((k, v) -> (k.0, k.1)) | map((k, v) -> (k, ((), v.1)));
-+    let item_rows9 = item_reduce7 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k.0, k.1) in (_call0.0, ((), ()))) | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k, ((), v.1)) in (_call0.0, ((), ())));
-     let item_idx11 = item_rows9 | arrange;
-     let item_idx12 = item_map10 | arrange;
--    let item_join3 = item_idx11 | join(item_idx12, (k, v, r) -> (r.0, (r.1, v.1)));
--    let item_rows10 = item_join3 | map((k, v) -> (k, (v.0, v.1))) | map((k, v) -> (k, v.0)) | map((k, v) -> ((k, v), ()));
-+    let item_join3 = item_idx11 | join(item_idx12, arg -> let _call0 = let input = arg in let (k, v, r) = input in (r.0, (r.1, v.1)) in (_call0.0, (_call0.1.0, ())));
-+    let item_rows10 = item_join3 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k, (v.0, v.1)) in (_call0.0, (_call0.1.0, ()))) | map((k, v) -> (k, v.0)) | map((k, v) -> ((k, v), ()));
-     let item_map11 = item_map2 | map((k, v) -> ((k, v), ()));
-     let item_idx13 = item_rows10 | arrange;
-     let item_idx14 = item_map11 | arrange;
+@@ -40,10 +40,10 @@
+     let item_reduce7 = item_reduce6 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+     let item_rows2 = item_map3 + item_map9;
+     let item_map15 = item_rows2 | map((k, v) -> let _call0 = let input = (k, v) in let (k, v) = input in let _call0 = let input = (k, v.0) in let (src, dst) = input in (dst, ()) in _call0 in (_call0.0, (k, v.0)));
+-    let item_map16 = item_reduce7 | map((k, v) -> (k.0, k.1));
++    let item_map16 = item_reduce7 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k.0, k.1) in (_call0.0, ((), ())));
+     let item_idx10 = item_map16 | arrange;
+     let item_idx11 = item_map15 | arrange;
+-    let item_join3 = item_idx10 | join(item_idx11, (k, v, r) -> (r.0, (r.1, v.1)));
++    let item_join3 = item_idx10 | join(item_idx11, arg -> let _call0 = let input = arg in let (k, v, r) = input in (r.0, (r.1, v.1)) in (_call0.0, (_call0.1.0, ())));
+     let item_map17 = item_join3 | map((a, (b, _)) -> ((a, b), ()));
+     let item_map18 = item_map2 | map((k, v) -> ((k, v), ()));
+     let item_idx12 = item_map17 | arrange;

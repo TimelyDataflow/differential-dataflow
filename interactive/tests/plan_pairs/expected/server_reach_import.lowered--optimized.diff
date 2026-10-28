@@ -1,0 +1,12 @@
+--- lowered
++++ optimized
+@@ -1,8 +1,7 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
+ let edges = import "edges" : ((int), (int));
+-let input0 = input 0 : ((int), ());
+-let roots = input0 | map((n, ()) -> (n, ()));
++let roots = input 0 : ((int), ());
+ reach: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var reach : ((int), ());
