@@ -21,7 +21,8 @@ pub enum Reducer {
     Count,
     /// Ordered values, each repeated by its positive diff.
     Collect,
-    Expr(Lambda),
+    /// A lambda over each key and its values, handed only the first `limit` of them when given.
+    Expr(Lambda, Option<usize>),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

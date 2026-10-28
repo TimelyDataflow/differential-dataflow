@@ -14,7 +14,7 @@ let latest_idx2 = latest_join | arrange;
 let likes_idx = likes | arrange;
 let latest_join2 = latest_idx2 | join(likes_idx, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m)));
 let latest_idx3 = latest_join2 | arrange;
-let latest = latest_idx3 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+let latest = latest_idx3 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let rows_map = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg)));
 let rows_idx = rows_map | arrange;
 let message_idx = message | arrange;

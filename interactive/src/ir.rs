@@ -19,7 +19,8 @@ pub(crate) const KEYWORDS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
     /// A key's output by a lambda over `(key, vals)`, `vals` the key's values with non-zero
-    /// accumulated diffs, as a `List` of `(val, diff)` in the values' order. The lambda gives a
+    /// accumulated diffs, as a `List` of `(val, diff)` in the values' order (the first of them
+    /// only, when the reduce has a limit: see `scope_ir::Node::Reduce`). The lambda gives a
     /// `List` of `(val, diff)`: the key's output values and their diffs. A key with no such values
     /// has no output.
     Expr(Lambda),

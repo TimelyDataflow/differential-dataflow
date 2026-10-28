@@ -339,7 +339,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
                 Err(e) => fail(format!("half_join: {e}")),
             }
         }
-        st::Node::Reduce { input, reducer } => {
+        st::Node::Reduce { input, reducer, .. } => {
             let c = shapes.of(input)?;
             let Reducer::Expr(lambda) = reducer;
             let v = match reduce_shape(lambda, &c.key, &c.val) {

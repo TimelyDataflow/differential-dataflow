@@ -98,7 +98,7 @@ fn node(a: &Node, b: &Node, map: &Mapping, scalar: bool, inputs: &[corgi::Shape]
         (Node::Arrange(a), Node::Arrange(b)) => map.same(a, b),
         (Node::Join { left: a, right: b, projection: p }, Node::Join { left: c, right: d, projection: q }) => map.same(a, c) && map.same(b, d) && (!scalar || lambda(p, q, inputs.first())),
         (Node::HalfJoin { stream: a, arrangement: b, strict: s, projection: p }, Node::HalfJoin { stream: c, arrangement: d, strict: t, projection: q }) => map.same(a, c) && map.same(b, d) && s == t && (!scalar || lambda(p, q, inputs.first())),
-        (Node::Reduce { input: a, reducer: x }, Node::Reduce { input: b, reducer: y }) => map.same(a, b) && (!scalar || reducer(x, y, inputs.first())),
+        (Node::Reduce { input: a, reducer: x, limit: s }, Node::Reduce { input: b, reducer: y, limit: t }) => map.same(a, b) && s == t && (!scalar || reducer(x, y, inputs.first())),
         (Node::Inspect { input: a, label: x }, Node::Inspect { input: b, label: y }) => map.same(a, b) && x == y,
         _ => false,
     }

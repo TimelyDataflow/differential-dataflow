@@ -36,7 +36,9 @@
 //!   record once, and `collect` is NEST (gather a key's values into a `List`).
 //! - `| reduce((k, vals) -> out)` — reduce by a lambda: `vals` is the key's values with their
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
-//!   `List` of `(val, diff)`.
+//!   `List` of `(val, diff)`. `| reduce(limit n, (k, vals) -> out)` hands the lambda only each
+//!   key's first `n` values (`n` at least one), whatever their diffs; `min` is
+//!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`.
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
 //! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
 //!   element, value `(pos, element)`.
@@ -586,7 +588,22 @@ impl Parser {
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
-            Token::Ident(name) if name == "reduce" => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Expr(self.slot())) },
+            Token::Ident(name) if name == "reduce" => {
+                self.next(); self.expect(&Token::LParen);
+                // `reduce(limit k, (k, vals) -> …)`: the lambda is handed each key's first `k` values.
+                let limit = if matches!(self.peek(), Token::Ident(word) if word == "limit") {
+                    self.next();
+                    let k = match self.next() {
+                        Token::Int(k) if k > 0 => k as usize,
+                        other => panic!("reduce: a limit is a positive integer, not {other:?}"),
+                    };
+                    self.expect(&Token::Comma);
+                    Some(k)
+                } else { None };
+                let lambda = self.lambda();
+                self.expect(&Token::RParen);
+                Expr::Reduce(Box::new(lhs), Reducer::Expr(lambda, limit))
+            },
             Token::FlatMap => { self.next(); Expr::FlatMap(Box::new(lhs), self.slot()) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },

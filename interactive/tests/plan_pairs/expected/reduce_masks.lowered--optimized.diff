@@ -5,8 +5,8 @@
  let custom = values_idx | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
  let out_map = counted | map(((a, _), n) -> (a, n));
 -let values_idx2 = values | arrange;
--let minimum_reduce = values_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
-+let minimum_reduce = values_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let minimum_reduce = values_idx2 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
++let minimum_reduce = values_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let minimum_map = minimum_reduce | map((k, (_, v)) -> (k, ((), v)));
  let unique_map = values | map((k, v) -> ((k, v), ()));
  let unique_idx = unique_map | arrange;

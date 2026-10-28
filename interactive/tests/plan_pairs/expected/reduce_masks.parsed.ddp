@@ -2,7 +2,7 @@ let rows = input 0 : ((int, int), ());
 let counted = rows | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 export "out" = counted | map(((a, _), n) -> (a, n));
 let values = input 1 : (int, (int, int));
-export "minimum" = values | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist) | map((k, (_, v)) -> (k, ((), v)));
+export "minimum" = values | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist) | map((k, (_, v)) -> (k, ((), v)));
 export "unique" = values | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map((k, (_, v)) -> (k, ((), v)));
 export "counted" = values | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | map((k, _) -> (k, ()));
 export "collected" = values | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map((k, _) -> (k, ()));

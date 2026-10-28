@@ -760,7 +760,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
-            (Item::Op(Node::Reduce { input, reducer }), PlannedItem::Op { output, .. }) => {
+            (Item::Op(Node::Reduce { input, reducer, .. }), PlannedItem::Op { output, .. }) => {
                 if needs_mask(&output.shape.1, &output.val, live) {
                     let value = mask_part("input", &output.shape.1, &output.val, live);
                     let shape = &plan.at(input).expect("reduce input").shape;
@@ -880,7 +880,7 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -
             projections.push(projection);
         }
         if projections.is_empty() { continue; }
-        let Item::Op(Node::Reduce { input, reducer }) = &mut scope.items[j] else { unreachable!() };
+        let Item::Op(Node::Reduce { input, reducer, .. }) = &mut scope.items[j] else { unreachable!() };
         let Some(shape) = shapes.of(input) else { continue };
         for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
         changed += projections.len();

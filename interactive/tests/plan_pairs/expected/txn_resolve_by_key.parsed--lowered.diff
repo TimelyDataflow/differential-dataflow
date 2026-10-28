@@ -48,7 +48,7 @@
  let rb = res::rollback;
 -let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 -let committed = wid + (wbad | negate);
--let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let wid_idx = wid | arrange;
 +let rb_idx = rb | arrange;
 +let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
@@ -56,7 +56,7 @@
 +let committed = wid + committed_neg;
 +let latest_map = committed | map(((wid), (k, v)) -> ((k), (wid neg, v)));
 +let latest_idx = latest_map | arrange;
-+let latest = latest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
++let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 -let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 +let store_idx2 = store | arrange;

@@ -396,9 +396,9 @@ impl Backend for CorgiBackend {
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
         half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
     }
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s> {
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
-        let backend = CorgiReduceBackend::new(reducer.clone(), shape);
+        let backend = CorgiReduceBackend::new(reducer.clone(), limit, shape);
         // An import is read as of its time; the output is the program's own, read as it is.
         // As for the join, the wrapper at the minimum is one comparison per unit.
         let Arr { arranged, since } = a;

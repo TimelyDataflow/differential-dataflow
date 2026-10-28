@@ -29,7 +29,7 @@
 +    let writes = ::wid + writes_neg;
      let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
 -    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v))) | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
--    let best = pairs + base | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-    let best = pairs + base | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
 +    let rk_idx = ::rk | arrange;
 +    let wk_idx = wk | arrange;
@@ -37,7 +37,7 @@
 +    let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
 +    let best_rows = pairs + ::base;
 +    let best_idx = best_rows | arrange;
-+    let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
++    let best = best_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
 +    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
      let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
@@ -61,7 +61,7 @@
  let rb = res::rollback;
 -let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 -let committed = wid + (wbad | negate);
--let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let wid_idx = wid | arrange;
 +let rb_idx = rb | arrange;
 +let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
@@ -69,7 +69,7 @@
 +let committed = wid + committed_neg;
 +let latest_map = committed | map(((wid), (k, v)) -> ((k), (wid neg, v)));
 +let latest_idx = latest_map | arrange;
-+let latest = latest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
++let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 -let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 +let store_idx2 = store | arrange;

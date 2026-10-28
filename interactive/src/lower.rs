@@ -408,7 +408,7 @@ impl ScopeLower {
                     self.distinct.push(self.items.len());
                     r
                 } else { self.arrange(r) };
-                self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()) })
+                self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },

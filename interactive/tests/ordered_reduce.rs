@@ -199,3 +199,56 @@ fn lambdas_reading_part_of_their_input_match_their_definitions() {
         for name in ["lengths", "sums", "firsts", "sizes"] { assert!(col.snapshot(worker, name).unwrap().is_empty(), "{name}"); }
     });
 }
+
+/// `reduce(limit 2, …)` hands its lambda each key's first two values of non-zero net, in value
+/// order, whatever their nets: a negative net is a value like any other, a value with many copies
+/// is one value, values tied on their first field are ordered by the rest, and retracting a first
+/// value hands the lambda the next one.
+#[test]
+fn limited_reduces_see_each_keys_first_values() {
+    timely::execute_directly(|worker| {
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
+            let x = input 0 : ((int, int, List(int)), ())
+                | map(((k, n, xs), ()) -> (k, (n, xs)));
+            export "first_two" = x | reduce(limit 2, (_, vals) -> vals);
+            export "how_many" = x | reduce(limit 2, (_, vals) -> (vals len, 1) enlist);
+            export "minimum" = x | min;
+        "#));
+        interactive::passes::optimize(&mut program);
+        let mut col = Server::new();
+        col.install(worker, "col", &program).unwrap();
+        let (key, val) = (|k: &i64| k.to_string(), |(n, xs): &(i64, Vec<i64>)| format!("tuple({n},list({}))", join(xs, i64::to_string)));
+        let mut net = BTreeMap::new();
+        let reference = |name: &str, net: &BTreeMap<(i64, (i64, Vec<i64>)), i64>| -> Rows {
+            let mut groups: BTreeMap<i64, Vec<(&(i64, Vec<i64>), i64)>> = BTreeMap::new();
+            for ((k, v), d) in net { groups.entry(*k).or_default().push((v, *d)); }
+            sorted(groups.into_iter().flat_map(|(k, vals)| match name {
+                "first_two" => vals.iter().take(2).map(|(v, d)| (key(&k), val(v), *d)).collect::<Vec<_>>(),
+                "how_many" => vec![(key(&k), vals.len().min(2).to_string(), 1)],
+                _ => vec![(key(&k), val(vals[0].0), 1)],
+            }).collect())
+        };
+        let batches: [&[(i64, i64, &[i64], i64)]; 4] = [
+            // Key 0: ties on 5, broken by the lists; a value with three copies. Key 1: a negative net
+            // first. Key 2: one value.
+            &[(0, 5, &[2], 1), (0, 5, &[1, 9], 3), (0, 7, &[], 1), (1, -4, &[], -1), (1, 3, &[], 1), (1, 8, &[], 1), (2, 0, &[0], 1)],
+            // Retracting key 0's first value hands over its third, `(7, [])`. Key 1's negative net
+            // goes, and a new first value arrives below the rest.
+            &[(0, 5, &[1, 9], -3), (1, -4, &[], 1), (1, -9, &[], 2)],
+            // A value cancelled within a batch is never handed over; key 2 gains a second value.
+            &[(0, 4, &[], 1), (0, 4, &[], -1), (2, -1, &[], -1)],
+            &[(0, 5, &[2], -1), (0, 7, &[], -1), (1, 3, &[], -1), (1, 8, &[], -1), (1, -9, &[], -2), (2, 0, &[0], -1), (2, -1, &[], 1)],
+        ];
+        for batch in batches {
+            let lines: Vec<String> = batch.iter().map(|(k, n, xs, d)| format!("tuple({k},{n},list({})) diff={d}", join(xs.iter(), i64::to_string))).collect();
+            col.feed("col", 0, &lines.join("\n"), None).unwrap();
+            for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
+            col.tick(worker);
+            for name in ["first_two", "how_many", "minimum"] {
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net), "{name}");
+            }
+        }
+        assert!(net.is_empty());
+        for name in ["first_two", "how_many", "minimum"] { assert!(col.snapshot(worker, name).unwrap().is_empty(), "{name}"); }
+    });
+}

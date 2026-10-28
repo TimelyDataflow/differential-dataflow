@@ -13,7 +13,7 @@
 -let hop1 = request | map(((rid, who, name), ()) -> (who, (rid, who, name))) | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
 -let hop2 = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
 -let hop3 = hop2 | join(friend, (_, (req, _), (h, _)) -> (h, (req, 3)));
--let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let found = circle | map(((rid, node, name), d) -> (node, (rid, name, d))) | join(person, (node, (rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _)) -> ((first, name) eq, (home, (rid, node, d, last, gender, birthday, created, ip, browser)))) | filter((named, _) -> named) | map((_, row) -> row) | join(place, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) -> ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
 +let hop1_map = request | map(((rid, who, name), ()) -> (who, (rid, who, name)));
 +let hop1_idx = hop1_map | arrange;
@@ -29,7 +29,7 @@
 +let circle_filter = circle_rows | filter((node, ((_, who, _), _)) -> (node, who) ne);
 +let circle_map = circle_filter | map((node, ((rid, _, name), d)) -> ((rid, node, name), d));
 +let circle_idx = circle_map | arrange;
-+let circle = circle_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
++let circle = circle_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let found_map = circle | map(((rid, node, name), d) -> (node, (rid, name, d)));
 +let found_idx = found_map | arrange;
 +let person_idx = person | arrange;

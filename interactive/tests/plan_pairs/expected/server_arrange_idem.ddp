@@ -20,7 +20,7 @@ eqsat: {
     let bsig_reduce = canon_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
     let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
     let bsig_idx = bsig | arrange;
-    let reps = bsig_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+    let reps = bsig_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
     let cong = bsig_idx | join(reps, (_, id, rep) -> (id, rep));
     let arranged_join = ::producing_idx | join(eq_idx, (_, _, cls) -> (cls, ()));
     let arranged_idx = arranged_join | arrange;
@@ -36,7 +36,7 @@ eqsat: {
     let prop = eq_idx | join(edges_idx, (_, l, n) -> (n, l));
     let eq_rows = ::elems + prop;
     let eq_idx2 = eq_rows | arrange;
-    let eq_reduce = eq_idx2 | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+    let eq_reduce = eq_idx2 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
     set eq = eq_reduce;
 }
 let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));

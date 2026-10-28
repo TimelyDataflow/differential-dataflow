@@ -36,6 +36,9 @@ struct Addr {
 pub(crate) enum Site {
     Op(usize),
     Var(usize),
+    /// The values the limited reduce at op `i` hands its lambda: each key's first values, which
+    /// are all it depends on. The clone computes them beside the reduce (see `clone_rec`).
+    Presented(usize),
 }
 
 /// Clone `orig`'s contents into `out`, splicing (no extra scope around the
@@ -78,7 +81,7 @@ fn clone_node(node: &Node, m: impl Fn(&Ref) -> Ref) -> Node {
         Node::Arrange(r) => Node::Arrange(m(r)),
         Node::Join { left, right, projection } => Node::Join { left: m(left), right: m(right), projection: projection.clone() },
         Node::HalfJoin { stream, arrangement, strict, projection } => Node::HalfJoin { stream: m(stream), arrangement: m(arrangement), strict: *strict, projection: projection.clone() },
-        Node::Reduce { input, reducer } => Node::Reduce { input: m(input), reducer: reducer.clone() },
+        Node::Reduce { input, reducer, limit } => Node::Reduce { input: m(input), reducer: reducer.clone(), limit: *limit },
         Node::Inspect { input, label } => Node::Inspect { input: m(input), label: label.clone() },
     }
 }
@@ -112,6 +115,17 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                     _ => Ref::Local(out_idx),
                 };
                 visible.push((addr(Site::Op(i)), vis));
+                // A limited reduce depends only on the values it hands its lambda, and these can
+                // differ from round to round as values come and go: they are a site of their own.
+                if let Node::Reduce { input, limit: Some(k), .. } = node {
+                    let presented = Node::Reduce {
+                        input: map_ref(input, &locals, &subs, import_map, var_base),
+                        reducer: Reducer::Expr(crate::parse::Reducer::Distinct.lambda()),
+                        limit: Some(*k),
+                    };
+                    visible.push((addr(Site::Presented(i)), Ref::Local(out.items.len())));
+                    out.items.push(Item::Op(presented));
+                }
             }
             Item::Sub(child) => {
                 // The cloned child declares the same imports, with the parent-
@@ -338,7 +352,7 @@ impl Sb {
     }
     fn reduce(&mut self, input: Ref, reducer: Reducer) -> Ref {
         let a = self.op(Node::Arrange(input));
-        self.op(Node::Reduce { input: a, reducer })
+        self.op(Node::Reduce { input: a, reducer, limit: None })
     }
     fn variable(&mut self, name: &str) -> Ref {
         let v = self.s.vars.len();
@@ -417,6 +431,11 @@ impl Sb {
     /// A reduction expression may read every value at the demanded key.
     fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, out_user_len: usize) -> Ref {
         decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, false)
+    }
+
+    /// The values a limited reduce handed its lambda at the demanded key, as demand on them.
+    fn emit_lookup_presented(&mut self, dep_y: Ref, presented: &Side, out_user_len: usize) -> Ref {
+        decouple::presented_lookup::<Val, Sb>(self, &dep_y, &presented.info(), out_user_len)
     }
 
     /// Lossy lookup (Linear[Project]), through the pair table.
@@ -541,6 +560,11 @@ impl RowModel for Val {
     fn blank_v(out_len: usize) -> Lambda {
         let mut val = vec!["()".to_string()];
         val.extend(fidx(1, 1, 2 + out_len));          // chain, q
+        projection(var(0), tup(val), 2)
+    }
+    fn ky_at_out(in_len: usize, out_len: usize) -> Lambda {
+        let mut val = vec![f(1, 0)];
+        val.extend(fidx(1, 1 + in_len, 2 + in_len + out_len)); // chain_out, q
         projection(var(0), tup(val), 2)
     }
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Lambda {
@@ -959,11 +983,24 @@ impl<'a> Reverse<'a> {
             Node::Arrange(input) | Node::Inspect { input, .. } => {
                 self.push(ex, path, input, dep_this);
             }
-            Node::Reduce { input, .. } => {
+            Node::Reduce { input, limit: None, .. } => {
                 let target = resolve(self.orig, path, input);
                 let side = self.side(&target);
                 let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
                 let contrib = ex.emit_lookup_keyed(dep, &side, out_len);
+                self.contribs.entry(target).or_default().push(contrib);
+            }
+            // A limited reduce reads only each key's first values. Its output at a chain is decided
+            // by the values first at that chain and at every chain before it, so it depends on the
+            // values it handed its lambda at those chains, and on every input row holding them up
+            // to the demanded chain: with them, each round's first values are as in the reference.
+            Node::Reduce { input, limit: Some(_), .. } => {
+                let target = resolve(self.orig, path, input);
+                let side = self.side(&target);
+                let presented = self.side(&Target::Site(Addr { path: path.to_vec(), site: Site::Presented(i) }));
+                let values = ex.emit_lookup_presented(dep_this, &presented, path.len());
+                let (dep, out_len) = align(ex, values, path, target_path(&target));
+                let contrib = ex.emit_lookup_shape_preserving(dep, &side, out_len);
                 self.contribs.entry(target).or_default().push(contrib);
             }
             // It reads its stream's whole times, as `lift` does.
@@ -1007,8 +1044,12 @@ mod tests {
         let mut out = Scope { imports: p.root.imports.clone(), ..Scope::default() };
         let import_map: Vec<Ref> = (0..out.imports.len()).map(Ref::Import).collect();
         let visible = clone_into(&p.root, &mut out, &import_map);
-        let sites = p.op_count() + vars_total(&p.root);
-        assert_eq!(visible.len(), sites, "one host-visible ref per op and var");
+        fn limited(s: &Scope) -> usize {
+            s.items.iter().map(|i| match i { Item::Sub(c) => limited(c), Item::Op(Node::Reduce { limit: Some(_), .. }) => 1, _ => 0 }).sum()
+        }
+        let sites = p.op_count() + vars_total(&p.root) + limited(&p.root);
+        assert!(limited(&p.root) > 0, "SCC's `min`s are limited reduces");
+        assert_eq!(visible.len(), sites, "one host-visible ref per op and var, and per limited reduce's presented values");
         // A depth-2 site (inside fwd) surfaces as a ChildExport at the root.
         assert!(visible.iter().any(|(a, r)| a.path.len() == 2 && matches!(r, Ref::ChildExport(..))),
             "depth-2 sites surface via child exports");

@@ -8,7 +8,7 @@ res: {
     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
     let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
     let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v))) | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
-    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
     let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
     let rkk = reads | map((rk, _) -> (rk, ()));
@@ -19,7 +19,7 @@ res: {
 let rb = res::rollback;
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
-let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 export "rollback" = rb;
 export "state" = current | map((k, (_, v)) -> (k, (v)));
 export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);

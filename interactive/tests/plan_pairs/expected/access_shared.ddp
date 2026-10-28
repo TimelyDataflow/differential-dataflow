@@ -34,7 +34,7 @@ sharing: {
     let allowed_neg = allowed_join | negate;
     let allowed_rows = offered + allowed_neg;
     let allowed_idx = allowed_rows | arrange;
-    let allowed_reduce = allowed_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+    let allowed_reduce = allowed_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
     set allowed = allowed_reduce;
 }
 -- Renderer: build an export arrangement.

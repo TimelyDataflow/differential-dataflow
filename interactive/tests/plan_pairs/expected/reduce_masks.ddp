@@ -6,7 +6,7 @@ let counted = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) 
 let values_idx = values | arrange;
 let custom = values_idx | reduce((_, a) -> a map ((a, b) -> (((), a.1), (b, 2) mul)));
 let out_map = counted | map(((a, _), n) -> (a, n));
-let minimum_reduce = values_idx | reduce((_, a) -> (((), a head.0.1), 1) enlist);
+let minimum_reduce = values_idx | reduce(limit 1, (_, a) -> (((), a head.0.1), 1) enlist);
 let unique_map = values | map((k, v) -> ((k, v), ()));
 let unique_idx = unique_map | arrange;
 let unique_reduce = unique_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

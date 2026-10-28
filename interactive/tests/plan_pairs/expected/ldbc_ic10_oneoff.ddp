@@ -15,7 +15,7 @@ let hop2 = hop1_idx2 | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
 let twohop_rows = hop1 + hop2;
 let twohop_rows2 = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
 let twohop_idx = twohop_rows2 | arrange;
-let twohop_reduce = twohop_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+let twohop_reduce = twohop_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let cands_rows = twohop_reduce | filter((_, d) -> (d, 2) eq) | map(((rid, who, month, node), _) -> (node, (rid, who, month)));
 let cands_idx = cands_rows | arrange;
 let people_idx = people | arrange;

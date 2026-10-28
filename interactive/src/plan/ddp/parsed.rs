@@ -79,7 +79,7 @@ impl Printer<'_> {
                     // which also preserves unit-valued distinct's meaning.
                     format!("{input} | map((k, v) -> ((k, v), ())) | reduce({lambda}) | map((kv, ()) -> kv)")
                 } else {
-                    format!("{input} | reduce({lambda})")
+                    format!("{input} | reduce({}{lambda})", super::limit_text(reducer.limit()))
                 }
             }
             Expr::Negate(input) | Expr::Lift(input) | Expr::LiftIter(input) | Expr::Arrange(input) => {

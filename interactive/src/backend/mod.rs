@@ -52,8 +52,8 @@ pub(crate) trait Backend {
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
     fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
-    /// `shape` is the input's row shape.
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s>;
+    /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
@@ -233,9 +233,9 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
                         Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
                     },
-                    st::Node::Reduce { input, reducer } => {
+                    st::Node::Reduce { input, reducer, limit } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
-                        Rendered::Arrangement(B::reduce(a, reducer, shape_of(input)))
+                        Rendered::Arrangement(B::reduce(a, reducer, *limit, shape_of(input)))
                     },
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();

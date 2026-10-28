@@ -23,7 +23,7 @@ res: {
 let rb = res::rollback;
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 export "rollback" = rb;

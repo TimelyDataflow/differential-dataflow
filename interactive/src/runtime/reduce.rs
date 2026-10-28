@@ -73,6 +73,21 @@ fn gather_refs(columns: &[CValue], refs: impl Iterator<Item = (usize, usize)>) -
 /// each key it holds, in key order.
 type Matches = Vec<Vec<(usize, Range<usize>)>>;
 
+/// Each bracket of `input`, ending at `ends`, cut to its first `k` entries, or `None` if none is
+/// longer. A bracket's ids ascend in value order, so these are its first `k` values.
+fn first_entries(k: usize, ends: &[usize], input: &[(u64, Diff)]) -> Option<(Vec<usize>, Vec<(u64, Diff)>)> {
+    let mut start = 0;
+    if !ends.iter().any(|&end| end - std::mem::replace(&mut start, end) > k) { return None; }
+    let (mut kept_ends, mut kept) = (Vec::with_capacity(ends.len()), Vec::new());
+    start = 0;
+    for &end in ends {
+        kept.extend_from_slice(&input[start..end.min(start + k)]);
+        kept_ends.push(kept.len());
+        start = end;
+    }
+    Some((kept_ends, kept))
+}
+
 /// What a reduce's lambda reads of its input `(key, vals)`, `vals` a list of `(val, diff)`, as
 /// Corgi's demand analysis finds it. Each key's list keeps its length and order whatever is read.
 struct Reads {
@@ -123,6 +138,8 @@ pub(crate) struct CorgiReduceBackend<T> {
     graph: Graph<NumOp>,
     /// What the graph reads of its input.
     reads: Reads,
+    /// How many of each key's first values the graph is handed, if not all.
+    limit: Option<usize>,
     /// The current window's input values: its chunks' value columns, projected by `reads.value`.
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
@@ -186,12 +203,12 @@ impl Retire {
 impl<T> CorgiReduceBackend<T> {
     /// A backend for input of `shape`, covering the key space in windows of `1 << 12` input
     /// records.
-    pub(crate) fn new(reducer: Reducer, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, shape, 1 << 12) }
+    pub(crate) fn new(reducer: Reducer, limit: Option<usize>, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, limit, shape, 1 << 12) }
 
     /// A backend with an explicit window budget, in presented input records. A `Reducer::Expr`
     /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
     /// type check keeps from being reached.
-    pub(crate) fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
+    pub(crate) fn with_window(reducer: Reducer, limit: Option<usize>, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
         let Reducer::Expr(lambda) = reducer;
         let graph = compile_reduce(&lambda, &kshape, &vshape)
             .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
@@ -202,6 +219,7 @@ impl<T> CorgiReduceBackend<T> {
         CorgiReduceBackend {
             graph: narrowed.graph,
             reads: Reads::new(narrowed.input, &input),
+            limit,
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -339,6 +357,9 @@ where
     /// brackets are presented as they are. One with no input has no output, and the lambda does not
     /// see it.
     fn reduce_lambda(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+        // A limit hands the lambda each bracket's first values only; nothing past them is gathered.
+        let limited = self.limit.and_then(|k| first_entries(k, ends, input));
+        let (ends, input) = limited.as_ref().map_or((ends, input), |(ends, input)| (&ends[..], &input[..]));
         // Per bracket with input: its index, its end in `input`, and the row holding its key.
         let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
         let mut start = 0;
@@ -767,7 +788,7 @@ mod tests {
     /// one value count together, and a new value gets a new id naming its row.
     #[test]
     fn corrections_net_by_value() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
         backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
@@ -785,7 +806,7 @@ mod tests {
     /// A changed wave's column stays alive when a later unchanged wave reuses its id.
     #[test]
     fn corrections_retain_only_named_output_columns() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
         backend.input.refs = vec![(0, 0)];
         backend.input.columns = vec![ints(vec![0])];
         backend.key_columns = vec![ints(vec![10])];
@@ -855,7 +876,7 @@ mod tests {
             let run = |window_size| {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
                 // Distinct reads its values whole, so the input pool holds what was presented.
-                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), shape, window_size);
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), None, shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
@@ -918,7 +939,10 @@ mod tests {
         // A lambda: the weighted sum of the values' first fields, once, and how many values, twice negated.
         let lambda = crate::ir::Lambda::new("let (_, vals) = input in \
             ((((0, vals) fold ((acc, ((a, _), d)) -> (acc, (a, d) mul) add)), 1) enlist, ((vals len), -2) enlist) append".into(), &corgi::Scope::default());
-        for reducer in [Reducer::Expr(crate::parse::Reducer::Count.lambda()), Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), Reducer::Expr(crate::parse::Reducer::Min.lambda()), Reducer::Expr(crate::parse::Reducer::Collect.lambda()), Reducer::Expr(lambda)] {
+        // Each sugar with its limit, `min`'s splitting a colliding identifier's real keys first.
+        use crate::parse::Reducer as Sugar;
+        let sugars = [Sugar::Count, Sugar::Distinct, Sugar::Min, Sugar::Collect].map(|sugar| (Reducer::Expr(sugar.lambda()), sugar.limit()));
+        for (reducer, limit) in sugars.into_iter().chain([(Reducer::Expr(lambda), None)]) {
             // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
             let run = |forged: bool, window_size: usize| {
                 let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {
@@ -928,7 +952,7 @@ mod tests {
                     let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
                     Rc::new(ChunkBatch::new(vec![chunk]))
                 };
-                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), (shape.clone(), shape.clone()), window_size));
+                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), limit, (shape.clone(), shape.clone()), window_size));
                 let held = Antichain::from_elem(Time::minimum());
                 let (first, _) = tactic.retire(Vec::new(), Vec::new(), vec![batch(&early)], &held, &Antichain::from_elem(stamp(2)), &held);
                 let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();

@@ -10,7 +10,7 @@ let language = import "ldbc.language.by_person" : (int, List(int));
 let hop1 = request | map(((rid, who, name), ()) -> (who, (rid, who, name))) | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
 let hop2 = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
 let hop3 = hop2 | join(friend, (_, (req, _), (h, _)) -> (h, (req, 3)));
-let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+let circle = hop1 + hop2 + hop3 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let found = circle | map(((rid, node, name), d) -> (node, (rid, name, d))) | join(person, (node, (rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _)) -> ((first, name) eq, (home, (rid, node, d, last, gender, birthday, created, ip, browser)))) | filter((named, _) -> named) | map((_, row) -> row) | join(place, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) -> ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
 let who = found | map(((rid, node), _) -> (node, rid));
 let emails = who | join(email, (node, rid, value) -> ((rid, node), value)) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);

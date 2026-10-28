@@ -77,7 +77,7 @@ pub(crate) fn expand_distinct(
             // Both paths now have unit values: either they were known to be unit,
             // or the map above keyed the collection by its whole record.
             let reducer = Reducer::Expr(unit_distinct());
-            let output = push(Node::Reduce { input, reducer });
+            let output = push(Node::Reduce { input, reducer, limit: None });
             if by_record {
                 push(Node::Linear { input: output, ops: vec![LinearOp::Project(Lambda::new("let (kv, ()) = input in kv".into(), &corgi::Scope::default()))] });
             }
@@ -100,13 +100,24 @@ impl crate::parse::Reducer {
     /// The definitions of the four sugars. Empty keys are suppressed by reduce itself.
     pub(crate) fn lambda(&self) -> Lambda {
         let body = match self {
+            // Lowered with a limit of one, so `vals` holds just the least value.
             Self::Min => "let first = vals head in (first.0, 1) enlist",
             Self::Distinct => "vals map ((v, _) -> (v, 1))",
             Self::Count => "let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter",
             Self::Collect => "let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist",
-            Self::Expr(lambda) => return lambda.clone(),
+            Self::Expr(lambda, _) => return lambda.clone(),
         };
         Lambda::new(format!("let (_, vals) = input in {body}"), &corgi::Scope::default())
+    }
+
+    /// How many of each key's first values the lambda is handed: one for `min`, all for the other
+    /// sugars, and what `reduce(limit k, …)` says.
+    pub(crate) fn limit(&self) -> Option<usize> {
+        match self {
+            Self::Min => Some(1),
+            Self::Distinct | Self::Count | Self::Collect => None,
+            Self::Expr(_, limit) => *limit,
+        }
     }
 }
 

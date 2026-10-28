@@ -4,8 +4,8 @@
      let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
      let best_rows = pairs + ::base;
      let best_idx = best_rows | arrange;
--    let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
-+    let best = best_idx | reduce((_, a) -> (((), a head.0.1), 1) enlist);
+-    let best = best_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
++    let best = best_idx | reduce(limit 1, (_, a) -> (((), a head.0.1), 1) enlist);
      let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
      let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
      let unseen = ::rkk + unseen_rows;

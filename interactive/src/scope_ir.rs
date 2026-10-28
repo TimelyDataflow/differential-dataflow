@@ -125,7 +125,9 @@ pub enum Node {
     /// data time joined with the arranged row's. The output keeps the update's own time, and its
     /// diff is the product of the two. The arrangement's changes produce no output.
     HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
-    Reduce { input: Ref, reducer: Reducer },
+    /// `reducer`'s lambda over each key and its values. With `limit = Some(k)` it is handed only
+    /// the key's first `k` values of non-zero net, in value order, whatever their sums.
+    Reduce { input: Ref, reducer: Reducer, limit: Option<usize> },
     Inspect { input: Ref, label: String },
 }
 
@@ -323,7 +325,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
-                    Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
+                    Node::Reduce { input, reducer, limit } => format!("{} | {:?} limit={limit:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };
                 println!("{}n{} = {};", pad2, i, desc);

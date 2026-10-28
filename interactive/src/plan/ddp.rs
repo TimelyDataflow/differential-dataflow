@@ -413,11 +413,11 @@ impl Printer<'_> {
                 });
                 format!("{} | half_join({}, {}, {})", names.of(stream), names.of(arrangement), u8::from(*strict), self.lambda(projection, input)?)
             }
-            Node::Reduce { input, reducer } => {
+            Node::Reduce { input, reducer, limit } => {
                 let word = match reducer {
                     Reducer::Expr(l) => {
                         let input = shapes.of(input).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
-                        format!("reduce({})", self.lambda(l, input)?)
+                        format!("reduce({}{})", limit_text(*limit), self.lambda(l, input)?)
                     }
                 };
                 format!("{} | {word}", names.of(input))
@@ -436,6 +436,11 @@ fn aliases(aliases: &[(&String, &Ref)], names: &Names, defined: &mut BTreeSet<St
     for &(name, r) in aliases {
         if defined.insert(name.clone()) { writeln!(out, "{indent}let {name} = {};", names.raw(r)).unwrap(); }
     }
+}
+
+/// A reduce's limit as DDP writes it, before its lambda: `limit 1, `.
+pub(crate) fn limit_text(limit: Option<usize>) -> String {
+    limit.map_or(String::new(), |k| format!("limit {k}, "))
 }
 
 fn quoted(text: &str) -> Result<String, String> {

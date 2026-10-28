@@ -35,7 +35,7 @@
 +    let pairs_join = ::rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
 +    let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
 +    let best_idx = best_rows | arrange;
-     let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+     let best = best_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
 -    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
 -    let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
@@ -64,7 +64,7 @@
  let committed_neg = wbad | negate;
 @@ -48,12 +40,11 @@
  let current_idx = current_map | arrange;
- let current = current_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+ let current = current_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let state_map = current | map((k, (_, v)) -> (k, (v)));
 -let retire_map = current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v)));
 -let retire_neg = retire_map | negate;

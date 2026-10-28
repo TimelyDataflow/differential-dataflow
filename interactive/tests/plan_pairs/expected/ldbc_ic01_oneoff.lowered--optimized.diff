@@ -17,7 +17,7 @@
 -let circle_idx = circle_map | arrange;
 +let circle_rows2 = circle_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, _, name), d)) -> ((rid, node, name), d));
 +let circle_idx = circle_rows2 | arrange;
- let circle = circle_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+ let circle = circle_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let found_map = circle | map(((rid, node, name), d) -> (node, (rid, name, d)));
  let found_idx = found_map | arrange;
  let person_idx = person | arrange;

@@ -9,7 +9,7 @@
 +let latest = by_author_idx | reduce((_, a) -> let v0 = (a map ((_, a) -> (a, 0) gt), (0, a len) range) zip filter in let v1 = (((0, (v0 len, 20) min) range, v0) gather, a) gather in let v2 = (v1, v1 map ((_, a) -> (a, 20) min) scan_add) zip map ((a, b) -> let v0 = (a.1, 20) min in let v1 = (((20, (b, v0) sub) sub, 0) max, v0) min in ((v1, 0) gt, (a.0, v1))) filter in (v2, v2 map ((_, a) -> a) scan_add) zip map ((a, b) -> (a.0, ((b, a.1) sub, b) range) cap_list map ((a, b) -> ((b, a), 1))) flatten.1 map ((a, b) -> ((a.1.0, a.1.1), b)));
  let newest_map = by_author | map((author, (neg, _)) -> (author, neg));
  let newest_idx = newest_map | arrange;
- let newest = newest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
+ let newest = newest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let latest_idx = latest | arrange;
  -- Renderer: publish the existing arrangement.
  export "ic2.s.by_author" = by_author_idx;
