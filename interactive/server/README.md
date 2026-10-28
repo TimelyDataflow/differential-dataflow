@@ -14,7 +14,7 @@ the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
 `peek diag.time_by_statement` reads time by program statement like any other
 trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
-(default `all,-projection`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
+(default `all`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
 `collapse-parent-arranges`, `hoist-invariant`, `compose-maps`,
 `projection` and `as-of-drop`; `hoist-arranges` is an alias for `hoist-invariant`).
 `dead-code` is on by default and runs before structural fusion in every optimizer
@@ -92,7 +92,7 @@ Add `--timings` as `plan <name> from <path> --timings` or
 call/change counts, and fixed-point rounds. Timings are a display option;
 ordinary plan replies remain deterministic.
 
-Planning always enables projection, assumes arranged imports, and uses the
+Planning runs the server's passes, assumes arranged imports, and uses the
 fixed placeholder as-of time `(1, [])` for epoch 2. These assumptions are printed;
 they do not change the server's settings or current time. Reports are not yet
 parseable DDP. Command-line load bindings and the explain transform are not

@@ -281,7 +281,7 @@ A program moves through four parts, each using only the ones before it.
    store them; `passes/demand.rs` is the analysis, `passes/narrow.rs` the transform), and
    the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
    `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
-   excludes projection; `all` enables every pass. `explain/` produces a
+   is every pass. `explain/` produces a
    program that explains its own outputs.
 3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
    trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's

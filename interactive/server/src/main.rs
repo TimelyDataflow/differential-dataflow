@@ -119,7 +119,7 @@ fn main() {
         .unwrap_or(1);
     assert!(workers > 0, "DDIR_WORKERS must be positive");
     if std::env::var_os("DDIR_PROJECTION").is_some() {
-        eprintln!("DDIR_PROJECTION is ignored; use DDIR_PASSES=projection to enable projection");
+        eprintln!("DDIR_PROJECTION is ignored; projection is on by default, and DDIR_PASSES=-projection switches it off");
     }
     if let Err(error) = control_loop::passes_from_env() {
         eprintln!("DDIR_PASSES: {error}");

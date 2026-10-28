@@ -621,10 +621,10 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let warning = String::from_utf8(output.stderr).unwrap();
-    assert!(warning.contains("DDIR_PROJECTION is ignored; use DDIR_PASSES=projection"), "{warning}");
+    assert!(warning.contains("DDIR_PROJECTION is ignored; projection is on by default"), "{warning}");
     let report = String::from_utf8(output.stdout).unwrap();
     assert!(!report.contains("Unresolved import") && !report.contains("incomplete"), "{report}");
-    assert!(report.contains("projection switched off"), "{report}");
+    assert!(report.contains("no fields narrowed"), "{report}");
     let stages = report.lines().filter(|line| line.starts_with("p data === ")).count();
     assert!(stages > 0, "{report}");
     assert!(report.contains(&format!("p ok planned \"preview\" ({stages} stages)")), "{report}");

@@ -46,7 +46,7 @@ fn item_ordinals(scope: &Scope) -> Vec<usize> {
 type Observe<'a> = dyn FnMut(&str, &Scope, &[usize], &'static str, usize, usize) + 'a;
 
 /// Which passes `run` applies. Every pass is optional: the runtime runs any program the
-/// language accepts, with the same answers, whichever of them ran. The default excludes projection.
+/// language accepts, with the same answers, whichever of them ran. The default is all of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
     /// Remove unread computations, child exports, imports, and aliases; keep root inputs.
@@ -66,7 +66,7 @@ pub struct Config {
 }
 
 impl Default for Config {
-    fn default() -> Self { Self { projection: false, ..Self::all() } }
+    fn default() -> Self { Self::all() }
 }
 
 impl Config {
@@ -323,9 +323,9 @@ mod schedule_tests {
 
     #[test]
     fn config_words_apply_in_order_from_default() {
-        assert_eq!(Config::default(), Config { projection: false, ..Config::all() });
+        assert_eq!(Config::default(), Config::all());
         assert_eq!(Config::parse("").unwrap(), Config::default());
-        assert_eq!(Config::parse("projection").unwrap(), Config::all());
+        assert_eq!(Config::parse("-projection").unwrap(), Config { projection: false, ..Config::all() });
         assert_eq!(Config::parse("all,-projection").unwrap(), Config::parse("-projection").unwrap());
         assert_eq!(Config::parse("none, structural").unwrap(), Config { structural: true, ..Config::none() });
         assert_eq!(Config::parse("none").unwrap().off(), Config::NAMES);
