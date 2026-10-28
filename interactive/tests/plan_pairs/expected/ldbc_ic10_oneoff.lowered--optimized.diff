@@ -1,0 +1,42 @@
+--- lowered
++++ optimized
+@@ -1,12 +1,8 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
+ let request = input 0 : ((int, int, int), ());
+-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "ldbc.friend" : (int, (int, int));
+-let place = import "ldbc.place" : (int, (List(int), List(int), int));
+ let tags_of = import "ldbc.mtag.by_message" : (int, int);
+-let interest = import "ldbc.interest.by_person" : (int, int);
+ let people = import "ic10.s.people" : (int, (List(int), List(int), List(int), List(int), int, int));
+ let posts = import "ic10.s.posts" : (int, int);
+ let likes = import "ic10.s.likes" : ((int, int), ());
+@@ -15,20 +11,16 @@
+ let friend_idx = friend | arrange;
+ let hop1 = hop1_idx | join(friend_idx, (_, req, (f, _)) -> (f, (req, 1)));
+ let hop1_idx2 = hop1 | arrange;
+-let friend_idx2 = friend | arrange;
+-let hop2 = hop1_idx2 | join(friend_idx2, (_, (req, _), (g, _)) -> (g, (req, 2)));
++let hop2 = hop1_idx2 | join(friend_idx, (_, (req, _), (g, _)) -> (g, (req, 2)));
+ let twohop_rows = hop1 + hop2;
+-let twohop_filter = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne);
+-let twohop_map = twohop_filter | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
+-let twohop_idx = twohop_map | arrange;
++let twohop_rows2 = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
++let twohop_idx = twohop_rows2 | arrange;
+ let twohop_reduce = twohop_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let twohop = twohop_reduce | filter((_, d) -> (d, 2) eq);
+-let cands_map = twohop | map(((rid, who, month, node), _) -> (node, (rid, who, month)));
+-let cands_idx = cands_map | arrange;
++let cands_rows = twohop_reduce | filter((_, d) -> (d, 2) eq) | map(((rid, who, month, node), _) -> (node, (rid, who, month)));
++let cands_idx = cands_rows | arrange;
+ let people_idx = people | arrange;
+ let cands_join = cands_idx | join(people_idx, (node, (rid, who, month), (first, last, gender, town, bmonth, bday)) -> ((rid, who, node), (first, last, gender, town, month, bmonth, bday)));
+-let cands_filter = cands_join | filter((_, (_, _, _, _, month, bmonth, bday)) -> (((bmonth, month) eq, (bday, 21) ge) all, ((bmonth, ((month, 12) eq, 1, (month, 1) add) select) eq, (bday, 22) lt) all) any);
+-let cands = cands_filter | map((key, (first, last, gender, town, _, _, _)) -> (key, (first, last, gender, town)));
++let cands = cands_join | filter((_, (_, _, _, _, month, bmonth, bday)) -> (((bmonth, month) eq, (bday, 21) ge) all, ((bmonth, ((month, 12) eq, 1, (month, 1) add) select) eq, (bday, 22) lt) all) any) | map((key, (first, last, gender, town, _, _, _)) -> (key, (first, last, gender, town)));
+ let wrote_map = cands | map(((rid, who, node), _) -> (node, (rid, who)));
+ let wrote_idx = wrote_map | arrange;
+ let posts_idx = posts | arrange;

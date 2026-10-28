@@ -1,0 +1,7 @@
+--- parsed
++++ lowered
+@@ -1,2 +1,4 @@
++-- Time lanes: epoch.
+ let store = input 0 : ((int), (int, int));
++-- Renderer: build an export arrangement.
+ export "store" = store;

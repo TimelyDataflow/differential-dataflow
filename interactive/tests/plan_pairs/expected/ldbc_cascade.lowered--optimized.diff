@@ -1,0 +1,104 @@
+--- lowered
++++ optimized
+@@ -22,10 +22,6 @@
+ let del_knows = input 20 : ((int, int, int), ());
+ let del_member = input 21 : ((int, int, int), ());
+ let del_likes = input 22 : ((int, int, int), ());
+-let tag = tag_in;
+-let tagclass = tagclass_in;
+-let place = place_in;
+-let org = org_in;
+ let dead_p_map = del_person | map(((id, _), ()) -> (id, ()));
+ let dead_p_idx = dead_p_map | arrange;
+ let dead_p = dead_p_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+@@ -33,10 +29,9 @@
+ let owned_idx = owned_map | arrange;
+ let owned = owned_idx | join(dead_p, (moderator, (id, title, created), ()) -> (id, (title, created, moderator)));
+ let dead_f_map = del_forum | map(((id, _), ()) -> (id, ()));
+-let dead_f_filter = owned | filter((_, (title, _, _)) -> ((((0, (title len, 6) min) range, title) gather, "Album ") eq, (((0, (title len, 5) min) range, title) gather, "Wall ") eq) any);
+-let dead_f_map2 = dead_f_filter | map((id, _) -> (id, ()));
+-let dead_f_rows = dead_f_map + dead_f_map2;
+-let dead_f_idx = dead_f_rows | arrange;
++let dead_f_rows = owned | filter((_, (title, _, _)) -> ((((0, (title len, 6) min) range, title) gather, "Album ") eq, (((0, (title len, 5) min) range, title) gather, "Wall ") eq) any) | map((id, _) -> (id, ()));
++let dead_f_rows2 = dead_f_map + dead_f_rows;
++let dead_f_idx = dead_f_rows2 | arrange;
+ let dead_f = dead_f_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let groups = owned | filter((_, (title, _, _)) -> (((0, (title len, 6) min) range, title) gather, "Group ") eq);
+ let groups_idx = groups | arrange;
+@@ -47,19 +42,17 @@
+ let seeds_map2 = message_in | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
+ let seeds_idx = seeds_map2 | arrange;
+ let seeds_join = seeds_idx | join(dead_p, (_, id, ()) -> (id, ()));
+-let seeds_filter = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 0) eq);
+-let seeds_map3 = seeds_filter | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
+-let seeds_idx2 = seeds_map3 | arrange;
++let seeds_rows = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 0) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
++let seeds_idx2 = seeds_rows | arrange;
+ let seeds_join2 = seeds_idx2 | join(dead_f, (_, id, ()) -> (id, ()));
+ let seeds = seeds_map + seeds_join + seeds_join2;
+-let children_filter = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq);
+-let children = children_filter | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
++let children = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
++let children_idx = children | arrange;
+ dead_m: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var dead_m;
+     let dead_m_idx = dead_m | arrange;
+-    let children_idx = ::children | arrange;
+-    let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
++    let kids = dead_m_idx | join(::children_idx, (_, (), child) -> (child, ()));
+     let dead_m_rows = ::seeds + kids;
+     let dead_m_idx2 = dead_m_rows | arrange;
+     let dead_m_reduce = dead_m_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+@@ -137,8 +130,7 @@
+ let interest = interest_in + interest_neg;
+ let mtag_map = mtag_in | map(((message, tag), ()) -> (message, (message, tag)));
+ let mtag_idx = mtag_map | arrange;
+-let dead_msg_idx2 = dead_msg | arrange;
+-let mtag_join = mtag_idx | join(dead_msg_idx2, (_, r, ()) -> (r, ()));
++let mtag_join = mtag_idx | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+ let mtag_idx2 = mtag_join | arrange;
+ let mtag_reduce = mtag_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let mtag_neg = mtag_reduce | negate;
+@@ -158,8 +150,7 @@
+ let likes_join2 = likes_idx2 | join(dead_p, (_, r, ()) -> (r, ()));
+ let likes_map3 = likes_in | map(((person, message, created), ()) -> (message, (person, message, created)));
+ let likes_idx3 = likes_map3 | arrange;
+-let dead_msg_idx3 = dead_msg | arrange;
+-let likes_join3 = likes_idx3 | join(dead_msg_idx3, (_, r, ()) -> (r, ()));
++let likes_join3 = likes_idx3 | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+ let likes_rows = likes_join + likes_join2 + likes_join3;
+ let likes_idx4 = likes_rows | arrange;
+ let likes_reduce = likes_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+@@ -206,17 +197,15 @@
+ let friends_idx2 = friends_join2 | arrange;
+ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
+-let posts_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq);
+-let posts = posts_filter | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
+-let replies_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq);
+-let replies = replies_filter | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
++let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
++let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
++let replies_idx = replies | arrange;
+ thread: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var thread;
+     let below_map = thread | map(((mid, root), ()) -> (mid, root));
+     let below_idx = below_map | arrange;
+-    let replies_idx = ::replies | arrange;
+-    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
++    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
+     let thread_rows = ::posts + below;
+     let thread_idx = thread_rows | arrange;
+     let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+@@ -238,8 +227,7 @@
+ let ldbc_forum_idx = ldbc_forum_map | arrange;
+ let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
+ let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
+-let ldbc_knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
+-let ldbc_knows_by_src_idx = ldbc_knows_by_src_map | arrange;
++let ldbc_knows_by_src_idx = either_map | arrange;
+ let ldbc_member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
+ let ldbc_member_by_forum_idx = ldbc_member_by_forum_map | arrange;
+ let ldbc_member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));

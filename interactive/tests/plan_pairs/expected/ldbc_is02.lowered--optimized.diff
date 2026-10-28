@@ -1,0 +1,16 @@
+--- lowered
++++ optimized
+@@ -19,11 +19,9 @@
+ let top = mine_idx4 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+ let answer_map = top | map((rid, (rank, (_, (id, created, root)))) -> (id, (rid, rank, created, root)));
+ let answer_idx = answer_map | arrange;
+-let message_idx2 = message | arrange;
+-let answer_join = answer_idx | join(message_idx2, (id, (rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
++let answer_join = answer_idx | join(message_idx, (id, (rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
+ let answer_idx2 = answer_join | arrange;
+-let message_idx3 = message | arrange;
+-let answer_join2 = answer_idx2 | join(message_idx3, (root, (rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (op, (rid, rank, id, body, created, root)));
++let answer_join2 = answer_idx2 | join(message_idx, (root, (rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (op, (rid, rank, id, body, created, root)));
+ let answer_idx3 = answer_join2 | arrange;
+ let person_idx = person | arrange;
+ let answer = answer_idx3 | join(person_idx, (op, (rid, rank, id, body, created, root), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (id, body, created, root, op, first, last)));

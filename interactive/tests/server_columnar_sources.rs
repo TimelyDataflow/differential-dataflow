@@ -7,7 +7,7 @@ use interactive::{lower, parse};
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
 

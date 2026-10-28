@@ -100,6 +100,12 @@ impl Work {
 /// The diagnostics views, installed as program `diag` when diagnostics are on.
 const DIAG_PROGRAM: &str = include_str!("../diag.ddp");
 
+/// The passes install runs, from `DDIR_PASSES` (default all except projection): comma-separated words applied in
+/// order from the default, as `passes::Config::parse` reads them, so `none` or `all,-projection`.
+pub fn passes_from_env() -> Result<interactive::passes::Config, String> {
+    std::env::var("DDIR_PASSES").map_or(Ok(interactive::passes::Config::default()), |text| interactive::passes::Config::parse(&text))
+}
+
 pub fn run_worker(
     worker: &mut Worker,
     events: Option<Receiver<ControlEvent>>,
@@ -131,11 +137,13 @@ pub fn run_worker(
     let mut work_input = (worker.index() == 0).then_some(input);
 
     let mut server = Server::new();
+    // The passes install runs: DDIR_PASSES, as `passes::Config::parse` reads it (default all except projection).
+    // `main` has already checked that it parses.
+    server.set_passes(passes_from_env().expect("DDIR_PASSES parses"));
     // The diagnostics program: views over the `diag.*` sources, published as `diag.*` traces.
     if let Some(diagnostics) = &diagnostics {
         server.set_diagnostics(Rc::clone(diagnostics));
-        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
-        program.optimize();
+        let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
         server.install(worker, "diag", &program).expect("the diagnostics program installs");
     }
     // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
@@ -393,6 +401,21 @@ fn dispatch(
                 Ok("bye".into())
             }
         },
+        Ok(PreparedCommand::Plan { name, program, timings }) => {
+            // Only the responding worker needs the report. It reads the catalog in command
+            // order, including successful loads and drops from this or other sessions.
+            if let Some(response) = response.as_ref() {
+                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.import_as_of().outer).and_then(|report| {
+                    let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() })
+                    })).map_err(|_| "plan printing panicked".to_string())?;
+                    for line in printed.text.lines() { send(response, reqid, "data", line.to_string()); }
+                    let incomplete = !report.unresolved.is_empty() || report.stages.iter().any(|s| !s.problems.is_empty());
+                    let status = if incomplete { "incomplete; see report".into() } else { format!("{} stages", report.stages.len()) };
+                    Ok(format!("planned {:?} ({status})", name))
+                })
+            } else { Ok(String::new()) }
+        }
         Ok(PreparedCommand::Peek { name, key, format }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
             if let Some(response) = response.as_ref() {
                 match format {

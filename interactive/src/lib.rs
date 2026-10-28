@@ -13,6 +13,8 @@
 pub mod ir;
 // `Lambda`, and the registry of host functions: `Function`, `register`, `lookup`.
 pub mod lambda;
+// Crate-only: canonical reducer definitions and value projection composition.
+mod reducers;
 // The scope tree: `Program`, `Scope`, `Item`, `Node`, `Ref`, `Source` and their parts. Plain data,
 // so every field is public.
 pub mod scope_ir;
@@ -25,13 +27,14 @@ pub mod lower;
 // `infer`, every collection's shape (`CollShape`, `ScopeShapes`, `Problems`), and `linear_shapes`.
 pub mod shapes;
 
-// Analyses and rewrites over the scope tree.
-// `explain`, `explain_with`, `Options`, `clone_identity`.
+// Scope-tree rewriting: one module, with `passes::run` as the preparation entry point.
+// `optimize` runs just the optimizer; `projection` also exposes the demand analysis.
+pub mod passes;
+// Explanation construction: `explain`, `explain_with`, `Options`, `clone_identity`.
 pub mod explain;
-// `pushdown`, the optional field-demand pass, and `demand_graph` (`DemandGraph`).
-pub mod projection;
-// Crate-only: the rewrite install makes once it knows the program's as-of time.
-mod as_of;
+
+// `report`: read-only planning stages, and their diagnostic printer.
+pub mod plan;
 
 // The runtime: rendering a scope tree onto differential dataflow.
 // Only the statement labels escape (`LabelEvent`, `LabelEventBuilder`), for a logger to read;
@@ -45,5 +48,5 @@ pub mod runtime;
 // The host: installing, feeding and reading programs.
 // `register`: the server's own diagnostics as `diag.*` collections, kept in a `Diagnostics`.
 pub mod diag;
-// `Server`, `evaluate`, and the host's time and container types.
+// `Server`, `evaluate`, `generated_shape`, and the host's time and container types.
 pub mod server;

@@ -50,7 +50,7 @@ const FEEDS: &[(u64, usize, &str)] = &[
 /// containers or as arrangements.
 fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
@@ -124,7 +124,7 @@ const ARRANGED_FEEDS: &[(u64, usize, &str)] = &[
 /// The arranged consumer's exports after the last epoch, installed before epoch `late`.
 fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, i64)>) {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(true);
         server.install(worker, "producer", &program(ARRANGED_PRODUCER)).unwrap();
@@ -161,7 +161,7 @@ const DELTA_CONSUMER: &str = r#"
 /// A consumer's exports after the last epoch, installed before epoch `late`, imports arranged.
 fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, i64)>) {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(true);
         server.install(worker, "producer", &program(ARRANGED_PRODUCER)).unwrap();
@@ -246,7 +246,7 @@ const TRIPLE_DELTA: &str = r#"
 /// The consumer's `r` after the last epoch, installed before epoch `late`.
 fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String, String, i64)> {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); p.optimize(); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
         server.install(worker, "producer", &program(TRIPLE_PRODUCER)).unwrap();

@@ -1,0 +1,11 @@
+--- lowered
++++ optimized
+@@ -1,7 +1,6 @@
+ -- Time lanes: epoch.
+ let rows = input 0 : ((int, int), ());
+-let left = rows | map((row, ()) -> (row, ()));
+-let merged = rows + left;
++let merged = rows + rows;
+ let out_map = merged | map(((a, _), ()) -> (a, ()));
+ -- Renderer: build an export arrangement.
+ export "out" = out_map;

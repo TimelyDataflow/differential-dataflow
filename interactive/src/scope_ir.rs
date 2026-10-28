@@ -5,10 +5,10 @@
 //!
 //! # Why a tree
 //!
-//! A scope boundary is a real semantic barrier: an operator cannot be hoisted
-//! across it, and an arrangement cannot be shared across it freely. So the
-//! boundary is structural: a `Scope` owns its items, and nothing crosses except
-//! through an explicit import or export.
+//! A scope boundary is a real semantic barrier: rewrites must account for its
+//! imports, exports, and feedback. An arrangement of an unchanged parent import
+//! can be shared through an explicit import of the arranged parent binding.
+//! A `Scope` owns its items, and nothing crosses except through an explicit edge.
 //!
 //! The guiding principle throughout: make explicit anything a consumer would
 //! otherwise have to analyze the IR to recover. Feedback variables are a
@@ -125,8 +125,33 @@ pub enum Node {
     /// data time joined with the arranged row's. The output keeps the update's own time, and its
     /// diff is the product of the two. The arrangement's changes produce no output.
     HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
-    Reduce { input: Ref, reducer: Reducer },
+    /// `reducer`'s lambda over each key and its values. With `limit = Some(k)` it is handed only
+    /// the key's first `k` values of non-zero net, in value order, whatever their sums.
+    Reduce { input: Ref, reducer: Reducer, limit: Option<usize> },
     Inspect { input: Ref, label: String },
+}
+
+impl Node {
+    pub(crate) fn refs(&self) -> impl Iterator<Item = &Ref> {
+        let (first, second, rest): (_, _, &[_]) = match self {
+            Self::Linear { input, .. } | Self::Arrange(input)
+            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => (Some(input), None, &[]),
+            Self::Join { left, right, .. } => (Some(left), Some(right), &[]),
+            Self::HalfJoin { stream, arrangement, .. } => (Some(stream), Some(arrangement), &[]),
+            Self::Concat(refs) => (None, None, refs),
+        };
+        first.into_iter().chain(second).chain(rest)
+    }
+
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            Self::Linear { input, .. } | Self::Arrange(input)
+            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => f(input),
+            Self::Join { left, right, .. } => { f(left); f(right); }
+            Self::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); }
+            Self::Concat(refs) => for r in refs { f(r); },
+        }
+    }
 }
 
 /// An item in a scope's body: a pure operator or a nested child scope. The
@@ -141,7 +166,7 @@ pub enum Item {
 /// Structural identity, excluding diagnostic names and labels. Export positions and
 /// declared shapes matter; an Inspect's label remains part of its operator.
 #[derive(PartialEq, Eq, Hash)]
-enum ItemKey<'a> {
+pub(crate) enum ItemKey<'a> {
     Op(&'a Node),
     Sub {
         imports: Vec<(&'a Source, &'a Option<RowShape>)>,
@@ -153,7 +178,7 @@ enum ItemKey<'a> {
 }
 
 impl Item {
-    fn key(&self) -> ItemKey<'_> {
+    pub(crate) fn key(&self) -> ItemKey<'_> {
         match self {
             Item::Op(node) => ItemKey::Op(node),
             Item::Sub(s) => ItemKey::Sub {
@@ -167,15 +192,9 @@ impl Item {
     }
 
     /// References read by this item, in the scope that owns it.
-    fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
         match self {
-            Item::Op(node) => match node {
-                Node::Linear { input, .. } | Node::Arrange(input)
-                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
-                Node::Join { left, right, .. } => { f(left); f(right); },
-                Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
-                Node::Concat(refs) => for r in refs { f(r); },
-            },
+            Item::Op(node) => node.for_each_ref(&mut f),
             Item::Sub(child) => for imp in child.imports.iter_mut() {
                 if let Source::Parent(r) = &mut imp.from { f(r); }
             },
@@ -198,6 +217,9 @@ pub struct Scope {
     /// for a scope built without them; a reader uses it only when it has one entry per item.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Source bindings for printing. These are not dataflow uses: fusion may erase a binding.
+    #[serde(skip)]
+    pub names: Vec<(String, Ref)>,
     pub binds: Vec<Bind>,
     pub exports: Vec<Export>,
 }
@@ -210,11 +232,6 @@ pub struct Program {
 }
 
 impl Program {
-    /// Optimize every scope in place. See `Scope::optimize`.
-    pub fn optimize(&mut self) {
-        self.root.optimize();
-    }
-
     /// Print the tree as indented structural text (readability, not
     /// parseability): imports and vars first, items in order (`Sub`s nest),
     /// then binds and exports.
@@ -232,105 +249,17 @@ impl Program {
 }
 
 impl Scope {
-    /// Optimize this scope (and, recursively, its children) in place, iterating
-    /// four rewrites to a fixed point:
-    ///
-    /// - remove items and imports that feed neither an export nor an Inspect,
-    ///   keeping program inputs as part of the interface;
-    /// - collapse an `Arrange` whose input is already an arrangement
-    ///   (an `Arrange` or a `Reduce`);
-    /// - deduplicate structurally identical operators and child scopes;
-    /// - fuse a `Linear` into its `Linear` input when it is that input's only
-    ///   consumer. Deduplication comes first so fusion cannot hide shared prefixes.
-    ///
-    /// A scope boundary is a semantic barrier: nothing merges or moves across one.
-    /// Returns whether this scope contains an Inspect, including in its children.
-    pub(crate) fn optimize(&mut self) -> bool {
-        let inspect: Vec<bool> = self.items.iter_mut().map(|item| match item {
-            Item::Op(Node::Inspect { .. }) => true,
-            Item::Sub(child) => child.optimize(),
-            _ => false,
-        }).collect();
-        let mut dead: Vec<bool> = vec![false; self.items.len()];
-        loop {
-            // Prune readers before counting uses for fusion, and optimize children
-            // with only their read exports before comparing them for deduplication.
-            let changed = self.prune(&mut dead, &inspect)
-                | self.collapse_arranges(&mut dead)
-                | self.dedup(&mut dead)
-                | self.fuse_linear(&mut dead);
-            if !changed {
-                self.compact(&dead);
-                return inspect.iter().any(|&i| i);
-            }
+    /// Apply a dependency-preserving item order, including names and child edges.
+    pub(crate) fn reorder(&mut self, order: &[usize]) {
+        let mut remap = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() { remap[old] = new; }
+        let items = std::mem::take(&mut self.items);
+        let mut items: Vec<_> = items.into_iter().map(Some).collect();
+        self.items = order.iter().map(|&i| items[i].take().unwrap()).collect();
+        if self.labels.len() == order.len() {
+            self.labels = order.iter().map(|&i| self.labels[i].clone()).collect();
         }
-    }
-
-    /// Walk backward once: all readers of an item precede it in this walk.
-    /// Retained scopes keep their feedback bindings as roots, since a variable
-    /// can read a later item. Inspect also keeps its enclosing scopes alive.
-    fn prune(&mut self, dead: &mut [bool], inspect: &[bool]) -> bool {
-        let mut live = inspect.to_vec();
-        // Positional inputs only occur at the root. Clients can still feed an
-        // unread input, so retain its slot even when no operator reads it.
-        let mut imports: Vec<bool> = self.imports.iter().map(|i| matches!(i.from, Source::Input(_))).collect();
-        let mut exports: Vec<Vec<bool>> = self.items.iter().map(|item| match item {
-            Item::Sub(child) => vec![false; child.exports.len()],
-            Item::Op(_) => Vec::new(),
-        }).collect();
-        let mark = |r: &Ref, live: &mut [bool], imports: &mut [bool], exports: &mut [Vec<bool>]| match r {
-            Ref::Local(i) => live[*i] = true,
-            Ref::Import(i) => imports[*i] = true,
-            Ref::ChildExport(i, e) => { live[*i] = true; exports[*i][*e] = true; },
-            Ref::Var(_) => {}, // The retained scope's bindings are roots below.
-        };
-        for e in &self.exports { mark(&e.value, &mut live, &mut imports, &mut exports); }
-        for b in &self.binds { mark(&b.value, &mut live, &mut imports, &mut exports); }
-        let mut changed = false;
-        let mut export_remap = vec![Vec::new(); self.items.len()];
-        for (i, item) in self.items.iter_mut().enumerate().rev() {
-            if dead[i] { continue; }
-            if let Item::Sub(child) = item {
-                let mut next = 0;
-                export_remap[i] = exports[i].iter().map(|&keep| {
-                    if keep { let slot = next; next += 1; slot } else { usize::MAX }
-                }).collect();
-                if next != child.exports.len() {
-                    let mut keep = exports[i].iter();
-                    child.exports.retain(|_| *keep.next().unwrap());
-                    // Only a changed set of roots needs another child pass, and a
-                    // child about to be removed needs none. Inspect survives pruning,
-                    // so its cached flag stays valid.
-                    if live[i] { child.optimize(); }
-                    changed = true;
-                }
-            }
-            if live[i] {
-                item.for_each_ref(|r| mark(r, &mut live, &mut imports, &mut exports));
-            } else {
-                dead[i] = true;
-                changed = true;
-            }
-        }
-        let mut next = 0;
-        let import_remap: Vec<_> = imports.iter().map(|&keep| {
-            if keep { let slot = next; next += 1; slot } else { usize::MAX }
-        }).collect();
-        changed |= next != self.imports.len();
-        let mut keep = imports.iter();
-        self.imports.retain(|_| *keep.next().unwrap());
-        let mut remap = |r: &mut Ref| match r {
-            Ref::Import(i) => *i = import_remap[*i],
-            Ref::ChildExport(i, e) => *e = export_remap[*i][*e],
-            _ => {},
-        };
-        // Dead holders may still refer to exports or imports already removed.
-        for (i, item) in self.items.iter_mut().enumerate() {
-            if !dead[i] { item.for_each_ref(&mut remap); }
-        }
-        for b in &mut self.binds { remap(&mut b.value); }
-        for e in &mut self.exports { remap(&mut e.value); }
-        changed
+        self.for_each_ref(|r| if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = remap[*i]; });
     }
 
     /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
@@ -339,129 +268,7 @@ impl Scope {
         for item in self.items.iter_mut() { item.for_each_ref(&mut f); }
         for b in self.binds.iter_mut() { f(&mut b.value); }
         for e in self.exports.iter_mut() { f(&mut e.value); }
-    }
-
-    /// Count, for each item, the references to it (`Local` or `ChildExport`)
-    /// from LIVE holders only. Dead items keep their (stale, already-redirected-
-    /// around) input refs until `compact`, and counting those would make a
-    /// single-consumer item look shared — blocking fusion after its consumer
-    /// chain has partially fused (e.g. the middle of a three-op linear chain
-    /// dies into its consumer, and its stale input ref still counts against
-    /// the head, so the chain never finishes fusing).
-    fn use_counts(&self, dead: &[bool]) -> Vec<usize> {
-        let mut counts = vec![0usize; self.items.len()];
-        let mut tally = |r: &Ref| match r {
-            Ref::Local(i) | Ref::ChildExport(i, _) => counts[*i] += 1,
-            Ref::Import(_) | Ref::Var(_) => {},
-        };
-        for (i, item) in self.items.iter().enumerate() {
-            if dead[i] { continue; }
-            match item {
-                Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
-                    Node::Join { left, right, .. } => { tally(left); tally(right); },
-                    Node::HalfJoin { stream, arrangement, .. } => { tally(stream); tally(arrangement); },
-                    Node::Concat(refs) => for r in refs { tally(r); },
-                },
-                Item::Sub(child) => for imp in &child.imports {
-                    if let Source::Parent(r) = &imp.from { tally(r); }
-                },
-            }
-        }
-        for b in &self.binds { tally(&b.value); }
-        for e in &self.exports { tally(&e.value); }
-        counts
-    }
-
-    /// Apply a batch of local redirects in one walk, including child imports,
-    /// binds, and exports. Each target is already the surviving item.
-    fn redirect(&mut self, redirects: &[usize]) {
-        self.for_each_ref(|r| if let Ref::Local(i) = r { *i = redirects[*i]; });
-    }
-
-    /// `Arrange` of an arrangement (an `Arrange` or `Reduce` item) is redundant.
-    fn collapse_arranges(&mut self, dead: &mut [bool]) -> bool {
-        let mut redirects: Vec<usize> = (0..self.items.len()).collect();
-        let mut changed = false;
-        for i in 0..self.items.len() {
-            if dead[i] { continue; }
-            let Item::Op(Node::Arrange(Ref::Local(j))) = &self.items[i] else { continue };
-            // Items are in dependency order, so an earlier redirect is final.
-            let j = redirects[*j];
-            if !dead[j] && matches!(&self.items[j], Item::Op(Node::Arrange(_) | Node::Reduce { .. })) {
-                redirects[i] = j;
-                dead[i] = true;
-                changed = true;
-            }
-        }
-        if changed { self.redirect(&redirects); }
-        changed
-    }
-
-    /// Fuse a `Linear` into its `Linear` input when it is the only consumer.
-    fn fuse_linear(&mut self, dead: &mut [bool]) -> bool {
-        let counts = self.use_counts(dead);
-        let mut changed = false;
-        for i in 0..self.items.len() {
-            if dead[i] { continue; }
-            let Item::Op(Node::Linear { input: Ref::Local(j), .. }) = &self.items[i] else { continue };
-            let j = *j;
-            if dead[j] || counts[j] != 1 { continue; }
-            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = &mut self.items[j] else { continue };
-            let inner_input = inner_input.clone();
-            // The input dies here. Move its growing op list so each prefix is
-            // neither cloned nor retained in a dead item until compaction.
-            let mut fused = std::mem::take(inner_ops);
-            let Item::Op(Node::Linear { ops, .. }) = &mut self.items[i] else { unreachable!() };
-            fused.append(ops);
-            self.items[i] = Item::Op(Node::Linear { input: inner_input, ops: fused });
-            dead[j] = true;
-            changed = true;
-        }
-        changed
-    }
-
-    /// Rewrite inputs before keying each item, so duplicate chains merge in one walk.
-    /// Children are already optimized. Keep the first item's text and labels.
-    fn dedup(&mut self, dead: &mut [bool]) -> bool {
-        let mut seen = std::collections::HashMap::new();
-        let mut redirects: Vec<usize> = (0..self.items.len()).collect();
-        let rewrite = |r: &mut Ref, redirects: &[usize]| {
-            if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = redirects[*i]; }
-        };
-        for (i, item) in self.items.iter_mut().enumerate() {
-            if dead[i] { continue; }
-            item.for_each_ref(|r| rewrite(r, &redirects));
-            redirects[i] = *seen.entry(item.key()).or_insert(i);
-            dead[i] = redirects[i] != i;
-        }
-        for b in &mut self.binds { rewrite(&mut b.value, &redirects); }
-        for e in &mut self.exports { rewrite(&mut e.value, &redirects); }
-        redirects.iter().enumerate().any(|(i, &j)| i != j)
-    }
-
-    /// Drop dead items and remap every item-indexed `Ref` to the compacted
-    /// positions. Dead items have no remaining live readers.
-    fn compact(&mut self, dead: &[bool]) {
-        let mut remap = vec![usize::MAX; self.items.len()];
-        let mut next = 0;
-        for (i, &d) in dead.iter().enumerate() {
-            if !d { remap[i] = next; next += 1; }
-        }
-        if self.labels.len() == self.items.len() {
-            let mut keep = dead.iter().map(|d| !d);
-            self.labels.retain(|_| keep.next().unwrap());
-        }
-        let mut keep = dead.iter().map(|d| !d);
-        self.items.retain(|_| keep.next().unwrap());
-        self.for_each_ref(|r| match r {
-            Ref::Local(i) | Ref::ChildExport(i, _) => {
-                assert!(remap[*i] != usize::MAX, "compact: a reference points at a dead item");
-                *i = remap[*i];
-            },
-            Ref::Import(_) | Ref::Var(_) => {},
-        });
+        for (_, r) in &mut self.names { f(r); }
     }
 }
 
@@ -518,7 +325,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
-                    Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
+                    Node::Reduce { input, reducer, limit } => format!("{} | {:?} limit={limit:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };
                 println!("{}n{} = {};", pad2, i, desc);
@@ -541,29 +348,6 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn dedup_chains_in_one_walk() {
-        let mut scope = Scope::default();
-        let mut inputs = [Ref::Import(0), Ref::Import(0)];
-        for _ in 0..128 {
-            for (input, names) in inputs.iter_mut().zip(["(k, v)", "(p, q)"]) {
-                let lambda = Lambda::new(format!("let {names} = input in {names}"), &corgi::Scope::default());
-                scope.items.push(Item::Op(Node::Linear { input: input.clone(), ops: vec![LinearOp::Project(lambda)] }));
-                *input = Ref::Local(scope.items.len() - 1);
-            }
-        }
-        scope.binds.push(Bind { var: 0, value: inputs[1].clone() });
-        scope.exports.push(Export { name: "out".into(), value: inputs[1].clone(), shape: None });
-        let mut dead = vec![false; scope.items.len()];
-        assert!(scope.dedup(&mut dead));
-        assert_eq!(dead.iter().filter(|&&d| d).count(), 128);
-        assert_eq!(scope.binds[0].value, inputs[0]);
-        assert_eq!(scope.exports[0].value, inputs[0]);
-        assert!(!scope.dedup(&mut dead));
-        scope.compact(&dead);
-        assert_eq!(scope.items.len(), 128);
-    }
-
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the
     // shape can represent a real scoped, iterative program.
@@ -584,6 +368,7 @@ mod tests {
                 Item::Op(Node::Concat(vec![Ref::Import(1), Ref::Local(0)])),
             ],
             labels: vec![],
+            names: vec![],
             binds: vec![Bind { var: 0, value: Ref::Local(1) }], // reach <- body
             exports: vec![Export { name: "reach".into(), value: Ref::Var(0), shape: None }],
         };

@@ -1,0 +1,30 @@
+--- lowered
++++ optimized
+@@ -6,7 +6,6 @@
+ let friend = import "ldbc.friend" : (int, (int, int));
+ let tag = import "ldbc.tag" : (int, (List(int), int));
+ let by_class = import "ldbc.tag.by_class" : (int, int);
+-let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+ let classes = import "ldbc.tagclass.by_name" : (List(int), int);
+ let mtag = import "ldbc.mtag.by_tag" : (int, int);
+ let below_hl = import "ic12.s.below_hl" : (int, int);
+@@ -30,8 +29,6 @@
+ let intag_idx6 = intag_join5 | arrange;
+ let message_idx = message | arrange;
+ let intag_join6 = intag_idx6 | join(message_idx, (m, (rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, name), kind));
+-let intag_filter = intag_join6 | filter((_, kind) -> (kind, 0) eq);
+-let intag = intag_filter | map((key, _) -> (key, ()));
+ let hits_map = request | map(((rid, who, _), ()) -> (who, rid));
+ let hits_idx = hits_map | arrange;
+ let friend_idx = friend | arrange;
+@@ -40,8 +37,8 @@
+ let reply_idx = reply | arrange;
+ let hits_join2 = hits_idx2 | join(reply_idx, (f, rid, (id, parent)) -> ((rid, parent), (f, id)));
+ let hits_idx3 = hits_join2 | arrange;
+-let hits_map2 = intag | map(((rid, m, name), ()) -> ((rid, m), name));
+-let hits_idx4 = hits_map2 | arrange;
++let hits_rows = intag_join6 | filter((_, kind) -> (kind, 0) eq) | map(((a, b, c), _) -> ((a, b), c));
++let hits_idx4 = hits_rows | arrange;
+ let hits = hits_idx3 | join(hits_idx4, ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
+ let counts_map = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ()));
+ let counts_idx = counts_map | arrange;

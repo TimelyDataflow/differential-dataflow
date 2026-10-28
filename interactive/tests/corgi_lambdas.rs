@@ -16,7 +16,7 @@ fn mismatched_lambdas_are_refused_at_install() {
             (r#"export "a" = input 0 : (int, ()) | map((k, v) -> let (a, b, c) = (k, v) in (k, v));"#, "wants a product of 3 fields"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
-            program.optimize();
+            interactive::passes::optimize(&mut program);
             let error = interactive::server::Server::new().install(worker, "p", &program).unwrap_err();
             assert!(error.contains(says), "{src}: {error}");
         }

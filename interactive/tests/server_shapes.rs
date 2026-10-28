@@ -8,7 +8,7 @@ use interactive::{lower, parse};
 
 fn program(src: &str) -> Program {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     program
 }
 
@@ -158,5 +158,26 @@ fn rows_of_another_shape_are_refused() {
         server.tick(worker);
         assert_eq!(server.snapshot(worker, "edges").unwrap().rows().len(), 4);
         std::fs::remove_file(&file).unwrap();
+    });
+}
+
+#[test]
+fn dead_imports_release_provider_dependencies_but_exports_keep_them() {
+    timely::execute_directly(|worker| {
+        let mut server = Server::new();
+        server.install(worker, "producer", &program(PRODUCER)).unwrap();
+        // Exercise install's optimizer too: this tree has not been optimized by the caller.
+        let unused = lower::lower_tree(parse::pipe::parse(r#"
+            let unused = import "edges";
+            let fed = input 7 : (int, ());
+        "#));
+        server.install(worker, "unused", &unused).unwrap();
+        server.feed("unused", 7, "1", None).unwrap();
+        server.drop_program(worker, "producer").unwrap();
+        server.install(worker, "producer", &program(PRODUCER)).unwrap();
+        server.install(worker, "contract", &program(r#"export "contract" = import "edges";"#)).unwrap();
+        assert!(server.drop_program(worker, "producer").unwrap_err().contains("live importer"));
+        server.drop_program(worker, "contract").unwrap();
+        server.drop_program(worker, "producer").unwrap();
     });
 }

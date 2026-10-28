@@ -13,15 +13,16 @@
 //!     ids are then per real key, input and output alike: a colliding bracket is split by real key
 //!     before it is reduced, its output is matched by key as well as value, and every output id
 //!     records the row holding its key, which is what `emit` reads.
-//!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
-//!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
-//!     `Unit`, Min → the chosen input rows, Collect → a `List`, a lambda → its graph's output over
-//!     every bracket's key and `(val, diff)` list), never through DDIR rows.
+//!   * the value callback — `reduce_lambda` runs ONE crossing per wave over every `(key, time)`
+//!     bracket, evaluating its expression over every bracket's key and `(val, diff)` list.
+//!     The resulting `(val, diff)` lists supply the desired output columns, never DDIR rows.
+//!     Only what the expression reads is gathered: its demand on its input, found once when the
+//!     backend is built, decides whether keys are gathered, and which fields of the values.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
 //! Presentation assigns value ids in structural order (signed integers, lexicographic lists).
-//! Min/Collect reuse that order rather than sorting the candidate columns a second time.
+//! Reduction expressions read their input lists in that order.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -37,7 +38,7 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
-use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
+use corgi::{Bounds, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::col_times::{ColTime, ColTimes};
 use crate::runtime::search::matching_ranges;
@@ -72,16 +73,74 @@ fn gather_refs(columns: &[CValue], refs: impl Iterator<Item = (usize, usize)>) -
 /// each key it holds, in key order.
 type Matches = Vec<Vec<(usize, Range<usize>)>>;
 
+/// Each bracket of `input`, ending at `ends`, cut to its first `k` entries, or `None` if none is
+/// longer. A bracket's ids ascend in value order, so these are its first `k` values.
+fn first_entries(k: usize, ends: &[usize], input: &[(u64, Diff)]) -> Option<(Vec<usize>, Vec<(u64, Diff)>)> {
+    let mut start = 0;
+    if !ends.iter().any(|&end| end - std::mem::replace(&mut start, end) > k) { return None; }
+    let (mut kept_ends, mut kept) = (Vec::with_capacity(ends.len()), Vec::new());
+    start = 0;
+    for &end in ends {
+        kept.extend_from_slice(&input[start..end.min(start + k)]);
+        kept_ends.push(kept.len());
+        start = end;
+    }
+    Some((kept_ends, kept))
+}
+
+/// What a reduce's lambda reads of its input `(key, vals)`, `vals` a list of `(val, diff)`, as
+/// Corgi's demand analysis finds it. Each key's list keeps its length and order whatever is read.
+struct Reads {
+    /// Whether the key is read at all. A key read only in part is gathered whole.
+    key: bool,
+    /// The demand on each value: the value columns are projected by it before they are gathered.
+    value: Demand,
+    /// The demand on the input once its values are gathered so, which projects it to the shape
+    /// the narrowed graph takes.
+    argument: Demand,
+    /// That shape, `(key, vals)` projected by the lambda's demand.
+    shape: Shape,
+}
+
+impl Reads {
+    /// `demand` is the lambda's demand on `input`, its `(key, vals)` shape.
+    fn new(demand: Demand, input: &Shape) -> Self {
+        let shape = demand.projected_shape(input).expect("a demand on the reduce's input");
+        let Demand::Prod(parts) = &demand else {
+            let read = demand != Demand::None;
+            let value = if read { Demand::All } else { Demand::None };
+            return Reads { key: read, value, argument: demand, shape };
+        };
+        // The values are projected by their demand before they are gathered, so the argument then
+        // takes them whole (or not at all), with whatever it reads of the diffs.
+        let (value, list) = match &parts[1] {
+            Demand::List(element) => match &**element {
+                Demand::Prod(pair) => {
+                    let gathered = if pair[0] == Demand::None { Demand::None } else { Demand::All };
+                    (pair[0].clone(), Demand::List(Box::new(Demand::Prod(vec![gathered, pair[1].clone()]))))
+                }
+                other => (other.clone(), parts[1].clone()),
+            },
+            other => (other.clone(), other.clone()),
+        };
+        Reads { key: parts[0] != Demand::None, value, argument: Demand::Prod(vec![parts[0].clone(), list]), shape }
+    }
+}
+
 /// A corgi reduce backend for a single `Reducer`.
 ///
 /// Each retire goes: `begin`; then per window, `next_window` presents a run of keys' input and
 /// output as integer records, `reduce_corrections` computes the output each key wants and how it
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub(crate) struct CorgiReduceBackend<T> {
-    reducer: Reducer,
-    /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads.
-    graph: Option<(Shape, Shape, Graph<NumOp>)>,
-    /// The current window's input values: its chunks' value columns.
+    /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads and narrowed to
+    /// what it reads of them: it takes its input projected by `reads.argument`.
+    graph: Graph<NumOp>,
+    /// What the graph reads of its input.
+    reads: Reads,
+    /// How many of each key's first values the graph is handed, if not all.
+    limit: Option<usize>,
+    /// The current window's input values: its chunks' value columns, projected by `reads.value`.
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
     output: Pool,
@@ -144,23 +203,23 @@ impl Retire {
 impl<T> CorgiReduceBackend<T> {
     /// A backend for input of `shape`, covering the key space in windows of `1 << 12` input
     /// records.
-    pub(crate) fn new(reducer: Reducer, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, shape, 1 << 12) }
+    pub(crate) fn new(reducer: Reducer, limit: Option<usize>, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, limit, shape, 1 << 12) }
 
     /// A backend with an explicit window budget, in presented input records. A `Reducer::Expr`
     /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
     /// type check keeps from being reached.
-    pub(crate) fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
-        let graph = match &reducer {
-            Reducer::Expr(lambda) => {
-                let g = compile_reduce(lambda, &kshape, &vshape)
-                    .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
-                Some((kshape, vshape, g))
-            }
-            _ => None,
-        };
+    pub(crate) fn with_window(reducer: Reducer, limit: Option<usize>, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
+        let Reducer::Expr(lambda) = reducer;
+        let graph = compile_reduce(&lambda, &kshape, &vshape)
+            .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
+        // The graph rebuilt to read only what it reads, and the demand saying what that is.
+        let input = Shape::Prod(vec![kshape, Shape::List(Box::new(Shape::Prod(vec![vshape, Shape::Int])))]);
+        let narrowed = corgi::compile(graph, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+            .unwrap_or_else(|e| panic!("reduce: narrowing a compiled graph at {input}: {e}"));
         CorgiReduceBackend {
-            reducer,
-            graph,
+            graph: narrowed.graph,
+            reads: Reads::new(narrowed.input, &input),
+            limit,
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -289,101 +348,7 @@ impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
-    /// The one value crossing for a wave: every `(key, time)` bracket at once. Builds a column of the
-    /// desired output values, one row each, and returns it with each bracket's end among its rows.
-    /// `input[k] = (value_id, accumulated diff)`; bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    /// As with `reduce_lambda`, the harness consolidates each bracket in ascending value-id order.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<usize>) {
-        let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
-        match self.reducer {
-            Reducer::Count => {
-                // Per-bracket sum of diffs, of either sign, as DD's `count`; a non-zero sum becomes an
-                // `Int`.
-                let mut sums: Vec<i64> = Vec::new();
-                let mut start = 0;
-                for &end in ends {
-                    let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
-                    if c != 0 {
-                        sums.push(c);
-                    }
-                    out_ends.push(sums.len());
-                    start = end;
-                }
-                (CValue::i64(sums), out_ends)
-            }
-            Reducer::Distinct => {
-                // Distinct records: each of a key's values whose net is NON-ZERO, once -- the sign
-                // does not matter. DD's `reduce` presents every value whose accumulation is
-                // non-zero, negatives included. A `> 0` test here silently drops a value that
-                // accumulates negative, which is exactly what a negated collection produces.
-                let mut reps = Vec::new();
-                let mut start = 0;
-                for &end in ends {
-                    reps.extend(input[start..end].iter().filter(|&&(_, d)| d != 0).map(|&(id, _)| id));
-                    out_ends.push(reps.len());
-                    start = end;
-                }
-                if reps.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                (self.input.gather(&reps), out_ends)
-            }
-            Reducer::Min => {
-                // The structural minimum over values with NON-ZERO net. The sign does not select
-                // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
-                // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
-                // Presentation has already ordered each real key's values. Its first non-zero
-                // value id is the minimum; gather just the winners, across all brackets at once.
-                let mut min_reps = Vec::with_capacity(ends.len());
-                let mut start = 0;
-                for &end in ends {
-                    if let Some(&(id, _)) = input[start..end].iter().find(|&&(_, diff)| diff != 0) {
-                        min_reps.push(id);
-                    }
-                    out_ends.push(min_reps.len());
-                    start = end;
-                }
-                if min_reps.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                (self.input.gather(&min_reps), out_ends)
-            }
-            Reducer::Expr(_) => unreachable!("a lambda's brackets are `reduce_lambda`'s"),
-            Reducer::Collect => {
-                // One row per bracket: the values sorted in DDIR observable order,
-                // each repeated by its diff, as a `List`. Ascending ids already give that order;
-                // element rows are taken columnar. A bracket emits iff some
-                // value has NON-ZERO net (as Distinct/Min: DD invokes the reducer only for a key
-                // with input, and the row reducer then lists the positive copies — an empty list
-                // when every net is negative). A bracket whose values all cancelled is a key with
-                // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
-                let mut elem_reps = Vec::new();
-                let mut bracket_ends = Vec::with_capacity(ends.len());
-                let mut start = 0;
-                for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        for &(id, diff) in &input[start..end] {
-                            elem_reps.extend(std::iter::repeat_n(id, diff.max(0) as usize));
-                        }
-                        bracket_ends.push(elem_reps.len());
-                    }
-                    out_ends.push(bracket_ends.len());
-                    start = end;
-                }
-                if bracket_ends.is_empty() {
-                    return (CValue::Unit(0), out_ends);
-                }
-                // A window whose lists are all empty still has an element SHAPE — the input
-                // values' — and the column must carry it, or this batch's `List<()>` meets the
-                // next batch's `List<T>` where the two are concatenated. `gather` at no indices
-                // is the empty column of that shape.
-                let elems = self.input.gather(&elem_reps);
-                (CValue::List(Bounds::offsets(bracket_ends), Box::new(elems)), out_ends)
-            }
-        }
-    }
-
-    /// As [`Self::reduce_brackets`] for `Reducer::Expr`, whose output rows carry diffs: every
+    /// The expression crossing for a wave: every
     /// bracket's key and its values, as a list of `(val, diff)`, through the lambda's graph at once.
     /// Returns the output values, their diffs, and each bracket's end among them.
     ///
@@ -392,6 +357,9 @@ where
     /// brackets are presented as they are. One with no input has no output, and the lambda does not
     /// see it.
     fn reduce_lambda(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+        // A limit hands the lambda each bracket's first values only; nothing past them is gathered.
+        let limited = self.limit.and_then(|k| first_entries(k, ends, input));
+        let (ends, input) = limited.as_ref().map_or((ends, input), |(ends, input)| (&ends[..], &input[..]));
         // Per bracket with input: its index, its end in `input`, and the row holding its key.
         let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
         let mut start = 0;
@@ -405,9 +373,13 @@ where
         if blocks.is_empty() {
             return (CValue::Unit(0), Vec::new(), vec![0; ends.len()]);
         }
-        let vals = self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>());
+        let vals = match self.reads.value {
+            Demand::None => CValue::Unit(input.len()),
+            _ => self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>()),
+        };
         let diffs = CValue::i64(input.iter().map(|&(_, diff)| diff).collect());
-        if cfg!(debug_assertions) {
+        // Projected values may tie; whole ones ascend.
+        if cfg!(debug_assertions) && self.reads.value == Demand::All {
             let mut start = 0;
             for &(_, end) in &blocks {
                 for i in start + 1..end {
@@ -417,13 +389,12 @@ where
             }
             assert!(input.iter().all(|&(_, diff)| diff != 0), "reduce: a bracket holds a zero diff");
         }
-        let keys = recover_key(&gather_refs(&self.key_columns, key_refs.into_iter()));
-        let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
+        let keys = if self.reads.key { recover_key(&gather_refs(&self.key_columns, key_refs.into_iter())) } else { CValue::Unit(key_refs.len()) };
         let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
-
-        let (k, v, graph) = self.graph.as_ref().expect("an expression reducer compiles at construction");
-        assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator compiled at ({k}, {v})");
-        let (bounds, elems) = corgi::eval_graph(graph, CValue::Prod(vec![keys, lists])).into_list("reduce output").unwrap();
+        let argument = self.reads.argument.project(CValue::Prod(vec![keys, lists])).expect("the reduce's input has the shape its demand is on");
+        let shape = corgi::shape_of_value(&argument);
+        assert!(shape == self.reads.shape, "reduce: input read as {shape} reached an operator narrowed to {}", self.reads.shape);
+        let (bounds, elems) = corgi::eval_graph(&self.graph, argument).into_list("reduce output").unwrap();
         let mut fields = elems.into_prod("reduce output").unwrap();
         let out_diffs = fields.pop().unwrap().into_i64("reduce output diffs").unwrap().to_vec();
         let out_vals = fields.pop().unwrap();
@@ -471,7 +442,8 @@ where
             let mut held = vec![0; keys.len()];
             for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
             self.retire = Retire { keys, held, input, window: 0..0, colliding: Vec::new() };
-            self.input.columns = in_chunks.iter().map(|chunk| chunk.vals().clone()).collect();
+            let value = &self.reads.value;
+            self.input.columns = in_chunks.iter().map(|chunk| value.project(chunk.vals().clone()).expect("a chunk's values have the reduce's value shape")).collect();
             self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
             self.output_keys.clear();
             self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
@@ -553,10 +525,7 @@ where
         }
         let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
         // The desired rows, and each one's diff where it is not one copy.
-        let (desired, desired_diffs, desired_ends) = match self.reducer {
-            Reducer::Expr(_) => { let (d, diffs, e) = self.reduce_lambda(in_ends, input); (d, Some(diffs), e) }
-            _ => { let (d, e) = self.reduce_brackets(in_ends, input); (d, None, e) }
-        };
+        let (desired, desired_diffs, desired_ends) = self.reduce_lambda(in_ends, input);
         let fresh = self.output.columns.len();
         let prior_refs = self.output.refs.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
@@ -642,7 +611,7 @@ where
                 alloc.clear();
                 alloc.resize(hi - lo, 0);
                 for row in lo..hi {
-                    let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
+                    let diff = desired_diffs[row];
                     match target[row - lo] {
                         Ok(i) => corr[net_start + i].1 += diff,
                         Err(r) if r == row => {
@@ -662,7 +631,7 @@ where
                     let first = if s == 0 { 0 } else { in_ends[s - 1] };
                     let (kc, kr) = self.input.refs[input[first].0 as usize];
                     for row in ds..de {
-                        let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
+                        let diff = desired_diffs[row];
                         let equal = |&(id, _): &(u64, Diff)| {
                             let (column, r) = refs[id as usize];
                             compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
@@ -819,10 +788,11 @@ mod tests {
     /// one value count together, and a new value gets a new id naming its row.
     #[test]
     fn corrections_net_by_value() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
         backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
+        backend.input.columns = vec![ints(vec![0, 1])];
         backend.key_columns = vec![ints(vec![10, 11, 12])];
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
@@ -836,8 +806,9 @@ mod tests {
     /// A changed wave's column stays alive when a later unchanged wave reuses its id.
     #[test]
     fn corrections_retain_only_named_output_columns() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
         backend.input.refs = vec![(0, 0)];
+        backend.input.columns = vec![ints(vec![0])];
         backend.key_columns = vec![ints(vec![10])];
         backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
         backend.output_keys = vec![(0, 0)];
@@ -904,7 +875,8 @@ mod tests {
             }
             let run = |window_size| {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
-                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, shape, window_size);
+                // Distinct reads its values whole, so the input pool holds what was presented.
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), None, shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
@@ -967,7 +939,10 @@ mod tests {
         // A lambda: the weighted sum of the values' first fields, once, and how many values, twice negated.
         let lambda = crate::ir::Lambda::new("let (_, vals) = input in \
             ((((0, vals) fold ((acc, ((a, _), d)) -> (acc, (a, d) mul) add)), 1) enlist, ((vals len), -2) enlist) append".into(), &corgi::Scope::default());
-        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(lambda)] {
+        // Each sugar with its limit, `min`'s splitting a colliding identifier's real keys first.
+        use crate::parse::Reducer as Sugar;
+        let sugars = [Sugar::Count, Sugar::Distinct, Sugar::Min, Sugar::Collect].map(|sugar| (Reducer::Expr(sugar.lambda()), sugar.limit()));
+        for (reducer, limit) in sugars.into_iter().chain([(Reducer::Expr(lambda), None)]) {
             // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
             let run = |forged: bool, window_size: usize| {
                 let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {
@@ -977,7 +952,7 @@ mod tests {
                     let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
                     Rc::new(ChunkBatch::new(vec![chunk]))
                 };
-                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), (shape.clone(), shape.clone()), window_size));
+                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), limit, (shape.clone(), shape.clone()), window_size));
                 let held = Antichain::from_elem(Time::minimum());
                 let (first, _) = tactic.retire(Vec::new(), Vec::new(), vec![batch(&early)], &held, &Antichain::from_elem(stamp(2)), &held);
                 let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();

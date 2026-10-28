@@ -1,0 +1,74 @@
+--- lowered
++++ optimized
+@@ -2,11 +2,11 @@
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
+ let store = import "store" : ((int), (int, int));
+ let intents = input 0 : ((int, int, int), (int));
+-let reads_filter = intents | filter(((_, r, _), _) -> (r, 1) eq);
+-let reads = reads_filter | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+-let wr_all_filter = intents | filter(((_, r, _), _) -> (r, 0) eq);
+-let wr_all = wr_all_filter | map(((wid, _, k), (v)) -> ((wid, k), (v)));
+-let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
++let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
++let rkk = reads | map((rk, _) -> (rk, ()));
++let reads_idx = reads | arrange;
++let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
++let wid_idx = wid | arrange;
+ let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
+ let rk_idx = rk | arrange;
+ let store_idx = store | arrange;
+@@ -14,37 +14,29 @@
+ res: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var rollback;
+-    let wid_idx = ::wid | arrange;
+     let rollback_idx = rollback | arrange;
+-    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
++    let wr_bad = ::wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
+     let writes_neg = wr_bad | negate;
+     let writes = ::wid + writes_neg;
+     let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
+-    let rk_idx = ::rk | arrange;
+     let wk_idx = wk | arrange;
+-    let pairs_join = rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)));
++    let pairs_join = ::rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)));
+     let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
+     let best_rows = pairs + ::base;
+     let best_idx = best_rows | arrange;
+     let best = best_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-    let bad_seen_filter = best | filter(((_, _, e), (_, v)) -> (v, e) ne);
+-    let bad_seen = bad_seen_filter | map(((_, rid, _), _) -> ((rid), ()));
+-    let seen = best | map(((k, rid, _), _) -> ((rid, k), ()));
+-    let rkk = ::reads | map((rk, _) -> (rk, ()));
+-    let unseen_neg = seen | negate;
+-    let unseen = rkk + unseen_neg;
++    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
++    let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
++    let unseen = ::rkk + unseen_rows;
+     let unseen_idx = unseen | arrange;
+-    let reads_idx = ::reads | arrange;
+-    let bad_absent_join = unseen_idx | join(reads_idx, ((rid, _), (), (e)) -> ((rid, e), ()));
+-    let bad_absent_filter = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne);
+-    let bad_absent = bad_absent_filter | map(((rid, _), ()) -> ((rid), ()));
++    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), (), (e)) -> ((rid, e), ()));
++    let bad_absent = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
+     let rollback_rows = bad_seen + bad_absent;
+     let rollback_idx2 = rollback_rows | arrange;
+     let rollback_reduce = rollback_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+     set rollback = rollback_reduce;
+ }
+ let rb = res::rollback;
+-let wid_idx = wid | arrange;
+ let rb_idx = rb | arrange;
+ let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
+ let committed_neg = wbad | negate;
+@@ -53,8 +45,7 @@
+ let latest_idx = latest_map | arrange;
+ let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+ let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
+-let store_idx2 = store | arrange;
+-let old_rows = latest | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
++let old_rows = latest | join(store_idx, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
+ let delta_neg = old_rows | negate;
+ let delta_rows = new_rows + delta_neg;
+ -- Renderer: build an export arrangement.

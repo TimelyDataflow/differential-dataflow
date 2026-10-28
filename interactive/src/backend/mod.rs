@@ -52,8 +52,8 @@ pub(crate) trait Backend {
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
     fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
-    /// `shape` is the input's row shape.
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s>;
+    /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
@@ -117,16 +117,6 @@ impl<'s, B: Backend> Rendered<'s, B> {
             Rendered::Collection(c) => B::arrange(c.clone()),
         }
     }
-}
-
-/// `(k, v)` to `((k, v), ())`: the record as the key, for `distinct` over values that aren't `()`.
-fn record_key() -> Lambda {
-    Lambda::new("let (k, v) = input in ((k, v), ())".into(), &::corgi::Scope::default())
-}
-
-/// `((k, v), ())` back to `(k, v)`.
-fn record_unkey() -> Lambda {
-    Lambda::new("let (kv, _) = input in kv".into(), &::corgi::Scope::default())
 }
 
 /// A rendered scope item: an operator's value, or a child scope's surrendered
@@ -243,19 +233,9 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
                         Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
                     },
-                    st::Node::Reduce { input, reducer: Reducer::Distinct } if shape_of(input).1 != ::corgi::Shape::Unit => {
-                        // Distinct records, data-parallel by record: each record is its own key, so a
-                        // change at a key with many values touches only its own records.
-                        let (key, val) = shape_of(input);
-                        let c = resolve(&items, &imports, &var_cols, input).collection();
-                        let rekeyed = B::linear(c, vec![LinearOp::Project(record_key())], depth, (key.clone(), val.clone()));
-                        let record = ::corgi::Shape::Prod(vec![key, val]);
-                        let present = B::reduce(B::arrange(rekeyed), &Reducer::Distinct, (record.clone(), ::corgi::Shape::Unit));
-                        Rendered::Collection(B::linear(B::as_collection(present), vec![LinearOp::Project(record_unkey())], depth, (record, ::corgi::Shape::Unit)))
-                    },
-                    st::Node::Reduce { input, reducer } => {
+                    st::Node::Reduce { input, reducer, limit } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
-                        Rendered::Arrangement(B::reduce(a, reducer, shape_of(input)))
+                        Rendered::Arrangement(B::reduce(a, reducer, *limit, shape_of(input)))
                     },
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();

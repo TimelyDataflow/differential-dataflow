@@ -1,0 +1,7 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (0, []).
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let sent_from = message | map((_, (_, created, author, country, _, _, _, _, _, _, _, _, _)) -> (country, (author, created)));
+let sent_from_idx = sent_from | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic3.s.sent_from" = sent_from_idx;

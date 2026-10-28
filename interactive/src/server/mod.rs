@@ -91,7 +91,8 @@ pub use self::evaluate::evaluate;
 pub use self::sources::gen_field_seeded;
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
 use self::bind::Binding;
-use self::sources::{canonical_source_name, clock_rows, generated_shape, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
+use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
+pub use self::sources::generated_shape;
 
 /// A published export as its readers see it: a trace of corgi chunks.
 #[derive(Clone)]
@@ -255,8 +256,8 @@ pub struct Server {
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
     arranged_imports: bool,
-    /// Apply the as-of rewrite to programs installed afterwards (default on).
-    as_of_drop: bool,
+    /// The passes install runs on programs installed afterwards (default all except projection).
+    passes: crate::passes::Config,
     /// This worker's diagnostics, when they are on: the source of the `diag.*` collections.
     diagnostics: Option<Rc<RefCell<crate::diag::Diagnostics>>>,
 }
@@ -274,7 +275,7 @@ impl Server {
             bindings: Vec::new(),
             epoch: 0,
             arranged_imports: true,
-            as_of_drop: true,
+            passes: crate::passes::Config::default(),
             diagnostics: None,
         }
     }
@@ -308,9 +309,15 @@ impl Server {
         self.arranged_imports = on;
     }
 
-    /// Drop dead as-of updates on programs installed afterwards (default on).
-    pub fn set_as_of_drop(&mut self, on: bool) {
-        self.as_of_drop = on;
+    /// The passes install runs on programs installed afterwards (default all except projection). None of them is
+    /// needed to run a program; they change how, not what, it computes.
+    pub fn set_passes(&mut self, passes: crate::passes::Config) {
+        self.passes = passes;
+    }
+
+    /// The passes install runs, for reports that describe an install.
+    pub fn passes(&self) -> crate::passes::Config {
+        self.passes
     }
 
     /// Also keep each export's new batches for [`Server::take_changes`] (default off). Affects
@@ -327,6 +334,12 @@ impl Server {
     /// The shape of a published trace's rows.
     pub fn trace_shape(&self, name: &str) -> Option<RowShape> {
         self.shapes.get(&canonical_source_name(name)).cloned()
+    }
+
+    /// The shape of a published trace or a source install can create on demand.
+    pub fn source_shape(&self, name: &str) -> Option<RowShape> {
+        let key = canonical_source_name(name);
+        self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
     }
 
     /// Return registry state without coupling a caller to stdout formatting.

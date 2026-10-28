@@ -1,0 +1,5 @@
+let request = input 0 : ((int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let answer = request | map(((rid, m), ()) -> (m, rid)) | join(message, (_, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, rid)) | join(person, (who, rid, (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (who, first, last)));
+export "is5.answer" = answer | arrange;

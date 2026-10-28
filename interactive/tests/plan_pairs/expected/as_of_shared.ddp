@@ -1,0 +1,12 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (0, []).
+let rows = import "rows" : (int, int);
+let lifted = rows | lift;
+let lifted_filter = lifted | filter((_, (_, (t0))) -> (t0, 0) ne);
+let rows_idx = rows | arrange;
+let strict_join = lifted_filter | half_join(rows_idx, 1, (k, v, _) -> (k, v));
+let inclusive_join = lifted | half_join(rows_idx, 0, (k, v, _) -> (k, v));
+-- Renderer: build an export arrangement.
+export "strict" = strict_join;
+-- Renderer: build an export arrangement.
+export "inclusive" = inclusive_join;

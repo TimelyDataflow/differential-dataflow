@@ -18,21 +18,9 @@ pub(crate) const KEYWORDS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
-    Min,
-    /// Each `(key, val)` whose accumulated diff is not zero, once: a collection read as a set of
-    /// records. A key's values are kept. When they aren't `()`, rendering keys the reduction by the
-    /// whole record (see `backend::render_scope`), so a change at a key with many values touches
-    /// only its own records rather than all of the key's values.
-    Distinct,
-    /// The sum of a key's diffs, as an `Int`, when it is not zero. It may be negative, as DD's
-    /// `count` is: a negative count is how a program finds a negative accumulation.
-    Count,
-    /// NEST: collect a key's values into a `List`, in corgi's order of values — so
-    /// deterministic, and position-ordered when the values are `(pos, …)` as `flatmap`
-    /// emits. The inverse of `FlatMap`.
-    Collect,
     /// A key's output by a lambda over `(key, vals)`, `vals` the key's values with non-zero
-    /// accumulated diffs, as a `List` of `(val, diff)` in the values' order. The lambda gives a
+    /// accumulated diffs, as a `List` of `(val, diff)` in the values' order (the first of them
+    /// only, when the reduce has a limit: see `scope_ir::Node::Reduce`). The lambda gives a
     /// `List` of `(val, diff)`: the key's output values and their diffs. A key with no such values
     /// has no output.
     Expr(Lambda),

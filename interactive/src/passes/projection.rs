@@ -1,5 +1,5 @@
 //! Field demand over the scope IR, computed in Rust so that an installed program can be
-//! rewritten without starting a second dataflow inside `Server::install`.
+//! rewritten using an in-process demand closure.
 //!
 //! Lambda input demand comes from Corgi's typed demand transform. Unknown or
 //! unsupported lambda shapes conservatively read their entire input.
@@ -8,7 +8,8 @@ use std::collections::VecDeque;
 
 use corgi::Shape;
 
-use crate::ir::{Lambda, LinearOp, Reducer};
+use crate::ir::{Lambda, LinearOp};
+use crate::lambda::Projection;
 use crate::scope_ir::{self as st, Item, Node, Ref, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
@@ -101,7 +102,7 @@ pub struct DemandGraph {
 }
 
 impl DemandGraph {
-    /// The in-process mirror of `demand.ddp`, for opt-in server installs.
+    /// The in-process mirror of `demand.ddp`.
     pub fn closure(&self) -> Vec<bool> {
         let mut next = vec![Vec::new(); self.facts];
         for &(from, to) in &self.edges {
@@ -328,15 +329,15 @@ fn all_lambda_fields(shapes: &[Shape]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn output_projection(shape: &Shape, path: &[usize]) -> Option<Shape> {
+fn output_demand(shape: &Shape, path: &[usize]) -> Option<corgi::Demand> {
     let Some((&field, tail)) = path.split_first() else {
-        return Some(shape.clone());
+        return Some(corgi::Demand::All);
     };
     let Shape::Prod(parts) = shape else {
         return None;
     };
-    let chosen = output_projection(parts.get(field)?, tail)?;
-    Some(Shape::Prod(
+    let chosen = output_demand(parts.get(field)?, tail)?;
+    Some(corgi::Demand::Prod(
         parts
             .iter()
             .enumerate()
@@ -344,7 +345,7 @@ fn output_projection(shape: &Shape, path: &[usize]) -> Option<Shape> {
                 if i == field {
                     chosen.clone()
                 } else {
-                    Shape::Unit
+                    corgi::Demand::None
                 }
             })
             .collect(),
@@ -362,40 +363,36 @@ fn graph_fields(lambda: &Lambda, shapes: &[Shape], output_path: &[usize]) -> Vec
     let Ok(output_shape) = corgi::shape_of(graph, &input_shape) else {
         return all();
     };
-    let Some(projection) = output_projection(&output_shape, output_path) else {
+    let Some(demand) = output_demand(&output_shape, output_path) else {
         return all();
     };
-    // demand_transform prunes the unobserved outputs and calls Corgi's
-    // demand_projection on the result.
-    let Ok(transform) = corgi::demand_transform(graph, &input_shape, &projection) else {
+    // Prove patterns at the original type before asking which input fields are read.
+    let Ok(compiled) = corgi::compile(graph.as_ref().clone(), &input_shape) else {
         return all();
     };
-    let Ok(projected_input) = transform.input_demand.to_shape(&input_shape) else {
+    let Ok(analysis) = corgi::analyze_demand(compiled.graph(), &input_shape, &demand) else {
         return all();
     };
-    let Shape::Prod(slots) = projected_input else {
-        return if projected_input == Shape::Unit {
-            Vec::new()
-        } else {
-            all()
-        };
-    };
-    if slots.len() != shapes.len() {
-        return all();
+    // Requests retain original field positions; projected_shape compacts them.
+    // Inspect each original field separately so dropping an earlier field cannot
+    // renumber the dependency edges used by DDIR's masks.
+    fn field(demand: &corgi::Demand, index: usize) -> &corgi::Demand {
+        match demand {
+            corgi::Demand::Prod(fields) => &fields[index],
+            other => other,
+        }
     }
     let mut fields = Vec::new();
-    for (slot, (original, projected_slot)) in shapes.iter().zip(&slots).enumerate() {
-        match (original, projected_slot) {
-            (Shape::Unit, Shape::Unit) | (_, Shape::Unit) => {}
-            (Shape::Prod(parts), Shape::Prod(kept)) if parts.len() == kept.len() => {
-                fields.extend(
-                    kept.iter().enumerate().filter_map(|(field, shape)| {
-                        (shape != &Shape::Unit).then_some((slot, field))
-                    }),
-                );
+    for (slot, original) in shapes.iter().enumerate() {
+        let demand = field(analysis.input_demand(), slot);
+        let parts = match original { Shape::Prod(parts) => parts.as_slice(), other => std::slice::from_ref(other) };
+        for (index, part) in parts.iter().enumerate() {
+            let need = if matches!(original, Shape::Prod(_)) { field(demand, index) } else { demand };
+            match need.projected_shape(part) {
+                Ok(Shape::Unit) => {},
+                Ok(_) => fields.push((slot, index)),
+                Err(_) => return all(),
             }
-            (Shape::Prod(_), _) => return all(),
-            _ => fields.push((slot, 0)),
         }
     }
     fields
@@ -462,6 +459,8 @@ fn build_scope(
         }
     }
     for (var, site) in scope.vars.iter().zip(&plan.vars) {
+        // A declaration constrains every feedback binding. Masking those fields would
+        // violate that contract; an inferred shape does not impose the same demand.
         if var.shape.is_some() {
             builder.graph.seeds.extend(site.all());
         }
@@ -562,24 +561,9 @@ fn build_scope(
                             projection,
                         )?;
                     }
-                    Node::Reduce { input, reducer } => {
+                    Node::Reduce { input, .. } => {
                         let input = plan.at(input)?;
-                        match reducer {
-                            Reducer::Count => {
-                                builder.presence(&output, input);
-                                for id in output.all() {
-                                    for &key in &input.key {
-                                        builder.edge(id, key);
-                                    }
-                                }
-                            }
-                            Reducer::Distinct
-                            | Reducer::Min
-                            | Reducer::Collect
-                            | Reducer::Expr(_) => {
-                                builder.opaque(&output, &[input]);
-                            }
-                        }
+                        builder.opaque(&output, &[input]);
                     }
                     Node::Inspect { input, .. } => {
                         // Inspection is observable even if its collection has
@@ -665,7 +649,10 @@ fn mask_lambda(
     {
         return None;
     }
-    if key_facts.iter().chain(value_facts).all(|&id| live[id]) {
+    if !needs_mask(key_shape, key_facts, live) && match value_shape {
+        Some(shape) => !needs_mask(shape, value_facts, live),
+        None => live[value_facts[0]],
+    } {
         return None;
     }
     // Select live fields directly from the call result. Corgi can fold those
@@ -684,6 +671,14 @@ fn mask_lambda(
             format!("({key}, {val})")
         },
     ))
+}
+
+fn needs_mask(shape: &Shape, facts: &[usize], live: &[bool]) -> bool {
+    match shape {
+        Shape::Unit => false,
+        Shape::Prod(parts) => parts.iter().zip(facts).any(|(s, &id)| *s != Shape::Unit && !live[id]),
+        _ => !live[facts[0]],
+    }
 }
 
 fn mask_site_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
@@ -765,6 +760,14 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
+            (Item::Op(Node::Reduce { input, reducer, .. }), PlannedItem::Op { output, .. }) => {
+                if needs_mask(&output.shape.1, &output.val, live) {
+                    let value = mask_part("input", &output.shape.1, &output.val, live);
+                    let shape = &plan.at(input).expect("reduce input").shape;
+                    *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"), &shape.0, &shape.1);
+                    masked += output.val.iter().filter(|&&id| !live[id]).count();
+                }
+            }
             (Item::Sub(child), PlannedItem::Sub(plan)) => {
                 masked += rewrite_scope(child, plan, live)
             }
@@ -793,7 +796,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                         remap_ref(r, &remap);
                     }
                     if let PlannedItem::Op { output, .. } = planned {
-                        if let Some(lambda) = mask_site_lambda(&identity, output, live) {
+                        if let Some(mut lambda) = mask_site_lambda(&identity, output, live) {
+                            lambda.added_by = Some("projection pushdown");
                             let fields = output
                                 .key
                                 .iter()
@@ -824,37 +828,12 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                 }
             }
         }
-        // Distinct, min, collect, and user reductions must see their full input.
-        // Mask only the rows they emit, before any downstream consumer sees them.
-        let reduced_output = match (&item, planned) {
-            (Item::Op(Node::Reduce { .. }), PlannedItem::Op { output, .. }) => Some(output),
-            _ => None,
-        };
         items.push(item);
         if labeled {
             labels.push(scope.labels[i].clone());
         }
-        if let Some(output) = reduced_output {
-            if let Some(lambda) = mask_site_lambda(&identity, output, live) {
-                let fields = output
-                    .key
-                    .iter()
-                    .chain(&output.val)
-                    .filter(|&&id| !live[id])
-                    .count();
-                let project = Item::Op(Node::Linear {
-                    input: Ref::Local(items.len() - 1),
-                    ops: vec![LinearOp::Project(lambda)],
-                });
-                remap.push(items.len());
-                items.push(project);
-                if labeled {
-                    labels.push(scope.labels[i].clone());
-                }
-                masked += fields;
-                continue;
-            }
-        }
+        // Reduce keeps its grouping key. Readers already project it as needed;
+        // concat arms receive their own mask when they need a common shape.
         remap.push(items.len() - 1);
     }
     for bind in &mut scope.binds {
@@ -863,11 +842,58 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
     for export in &mut scope.exports {
         remap_ref(&mut export.value, &remap);
     }
+    for (_, value) in &mut scope.names {
+        remap_ref(value, &remap);
+    }
     scope.items = items;
     if labeled {
         scope.labels = labels;
     }
     masked
+}
+
+/// Fuse value maps before computing field demand. A shared reduction, a
+/// changed key, or a map that computes anything beyond tuple wiring is left alone.
+fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -> usize {
+    let mut dead = vec![false; scope.items.len()];
+    let mut changed = 0;
+    let mut counts = super::structural::use_counts(scope, &dead);
+    // Redirection can make a later map read a reduce directly. Its input shape is
+    // still the shape at its original edge, including any projection fused earlier.
+    let input_shapes: Vec<_> = scope.items.iter().map(|item| match item {
+        Item::Op(Node::Linear { input, .. }) => shapes.of(input),
+        _ => None,
+    }).collect();
+    for i in 0..scope.items.len() {
+        if let (Item::Sub(child), ItemShapes::Sub(shapes)) = (&mut scope.items[i], &shapes.items[i]) {
+            changed += fuse_reduce_maps(child, shapes, depth + 1);
+        }
+        let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { continue };
+        let j = *j;
+        if counts[j] != 1 || !matches!(&scope.items[j], Item::Op(Node::Reduce { .. })) { continue; }
+        let Some(shape) = &input_shapes[i] else { continue };
+        let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), depth) else { continue };
+        let mut projections = Vec::new();
+        for (op, (key, val)) in ops.iter().zip(&steps) {
+            let LinearOp::Project(lambda) = op else { break };
+            let Some(projection) = Projection::of(lambda, &Shape::Prod(vec![key.clone(), val.clone()])).and_then(|p| p.value(key, val)) else { break };
+            projections.push(projection);
+        }
+        if projections.is_empty() { continue; }
+        let Item::Op(Node::Reduce { input, reducer, .. }) = &mut scope.items[j] else { unreachable!() };
+        let Some(shape) = shapes.of(input) else { continue };
+        for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
+        changed += projections.len();
+        let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };
+        ops.drain(..projections.len());
+        if ops.is_empty() {
+            scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = Ref::Local(j); });
+            dead[i] = true;
+            counts = super::structural::use_counts(scope, &dead);
+        }
+    }
+    super::structural::compact(scope, &dead);
+    changed
 }
 
 fn remap_ref(r: &mut Ref, remap: &[usize]) {
@@ -900,40 +926,87 @@ pub fn demand_graph(
     Ok(builder.graph)
 }
 
-/// Replace dead tuple fields in producer lambdas by unit. Returns the number of
-/// replaced top-level fields. On a shape disagreement the original is restored.
+/// Replace dead tuple fields in producer lambdas by unit and fuse value maps into
+/// reduces, alternating to a fixed point. Returns the number of field masks and fused
+/// maps. On a shape disagreement or failure to converge within 16 rounds the original
+/// is restored. Masks can leave adjacent maps and identity masks behind; `run` follows
+/// this pass with the optimizer passes it runs.
 pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<usize, String> {
+    pushdown_timed(program, source, &mut super::Measurement::default())
+}
+
+pub(super) fn pushdown_timed(
+    program: &mut st::Program,
+    source: &dyn Fn(&Source) -> Option<st::RowShape>,
+    inference: &mut super::Measurement,
+) -> Result<usize, String> {
     let original = program.clone();
-    let (shapes, problems) = shapes::infer(program, source);
+    let (mut shapes, problems) = inference.infer(program, source);
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
-    let mut builder = Builder::default();
-    let Ok(plan) = build_scope(&mut builder, &program.root, &shapes, None, 0) else {
-        return Ok(0);
-    };
-    for export in &plan.exports {
-        builder.graph.seeds.extend(export.all());
+    let exports = shapes.exports.clone();
+    let mut changed = 0;
+    for _ in 0..16 {
+        let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
+        let (checked, problems) = inference.infer(program, source);
+        if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
+        let mut builder = Builder::default();
+        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, 0) else { break };
+        for export in &plan.exports {
+            builder.graph.seeds.extend(export.all());
+        }
+        let live = builder.graph.closure();
+        let masked = rewrite_scope(&mut program.root, &plan, &live);
+        let (checked, problems) = inference.infer(program, source);
+        if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
+        changed += fused + masked;
+        if fused + masked == 0 { return Ok(changed); }
+        shapes = checked;
     }
-    let live = builder.graph.closure();
-    let masked = rewrite_scope(&mut program.root, &plan, &live);
-    let (_, check) = shapes::infer(program, source);
-    if !check.conflicts.is_empty() || !check.unknown.is_empty() {
-        *program = original;
-        // A rewritten intermediate shape disagrees with a consumer. The pass
-        // is optional, so keep the original program in that case.
-        return Ok(0);
-    }
-    Ok(masked)
+    // Projection is optional. Never leave a rejected or partially converged rewrite.
+    *program = original;
+    Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{lower, parse};
+
+    #[test]
+    fn masking_and_reduce_fusion_reach_a_fixed_point() {
+        let text = r#"let rows = input 0 : (int, int);
+            let dead = rows | map((k,v) -> ((k,v),v)) | distinct;
+            export "out" = rows;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        let exports = shapes::infer(&program, &|_| None).0.exports;
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let once = format!("{program:?}");
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+        assert_eq!(once, format!("{program:?}"));
+        assert_eq!(exports, shapes::infer(&program, &|_| None).0.exports);
+    }
+
+    #[test]
+    fn declared_feedback_shapes_keep_their_fields() {
+        let text = r#"let rows = input 0 : (int, int);
+            s: { var x : (int, int); set x = rows | map((k,v) -> (k,v)); }
+            let dead = rows | map((k,v) -> (v,k));
+            export "out" = rows;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        // The unrelated map can still be masked; violating the feedback declaration
+        // would reject the whole candidate, including the unrelated field masks.
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let (shapes, problems) = shapes::infer(&program, &|_| None);
+        assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
+        let ItemShapes::Sub(child) = &shapes.items[0] else { panic!("expected child") };
+        let shape = child.vars[0].as_ref().unwrap();
+        assert_eq!((&shape.key, &shape.val), (&Shape::Int, &Shape::Int));
+    }
 
     #[test]
     fn graph_reads_selected_tuple_fields() {
@@ -970,13 +1043,13 @@ mod tests {
     }
 
     #[test]
-    fn count_can_drop_values_but_distinct_keeps_them() {
+    fn reduction_expressions_conservatively_keep_input_values() {
         let source = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));\n";
         let count = format!("{source}export \"out\" = x | count;\n");
         let distinct = format!("{source}export \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
         let mut distinct = lower::lower_tree(parse::pipe::parse(&distinct));
-        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 0);
         assert_eq!(pushdown(&mut distinct, &|_| None).unwrap(), 0);
     }
 
@@ -994,9 +1067,8 @@ mod tests {
         let text = "let x = input 0 : ((int, int), ()) | map((k, v) -> (k, v));
                     export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        // Count still groups by both key fields; the second is masked only
-        // after the reduction, where the next map no longer reads it.
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
+        // Count still groups by both key fields. Its reader projects the key.
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
     }
 
     #[test]
@@ -1008,16 +1080,17 @@ mod tests {
                     export \"merged\" = merged | map((row, ()) -> (row.0, ()));
                     export \"counts\" = counted | map(((a, _), n) -> (a, n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
+        crate::passes::optimize(&mut program);
         assert_eq!(program.root.labels, [
-            "left", "merged", "counted", "counted", "export merged", "export counts",
+            "merged", "counted", "counted", "export merged", "export counts",
         ]);
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
-        // A projection inserted before each concat input, and after the reduce, takes the
-        // label of the statement it serves.
+        crate::passes::optimize(&mut program);
+        // Both concat arms read the source after identity removal and share one
+        // mask. It keeps the statement it serves; reduce keeps its grouping key.
         assert_eq!(program.root.labels.len(), program.root.items.len());
         assert_eq!(program.root.labels, [
-            "left", "merged", "merged", "merged", "counted", "counted", "counted",
+            "merged", "merged", "counted", "counted",
             "export merged", "export counts",
         ]);
     }
@@ -1030,9 +1103,9 @@ mod tests {
                     export \"out\" = x | distinct
                     | map((row, ()) -> (row.0, ())) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
-        original.optimize();
+        crate::passes::optimize(&mut original);
         let mut projected = original.clone();
-        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 1);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 0);
         original.root.exports[0].name = "before.out".into();
         projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
@@ -1060,8 +1133,8 @@ mod tests {
                     }
                     export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
-        assert!(pushdown(&mut program, &|_| None).unwrap() >= 3);
+        crate::passes::optimize(&mut program);
+        assert!(pushdown(&mut program, &|_| None).unwrap() >= 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
         assert!(check.unknown.is_empty(), "{:?}", check.unknown);
@@ -1094,8 +1167,8 @@ mod tests {
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        program.optimize();
-        assert!(pushdown(&mut program, &|_| None).unwrap() >= 4);
+        crate::passes::optimize(&mut program);
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
     }
@@ -1110,9 +1183,9 @@ mod tests {
                     export \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
-        original.optimize();
+        crate::passes::optimize(&mut original);
         let mut projected = original.clone();
-        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 4);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
         original.root.exports[0].name = "before.out".into();
         projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {

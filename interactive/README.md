@@ -270,13 +270,17 @@ I didn't write it, but I find `ok bye` hilarious.
 A program moves through four parts, each using only the ones before it.
 
 1. **The language.** `parse/` reads `.ddp` text. `lower.rs` turns it into the scope-tree IR of
-   `scope_ir.rs`: scopes, items, exports, and the IR's own optimizations. `shapes.rs` infers the
+   `scope_ir.rs`: scopes, items, imports, and exports. `shapes.rs` infers the
    shape of every collection. `ir.rs` is the vocabulary all of these are written in: lambdas,
    operator steps, reducers, and registered functions. `lambda.rs` is where the expression
    language plugs in: it parses, types, compiles and composes the lambdas in a program's slots.
-2. **Analyses** rewrite a program into another program. `explain/` produces one that explains its
-   own outputs. `projection.rs`, on with `DDIR_PROJECTION`, replaces fields that nothing reads
-   by `()`.
+2. **Rewrites** turn a program into another program. `passes/` holds the passes install runs,
+   through one entry point, `passes::run`: dead-code removal, structural optimization, map
+   composition, arrangement sharing, invariant motion, projection (fields nothing reads
+   become `()`), and the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
+   `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
+   excludes projection; `all` enables every pass. `explain/` produces a
+   program that explains its own outputs.
 3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
    trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's
    backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
@@ -285,6 +289,15 @@ A program moves through four parts, each using only the ones before it.
    one file per concern.
    `diag.rs` turns the server's own logging into the `diag.*` collections. The `ddir-server`
    crate in `server/` is the executable that drives it all.
+
+The `dead-code` pass runs before `structural` in each optimizer round, after the
+initial invariant-hoisting phase, so dead readers cannot inflate fusion's use
+counts. Its analysis walks each scope backward once; a separate transform removes
+unread operators, child scopes, child exports, imports, and redundant source aliases.
+Exports, inspections, and feedback bindings in retained scopes are roots. Root
+program inputs remain available to clients. The pass is on by default; use
+`--passes all,-projection,-dead-code` or the same list in `DDIR_PASSES` to disable
+this cleanup. Structural optimization performs no liveness pruning of its own.
 
 The stack aims to stay generic over two things: the expression language and the backend.
 - **The expression language** is corgi today. Slots are corgi lambdas, typed and compiled to corgi
@@ -331,3 +344,57 @@ Its module documentation lists the oracles, and how to pick them and replay a fa
 This is a research project, primarily for personal learning at this point.
 Various bits of what is written above are not yet entirely true.
 I would not recommend relying on any of this yet.
+
+## Plan without running
+
+`cargo run -p interactive --bin ddir-plan -- file.ddp [more.ddp ...]` prints
+lowering, optimization, projection, and as-of-drop stages. `--passes LIST` switches
+passes off as the server's `DDIR_PASSES` does; a switched-off stage is shown unchanged. Earlier files supply
+their inferred export shapes to later files. No dataflow or generated source is
+installed. A missing provider is unresolved even if its import declares a shape;
+the tool prints the partial report and exits unsuccessfully.
+
+`ddir-plan --timings file.ddp` adds wall times, call counts, rewrite counts, and
+fixed-point rounds. The table separates parsing, lowering, preparation stages,
+report snapshots/diffs, source context, and printing. Pass totals include calls
+made by projection, including rejected candidates; they are subtotals of the
+stages, so do not add both. Shape inference includes schedule and projection
+checks; inference for report snapshots stays in the snapshot row. Times exclude
+file I/O. With `--emit-ddp`, the table goes to stderr, leaving DDP stdout unchanged.
+Default reports, stage diffs, and plan-pairs snapshots never contain timings.
+
+Changes use the stage's `Change` observations: structural rewrites count one per
+observation, map canonicalization counts one per rewrite (a bulk composition is
+one), binding/import cleanup counts removed bindings, and projection/as-of count
+masks/fusions and inserted filters. Pass counts include attempted rewrites; stage
+counts describe accepted changes. Disabled passes have zero calls. A disabled
+projection stage still checks providers and shapes. Fixed-point rounds include
+the final stable round; optimizer totals include projection's optimizer calls.
+`passes::run` returns `Timings`; because it receives lowered IR, the plan frontend
+supplies the lowering measurement. `report_program` leaves parse and lowering
+counts at zero. Collection uses clocks around calls, never around individual items.
+
+The library entry point is `plan::report(text, source, passes)`, where `source` looks up a
+published trace's shape and `passes` says which passes run. `Report::print` prints all
+stages; `Stage::print` prints one. Reports assume arranged imports and use placeholder
+as-of time `(1, [])`, for installation at epoch 2.
+They ignore environment switches. The output is diagnostic text, not yet
+parseable DDP. Renderer notes describe known storage conversions and non-unit
+distinct; other renderer expansions are not shown.
+
+Lambdas print from the typed, optimized corgi graph, using the public
+`Graph::nodes` and `Graph::output` methods in the pinned dependency.
+
+`ddir-plan --check-lambdas file.ddp` reparses every printed slot at its input
+shape. It compares compiled graphs first. If they differ, it compares outputs
+on 82 generated rows, in batches of 0, 1, 17 and 64, with a fixed seed. This is a
+sample check, not a proof. It may evaluate registered functions. Each stage
+reports printed, checked, failed, fallback, exact and sampled counts. A failed
+or unavailable check makes the tool exit unsuccessfully. Unsupported nodes use
+a marked, readable graph form; this form is not executable DDP.
+
+`--lambda-source` displays the old source for comparison. Checks still concern
+the graph printer's text. The library equivalents are `Report::print_with` and
+`Stage::print_with`, using `PrintOptions`. Plain `print` does not evaluate rows.
+Generated input names and local sum declarations do not recover erased source
+names. Lambda serialization still stores source and is unchanged.

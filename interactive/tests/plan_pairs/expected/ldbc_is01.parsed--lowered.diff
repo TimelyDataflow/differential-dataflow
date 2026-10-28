@@ -1,0 +1,16 @@
+--- parsed
++++ lowered
+@@ -1,4 +1,11 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (0, []).
+ let request = input 0 : ((int, int), ());
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+-let answer = request | map(((rid, who), ()) -> (who, rid)) | join(person, (_, rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _)) -> ((rid, 0), (first, last, birthday, ip, browser, city, gender, created)));
+-export "is1.answer" = answer | arrange;
++let answer_map = request | map(((rid, who), ()) -> (who, rid));
++let answer_idx = answer_map | arrange;
++let person_idx = person | arrange;
++let answer = answer_idx | join(person_idx, (_, rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _)) -> ((rid, 0), (first, last, birthday, ip, browser, city, gender, created)));
++let answer_idx2 = answer | arrange;
++-- Renderer: publish the existing arrangement.
++export "is1.answer" = answer_idx2;

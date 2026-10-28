@@ -17,7 +17,7 @@ fn tup(fields: &[i64]) -> String {
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let statements = parse::pipe::parse(src);
     let mut program = lower::lower_tree(statements);
-    program.optimize();
+    interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
 

@@ -298,6 +298,10 @@ fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
 
 use crate::scope_ir as st;
 
+pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
+    matches!(input, st::Ref::Local(i) if matches!(&items[*i], st::Item::Op(st::Node::Arrange(_) | st::Node::Reduce { .. })))
+}
+
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut scopes = HashMap::new();
     // The program root has no source-level name; `::` is its only explicit anchor.
@@ -306,12 +310,17 @@ pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut plan = PathPlan::default();
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
-    st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true) }
+    let mut distinct = HashMap::new();
+    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut distinct) };
+    let (shapes, _) = crate::shapes::infer(&program, &|_| None);
+    crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &mut Vec::new());
+    program
 }
 
 /// Expr-lowering state for one scope. Resolves names to scope-local `Ref`s and
 /// accumulates this scope's nodes and (input/trace) imports.
 struct ScopeLower {
+    distinct: Vec<usize>,
     is_root: bool,
     items: Vec<st::Item>,
     /// Each item's statement name (see `st::Scope::labels`).
@@ -330,6 +339,10 @@ impl ScopeLower {
         self.items.push(st::Item::Op(n));
         self.labels.push(self.statement.clone());
         st::Ref::Local(i)
+    }
+    fn arrange(&mut self, input: st::Ref) -> st::Ref {
+        if is_arranged(&input, &self.items) { input }
+        else { self.push(st::Node::Arrange(input)) }
     }
     fn input_ref(&mut self, n: usize) -> st::Ref {
         assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", n);
@@ -376,23 +389,26 @@ impl ScopeLower {
             Expr::Lift(e)       => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Lift] }) },
             Expr::JoinFunction(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::JoinFunction(t.clone())] }) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
-            // Join/Reduce consume arrangements; arrange their inputs explicitly
-            // so identical arrangements are visible to `optimize`'s within-scope
-            // dedup and shared at render.
+            // Join/Reduce consume arrangements; reuse local arrangements.
             Expr::Join(l, r, p) => {
-                let lr = self.lower_expr(l); let la = self.push(st::Node::Arrange(lr));
-                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                let lr = self.lower_expr(l); let la = self.arrange(lr);
+                let rr = self.lower_expr(r); let ra = self.arrange(rr);
                 self.push(st::Node::Join { left: la, right: ra, projection: p.clone() })
             },
             // A half join reads its stream as updates and only its second input arranged.
             Expr::HalfJoin(s, r, strict, p) => {
                 let stream = self.lower_expr(s);
-                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                let rr = self.lower_expr(r); let ra = self.arrange(rr);
                 self.push(st::Node::HalfJoin { stream, arrangement: ra, strict: *strict, projection: p.clone() })
             },
             Expr::Reduce(e, red)=> {
-                let r = self.lower_expr(e); let a = self.push(st::Node::Arrange(r));
-                self.push(st::Node::Reduce { input: a, reducer: red.clone() })
+                let r = self.lower_expr(e);
+                let a = if matches!(red, Reducer::Distinct) {
+                    // Once shapes are known, lower distinct by key or by whole record.
+                    self.distinct.push(self.items.len());
+                    r
+                } else { self.arrange(r) };
+                self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
@@ -407,9 +423,11 @@ fn lower_scope_tree(
     exports_wanted: &[PathKey],
     plan: &PathPlan,
     is_root: bool,
+    distinct: &mut HashMap<Vec<String>, Vec<usize>>,
 ) -> st::Scope {
     let scope_name = scope_label(address);
     let mut s = ScopeLower {
+        distinct: Vec::new(),
         is_root,
         items: Vec::new(),
         labels: Vec::new(),
@@ -517,6 +535,7 @@ fn lower_scope_tree(
         }
     }
     drop(deps);
+    let mut names = Vec::new();
     let mut ready: BTreeSet<usize> = (0..pending.len()).filter(|&i| remaining[i] == 0).collect();
     while let Some(pos) = ready.pop_first() {
         for &u in &users[pos] {
@@ -529,6 +548,7 @@ fn lower_scope_tree(
                 let e = lets.remove(&name).unwrap();
                 s.statement = name.clone();
                 let r = s.lower_expr(e);
+                names.push((name.clone(), r.clone()));
                 s.env.insert(RefName::Plain(name.clone()), r.clone());
                 s.env.insert(RefName::Path(PathKey { anchor: address.to_vec(), target: address.to_vec(), field: name }), r);
             },
@@ -537,7 +557,7 @@ fn lower_scope_tree(
                 let mut child_address = address.to_vec();
                 child_address.push(name.clone());
                 let wanted: Vec<PathKey> = plan.exports.get(&child_address).into_iter().flatten().cloned().collect();
-                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false);
+                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, distinct);
                 let slots = export_slots(&wanted, &child_address);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
@@ -588,7 +608,8 @@ fn lower_scope_tree(
         }
     }
 
-    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, binds, exports }
+    distinct.insert(address.to_vec(), s.distinct);
+    st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, names, binds, exports }
 }
 
 #[cfg(test)]
@@ -605,6 +626,64 @@ mod tree_tests {
     }
     fn reads_a_child_export(s: &st::Scope) -> bool {
         s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Linear { input: Ref::ChildExport(..), .. })))
+    }
+
+    #[test]
+    fn reuses_local_arrangements_without_passes() {
+        let producer = "min";
+        let text = format!(r#"
+            let rows = input 0 : (int, ()) | {producer};
+            export "join" = rows | join(rows, (k, _, _) -> (k, ()));
+            export "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
+            export "reduce" = rows | min;
+            export "distinct" = rows | distinct;
+        "#);
+        let program = lower_tree(parse(&text));
+        assert_eq!(program.root.items.iter().filter(|item| matches!(item, st::Item::Op(st::Node::Arrange(_)))).count(), 1, "{producer}");
+        let passes = crate::passes::Config::none();
+        let report = crate::plan::report(&text, &|_| None, &passes).unwrap();
+        let printed = report.emit_ddp().unwrap().text;
+        let replanned = crate::plan::report(&printed, &|_| None, &passes).unwrap();
+        assert!(report.compare_final(&replanned).is_empty(), "{producer}");
+        assert_eq!(printed, replanned.emit_ddp().unwrap().text, "{producer}");
+    }
+
+    #[test]
+    fn arranges_consumers_of_whole_record_distinct() {
+        let program = lower_tree(parse(r#"
+            let rows = input 0 : (int, int) | distinct;
+            export "join" = rows | join(rows, (k, a, _) -> (k, a));
+            export "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
+            export "reduce" = rows | min;
+            export "distinct" = rows | distinct;
+        "#));
+        for item in &program.root.items {
+            let inputs = match item {
+                st::Item::Op(st::Node::Join { left, right, .. }) => vec![left, right],
+                st::Item::Op(st::Node::HalfJoin { arrangement, .. }) => vec![arrangement],
+                st::Item::Op(st::Node::Reduce { input, .. }) => vec![input],
+                _ => Vec::new(),
+            };
+            for input in inputs { assert!(is_arranged(input, &program.root.items), "{item:?}"); }
+        }
+    }
+
+    #[test]
+    fn keeps_explicit_arranges_and_scope_boundaries() {
+        let program = lower_tree(parse(r#"
+            let rows = input 0 : (int, ()) | arrange | arrange;
+            inner: { let reduced = rows | min; }
+            export "local" = rows | min | arrange;
+            export "child" = inner::reduced | min;
+            export "trace" = import "trace" : (int, ()) | min;
+        "#));
+        let arranges: Vec<_> = program.root.items.iter().filter_map(|item| match item {
+            st::Item::Op(st::Node::Arrange(input)) => Some(input),
+            _ => None,
+        }).collect();
+        assert!(arranges.iter().any(|input| matches!(input, Ref::ChildExport(..))));
+        let inner = child(&program.root, "inner");
+        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Arrange(Ref::Import(_)))));
     }
 
     #[test]
@@ -905,7 +984,7 @@ mod optimize_tests {
         let src = "let a = input 0 | map(((a, b), ()) -> (a, b)) | filter((a, b) -> (a, b) ne) | negate;\nexport \"result\" = a;";
         let mut p = lower_tree(parse(src));
         assert_eq!(p.op_count(), 3); // three single-op Linears
-        p.optimize();
+        crate::passes::optimize(&mut p);
         assert_eq!(p.op_count(), 1, "chain should fuse to one Linear");
         let Node::Linear { ops, .. } = ops(&p.root)[0] else { panic!("expected a Linear") };
         assert_eq!(ops.len(), 3, "fused Linear carries all three ops in order");
@@ -923,7 +1002,7 @@ mod optimize_tests {
             let j2 = a | join(b, (_, x, y) -> (y, x));\n\
             export \"result\" = j1 + j2;";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         let arranges = ops(&p.root).iter().filter(|n| matches!(n, Node::Arrange(_))).count();
         assert_eq!(arranges, 2, "one shared arrangement per distinct input (a, b)");
     }
@@ -936,7 +1015,7 @@ mod optimize_tests {
             let b = input 0 | map(((a, b), ()) -> (a, b));\n\
             export \"result\" = a | join(b, (_, x, _) -> (x, ()));";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         // No Arrange may target a Reduce item.
         for n in ops(&p.root) {
             if let Node::Arrange(Ref::Local(j)) = n {
@@ -948,17 +1027,17 @@ mod optimize_tests {
 
     #[test]
     fn optimizes_within_nested_scopes() {
-        // The fusible chain sits inside a scope; optimize must recurse.
+        // The feedback-dependent chain stays inside its scope; optimize must recurse.
         let src = "\
             let e = input 0 | map(((a, b), ()) -> (a, b));\n\
             s: {\n\
-                set x = e | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
+                set x = (e + x) | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
             }\n\
             export \"result\" = s::x;";
         let mut p = lower_tree(parse(src));
-        p.optimize();
+        crate::passes::optimize(&mut p);
         let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
         let linears: Vec<usize> = ops(child).iter().filter_map(|n| match n { Node::Linear { ops, .. } => Some(ops.len()), _ => None }).collect();
-        assert_eq!(linears, vec![2], "the key|filter chain fuses inside the child scope");
+        assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");
     }
 }

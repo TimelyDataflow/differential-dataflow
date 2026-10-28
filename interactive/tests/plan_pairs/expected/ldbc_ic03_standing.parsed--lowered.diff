@@ -1,0 +1,15 @@
+--- parsed
++++ lowered
+@@ -1,7 +1,11 @@
++-- Time lanes: epoch.
++-- Trace imports use provider arrangements; history advances to G = (0, []).
+ let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "ldbc.friend" : (int, (int, int));
+ let place = import "ldbc.place" : (int, (List(int), List(int), int));
+ let by_name = import "ldbc.place.by_name" : (List(int), int);
+ let sent_from = message | map((_, (_, created, author, country, _, _, _, _, _, _, _, _, _)) -> (country, (author, created)));
+-export "ic3.s.sent_from" = sent_from | arrange;
++let sent_from_idx = sent_from | arrange;
++-- Renderer: publish the existing arrangement.
++export "ic3.s.sent_from" = sent_from_idx;

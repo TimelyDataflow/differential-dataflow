@@ -7,12 +7,12 @@ fn program(src: &str) -> Program { lower::lower_tree(parse::pipe::parse(src)) }
 fn alpha_renamed_maps_keep_the_first_text_and_label() {
     let mut p = program(r#"
         let x = input 0 : (int, int);
-        let a = x | map((k, v) -> (k, v)); let b = x | map((p, q) -> (p, q));
+        let a = x | map((k, v) -> (v, k)); let b = x | map((p, q) -> (q, p));
         export "a" = a; export "b" = b;
     "#);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
     let original = format!("{ops:?}");
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     assert_eq!(p.op_count(), 1);
     assert_eq!(p.root.labels, ["a"]);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
@@ -42,7 +42,7 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
     src += r#"reader: { let both = a::out_a + b::out_b; } export "both" = reader::both;"#;
     let original = program(&src);
     let mut optimized = original.clone();
-    optimized.optimize();
+    interactive::passes::optimize(&mut optimized);
     assert_eq!(optimized.root.items.iter().filter(|i| matches!(i, Item::Sub(_))).count(), 3);
     assert!(optimized.op_count() < original.op_count());
     assert_eq!(optimized.root.exports[0].value, optimized.root.exports[2].value);

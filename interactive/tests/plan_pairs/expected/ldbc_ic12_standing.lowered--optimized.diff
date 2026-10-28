@@ -1,0 +1,37 @@
+--- lowered
++++ optimized
+@@ -1,31 +1,22 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
+-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let friend = import "ldbc.friend" : (int, (int, int));
+-let tag = import "ldbc.tag" : (int, (List(int), int));
+-let by_class = import "ldbc.tag.by_class" : (int, int);
+ let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+-let classes = import "ldbc.tagclass.by_name" : (List(int), int);
+-let mtag = import "ldbc.mtag.by_tag" : (int, int);
+ let selves = tagclass | map((id, _) -> ((id, id), ()));
+ below: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var below;
+     let step_map = below | map(((low, high), ()) -> (high, low));
+     let step_idx = step_map | arrange;
+-    let tagclass_idx = ::tagclass | arrange;
+-    let step_join = step_idx | join(tagclass_idx, (_, low, (_, parent)) -> (low, parent));
+-    let step_filter = step_join | filter((_, parent) -> (parent, 0) ge);
+-    let step = step_filter | map((low, higher) -> ((low, higher), ()));
++    let step_join = step_idx | join(::tagclass, (_, low, (_, parent)) -> (low, parent));
++    let step = step_join | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));
+     let below_rows = ::selves + step;
+     let below_idx = below_rows | arrange;
+     let below_reduce = below_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+     set below = below_reduce;
+ }
+ let below_hl = below::below | map(((low, high), ()) -> (high, low));
+-let reply_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);
+-let reply = reply_filter | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
++let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
+ let below_hl_idx = below_hl | arrange;
+ let reply_idx = reply | arrange;
+ -- Renderer: publish the existing arrangement.

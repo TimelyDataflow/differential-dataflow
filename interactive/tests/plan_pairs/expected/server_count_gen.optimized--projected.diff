@@ -1,0 +1,13 @@
+--- optimized
++++ projected
+@@ -3,7 +3,6 @@
+ let edges = import "random:nodes=8,edges=12" : ((int, int), ());
+ let edge_count_map = edges | map(_ -> ((), ()));
+ let edge_count_idx = edge_count_map | arrange;
+-let edge_count_reduce = edge_count_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-let edge_count_map2 = edge_count_reduce | map((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (n) in (k, _call0));
+--- Renderer: build an export arrangement.
+-export "edge_count" = edge_count_map2;
++let edge_count_reduce = edge_count_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((a, b) -> ((a), b)));
++-- Renderer: publish the existing arrangement.
++export "edge_count" = edge_count_reduce;

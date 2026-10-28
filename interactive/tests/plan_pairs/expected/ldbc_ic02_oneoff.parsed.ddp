@@ -1,0 +1,14 @@
+let request = input 0 : ((int, int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = import "ldbc.friend" : (int, (int, int));
+let by_author = import "ic2.s.by_author" : (int, (int, int));
+let latest = import "ic2.s.latest" : (int, (int, int));
+let newest = import "ic2.s.newest" : (int, int);
+let friends = request | map(((rid, who, max), ()) -> (who, (rid, max))) | join(friend, (_, req, (f, _)) -> (f, req));
+let ahead = friends | join(newest, (f, (rid, max), neg) -> (f, (rid, max, neg neg)));
+let fast = ahead | filter((_, (_, max, last)) -> (last, max) lt) | join(latest, (f, (rid, _, _), (neg, id)) -> (rid, ((neg, id), f)));
+let slow = ahead | filter((_, (_, max, last)) -> (last, max) ge) | join(by_author, (f, (rid, max, _), (neg, id)) -> (rid, ((neg, id), f, max))) | filter((_, ((neg, _), _, max)) -> (neg neg, max) lt) | map((rid, (order, f, _)) -> (rid, (order, f)));
+let top = fast + slow | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg neg, f))) | join(message, (id, (rid, rank, created, f), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created))) | join(person, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
+export "ic2x1.answer" = answer | arrange;

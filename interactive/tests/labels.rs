@@ -22,7 +22,7 @@ export \"reach\" = reach::reach;
 
 fn program() -> Program {
     let mut p = lower::lower_tree(parse::pipe::parse(SRC));
-    p.optimize();
+    interactive::passes::optimize(&mut p);
     p
 }
 
@@ -44,7 +44,9 @@ fn every_item_is_labelled_after_optimize() {
     // `pairs` lowers to arrangements and a join; `edges` is shared and arranged once, by `pairs`.
     assert!(labelled("pairs").iter().any(|i| matches!(i, Item::Op(Node::Join { .. }))));
     assert!(labelled("counts").iter().any(|i| matches!(i, Item::Op(Node::Reduce { .. }))));
-    assert!(labelled("export counts").iter().any(|i| matches!(i, Item::Op(Node::Linear { .. }))));
+    // The export's identity map is gone; its declared export still names the count.
+    assert!(labelled("export counts").is_empty());
+    assert!(p.root.exports.iter().any(|e| e.name == "counts"));
     let Some(Item::Sub(reach)) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))) else { panic!("no child scope") };
     assert!(reach.labels.iter().any(|l| l == "step"));
     assert!(reach.labels.iter().any(|l| l == "reach"));

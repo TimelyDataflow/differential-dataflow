@@ -591,3 +591,41 @@ fn framed_feeds_on_one_worker() {
 fn framed_feeds_on_three_workers() {
     assert_framed_feeds(3);
 }
+
+#[test]
+fn planning_reads_live_exports_without_installing() {
+    let (server, mut writer, mut reader) = start_server(2);
+    request(&mut writer, &mut reader, "r0", "r0 load provider begin\nexport \"rows\" = input 0 : (int, int);\nr0 end-load\n");
+    let before = request(&mut writer, &mut reader, "before", "before list\n");
+    let command = "p plan preview begin\nexport \"out\" = import \"rows\" | distinct;\np end-plan\n";
+    let plan = request(&mut writer, &mut reader, "p", command);
+    assert!(plan.iter().any(|line| line.contains("reduce(")));
+    assert!(!plan.iter().any(|line| line.contains("Unresolved import")));
+    assert_eq!(plan, request(&mut writer, &mut reader, "p", command));
+    assert_eq!(before, request(&mut writer, &mut reader, "after", "after list\n"));
+    request(&mut writer, &mut reader, "r3", "r3 drop provider\n");
+    let missing = request(&mut writer, &mut reader, "p", command);
+    assert!(missing.iter().any(|line| line.contains("Unresolved import: \"rows\"")));
+    server.stop();
+}
+
+#[test]
+fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
+        .env("DDIR_BIND", "127.0.0.1:0").env("DDIR_WS_BIND", "127.0.0.1:0")
+        .env("DDIR_WORKERS", "2").env("DDIR_DIAGNOSTICS", "0")
+        .env("DDIR_PROJECTION", "1").env_remove("DDIR_PASSES")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().unwrap();
+    child.stdin.take().unwrap().write_all(b"p plan preview begin\nexport \"out\" = import \"diag.time\";\np end-plan\nexit\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let warning = String::from_utf8(output.stderr).unwrap();
+    assert!(warning.contains("DDIR_PROJECTION is ignored; use DDIR_PASSES=projection"), "{warning}");
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(!report.contains("Unresolved import") && !report.contains("incomplete"), "{report}");
+    assert!(report.contains("projection switched off"), "{report}");
+    let stages = report.lines().filter(|line| line.starts_with("p data === ")).count();
+    assert!(stages > 0, "{report}");
+    assert!(report.contains(&format!("p ok planned \"preview\" ({stages} stages)")), "{report}");
+}

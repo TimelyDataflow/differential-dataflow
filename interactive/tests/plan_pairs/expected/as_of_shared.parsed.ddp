@@ -1,0 +1,4 @@
+let rows = import "rows" : (int, int);
+let lifted = rows | lift;
+export "strict" = lifted | half_join(rows, 1, (k, v, _) -> (k, v));
+export "inclusive" = lifted | half_join(rows, 0, (k, v, _) -> (k, v));

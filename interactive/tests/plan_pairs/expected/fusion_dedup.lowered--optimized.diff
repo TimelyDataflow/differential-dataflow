@@ -1,0 +1,15 @@
+--- lowered
++++ optimized
+@@ -2,10 +2,7 @@
+ let rows = input 0 : (int, int);
+ let left_map = rows | map((k, v) -> (k, (v, 1) add));
+ let left = left_map | filter((k, _) -> (k, 0) gt);
+-let right_map = rows | map((k, v) -> (k, (v, 1) add));
+-let right = right_map | filter((k, _) -> (k, 10) lt);
+-let same_map = rows | map((k, v) -> (k, (v, 1) add));
+-let same = same_map | filter((k, _) -> (k, 0) gt);
+-let out_rows = left + right + same;
++let right = left_map | filter((k, _) -> (k, 10) lt);
++let out_rows = left + right + left;
+ -- Renderer: build an export arrangement.
+ export "out" = out_rows;

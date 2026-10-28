@@ -31,6 +31,9 @@
 
 use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Value as CValue};
 
+pub(crate) mod print;
+pub(crate) mod normalize;
+
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
 /// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
 /// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
@@ -44,6 +47,8 @@ use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Valu
 pub struct Lambda {
     pub(crate) src: String,
     pub(crate) graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
+    /// Printer provenance only; it never affects compilation or equality.
+    pub(crate) added_by: Option<&'static str>,
 }
 
 impl Lambda {
@@ -52,7 +57,7 @@ impl Lambda {
     /// a type error.
     pub(crate) fn new(src: String, scope: &corgi::Scope) -> Self {
         let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
-        Lambda { src, graph }
+        Lambda { src, graph, added_by: None }
     }
     /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
     /// on an argument written over `pattern`'s names, and is bound to the name `body` is given for
@@ -105,6 +110,137 @@ impl serde::Serialize for Lambda {
 impl<'de> serde::Deserialize<'de> for Lambda {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Ok(Lambda::new(String::deserialize(d)?, &corgi::Scope::default()))
+    }
+}
+
+/// Tuple wiring: select an input subtree, build a tuple, or discard a subtree.
+/// Lists and sums are atomic here; no operation may inspect their contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Projection {
+    Field(Vec<usize>),
+    Tuple(Vec<Projection>),
+    Unit,
+}
+
+impl Projection {
+    pub(crate) fn field(&self, index: usize) -> Option<Self> {
+        match self {
+            Self::Field(path) => { let mut path = path.clone(); path.push(index); Some(Self::Field(path)) }
+            Self::Tuple(fields) => fields.get(index).cloned(),
+            Self::Unit => None,
+        }
+    }
+
+    pub(crate) fn text(&self, input: &str) -> String {
+        match self {
+            Self::Field(path) => path.iter().fold(input.to_owned(), |s, i| format!("{s}.{i}")),
+            Self::Tuple(fields) => format!("({})", fields.iter().map(|p| p.text(input)).collect::<Vec<_>>().join(", ")),
+            Self::Unit => "()".into(),
+        }
+    }
+
+    /// Expand products and unit fields, so rebuilding an unchanged key is identity too.
+    pub(crate) fn expanded(&self, shape: &Shape) -> Option<Self> {
+        match self {
+            Self::Field(path) => {
+                let mut selected = shape;
+                for &i in path { let Shape::Prod(parts) = selected else { return None }; selected = parts.get(i)?; }
+                match selected {
+                    Shape::Unit => Some(Self::Unit),
+                    Shape::Prod(parts) => Some(Self::Tuple((0..parts.len()).map(|i| self.field(i)?.expanded(shape)).collect::<Option<_>>()?)),
+                    _ => Some(self.clone()),
+                }
+            }
+            Self::Tuple(parts) => Some(Self::Tuple(parts.iter().map(|p| p.expanded(shape)).collect::<Option<_>>()?)),
+            Self::Unit => Some(Self::Unit),
+        }
+    }
+
+    /// Restrict a row projection to its value, proving that the key is unchanged.
+    pub(crate) fn value(&self, key: &Shape, val: &Shape) -> Option<Self> {
+        let shape = Shape::Prod(vec![key.clone(), val.clone()]);
+        let Self::Tuple(parts) = self.expanded(&shape)? else { return None };
+        if parts.len() != 2 || parts[0] != Self::Field(vec![0]).expanded(&shape)? { return None; }
+        fn strip(p: &Projection) -> Option<Projection> {
+            Some(match p {
+                Projection::Field(path) if path.first() == Some(&1) => Projection::Field(path[1..].to_vec()),
+                Projection::Tuple(parts) => Projection::Tuple(parts.iter().map(strip).collect::<Option<_>>()?),
+                Projection::Unit => Projection::Unit,
+                _ => return None,
+            })
+        }
+        strip(&parts[1])
+    }
+
+    pub(crate) fn of(lambda: &Lambda, input: &Shape) -> Option<Self> {
+        let projection = Self::parse(&lambda.src)?;
+        // Composed graphs are authoritative. Never optimize from diagnostic source alone.
+        let parsed = corgi::parse_ml(&lambda.src).ok()?;
+        (corgi::compile(parsed, input).ok()?.graph()
+            == corgi::compile(lambda.graph().ok()?.as_ref().clone(), input).ok()?.graph()).then_some(projection)
+    }
+
+    /// A deliberately small subset of Corgi: bindings, tuple patterns, field selections,
+    /// tuples and unit. Reject arithmetic, calls, and all other expressions.
+    pub(crate) fn parse(source: &str) -> Option<Self> {
+        #[derive(Clone)]
+        enum Pattern<'a> { Name(&'a str), Tuple(Vec<Pattern<'a>>) }
+        struct Parser<'a> { tokens: Vec<&'a str>, at: usize, names: std::collections::BTreeMap<&'a str, Projection> }
+        impl<'a> Parser<'a> {
+            fn eat(&mut self, token: &str) -> bool {
+                if self.tokens.get(self.at) == Some(&token) { self.at += 1; true } else { false }
+            }
+            fn next(&mut self) -> Option<&'a str> { let token = *self.tokens.get(self.at)?; self.at += 1; Some(token) }
+            fn pattern(&mut self) -> Option<Pattern<'a>> {
+                if self.eat("(") {
+                    let mut parts = Vec::new();
+                    if !self.eat(")") { loop { parts.push(self.pattern()?); if self.eat(")") { break; } if !self.eat(",") { return None; } } }
+                    Some(Pattern::Tuple(parts))
+                } else { Some(Pattern::Name(self.next()?)) }
+            }
+            fn bind(&mut self, pattern: &Pattern<'a>, value: Projection) -> Option<()> {
+                match pattern {
+                    Pattern::Name(name) => { self.names.insert(name, value); }
+                    Pattern::Tuple(parts) => for (i, p) in parts.iter().enumerate() { self.bind(p, value.field(i)?)?; },
+                }
+                Some(())
+            }
+            fn expr(&mut self) -> Option<Projection> {
+                if self.eat("let") {
+                    let pattern = self.pattern()?;
+                    if !self.eat("=") { return None; }
+                    let value = self.expr()?;
+                    if !self.eat("in") { return None; }
+                    let saved = self.names.clone();
+                    self.bind(&pattern, value)?;
+                    let result = self.expr();
+                    self.names = saved;
+                    return result;
+                }
+                let mut value = if self.eat("(") {
+                    let mut parts = Vec::new();
+                    if !self.eat(")") { loop { parts.push(self.expr()?); if self.eat(")") { break; } if !self.eat(",") { return None; } } }
+                    if parts.is_empty() { Projection::Unit } else { Projection::Tuple(parts) }
+                } else { let name = self.next()?; self.names.get(name)?.clone() };
+                while self.eat(".") { value = value.field(self.next()?.parse().ok()?)?; }
+                Some(value)
+            }
+        }
+        let mut tokens = Vec::new();
+        let mut start = 0;
+        let bytes = source.as_bytes();
+        while start < bytes.len() {
+            if bytes[start].is_ascii_whitespace() { start += 1; continue; }
+            let mut end = start + 1;
+            if bytes[start].is_ascii_alphanumeric() || bytes[start] == b'_' {
+                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') { end += 1; }
+            } else if !b"(),.=".contains(&bytes[start]) { return None; }
+            tokens.push(&source[start..end]);
+            start = end;
+        }
+        let mut parser = Parser { tokens, at: 0, names: [("input", Self::Field(Vec::new()))].into_iter().collect() };
+        let result = parser.expr()?;
+        (parser.at == parser.tokens.len()).then_some(result)
     }
 }
 
@@ -250,9 +386,9 @@ pub(crate) fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
 /// kernel runs on every batch of these shapes.
 fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let output = slot_shape(lambda, shapes)?;
-    // Optimized only now that it types: among corgi's passes, a field of a tuple the lambda built
-    // becomes the field itself, and common subexpressions merge.
-    Ok((corgi::optimize(lambda.graph()?), output))
+    // Typed compilation removes proven patterns before normalizing the executable graph.
+    let compiled = corgi::compile(lambda.graph()?.as_ref().clone(), &Shape::Prod(shapes.to_vec()))?;
+    Ok((compiled.graph().clone(), output))
 }
 
 /// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is
@@ -497,10 +633,13 @@ mod tests {
         }
         // Inside a larger body. Over non-NaN pairs only: corgi's float `add` returns the positive
         // quiet NaN where Rust may keep a NaN operand's sign; the words themselves agree on NaNs.
+        // An `add` of non-NaNs can still compute a NaN (infinity minus infinity), which corgi
+        // makes the positive quiet NaN and Rust's hardware may not (x86's default NaN is negative).
+        let canonical = |f: f64| if f.is_nan() { f64::from_bits(0x7ff8_0000_0000_0000) } else { f };
         let finite: Vec<_> = pairs.into_iter().filter(|(x, y)| !x.is_nan() && !y.is_nan()).collect();
         let body = "((a call fexp, b) add, (a call fln, b) call flt, (a call fsqrt, b call fint) call fpowi)";
         let expected = CValue::Prod(vec![
-            CValue::f64(finite.iter().map(|&(x, y)| x.exp() + y).collect()),
+            CValue::f64(finite.iter().map(|&(x, y)| canonical(x.exp() + y)).collect()),
             CValue::int(finite.iter().map(|&(x, y)| (x.ln() < y) as i64)),
             CValue::f64(finite.iter().map(|&(x, y)| powi(x.sqrt(), y)).collect()),
         ]);

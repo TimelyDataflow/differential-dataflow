@@ -13,7 +13,10 @@
 //! computing them:
 //! - `workers`: two to five workers, against one.
 //! - `scratch`: the accumulated input evaluated in one go, against the incremental run.
-//! - `optimize`: the program unoptimized.
+//! - `optimize`: the program unoptimized, installed with every pass switched off.
+//! - `subset`: the lowered program installed with a reproducible random pass subset.
+//! - `subset-asof`: the delta form installed over compacted history, with all versus random passes.
+//! - `plan`: emit final DDP and replan with that subset; compare graphs and emitted text.
 //! - `delta`: every `join` written as a delta join (two `half_join`s, delayed to their data times).
 //! - `asof`: the delta form, installed after its input traces have history, with and without
 //!   dropping dead as-of updates.
@@ -43,12 +46,16 @@
 //!   DIFFTEST_CASES=1` reproduces any case, with the programs `split`, `bind` and `reinstall`
 //!   derive from it; `DIFFTEST_CASE_FILE=<file>` checks a case as a failure prints it, edited by
 //!   hand if you like (the derived programs aside).
+//! - `DIFFTEST_PASSES=none,projection` overrides the seed-derived subset for replay.
+//! - `DIFFTEST_SECONDS=10800` bounds a sweep between cases; `DIFFTEST_MINIMIZE=0` saves
+//!   original failures for later minimization. Each case logs its subset and outcome.
 //! - A case that makes no progress for two minutes stops the sweep, naming its seed.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use interactive::passes::Config;
 use interactive::scope_ir::Program;
 use interactive::server::{self, Server};
 use interactive::{explain, lower, parse};
@@ -872,7 +879,7 @@ fn program(src: &str, optimize: bool) -> Result<Program, String> {
     let src = src.to_string();
     quietly(move || {
         let mut p = lower::lower_tree(parse::pipe::parse(&src));
-        if optimize { p.optimize(); }
+        if optimize { interactive::passes::optimize(&mut p); }
         p
     })
 }
@@ -907,18 +914,18 @@ struct RunOptions {
     arranged: bool,
     ahead: bool,
     cycle: Option<(usize, usize)>,
-    as_of_drop: bool,
+    passes: Config,
 }
 
 /// [`run_programs`], and once the last program is installed, each `(trace, input)` of `binds`
 /// bound to that input of it. With `cycle`, `(d, r)`, the last program is dropped before epoch `d`
 /// and installed again before epoch `r`.
 fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, arranged: bool, ahead: bool, cycle: Option<(usize, usize)>) -> Result<Vec<Exports>, String> {
-    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, as_of_drop: true })
+    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, passes: Config::all() })
 }
 
 fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, options: RunOptions) -> Result<Vec<Exports>, String> {
-    let RunOptions { arranged, ahead, cycle, as_of_drop } = options;
+    let RunOptions { arranged, ahead, cycle, passes } = options;
     let programs = programs.to_vec();
     let binds = binds.to_vec();
     let epochs = case.epochs.clone();
@@ -926,7 +933,7 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
     let guards = timely::execute(timely::Config::process(workers), move |worker| -> Result<Vec<Exports>, String> {
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
-        server.set_as_of_drop(as_of_drop);
+        server.set_passes(passes);
         // On one worker, every export's tapped changes are checked against its contents.
         let single = worker.peers() == 1;
         server.set_export_taps(single);
@@ -999,7 +1006,7 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
     let mut results = guards.join();
     match results.remove(0) {
         Ok(r) => r,
-        Err(e) => Err(format!("worker panicked: {e}")),
+        Err(e) => Err(format!("worker panicked: {}", FIRST_PANIC.lock().unwrap().take().unwrap_or(e))),
     }
 }
 
@@ -1082,7 +1089,7 @@ fn split(case: &Case) -> Option<(String, String, bool, usize)> {
 }
 
 /// Publish the inputs first, then install the whole delta form after at least two epochs.
-fn asof_programs(case: &Case) -> Result<Vec<(String, Program, usize)>, String> {
+fn asof_programs(case: &Case, optimize: bool) -> Result<Vec<(String, Program, usize)>, String> {
     let mut producer = String::new();
     let mut consumer = String::new();
     for stmt in &case.stmts {
@@ -1100,7 +1107,7 @@ fn asof_programs(case: &Case) -> Result<Vec<(String, Program, usize)>, String> {
         }
     }
     let late = 2 + (case.seed as usize % (case.epochs.len() - 2));
-    Ok(vec![("producer".into(), program(&producer, true)?, 0), ("consumer".into(), program(&consumer, true)?, late)])
+    Ok(vec![("producer".into(), program(&producer, optimize)?, 0), ("consumer".into(), program(&consumer, optimize)?, late)])
 }
 
 /// [`split`], but the consumer reads the producer's collections through its own inputs, each bound
@@ -1141,13 +1148,13 @@ fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
+enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
 
 impl Oracle {
     /// The oracles, by the names `DIFFTEST_ORACLES` takes.
-    const NAMED: [(&'static str, Oracle); 10] = [
+    const NAMED: [(&'static str, Oracle); 13] = [
         ("workers", Oracle::Workers), ("scratch", Oracle::Scratch), ("optimize", Oracle::Optimize),
-        ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
+        ("subset", Oracle::Subset), ("subset-asof", Oracle::SubsetAsOf), ("plan", Oracle::Plan), ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
         ("bind", Oracle::Bind), ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
     ];
     fn all() -> Vec<Oracle> { Self::NAMED.iter().map(|(_, o)| *o).collect() }
@@ -1237,18 +1244,33 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
             },
             Oracle::Scratch if case.timed => continue,
             Oracle::Scratch => scratch(&opt, case),
-            Oracle::Optimize => program(&src, false).and_then(|p| run(&p, 1, case)),
+            Oracle::Optimize => program(&src, false).and_then(|p| {
+                run_with_options(&[("p".to_string(), p, 0)], &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::none() })
+            }),
+            Oracle::Subset => program(&src, false).and_then(|p| {
+                run_with_options(&[("p".to_string(), p, 0)], &[], 1, case,
+                    RunOptions { arranged: true, ahead: false, cycle: None, passes: subset(case.seed) })
+            }),
+            Oracle::Plan => match plan_round_trip(&src, subset(case.seed)) {
+                Ok(known) => {
+                    if known { println!("KNOWN as-of reinsertion seed={} passes={}", case.seed, pass_names(subset(case.seed))); }
+                    continue;
+                }
+                Err(e) => return Outcome::Fail(oracle, e),
+            },
             Oracle::Delta => {
                 if !case.has_joins() { continue; }
                 program(&case.render(true), true).and_then(|p| run(&p, 1, case))
             }
-            Oracle::AsOf => {
-                if case.raw.is_some() { continue; }
-                asof_programs(case).and_then(|programs| {
-                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: true })?;
-                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, as_of_drop: false })?;
+            Oracle::AsOf | Oracle::SubsetAsOf => {
+                if case.raw.is_some() || case.epochs.len() < 3 { continue; }
+                asof_programs(case, oracle == Oracle::AsOf).and_then(|programs| {
+                    let passes = if oracle == Oracle::SubsetAsOf { subset(case.seed) }
+                        else { Config { as_of_drop: false, ..Config::all() } };
+                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::all() })?;
+                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes })?;
                     match differ(&on, &off) {
-                        Some(d) => Err(format!("with versus without as-of rewrite: {d}")),
+                        Some(d) => Err(format!("all passes versus alternate late-install passes: {d}")),
                         None => Ok(base.clone()),
                     }
                 })
@@ -1288,7 +1310,7 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
     // Explain rewrites the lowered program, before optimizing; its query input follows the
     // program's largest positional input.
     let lowered = program(&case.render(false), false)?;
-    let ex = quietly(|| { let mut ex = explain::explain(&lowered); ex.optimize(); ex }).map_err(|e| format!("explain panicked: {e}"))?;
+    let ex = quietly(|| { let mut ex = explain::explain(&lowered); interactive::passes::optimize(&mut ex); ex }).map_err(|e| format!("explain panicked: {e}"))?;
     let used: Vec<usize> = lowered.root.imports.iter().filter_map(|imp| match imp.from {
         interactive::scope_ir::Source::Input(i) => Some(i),
         _ => None,
@@ -1335,10 +1357,13 @@ fn load_case(path: &str) -> Case {
 
 /// A case from the text of a case file (see [`load_case`]).
 fn parse_case(text: &str) -> Case {
+    let mut seed = 0;
     let mut program = String::new();
     let mut epochs: Vec<BTreeMap<usize, Vec<String>>> = Vec::new();
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("-- epoch ") {
+        if let Some(rest) = line.strip_prefix("-- seed ") {
+            seed = rest.parse().unwrap();
+        } else if let Some(rest) = line.strip_prefix("-- epoch ") {
             let (head, rows) = rest.split_once(": ").unwrap();
             let (e, input) = head.split_once(", input ").unwrap();
             let (e, input): (usize, usize) = (e.parse().unwrap(), input.parse().unwrap());
@@ -1350,7 +1375,41 @@ fn parse_case(text: &str) -> Case {
         }
     }
     let timed = program.contains("delay(") || program.contains("join_function(") || program.contains("lift");
-    Case { seed: 0, stmts: Vec::new(), raw: Some(program), epochs, explainable: !timed, timed }
+    Case { seed, stmts: Vec::new(), raw: Some(program), epochs, explainable: !timed, timed }
+}
+
+/// Draw independently of generation, so minimization and new generator draws keep the subset.
+fn subset(seed: u64) -> Config {
+    if let Ok(text) = std::env::var("DIFFTEST_PASSES") { return Config::parse(&text).unwrap(); }
+    let bits = Rng(seed ^ 0x7061_7373_6573).below(128);
+    Config { structural: bits & 1 != 0, compose_maps: bits & 2 != 0,
+        dead_code: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
+        collapse_parent_arranges: bits & 32 != 0, hoist_invariant: bits & 64 != 0 }
+}
+
+fn pass_names(config: Config) -> String {
+    std::iter::once("none").chain(Config::NAMES.into_iter().filter(|n| !config.off().contains(n)))
+        .collect::<Vec<_>>().join(",")
+}
+
+/// True only for the known repeated as-of insertion. Replanning without that insertion must
+/// match both the original final graph and its text; other changes are still failures.
+fn plan_round_trip(src: &str, config: Config) -> Result<bool, String> {
+    let source = |name: &str| server::generated_shape(name);
+    let first = interactive::plan::report(src, &source, &config)?;
+    let printed = first.emit_ddp().map_err(|e| format!("emit: {e}"))?;
+    if printed.lambdas.graph_changed != 0 { return Err(format!("emit: {} changed scalar graphs", printed.lambdas.graph_changed)); }
+    let second = interactive::plan::report(&printed.text, &source, &config).map_err(|e| format!("reparse: {e}"))?;
+    let differences = first.compare_final(&second);
+    let stable = second.emit_ddp()?.text == printed.text;
+    if differences.is_empty() && stable { return Ok(false); }
+    if config.as_of_drop {
+        let without = interactive::plan::report(&printed.text, &source, &Config { as_of_drop: false, ..config })?;
+        if first.compare_final(&without).is_empty() && without.emit_ddp()?.text == printed.text {
+            return Ok(true);
+        }
+    }
+    Err(format!("roundtrip: text stable={stable}; {}", differences.join("; ")))
 }
 
 // ===== Minimizing =====
@@ -1364,7 +1423,7 @@ fn minimize(case: &Case, oracle: Oracle) -> Case {
     loop {
         let mut progress = false;
         // Exports: keep `result` first, so explain still has one.
-        let exports = best.exports();
+        let exports = if best.raw.is_none() { best.exports() } else { Vec::new() };
         for name in exports.iter().skip(1) {
             let mut c = best.clone();
             c.stmts.retain(|s| !matches!(s, Stmt::Export { name: n, .. } if n == name));
@@ -1455,8 +1514,10 @@ fn report(small: &Case, seed: u64, oracle: Oracle, why_small: &str, why: &str) -
     let comment = |text: &str| text.lines().map(|l| format!("--   {l}\n")).collect::<String>();
     let name = oracle.name();
     let run = "cargo test --release -p interactive --test difftest -- --ignored --nocapture";
+    let passes = pass_names(subset(seed));
+    let saved = if std::env::var("DIFFTEST_MINIMIZE").as_deref() == Ok("0") { "saved (not minimized)" } else { "minimized" };
     format!(
-        "-- the {name} oracle failed on seed {seed}\n-- replay the case:      DIFFTEST_SEED={seed} DIFFTEST_CASES=1 DIFFTEST_ORACLES={name} {run}\n-- replay this file:      DIFFTEST_CASE_FILE=finding-{seed}.txt DIFFTEST_ORACLES={name} {run}\n{}-- the minimized case disagrees:\n{}-- the original case disagreed:\n{}",
+        "-- the {name} oracle failed on seed {seed}\n-- passes: {passes}\n-- replay the case:      DIFFTEST_PASSES={passes} DIFFTEST_SEED={seed} DIFFTEST_CASES=1 DIFFTEST_ORACLES={name} {run}\n-- replay this file:      DIFFTEST_PASSES={passes} DIFFTEST_CASE_FILE=finding-{seed}.txt DIFFTEST_ORACLES={name} {run}\n{}-- the {saved} case disagrees:\n{}-- the original case disagreed:\n{}",
         small.describe(), comment(why_small), comment(why),
     )
 }
@@ -1484,6 +1545,101 @@ fn late_install_regressions() {
     }
 }
 
+/// The passes are optional: a program installed with every pass off, unoptimized, computes what
+/// it computes with every pass on, on a small sweep of generated cases.
+#[test]
+fn passes_are_optional() {
+    for seed in 0..24 {
+        match check(&generate(seed), &[Oracle::Optimize, Oracle::Subset]) {
+            Outcome::Pass | Outcome::Refused(_) => {}
+            Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
+        }
+    }
+}
+
+/// A shared invariant trace must work through nested feedback and retractions,
+/// including when a child also reads the original collection as rows.
+#[test]
+fn shared_arrangements_across_scopes() {
+    let text = r#"
+let edges = input 0 : (int, int);
+let roots = input 1 : (int, ());
+left: {
+    var reached : (int, ());
+    let edges_idx = ::edges | arrange;
+    let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+    set reached = (::roots + step) | distinct;
+    let rows = ::edges + edges_idx;
+}
+outer: {
+    var again : (int, ());
+    let starts = ::roots + again;
+    right: {
+        var reached : (int, ());
+        let edges_idx = ::edges | arrange;
+        let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+        set reached = (outer::starts + step) | distinct;
+    }
+    set again = right::reached | filter((_, ()) -> 0);
+}
+let edges_idx = edges | arrange;
+let reduced = roots | distinct;
+reader: { let reduced_idx = ::reduced | arrange; }
+export "result" = left::reached;
+export "nested" = ::outer::right::reached;
+export "rows" = left::rows;
+export "edges" = edges_idx;
+export "roots" = reader::reduced_idx;
+-- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
+-- epoch 0, input 1: 1 diff=1
+-- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1
+-- epoch 2, input 1: 1 diff=-1 | 3 diff=1
+-- epoch 3, input 0: 2 val=3 diff=1 | 4 val=6 diff=1
+"#;
+    let mut case = parse_case(text);
+    case.seed = 2; // The worker oracle uses four workers.
+    match check(&case, &[Oracle::Optimize, Oracle::Workers, Oracle::Scratch, Oracle::Ahead]) {
+        Outcome::Pass => {},
+        other => panic!("shared arrangement regression: {other:?}"),
+    }
+}
+
+#[test]
+fn invariant_statements_across_nested_feedback() {
+    let mut case = parse_case(r#"
+let edges = input 0 : (int, int);
+let roots = input 1 : (int, ());
+outer: {
+    var again : (int, ());
+    inner: {
+        var reached : (int, ());
+        let mapped = ::edges | map((src, dst) -> (dst, src));
+        let filtered = mapped | filter((_, src) -> (src, 0) ge);
+        let flat = filtered | flatmap((_, src) -> src enlist) | map((dst, (_, src)) -> (src, dst));
+        let doubled = flat + flat;
+        let once = doubled + (flat | negate);
+        let paired = once | join(::edges, (src, dst, _) -> (src, dst));
+        let reduced = paired | min;
+        let step = reached | join(reduced, (_, (), dst) -> (dst, ()));
+        set reached = (::roots + outer::again + step) | distinct;
+    }
+    set again = inner::reached | filter((_, ()) -> 0);
+}
+export "result" = ::outer::inner::reached;
+export "invariant" = ::outer::inner::reduced;
+-- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
+-- epoch 0, input 1: 1 diff=1
+-- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1
+-- epoch 2, input 1: 1 diff=-1 | 3 diff=1
+-- epoch 3, input 0: 2 val=3 diff=1 | 4 val=6 diff=1
+"#);
+    case.seed = 2; // Four workers in the worker oracle.
+    match check(&case, &[Oracle::Optimize, Oracle::Subset, Oracle::Workers, Oracle::Scratch, Oracle::Ahead]) {
+        Outcome::Pass => {},
+        other => panic!("invariant statement regression: {other:?}"),
+    }
+}
+
 #[test]
 #[ignore = "differential sweep; run with --release -- --ignored --nocapture"]
 fn difftest() {
@@ -1500,10 +1656,12 @@ fn difftest() {
         if first.is_none() { *first = Some(info.to_string().replace('\n', " ")); }
     }));
     if let Ok(path) = std::env::var("DIFFTEST_CASE_FILE") {
-        match check(&load_case(&path), &oracles) {
+        let outcome = check(&load_case(&path), &oracles);
+        let _ = std::panic::take_hook();
+        match outcome {
             Outcome::Pass => println!("pass"),
             Outcome::Refused(e) => println!("refused: {e}"),
-            Outcome::Fail(oracle, why) => println!("FAIL {} oracle\n{why}", oracle.name()),
+            Outcome::Fail(oracle, why) => panic!("FAIL {} oracle\n{why}", oracle.name()),
         }
         return;
     }
@@ -1520,12 +1678,18 @@ fn difftest() {
     });
     let (mut passed, mut refused, mut failed) = (0, 0, 0);
     let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
+    let started = std::time::Instant::now();
+    let seconds: u64 = env("DIFFTEST_SECONDS", "10800").parse().unwrap();
+    let mut end = seed;
     for s in seed..seed + cases {
+        if started.elapsed().as_secs() >= seconds { break; }
+        end = s + 1;
         tick();
         let case = generate(s);
         if let Some(dir) = &out { std::fs::write(dir.join("current.txt"), case.describe()).unwrap(); }
         let outcome = check(&case, &oracles);
         if let Some(dir) = &out { std::fs::write(dir.join("progress.txt"), s.to_string()).unwrap(); }
+        println!("case {s}: passes={} {outcome:?}", pass_names(subset(s)));
         match outcome {
             Outcome::Pass => passed += 1,
             Outcome::Refused(e) => {
@@ -1535,7 +1699,7 @@ fn difftest() {
             }
             Outcome::Fail(oracle, why) => {
                 failed += 1;
-                let small = minimize(&case, oracle);
+                let small = if env("DIFFTEST_MINIMIZE", "1") == "0" { case.clone() } else { minimize(&case, oracle) };
                 let why_small = match check(&small, &[oracle]) { Outcome::Fail(_, w) => w, other => format!("{other:?}") };
                 println!("FAIL {} oracle, seed {s}", oracle.name());
                 let report = report(&small, s, oracle, &why_small, &why);
@@ -1545,6 +1709,7 @@ fn difftest() {
         }
     }
     let _ = std::panic::take_hook();
-    println!("seeds {seed}..{}: {passed} passed, {refused} refused, {failed} failed", seed + cases);
+    println!("seeds {seed}..{end}: {passed} passed, {refused} refused, {failed} failed; elapsed {:.3}s", started.elapsed().as_secs_f64());
     for (why, n) in &refusals { println!("  refused {n}: {why}"); }
+    assert_eq!(failed, 0, "differential sweep found failures; see the saved cases");
 }
