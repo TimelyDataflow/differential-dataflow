@@ -336,6 +336,12 @@ impl Server {
         self.shapes.get(&canonical_source_name(name)).cloned()
     }
 
+    /// The shape of a published trace or a source install can create on demand.
+    pub fn source_shape(&self, name: &str) -> Option<RowShape> {
+        let key = canonical_source_name(name);
+        self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
+    }
+
     /// Return registry state without coupling a caller to stdout formatting.
     pub fn program_info(&self) -> Vec<ProgramInfo> {
         let mut result: Vec<_> = self

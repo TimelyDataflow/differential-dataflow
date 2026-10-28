@@ -76,8 +76,7 @@ impl Server {
         let as_of = self.import_as_of();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::passes::run(&mut optimized, &|source| match source {
-                st::Source::Trace(t) => self.shapes.get(&canonical_source_name(t)).cloned()
-                    .or_else(|| super::generated_shape(t)).or_else(|| crate::diag::shape(t)),
+                st::Source::Trace(t) => self.source_shape(t),
                 _ => None,
             }, &self.passes, &as_of, &mut |_, _, _| {});
         })).map_err(|_| format!("program {:?} panicked during preparation", name))?;
@@ -215,10 +214,7 @@ impl Server {
     /// for rendering, and the shape of each export; or the conflicts that leave the program
     /// without meaning, or the collections whose shape nothing determines.
     fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<(crate::shapes::ScopeShapes, Vec<(String, RowShape)>), String> {
-        let published = |t: &str| -> Option<RowShape> {
-            let key = canonical_source_name(t);
-            self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
-        };
+        let published = |t: &str| self.source_shape(t);
         for imp in &prog.root.imports {
             if let (st::Source::Trace(t), Some(declared)) = (&imp.from, &imp.shape) {
                 if let Some(shape) = published(t) {

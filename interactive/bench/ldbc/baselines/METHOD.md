@@ -108,8 +108,8 @@ Results distinguish:
 - **as shipped:** plans generated at master-next `bdc950a5`;
 - **#996:** plans generated after #996 (bounded top-k, fewer carried columns);
 - **#996 + projection:** the same with the field-demand pass of #1001 (then opt-in with
-  `DDIR_PROJECTION=1`; projection is now on by default, and `DDIR_PASSES=all,-projection`
-  gives the **#996** variant);
+  `DDIR_PROJECTION=1`; projection is off by default, and `DDIR_PASSES=projection`
+  enables it now);
 - **authored:** `../authored/plans/`, hand-written. Seventeen follow rewritten strategies,
   each found by looking at what a query's plan does with its request:
   - *apply the request's selective part first* (a semijoin or join on a key): IC3 (the two
