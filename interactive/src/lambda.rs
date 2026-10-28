@@ -633,10 +633,13 @@ mod tests {
         }
         // Inside a larger body. Over non-NaN pairs only: corgi's float `add` returns the positive
         // quiet NaN where Rust may keep a NaN operand's sign; the words themselves agree on NaNs.
+        // An `add` of non-NaNs can still compute a NaN (infinity minus infinity), which corgi
+        // makes the positive quiet NaN and Rust's hardware may not (x86's default NaN is negative).
+        let canonical = |f: f64| if f.is_nan() { f64::from_bits(0x7ff8_0000_0000_0000) } else { f };
         let finite: Vec<_> = pairs.into_iter().filter(|(x, y)| !x.is_nan() && !y.is_nan()).collect();
         let body = "((a call fexp, b) add, (a call fln, b) call flt, (a call fsqrt, b call fint) call fpowi)";
         let expected = CValue::Prod(vec![
-            CValue::f64(finite.iter().map(|&(x, y)| x.exp() + y).collect()),
+            CValue::f64(finite.iter().map(|&(x, y)| canonical(x.exp() + y)).collect()),
             CValue::int(finite.iter().map(|&(x, y)| (x.ln() < y) as i64)),
             CValue::f64(finite.iter().map(|&(x, y)| powi(x.sqrt(), y)).collect()),
         ]);
