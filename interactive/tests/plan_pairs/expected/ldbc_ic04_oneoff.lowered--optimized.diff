@@ -11,7 +11,7 @@
  let posts = import "ic4.s.posts" : (int, (int, int));
  let tags = import "ic4.s.tags" : (int, (int, List(int)));
  let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
-@@ -17,14 +14,12 @@
+@@ -17,9 +14,8 @@
  let seen_idx3 = seen_join2 | arrange;
  let tags_idx = tags | arrange;
  let seen = seen_idx3 | join(tags_idx, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
@@ -23,9 +23,3 @@
  let before = before_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
  let during_idx = during | arrange;
--let before_idx2 = before | arrange;
--let fresh_join = during_idx | join(before_idx2, (key, row, ()) -> (key, row));
-+let fresh_join = during_idx | join(before, (key, row, ()) -> (key, row));
- let fresh_neg = fresh_join | negate;
- let fresh = during + fresh_neg;
- let counts_map = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ()));

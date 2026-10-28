@@ -13,13 +13,12 @@
      let side0_idx = side0 | arrange;
      let side1_idx = side1 | arrange;
      let best_join = side0_idx | join(side1_idx, ((rid, _), d0, d1) -> (rid, (d0, d1) add));
-@@ -24,11 +22,8 @@
+@@ -24,10 +22,8 @@
      let open_join = by_rid_idx | join(met_idx, (rid, row, ()) -> (rid, row));
      let open_neg = open_join | negate;
      let open = by_rid + open_neg;
 -    let by_rid_idx2 = by_rid | arrange;
--    let best_idx2 = best | arrange;
--    let near_join = by_rid_idx2 | join(best_idx2, (rid, (side, node, d), b) -> (rid, (side, node, d, b)));
+-    let near_join = by_rid_idx2 | join(best, (rid, (side, node, d), b) -> (rid, (side, node, d, b)));
 -    let near_filter = near_join | filter((_, (_, _, d, b)) -> ((d, d) add, b) lt);
 -    let near = near_filter | map((rid, (side, node, d, _)) -> (rid, (side, node, d)));
 +    let near_join = by_rid_idx | join(best, (rid, (side, node, d), b) -> (rid, (side, node, d, b)));
@@ -27,7 +26,7 @@
      let grow_rows = open + near;
      let grow_map = grow_rows | map((rid, (side, node, d)) -> (node, (rid, side, d)));
      let grow_idx = grow_map | arrange;
-@@ -41,10 +36,8 @@
+@@ -40,10 +36,8 @@
      let search_map2 = search_reduce | map(((rid, side, node), d) -> ((rid, side, node, d), ()));
      set search = search_map2;
  }
@@ -40,13 +39,3 @@
  let side0_idx = side0 | arrange;
  let side1_idx = side1 | arrange;
  let best_join = side0_idx | join(side1_idx, ((rid, _), d0, d1) -> (rid, (d0, d1) add));
-@@ -52,8 +45,7 @@
- let best = best_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
- let asked = request | map(((rid, _, _), ()) -> (rid, ()));
- let asked_idx = asked | arrange;
--let best_idx2 = best | arrange;
--let never_join = asked_idx | join(best_idx2, (rid, (), _) -> (rid, ()));
-+let never_join = asked_idx | join(best, (rid, (), _) -> (rid, ()));
- let never_neg = never_join | negate;
- let never = asked + never_neg;
- let answer_map = best | map((rid, d) -> ((rid, 0), (d)));

@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,64 +1,200 @@
+@@ -1,64 +1,198 @@
 +-- Time lanes: epoch.
  let person = input 0 : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
 -export "ldbc.person" = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth))) | arrange;
@@ -67,11 +67,9 @@
 +let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
 +let either = either_map + either_map2;
 +let either_idx = either | arrange;
-+let exists_idx2 = exists | arrange;
-+let friends_join = either_idx | join(exists_idx2, (a, (b, t), ()) -> (b, (a, t)));
++let friends_join = either_idx | join(exists, (a, (b, t), ()) -> (b, (a, t)));
 +let friends_idx = friends_join | arrange;
-+let exists_idx3 = exists | arrange;
-+let friends_join2 = friends_idx | join(exists_idx3, (b, (a, t), ()) -> ((a, b, t), ()));
++let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
 +let friends_idx2 = friends_join2 | arrange;
 +let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));

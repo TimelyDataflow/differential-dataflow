@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,21 +1,64 @@
+@@ -1,21 +1,62 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
  let request = input 0 : ((int, int, int), ());
@@ -36,8 +36,7 @@
 +    let open_neg = open_join | negate;
 +    let open = by_rid + open_neg;
 +    let by_rid_idx2 = by_rid | arrange;
-+    let best_idx2 = best | arrange;
-+    let near_join = by_rid_idx2 | join(best_idx2, (rid, (side, node, d), b) -> (rid, (side, node, d, b)));
++    let near_join = by_rid_idx2 | join(best, (rid, (side, node, d), b) -> (rid, (side, node, d, b)));
 +    let near_filter = near_join | filter((_, (_, _, d, b)) -> ((d, d) add, b) lt);
 +    let near = near_filter | map((rid, (side, node, d, _)) -> (rid, (side, node, d)));
 +    let grow_rows = open + near;
@@ -69,8 +68,7 @@
 -let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
 -export "ic13x1.answer" = answer | arrange;
 +let asked_idx = asked | arrange;
-+let best_idx2 = best | arrange;
-+let never_join = asked_idx | join(best_idx2, (rid, (), _) -> (rid, ()));
++let never_join = asked_idx | join(best, (rid, (), _) -> (rid, ()));
 +let never_neg = never_join | negate;
 +let never = asked + never_neg;
 +let answer_map = best | map((rid, d) -> ((rid, 0), (d)));

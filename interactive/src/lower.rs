@@ -298,6 +298,10 @@ fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
 
 use crate::scope_ir as st;
 
+pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
+    matches!(input, st::Ref::Local(i) if matches!(&items[*i], st::Item::Op(st::Node::Arrange(_) | st::Node::Reduce { .. })))
+}
+
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut scopes = HashMap::new();
     // The program root has no source-level name; `::` is its only explicit anchor.
@@ -335,6 +339,10 @@ impl ScopeLower {
         self.items.push(st::Item::Op(n));
         self.labels.push(self.statement.clone());
         st::Ref::Local(i)
+    }
+    fn arrange(&mut self, input: st::Ref) -> st::Ref {
+        if is_arranged(&input, &self.items) { input }
+        else { self.push(st::Node::Arrange(input)) }
     }
     fn input_ref(&mut self, n: usize) -> st::Ref {
         assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", n);
@@ -381,18 +389,16 @@ impl ScopeLower {
             Expr::Lift(e)       => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Lift] }) },
             Expr::JoinFunction(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::JoinFunction(t.clone())] }) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
-            // Join/Reduce consume arrangements; arrange their inputs explicitly
-            // so identical arrangements are visible to `optimize`'s within-scope
-            // dedup and shared at render.
+            // Join/Reduce consume arrangements; reuse local arrangements.
             Expr::Join(l, r, p) => {
-                let lr = self.lower_expr(l); let la = self.push(st::Node::Arrange(lr));
-                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                let lr = self.lower_expr(l); let la = self.arrange(lr);
+                let rr = self.lower_expr(r); let ra = self.arrange(rr);
                 self.push(st::Node::Join { left: la, right: ra, projection: p.clone() })
             },
             // A half join reads its stream as updates and only its second input arranged.
             Expr::HalfJoin(s, r, strict, p) => {
                 let stream = self.lower_expr(s);
-                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                let rr = self.lower_expr(r); let ra = self.arrange(rr);
                 self.push(st::Node::HalfJoin { stream, arrangement: ra, strict: *strict, projection: p.clone() })
             },
             Expr::Reduce(e, red)=> {
@@ -401,7 +407,7 @@ impl ScopeLower {
                     // Once shapes are known, lower distinct by key or by whole record.
                     self.distinct.push(self.items.len());
                     r
-                } else { self.push(st::Node::Arrange(r)) };
+                } else { self.arrange(r) };
                 self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()) })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
@@ -620,6 +626,64 @@ mod tree_tests {
     }
     fn reads_a_child_export(s: &st::Scope) -> bool {
         s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Linear { input: Ref::ChildExport(..), .. })))
+    }
+
+    #[test]
+    fn reuses_local_arrangements_without_passes() {
+        let producer = "min";
+        let text = format!(r#"
+            let rows = input 0 : (int, ()) | {producer};
+            export "join" = rows | join(rows, (k, _, _) -> (k, ()));
+            export "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
+            export "reduce" = rows | min;
+            export "distinct" = rows | distinct;
+        "#);
+        let program = lower_tree(parse(&text));
+        assert_eq!(program.root.items.iter().filter(|item| matches!(item, st::Item::Op(st::Node::Arrange(_)))).count(), 1, "{producer}");
+        let passes = crate::passes::Config::none();
+        let report = crate::plan::report(&text, &|_| None, &passes).unwrap();
+        let printed = report.emit_ddp().unwrap().text;
+        let replanned = crate::plan::report(&printed, &|_| None, &passes).unwrap();
+        assert!(report.compare_final(&replanned).is_empty(), "{producer}");
+        assert_eq!(printed, replanned.emit_ddp().unwrap().text, "{producer}");
+    }
+
+    #[test]
+    fn arranges_consumers_of_whole_record_distinct() {
+        let program = lower_tree(parse(r#"
+            let rows = input 0 : (int, int) | distinct;
+            export "join" = rows | join(rows, (k, a, _) -> (k, a));
+            export "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
+            export "reduce" = rows | min;
+            export "distinct" = rows | distinct;
+        "#));
+        for item in &program.root.items {
+            let inputs = match item {
+                st::Item::Op(st::Node::Join { left, right, .. }) => vec![left, right],
+                st::Item::Op(st::Node::HalfJoin { arrangement, .. }) => vec![arrangement],
+                st::Item::Op(st::Node::Reduce { input, .. }) => vec![input],
+                _ => Vec::new(),
+            };
+            for input in inputs { assert!(is_arranged(input, &program.root.items), "{item:?}"); }
+        }
+    }
+
+    #[test]
+    fn keeps_explicit_arranges_and_scope_boundaries() {
+        let program = lower_tree(parse(r#"
+            let rows = input 0 : (int, ()) | arrange | arrange;
+            inner: { let reduced = rows | min; }
+            export "local" = rows | min | arrange;
+            export "child" = inner::reduced | min;
+            export "trace" = import "trace" : (int, ()) | min;
+        "#));
+        let arranges: Vec<_> = program.root.items.iter().filter_map(|item| match item {
+            st::Item::Op(st::Node::Arrange(input)) => Some(input),
+            _ => None,
+        }).collect();
+        assert!(arranges.iter().any(|input| matches!(input, Ref::ChildExport(..))));
+        let inner = child(&program.root, "inner");
+        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Arrange(Ref::Import(_)))));
     }
 
     #[test]

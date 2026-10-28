@@ -40,13 +40,3 @@
  let wrote_map = cands | map(((rid, who, node), _) -> (node, (rid, who)));
  let wrote_idx = wrote_map | arrange;
  let posts_idx = posts | arrange;
-@@ -52,8 +44,7 @@
- let summed = summed_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
- let keys = cands | map((key, _) -> (key, ()));
- let keys_idx = keys | arrange;
--let summed_idx2 = summed | arrange;
--let score_join = keys_idx | join(summed_idx2, (key, (), _) -> (key, ()));
-+let score_join = keys_idx | join(summed, (key, (), _) -> (key, ()));
- let score_neg = score_join | negate;
- let score_rows = keys + score_neg;
- let score_map = score_rows | map((key, ()) -> (key, 0));

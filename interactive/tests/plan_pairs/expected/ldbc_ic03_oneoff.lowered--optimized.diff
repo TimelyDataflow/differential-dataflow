@@ -8,7 +8,7 @@
  let friend = import "ldbc.friend" : (int, (int, int));
  let place = import "ldbc.place" : (int, (List(int), List(int), int));
  let by_name = import "ldbc.place.by_name" : (List(int), int);
-@@ -14,61 +13,47 @@
+@@ -14,58 +13,47 @@
  let asked_idx2 = asked_join | arrange;
  let place_idx = place | arrange;
  let asked_join2 = asked_idx2 | join(place_idx, (x, (rid, who, y, start, end), (_, kind, _)) -> ((kind, [67,111,117,110,116,114,121]) eq, (y, (rid, who, x, start, end))));
@@ -60,12 +60,10 @@
 +let circle_idx3 = circle_rows2 | arrange;
  let circle = circle_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let visits_idx = visits | arrange;
--let circle_idx4 = circle | arrange;
--let seen = visits_idx | join(circle_idx4, (key, (ix, iy), ()) -> (key, (ix, iy)));
+ let seen = visits_idx | join(circle, (key, (ix, iy), ()) -> (key, (ix, iy)));
 -let in_x_filter = seen | filter((_, (ix, _)) -> (ix, 1) eq);
 -let in_x_map = in_x_filter | map((key, _) -> (key, ()));
 -let in_x_idx = in_x_map | arrange;
-+let seen = visits_idx | join(circle, (key, (ix, iy), ()) -> (key, (ix, iy)));
 +let in_x_rows = seen | filter((_, (ix, _)) -> (ix, 1) eq) | map((key, _) -> (key, ()));
 +let in_x_idx = in_x_rows | arrange;
  let in_x = in_x_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
@@ -75,10 +73,7 @@
 +let in_y_rows = seen | filter((_, (_, iy)) -> (iy, 1) eq) | map((key, _) -> (key, ()));
 +let in_y_idx = in_y_rows | arrange;
  let in_y = in_y_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
--let in_x_idx2 = in_x | arrange;
--let in_y_idx2 = in_y | arrange;
--let counts = in_x_idx2 | join(in_y_idx2, (key, nx, ny) -> (key, (nx, ny)));
-+let counts = in_x | join(in_y, (key, nx, ny) -> (key, (nx, ny)));
+ let counts = in_x | join(in_y, (key, nx, ny) -> (key, (nx, ny)));
  let ranked_map = counts | map(((rid, node), (nx, ny)) -> (node, (rid, nx, ny)));
  let ranked_idx = ranked_map | arrange;
 -let person_idx2 = person | arrange;

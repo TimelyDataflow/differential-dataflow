@@ -15,13 +15,12 @@
  let read_entries_idx = read_entries | arrange;
  let store_idx = store | arrange;
  let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
-@@ -46,9 +42,7 @@
+@@ -46,8 +42,7 @@
  let latest_idx = latest_map | arrange;
  let latest = latest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
--let latest_idx2 = latest | arrange;
 -let store_idx2 = store | arrange;
--let old_rows = latest_idx2 | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
+-let old_rows = latest | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 +let old_rows = latest | join(store_idx, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
  let delta_neg = old_rows | negate;
  let delta_rows = new_rows + delta_neg;

@@ -47,7 +47,23 @@ pub(crate) fn expand_distinct(
                 }
             }
         }
-        let mut push = |node| {
+        let mut push = |mut node: Node| {
+            // Distinct can replace a Reduce with a map back from the record key.
+            // Check consumers after remapping, when their actual input is known.
+            let mut arrange = |input: &mut Ref| {
+                if !crate::lower::is_arranged(input, &items) {
+                    let r = Ref::Local(items.len());
+                    items.push(Item::Op(Node::Arrange(input.clone())));
+                    labels.push(scope.labels[i].clone());
+                    *input = r;
+                }
+            };
+            match &mut node {
+                Node::Join { left, right, .. } => { arrange(left); arrange(right); }
+                Node::HalfJoin { arrangement, .. } => arrange(arrangement),
+                Node::Reduce { input, .. } => arrange(input),
+                _ => {}
+            }
             let r = Ref::Local(items.len());
             items.push(Item::Op(node));
             labels.push(scope.labels[i].clone());
@@ -61,11 +77,12 @@ pub(crate) fn expand_distinct(
             // Both paths now have unit values: either they were known to be unit,
             // or the map above keyed the collection by its whole record.
             let reducer = Reducer::Expr(unit_distinct());
-            let input = push(Node::Arrange(input));
             let output = push(Node::Reduce { input, reducer });
             if by_record {
                 push(Node::Linear { input: output, ops: vec![LinearOp::Project(Lambda::new("let (kv, ()) = input in kv".into(), &corgi::Scope::default()))] });
             }
+        } else if let Item::Op(node) = item {
+            push(node);
         } else {
             items.push(item);
             labels.push(scope.labels[i].clone());

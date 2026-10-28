@@ -16,13 +16,7 @@
  let circle = circle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let with_it_map = request | map(((rid, _, name), ()) -> (name, rid));
  let with_it_idx = with_it_map | arrange;
-@@ -35,14 +33,12 @@
- let with_it_join3 = with_it_idx3 | join(message_idx, (m, (rid, t), (kind, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), (kind, m, t)));
- let with_it_filter = with_it_join3 | filter((_, (kind, _, _)) -> (kind, 0) eq);
- let with_it_idx4 = with_it_filter | arrange;
--let circle_idx2 = circle | arrange;
--let with_it = with_it_idx4 | join(circle_idx2, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
-+let with_it = with_it_idx4 | join(circle, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
+@@ -39,9 +37,8 @@
  let with_it_idx5 = with_it | arrange;
  let tags_of_idx = tags_of | arrange;
  let others_join = with_it_idx5 | join(tags_of_idx, (_, (rid, t), other) -> ((rid, t, other), ()));

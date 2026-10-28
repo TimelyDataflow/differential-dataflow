@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,7 +1,23 @@
+@@ -1,7 +1,22 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
@@ -19,12 +19,11 @@
 +let talks = talks_map + talks_map2;
 +let talks_idx = talks | arrange;
 +let weighted_reduce = talks_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
-+let weighted_idx = weighted_reduce | arrange;
 +let pals_idx = pals | arrange;
-+let weighted_join = weighted_idx | join(pals_idx, (pair, n, ()) -> (pair, n));
++let weighted_join = weighted_reduce | join(pals_idx, (pair, n, ()) -> (pair, n));
 +let weighted = weighted_join | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
                             ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
 -export "ic14.s.weighted" = weighted | arrange;
-+let weighted_idx2 = weighted | arrange;
++let weighted_idx = weighted | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic14.s.weighted" = weighted_idx2;
++export "ic14.s.weighted" = weighted_idx;

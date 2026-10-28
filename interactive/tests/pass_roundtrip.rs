@@ -44,14 +44,12 @@ fn roundtrip(first: plan::Report, config: Config, context: &str) {
 }
 
 #[test]
-fn minimized_findings_roundtrip_with_structural_cleanup() {
+fn minimized_findings_roundtrip_with_every_pass_subset() {
     // Exercise every subset of the available switches.
     for mask in 0..1 << Config::NAMES.len() {
         let names = std::iter::once("none").chain(Config::NAMES.into_iter().enumerate()
             .filter(|(i, _)| mask & (1 << i) != 0).map(|(_, n)| n)).collect::<Vec<_>>().join(",");
         let config = Config::parse(&names).unwrap();
-        // Until lowering reuses local arrangements, reparsing needs this cleanup.
-        if !config.structural { continue; }
         for (finding, text) in REPROS {
             let report = plan::report(text, &|_| None, &config).unwrap();
             roundtrip(report, config, &format!("{finding}: {names}"));

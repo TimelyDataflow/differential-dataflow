@@ -6,7 +6,7 @@
  let request = input 0 : ((int, int, List(int)), ());
  let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-@@ -6,11 +8,49 @@
+@@ -6,11 +8,48 @@
  let by_name = import "ldbc.tag.by_name" : (List(int), int);
  let tagged = import "ldbc.mtag.by_tag" : (int, int);
  let tags_of = import "ldbc.mtag.by_message" : (int, int);
@@ -43,8 +43,7 @@
 +let with_it_join3 = with_it_idx3 | join(message_idx, (m, (rid, t), (kind, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), (kind, m, t)));
 +let with_it_filter = with_it_join3 | filter((_, (kind, _, _)) -> (kind, 0) eq);
 +let with_it_idx4 = with_it_filter | arrange;
-+let circle_idx2 = circle | arrange;
-+let with_it = with_it_idx4 | join(circle_idx2, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
++let with_it = with_it_idx4 | join(circle, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
 +let with_it_idx5 = with_it | arrange;
 +let tags_of_idx = tags_of | arrange;
 +let others_join = with_it_idx5 | join(tags_of_idx, (_, (rid, t), other) -> ((rid, t, other), ()));

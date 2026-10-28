@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,28 +1,64 @@
+@@ -1,28 +1,63 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (1, []), placeholder install epoch 2.
  let store = import "store" : ((int), (int, int));
@@ -72,9 +72,8 @@
 +let latest = latest_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 -let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
-+let latest_idx2 = latest | arrange;
 +let store_idx2 = store | arrange;
-+let old_rows = latest_idx2 | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
++let old_rows = latest | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 +let delta_neg = old_rows | negate;
 +let delta_rows = new_rows + delta_neg;
 +-- Renderer: build an export arrangement.

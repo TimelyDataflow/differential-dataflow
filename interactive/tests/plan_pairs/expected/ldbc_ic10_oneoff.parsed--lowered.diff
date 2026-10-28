@@ -6,7 +6,7 @@
  let request = input 0 : ((int, int, int), ());
  let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-@@ -8,16 +10,60 @@
+@@ -8,16 +10,59 @@
  let people = import "ic10.s.people" : (int, (List(int), List(int), List(int), List(int), int, int));
  let posts = import "ic10.s.posts" : (int, int);
  let likes = import "ic10.s.likes" : ((int, int), ());
@@ -62,8 +62,7 @@
 -let score = summed + (keys + (keys | join(summed, (key, (), _) -> (key, ())) | negate) | map((key, ()) -> (key, 0)));
 -let ranked = score | join(cands, ((rid, _, node), s, (first, last, gender, town)) -> (rid, ((s neg, node), (first, last, s, gender, town)))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 +let keys_idx = keys | arrange;
-+let summed_idx2 = summed | arrange;
-+let score_join = keys_idx | join(summed_idx2, (key, (), _) -> (key, ()));
++let score_join = keys_idx | join(summed, (key, (), _) -> (key, ()));
 +let score_neg = score_join | negate;
 +let score_rows = keys + score_neg;
 +let score_map = score_rows | map((key, ()) -> (key, 0));

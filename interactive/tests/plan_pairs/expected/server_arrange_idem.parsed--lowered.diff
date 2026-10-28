@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,18 +1,57 @@
+@@ -1,18 +1,55 @@
 -let node = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));
 +-- Time lanes: epoch.
 +let input0 = input 0 : ((int), (int, List(int)));
@@ -41,8 +41,7 @@
 +    let bsig_idx = bsig | arrange;
 +    let reps = bsig_idx | reduce((_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    let bsig_idx2 = bsig | arrange;
-+    let reps_idx = reps | arrange;
-+    let cong = bsig_idx2 | join(reps_idx, (_, id, rep) -> (id, rep));
++    let cong = bsig_idx2 | join(reps, (_, id, rep) -> (id, rep));
 +    let producing_idx = ::producing | arrange;
 +    let eq_idx2 = eq | arrange;
 +    let arranged_join = producing_idx | join(eq_idx2, (_, _, cls) -> (cls, ()));
@@ -54,8 +53,7 @@
 +    let arr_cls = arr_cls_idx | join(eq_idx3, (_, a, cls) -> (a, cls));
 +    let rule_map = arr_cls | map((a, cls) -> (cls, a));
 +    let rule_idx = rule_map | arrange;
-+    let arranged_idx2 = arranged | arrange;
-+    let rule = rule_idx | join(arranged_idx2, (cls, a, _) -> (a, cls));
++    let rule = rule_idx | join(arranged, (cls, a, _) -> (a, cls));
 +    let edges_map = cong | map((a, b) -> (b, a));
 +    let edges_map2 = rule | map((a, b) -> (b, a));
 +    let edges = cong + edges_map + rule + edges_map2;

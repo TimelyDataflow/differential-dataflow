@@ -6,7 +6,7 @@
  let request = input 0 : ((int, int, int), ());
  let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
  let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-@@ -7,16 +9,63 @@
+@@ -7,16 +9,61 @@
  let posted = import "ic5.s.posted" : ((int, int), int);
  let first = import "ic5.s.first" : (int, int);
  let lowest = import "ic5.s.lowest" : (int, int);
@@ -64,9 +64,7 @@
 +let idle_rows = fast + slow;
 +let idle_idx = idle_rows | arrange;
 +let idle = idle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
-+let idle_idx2 = idle | arrange;
-+let busy_idx2 = busy | arrange;
-+let quiet_join = idle_idx2 | join(busy_idx2, (key, (), _) -> (key, ()));
++let quiet_join = idle | join(busy, (key, (), _) -> (key, ()));
 +let quiet_neg = quiet_join | negate;
 +let quiet_rows = idle + quiet_neg;
 +let quiet = quiet_rows | map((key, ()) -> (key, 0));

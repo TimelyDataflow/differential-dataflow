@@ -16,6 +16,7 @@
 //! - `optimize`: the program unoptimized, installed with every pass switched off.
 //! - `subset`: the lowered program installed with a reproducible random pass subset.
 //! - `subset-asof`: the delta form installed over compacted history, with all versus random passes.
+//! - `plan`: emit final DDP and replan with that subset; compare graphs and emitted text.
 //! - `delta`: every `join` written as a delta join (two `half_join`s, delayed to their data times).
 //! - `asof`: the delta form, installed after its input traces have history, with and without
 //!   dropping dead as-of updates.
@@ -1147,13 +1148,13 @@ fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
+enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
 
 impl Oracle {
     /// The oracles, by the names `DIFFTEST_ORACLES` takes.
-    const NAMED: [(&'static str, Oracle); 12] = [
+    const NAMED: [(&'static str, Oracle); 13] = [
         ("workers", Oracle::Workers), ("scratch", Oracle::Scratch), ("optimize", Oracle::Optimize),
-        ("subset", Oracle::Subset), ("subset-asof", Oracle::SubsetAsOf), ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
+        ("subset", Oracle::Subset), ("subset-asof", Oracle::SubsetAsOf), ("plan", Oracle::Plan), ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
         ("bind", Oracle::Bind), ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
     ];
     fn all() -> Vec<Oracle> { Self::NAMED.iter().map(|(_, o)| *o).collect() }
@@ -1250,6 +1251,13 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
                 run_with_options(&[("p".to_string(), p, 0)], &[], 1, case,
                     RunOptions { arranged: true, ahead: false, cycle: None, passes: subset(case.seed) })
             }),
+            Oracle::Plan => match plan_round_trip(&src, subset(case.seed)) {
+                Ok(known) => {
+                    if known { println!("KNOWN as-of reinsertion seed={} passes={}", case.seed, pass_names(subset(case.seed))); }
+                    continue;
+                }
+                Err(e) => return Outcome::Fail(oracle, e),
+            },
             Oracle::Delta => {
                 if !case.has_joins() { continue; }
                 program(&case.render(true), true).and_then(|p| run(&p, 1, case))
@@ -1381,6 +1389,26 @@ fn subset(seed: u64) -> Config {
 fn pass_names(config: Config) -> String {
     std::iter::once("none").chain(Config::NAMES.into_iter().filter(|n| !config.off().contains(n)))
         .collect::<Vec<_>>().join(",")
+}
+
+/// True only for the known repeated as-of insertion. Replanning without that insertion must
+/// match both the original final graph and its text; other changes are still failures.
+fn plan_round_trip(src: &str, config: Config) -> Result<bool, String> {
+    let source = |name: &str| server::generated_shape(name);
+    let first = interactive::plan::report(src, &source, &config)?;
+    let printed = first.emit_ddp().map_err(|e| format!("emit: {e}"))?;
+    if printed.lambdas.graph_changed != 0 { return Err(format!("emit: {} changed scalar graphs", printed.lambdas.graph_changed)); }
+    let second = interactive::plan::report(&printed.text, &source, &config).map_err(|e| format!("reparse: {e}"))?;
+    let differences = first.compare_final(&second);
+    let stable = second.emit_ddp()?.text == printed.text;
+    if differences.is_empty() && stable { return Ok(false); }
+    if config.as_of_drop {
+        let without = interactive::plan::report(&printed.text, &source, &Config { as_of_drop: false, ..config })?;
+        if first.compare_final(&without).is_empty() && without.emit_ddp()?.text == printed.text {
+            return Ok(true);
+        }
+    }
+    Err(format!("roundtrip: text stable={stable}; {}", differences.join("; ")))
 }
 
 // ===== Minimizing =====

@@ -1,16 +1,6 @@
 --- lowered
 +++ optimized
-@@ -23,18 +23,14 @@
- let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
- let either = either_map + either_map2;
- let either_idx = either | arrange;
--let exists_idx2 = exists | arrange;
--let friends_join = either_idx | join(exists_idx2, (a, (b, t), ()) -> (b, (a, t)));
-+let friends_join = either_idx | join(exists, (a, (b, t), ()) -> (b, (a, t)));
- let friends_idx = friends_join | arrange;
--let exists_idx3 = exists | arrange;
--let friends_join2 = friends_idx | join(exists_idx3, (b, (a, t), ()) -> ((a, b, t), ()));
-+let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
+@@ -29,10 +29,8 @@
  let friends_idx2 = friends_join2 | arrange;
  let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
@@ -23,7 +13,7 @@
  thread: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var thread;
-@@ -63,8 +59,7 @@
+@@ -61,8 +59,7 @@
  let ldbc_forum_idx = ldbc_forum_map | arrange;
  let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
  let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
