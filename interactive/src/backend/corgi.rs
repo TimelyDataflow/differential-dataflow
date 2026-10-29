@@ -132,10 +132,9 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
                 let g = plan.graph(&kshape, &vshape);
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
                 // delay field to an `Int` column and join it into each time in place. Joining
-                // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
-                // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
-                // never has to be built. The epoch is lane 0, so PointStamp index `level-1` is
-                // lane `level`, and the join is one lane-wise max.
+                // `PointStamp([0,..,0, delay])` takes a coordinate-wise maximum at the loop's
+                // lane and leaves every other coordinate unchanged, so the delta never has
+                // to be built. The epoch is lane 0; a loop at depth `level` uses lane `level`.
                 let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
                     .into_i64("enter_at delay")
                     .unwrap();
@@ -151,7 +150,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
             // `Prod([Unit, iter])` would be a silent one-field-too-many divergence from the
             // shape `shapes` infers.
             LinearOp::LiftIter => {
-                // PointStamp index `level-1` is lane `level`; at the root there is no iteration
+                // Loop depth `level` is lane `level`; at the root there is no iteration
                 // coordinate and the value is zero.
                 let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
                 let lane = CValue::i64(iters.into_iter().map(|i| i as i64).collect());
@@ -258,9 +257,7 @@ impl<'scope> Arr<'scope> {
 /// arrangement. Every later stream time is at or beyond some such frontier element, and advancing
 /// arranged times to it keeps their order against those stream times, strict and not.
 fn step_back(t: &Time, out: &mut Antichain<Time>) {
-    use differential_dataflow::dynamic::pointstamp::PointStamp;
-    let inner = PointStamp::new(t.inner.iter().map(|x| x.saturating_sub(1)).collect());
-    out.insert(timely::order::Product::new(t.outer.saturating_sub(1), inner));
+    out.insert(Time::new(t.iter().map(|x| x.saturating_sub(1)).collect()));
 }
 
 /// The updates of a stream of columnar batches, as corgi containers, read as of `since`.
@@ -429,46 +426,6 @@ impl Backend for CorgiBackend {
             .as_collection()
     }
 
-    fn leave_dynamic<'s>(c: Collection<'s, Time, CC>, level: usize) -> Collection<'s, Time, CC> {
-        // Mirror DD's `Collection::leave_dynamic`, but over a `CorgiContainer`:
-        // strip all but `level-1` PointStamp coordinates from the capability AND from each row's time
-        // (stored columnar in `CorgiContainer.times`, not inline in the data tuples). The input
-        // connection summary advertises the `retain` so timely's progress tracking stays correct.
-        use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
-        use timely::order::Product;
-        use timely::progress::Antichain;
-        use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
-
-        let mut builder = OperatorBuilder::new("CorgiLeaveDynamic".to_string(), c.inner.scope());
-        let (output, stream) = builder.new_output();
-        let mut output = OutputBuilder::from(output);
-        let summary = Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } };
-        let mut input = builder.new_input_connection(c.inner, Pipeline, [(0, Antichain::from_elem(summary))]);
-
-        builder.build(move |_capability| move |_frontier| {
-            let mut output = output.activate();
-            input.for_each(|cap, data| {
-                // A message may carry several timestamps (a multi-element stamp): hold a
-                // capability for each, truncated exactly as the rows are.
-                let new_cap: timely::dataflow::operators::CapabilitySet<_> = cap
-                    .stamp()
-                    .iter()
-                    .map(|t| {
-                        let mut new_time = t.clone();
-                        let mut v = std::mem::take(&mut new_time.inner).into_inner();
-                        v.truncate(level - 1);
-                        new_time.inner = PointStamp::new(v);
-                        cap.delayed(&new_time, 0)
-                    })
-                    .collect();
-                // `level - 1` PointStamp coordinates after the epoch are `level` lanes.
-                data.times.truncate(level);
-                output.session(&new_cap).give_container(data);
-            });
-        });
-
-        stream.as_collection()
-    }
     fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r> {
         Arr { arranged: a.arranged.enter_region(region), since: a.since }
     }

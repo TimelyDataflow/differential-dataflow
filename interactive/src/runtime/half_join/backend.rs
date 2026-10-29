@@ -522,7 +522,7 @@ mod tests {
                     let ss: Vec<(i64, i64)> = (0..n).map(|_| (rng.below(4) as i64, rng.below(3) as i64)).collect();
                     let ts: Vec<Time> = (0..n).map(|_| t(rng.below(4), rng.below(3))).collect();
                     // A time as data is at or beyond the update's own time.
-                    let ss: Vec<(i64, i64)> = ss.iter().zip(&ts).map(|(s, t)| (s.0.max(t.outer as i64), s.1.max(t.inner.first().copied().unwrap_or(0) as i64))).collect();
+                    let ss: Vec<(i64, i64)> = ss.iter().zip(&ts).map(|(s, t)| (s.0.max(t.first().copied().unwrap_or(0) as i64), s.1.max(t.get(1).copied().unwrap_or(0) as i64))).collect();
                     let ds: Vec<Diff> = (0..n).map(|_| rng.diff()).collect();
                     // The updates as several runs, of random lengths, as one extraction releases them.
                     let mut runs = Vec::new();
@@ -538,7 +538,7 @@ mod tests {
                     for i in 0..n {
                         for (k2, v1, t2, d2) in arranged_rows.iter() {
                             if *k2 != ks[i] || !(*t2 < ts[i] || (!strict && *t2 == ts[i])) { continue; }
-                            let s = tup(vec![int(ss[i].0.max(t2.outer as i64)), int(ss[i].1.max(t2.inner.first().copied().unwrap_or(0) as i64))]);
+                            let s = tup(vec![int(ss[i].0.max(t2.first().copied().unwrap_or(0) as i64)), int(ss[i].1.max(t2.get(1).copied().unwrap_or(0) as i64))]);
                             expect.push(((key_val(ks[i]), tup(vec![tup(vec![int(vs[i]), int(*v1)]), s])), ts[i].clone(), ds[i] * d2));
                         }
                     }

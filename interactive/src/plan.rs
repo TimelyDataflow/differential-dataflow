@@ -125,7 +125,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         _ => None,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::ir::Time::new(as_of, Default::default()), &mut |name, program, changes| {
+    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::server::host_time(as_of), &mut |name, program, changes| {
         let previous = stages.last().map(|stage| &stage.program);
         let changes = stage_changes(name, changes, previous, program, &resolve);
         stages.push(stage(name, program.clone(), changes, &resolve));

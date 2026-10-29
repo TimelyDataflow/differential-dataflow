@@ -770,9 +770,7 @@ mod test {
 
     #[test]
     fn ingest_nested_payload_matches_scalar_consolidation() {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
-        use timely::order::Product;
-        type T = Product<u64, PointStamp<u64>>;
+        type T = crate::ir::Time;
         // Lists compare by length before content; their elements are products.
         let ends: Vec<usize> = (0..32).scan(0, |end, i| { *end += i % 5; Some(*end) }).collect();
         let elements = *ends.last().unwrap();
@@ -787,8 +785,7 @@ mod test {
                 let keys = ints(rows.iter().map(|&r| (r % 4) as u64).collect());
                 let vals = gather(&values, &rows);
                 let kv = CValue::Prod(vec![keys.clone(), vals.clone()]);
-                let times: ColTimes<T> = rows.iter().map(|&r| T::new((r % 2) as u64,
-                    PointStamp::new([(r % 3) as u64, (r % 5) as u64].into_iter().collect()))).collect();
+                let times: ColTimes<T> = rows.iter().map(|&r| T::new([(r % 2) as u64, (r % 3) as u64, (r % 5) as u64].into_iter().collect())).collect();
                 let diffs: Vec<i64> = (0..n).map(|_| (xorshift(&mut seed) % 5) as i64 - 2).collect();
                 // The paired case cancels every triple, including on unordered input.
                 let input: Vec<usize> = if cancel_all { (0..n).chain(0..n).collect() } else { (0..n).collect() };
@@ -824,10 +821,9 @@ mod test {
 
     #[test]
     fn chunker_owned_lanes_match_scalar_across_flushes() {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
         use timely::container::{ContainerBuilder, PushInto};
         use crate::runtime::container::CorgiContainer;
-        let mut builder = CorgiChunker::<PointStamp<u64>, i64>::default();
+        let mut builder = CorgiChunker::<crate::ir::Time, i64>::default();
         let mut source = CorgiContainer::default();
         let mut seed = 731;
         for blocks in [1, 3, 1, 5] {
@@ -838,7 +834,7 @@ mod test {
                 let mut keys = Vec::new();
                 for row in 0..64 {
                     let key = xorshift(&mut seed) % 8;
-                    let time = PointStamp::new((0..(block + row) % 4)
+                    let time = crate::ir::Time::new((0..(block + row) % 4)
                         .map(|_| xorshift(&mut seed) % 3).collect());
                     let diff = (xorshift(&mut seed) % 5) as i64 - 2;
                     keys.push(key);
@@ -921,11 +917,9 @@ mod test {
 
     #[test]
     fn advance_owned_and_shared_nested_times_matches_reference() {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
         use differential_dataflow::lattice::Lattice;
-        use timely::order::Product;
-        type T = Product<u64, PointStamp<u64>>;
-        let time = |outer, coords: &[u64]| T::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        type T = crate::ir::Time;
+        let time = |outer, coords: &[u64]| T::new(std::iter::once(outer).chain(coords.iter().copied()).collect());
         let times = [time(0, &[]), time(1, &[2, 3]), time(2, &[1, 4]), time(2, &[3, 1]), time(3, &[2])];
         let rows: Vec<_> = (0..5).flat_map(|k| (0..2).flat_map(move |v| (0..5).map(move |t| (k, v, t))))
             .map(|(k, v, i)| ((k, v), times[i].clone(), if i % 2 == 0 { 1i64 } else { -1 }))
@@ -1023,10 +1017,8 @@ mod test {
     /// times, whether a chunk is kept whole, shipped whole, or split.
     #[test]
     fn extract_matches_owned_times_for_whole_and_split_chunks() {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
-        use timely::order::Product;
-        type T = Product<u64, PointStamp<u64>>;
-        let time = |outer, coords: &[u64]| T::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        type T = crate::ir::Time;
+        let time = |outer, coords: &[u64]| T::new(std::iter::once(outer).chain(coords.iter().copied()).collect());
         let times = [time(0, &[]), time(1, &[2]), time(2, &[0, 3]), time(1, &[4, 1]), time(3, &[1])];
         let frontiers = [Antichain::new(), Antichain::from_elem(time(0, &[])), Antichain::from_elem(time(1, &[1])),
                          Antichain::from(vec![time(1, &[3]), time(2, &[0, 1])]), Antichain::from_elem(time(9, &[]))];

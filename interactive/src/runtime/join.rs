@@ -1155,35 +1155,35 @@ mod tests {
 
     #[test]
     fn primitive_tokens_consolidate_after_product_time_reordering() {
-        use timely::order::Product;
+        let t = |epoch, iter| crate::ir::Time::new(smallvec::smallvec![epoch, iter]);
         let chunk = CorgiChunk::from_columns(
             ints(vec![7; 3]), ints(vec![11; 3]),
-            [Product::new(0, 2), Product::new(1, 0), Product::new(1, 2)].into_iter().collect(),
+            [t(0, 2), t(1, 0), t(1, 2)].into_iter().collect(),
             vec![1, 1, -1],
         );
         let mut scratch = SideScratch::new();
         scratch.stage_runs(
             &[RunRef { chunk: &chunk, cid: 0, s: 0, e: 3, vals: None }],
-            &Product::new(1u64, 0u64),
+            &t(1, 0),
         );
-        assert_eq!(scratch.entries, vec![(11, Product::new(1, 0), 1)]);
+        assert_eq!(scratch.entries, vec![(11, t(1, 0), 1)]);
     }
 
     #[test]
     fn compound_tokens_consolidate_after_product_time_reordering() {
-        use timely::order::Product;
+        let t = |epoch, iter| crate::ir::Time::new(smallvec::smallvec![epoch, iter]);
         let chunk = CorgiChunk::from_columns(
             ints(vec![7; 3]),
             CValue::Prod(vec![ints(vec![11; 3]), ints(vec![12; 3])]),
-            [Product::new(0, 2), Product::new(1, 0), Product::new(1, 2)].into_iter().collect(),
+            [t(0, 2), t(1, 0), t(1, 2)].into_iter().collect(),
             vec![1, 1, -1],
         );
         let mut scratch = SideScratch::new();
         scratch.stage_runs(
             &[RunRef { chunk: &chunk, cid: 0, s: 0, e: 3, vals: None }],
-            &Product::new(1u64, 0u64),
+            &t(1, 0),
         );
-        assert_eq!(scratch.entries, vec![(0, Product::new(1, 0), 1)]);
+        assert_eq!(scratch.entries, vec![(0, t(1, 0), 1)]);
     }
 
     #[test]

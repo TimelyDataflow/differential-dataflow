@@ -206,12 +206,3 @@ where
         CorgiContainer { keys, vals, times: self.times, diffs }
     }
 }
-
-
-/// Entering the program's iterative scope: each time gains iteration coordinates, all zero.
-impl<R: 'static> Enter<u64, crate::ir::Time> for CorgiContainer<u64, R> {
-    type InnerContainer = CorgiContainer<crate::ir::Time, R>;
-    fn enter(self) -> CorgiContainer<crate::ir::Time, R> {
-        CorgiContainer { keys: self.keys, vals: self.vals, times: self.times.retime(), diffs: self.diffs }
-    }
-}
