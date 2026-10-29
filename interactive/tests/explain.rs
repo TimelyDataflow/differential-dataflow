@@ -28,7 +28,7 @@ const SCC_ROW: &str = r#"
     outer: {
         let scc = edges + trim;
         fwd: {
-            let nodes = edges | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+            let nodes = edges | map((_, dst) -> (dst, dst)) | delay((_, (n)) -> (0, 0, (256, n call bit_length) mul));
             let labels = proposals + nodes | min;
             set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
@@ -38,7 +38,7 @@ const SCC_ROW: &str = r#"
             | filter((_, (_, l, m)) -> (l, m) eq)
             | map((dst, (src, _, _)) -> (dst, (src)));
         bwd: {
-            let nodes = trans | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+            let nodes = trans | map((_, dst) -> (dst, dst)) | delay((_, (n)) -> (0, 0, (256, n call bit_length) mul));
             let labels = proposals + nodes | min;
             set proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
         }
@@ -659,18 +659,18 @@ fn collect_explanations_sufficient_small() {
 }
 
 // ---------------------------------------------------------------------------
-// Explanations of loops: `enter_at`, a `min` in a loop, and SCC's shape at one
+// Explanations of loops: `delay`, a `min` in a loop, and SCC's shape at one
 // scope, with its feedback negated and not. `LinearOp::LiftIter` is synthesized
 // by the rewrite (every `$host:` export is one), so explained programs are what
 // exercise it.
 // ---------------------------------------------------------------------------
 
-/// `enter_at` through the rewrite, at depth 1.
-const REACH_ENTER_AT: &str = r#"
+/// `delay` through the rewrite, at depth 1.
+const REACH_DELAY: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
     let roots = input 1 : ((int), ()) | map(((n), ()) -> ((n), ()));
     reach: {
-        let seeds = roots | enter_at(((n), ()) -> n);
+        let seeds = roots | delay(((n), ()) -> (0, (256, n call bit_length) mul));
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = seeds + proposals | distinct;
     }
@@ -678,9 +678,9 @@ const REACH_ENTER_AT: &str = r#"
 "#;
 
 #[test]
-fn enter_at_explanations_sufficient() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), unit())]];
-    assert!(!assert_all_rows_sufficient(REACH_ENTER_AT, &inputs).is_empty());
+fn delay_explanations_sufficient() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), unit()), (row(&[1]), unit()), (row(&[8]), unit())]];
+    assert!(!assert_all_rows_sufficient(REACH_DELAY, &inputs).is_empty());
 }
 
 /// A `min` reducer in an iterative loop, at depth 1.

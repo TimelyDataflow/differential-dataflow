@@ -59,10 +59,10 @@ impl Printer<'_> {
             Expr::Name(name) => name.clone(),
             Expr::Path(parts, absolute) => format!("{}{}", if *absolute { "::" } else { "" }, parts.join("::")),
             Expr::ResolvedPath { .. } => return Err("parsed view unexpectedly contains a lowered path".into()),
-            Expr::Map(input, l) | Expr::Filter(input, l) | Expr::EnterAt(input, l)
+            Expr::Map(input, l) | Expr::Filter(input, l)
             | Expr::FlatMap(input, l) | Expr::JoinFunction(input, l) => {
                 let word = match expr {
-                    Expr::Map(..) => "map", Expr::Filter(..) => "filter", Expr::EnterAt(..) => "enter_at",
+                    Expr::Map(..) => "map", Expr::Filter(..) => "filter",
                     Expr::FlatMap(..) => "flatmap", _ => "join_function",
                 };
                 format!("{} | {word}({})", self.expression(input)?, self.parsed_lambda(l)?)

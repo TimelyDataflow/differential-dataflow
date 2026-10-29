@@ -13,7 +13,7 @@ pub use crate::lambda::Lambda;
 /// table (`parse::pipe`) must agree, which its tests check.
 pub(crate) const KEYWORDS: &[&str] = &[
     "let", "var", "set", "export", "type", "input", "import", "map", "join", "min", "distinct", "count",
-    "collect", "flatmap", "arrange", "negate", "filter", "enter_at", "inspect", "lift_iter",
+    "collect", "flatmap", "arrange", "negate", "filter", "inspect", "lift_iter",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -35,8 +35,6 @@ pub enum LinearOp {
     Filter(Lambda),
     /// Negate the diff.
     Negate,
-    /// Shift the timestamp to the round an `Int`-valued lambda gives.
-    EnterAt(Lambda),
     /// Append the current user-iter coord (at the row's scope depth) to
     /// the value. Time itself is unchanged. See `Expr::LiftIter` for the
     /// discipline restriction.
@@ -51,7 +49,7 @@ pub enum LinearOp {
     /// Each row becomes the rows of a lambda giving a list of `((key, val), time, diff)`.
     /// The time is a tuple of `Int`s as `Lift` gives it; the output row's time is the
     /// join of the input's time with it, coordinate-wise max, and its diff is the
-    /// product of the two diffs. A negative coordinate is below every time, so it
+    /// product of the two diffs. Zero is the bottom coordinate, so it
     /// leaves that coordinate unchanged. `delay(t)` is `[((key, val), t, 1)]`.
     JoinFunction(Lambda),
 }

@@ -42,7 +42,7 @@
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
 //! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
 //!   element, value `(pos, element)`.
-//! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at((k, v) -> round)` ·
+//! - `| negate` · `| arrange` · `| inspect(label)` ·
 //!   `| lift_iter`.
 //! - `| lift` — pair each value with its whole time, `(key, (val, time))`, the time a tuple
 //!   of the epoch and every scope coordinate.
@@ -53,7 +53,9 @@
 //!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
 //!   `(k', (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
-//!   each row to at least the time the lambda gives.
+//!   each row to at least the time the lambda gives. The tuple names the epoch, then each
+//!   enclosing loop from outermost to innermost; `0` leaves a coordinate unchanged. Inside one
+//!   loop, `delay((_, n) -> (0, (256, n call bit_length) mul))` schedules by integer bit length.
 //! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
 //!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
@@ -89,7 +91,7 @@
 //!
 //! A lambda is parsed in its program's scope, which names what the program has not defined:
 //!
-//! - Registered functions and the Float functions are words reached by `call`. A word's input is
+//! - Registered functions and the base words are reached by `call`. A word's input is
 //!   its argument, or the tuple of its arguments when it takes several: `x call fsqrt`,
 //!   `(x, y) call fpow`, `() call f` for a function of none.
 //! - The Float functions, each the Rust `f64` method of the same name: `fabs`, `fsqrt`, `fexp`,
@@ -99,6 +101,8 @@
 //!   otherwise follow the total order (`fmin` of `-0.0` and `0.0` is `-0.0`). `feq fne flt fle fgt
 //!   fge` are IEEE comparisons giving Int 0/1: NaN compares false (`fne` true) and `-0.0` equals
 //!   `0.0`, where corgi's own `eq lt …` use the total order.
+//! - `n call bit_length` is Int -> Int: `64 - (n as u64).leading_zeros()`, so zero gives 0
+//!   and a negative integer gives 64.
 //! - The program's `type` declarations are corgi enums of the same
 //!   names and variants. A variant two types share is written `Type::Variant`.
 //! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums whose payload lanes are open,
@@ -112,7 +116,7 @@ use crate::ir::Lambda;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Set, Export, Type,
-    Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
+    Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
@@ -297,7 +301,7 @@ fn keyword(ident: &str) -> Option<Token> {
         "count" => Token::Count, "collect" => Token::Collect,
         "flatmap" => Token::FlatMap,
         "arrange" => Token::Arrange, "negate" => Token::Negate,
-        "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
+        "filter" => Token::Filter, "inspect" => Token::Inspect,
         "lift_iter" => Token::LiftIter,
         _ => return None,
     })
@@ -320,7 +324,7 @@ impl Parser {
         Parser { tokens, pos: 0, types: Default::default(), type_order: Vec::new(), scope: None }
     }
 
-    /// The corgi scope of this program's lambdas: the registered functions and the Float functions
+    /// The corgi scope of this program's lambdas: the registered functions and the base words
     /// as words, the built-in `Option` and `Result`, and all declared types as enums.
     fn lambda_scope(&mut self) -> &corgi::Scope {
         if self.scope.is_none() {
@@ -608,7 +612,6 @@ impl Parser {
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
             Token::Filter => { self.next(); Expr::Filter(Box::new(lhs), self.slot()) },
-            Token::EnterAt => { self.next(); Expr::EnterAt(Box::new(lhs), self.slot()) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
             Token::Ident(name) if name == "half_join" => {

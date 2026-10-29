@@ -652,11 +652,12 @@ impl Gen {
         let mut src = "x".to_string();
         let mut seed_src = seed.name.clone();
         if self.rng.chance(30) {
+            // This op is one scope below the root: epoch, then the loop's coordinate.
             let mut e = Env::new();
             let input = format!("({}, {})", self.pattern(&seed.key, &mut e), self.pattern(&seed.val, &mut e));
             body.push(Stmt::Let(Let {
                 name: "seeds".into(), var: false, src: seed.name.clone(),
-                ops: vec![Op::Plain { text: format!("enter_at({input} -> ({}, 0) max)", self.int(&e, 1, true)), same_shape: true }],
+                ops: vec![Op::Plain { text: format!("delay({input} -> (0, (256, ({}, 0) max call bit_length) mul))", self.int(&e, 1, true)), same_shape: true }],
                 key: seed.key.clone(), val: seed.val.clone(),
             }));
             seed_src = "seeds".into();

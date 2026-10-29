@@ -78,7 +78,7 @@ fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> 
 fn linear(a: &LinearOp, b: &LinearOp, input: Option<&corgi::Shape>) -> bool {
     match (a, b) {
         (LinearOp::Project(a), LinearOp::Project(b)) | (LinearOp::Filter(a), LinearOp::Filter(b))
-        | (LinearOp::EnterAt(a), LinearOp::EnterAt(b)) | (LinearOp::FlatMap(a), LinearOp::FlatMap(b))
+        | (LinearOp::FlatMap(a), LinearOp::FlatMap(b))
         | (LinearOp::JoinFunction(a), LinearOp::JoinFunction(b)) => lambda(a, b, input),
         (LinearOp::Negate, LinearOp::Negate) | (LinearOp::Lift, LinearOp::Lift) | (LinearOp::LiftIter, LinearOp::LiftIter) => true,
         _ => false,

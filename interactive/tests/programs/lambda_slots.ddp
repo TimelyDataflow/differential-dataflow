@@ -1,6 +1,6 @@
 -- The slots that take one lambda: `value` (the value as written, with no tuple around it),
--- `filter`, `flatmap` (a row per element, valued `(position, element)`) and `enter_at` (a row
--- enters the loop at the round it names). A `--` comment may sit inside a lambda written over
+-- `filter`, `flatmap` (a row per element, valued `(position, element)`) and `delay` (a row
+-- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment may sit inside a lambda written over
 -- several lines. Declared types and the built-in `Option` are enums a lambda builds and takes
 -- apart, also when a payload is itself a sum.
 
@@ -14,10 +14,10 @@ export "value" = pairs | value(((a), (b)) -> ((b, 10) mul, a) add);
 export "filter" = pairs | filter(((a), (b)) -> (a, b) lt);
 export "flatmap" = pairs | flatmap(((a), (b)) -> (a enlist, b enlist, (a, b) add enlist) append);
 stepped: {
-    let delayed = pairs | enter_at((_, (b)) -> b);
+    let delayed = pairs | delay((_, (b)) -> (0, (256, b call bit_length) mul));
     set counted = delayed | count;
 }
-export "enter_at" = stepped::counted;
+export "delay" = stepped::counted;
 export "comment" = pairs | value(((a), (b)) ->
     -- the key and the value, added
     (a, b) add  -- one Int

@@ -315,7 +315,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Linear { input, ops } => {
                         let ops: Vec<&str> = ops.iter().map(|op| match op {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
-                            LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
+                            LinearOp::Negate => "negate",
                             LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
                             LinearOp::Lift => "lift", LinearOp::JoinFunction(_) => "join_function",
                         }).collect();

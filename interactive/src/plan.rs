@@ -385,7 +385,6 @@ fn linear(op: &LinearOp) -> String {
         LinearOp::Project(l) => format!("map({})", source_lambda(l)),
         LinearOp::Filter(l) => format!("filter({})", source_lambda(l)),
         LinearOp::Negate => "negate".into(),
-        LinearOp::EnterAt(l) => format!("enter_at({})", source_lambda(l)),
         LinearOp::LiftIter => "lift_iter".into(),
         LinearOp::FlatMap(l) => format!("flatmap({})", source_lambda(l)),
         LinearOp::Lift => "lift".into(),
@@ -421,12 +420,12 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
             for (i, op) in ops.iter().enumerate() {
                 let shape = input.as_ref().map(|(k, v)| Shape::Prod(vec![k.clone(), v.clone()]));
                 let name = match op {
-                    LinearOp::Project(_) => "map", LinearOp::Filter(_) => "filter", LinearOp::EnterAt(_) => "enter_at",
+                    LinearOp::Project(_) => "map", LinearOp::Filter(_) => "filter",
                     LinearOp::FlatMap(_) => "flatmap", LinearOp::JoinFunction(_) => "join_function",
                     LinearOp::Negate => "negate", LinearOp::Lift => "lift", LinearOp::LiftIter => "lift_iter",
                 };
                 printed.push(match op {
-                    LinearOp::Project(l) | LinearOp::Filter(l) | LinearOp::EnterAt(l) | LinearOp::FlatMap(l) | LinearOp::JoinFunction(l) =>
+                    LinearOp::Project(l) | LinearOp::Filter(l) | LinearOp::FlatMap(l) | LinearOp::JoinFunction(l) =>
                         format!("{name}({})", slots.lambda(l, shape, &format!("{at}/{name}[{i}]"))),
                     _ => name.into(),
                 });
@@ -556,11 +555,6 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
                         _ => supplied.text(),
                     };
                     writeln!(out, "{indent}    reads {} as {mode}: {conversion}", names.of(r)).unwrap();
-                }
-                if let Node::Linear { ops, .. } = op {
-                    if ops.iter().any(|op| matches!(op, LinearOp::EnterAt(_))) {
-                        writeln!(out, "{indent}    renderer: enter_at takes max(current scope lane, 256 * bit_length(argument as u64))").unwrap();
-                    }
                 }
                 forms.push(repr);
             }

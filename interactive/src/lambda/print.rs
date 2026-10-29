@@ -288,7 +288,7 @@ impl Printer {
                 // Compare the word's graph, including host Arc identity. A replaced registration
                 // must never silently print the new function under the old graph's name.
                 let scope = super::base_scope();
-                if let Some(word) = super::FloatWord::all().find_map(|(word, _)| {
+                if let Some(word) = super::base_words().find_map(|word| {
                     let graph = corgi::parse_ml_in(&format!("input call {word}"), &scope).ok()?;
                     // Only a whole one-node word spells this host call. A word that merely
                     // contains the kernel may also compute something before or after it.
@@ -600,6 +600,12 @@ mod tests {
             assert!(printed.text.contains("implementation identity required"));
             assert!(matches!(printed.check, Check::Unchecked(_)));
         }
+    }
+
+    #[test]
+    fn bit_length_word_round_trips() {
+        let lambda = Lambda::new("input call bit_length".into(), &super::super::base_scope());
+        assert!(checked_lambda(&lambda, Shape::Int).contains("call bit_length"));
     }
 
     #[test]

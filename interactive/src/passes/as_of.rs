@@ -31,7 +31,7 @@ pub(super) fn drop_dead_as_of(prog: &mut Program, as_of: &Time) -> usize {
 fn keeps_times(op: &LinearOp) -> bool {
     match op {
         LinearOp::Project(_) | LinearOp::Filter(_) | LinearOp::Negate | LinearOp::LiftIter | LinearOp::FlatMap(_) | LinearOp::Lift => true,
-        LinearOp::EnterAt(_) | LinearOp::JoinFunction(_) => false,
+        LinearOp::JoinFunction(_) => false,
     }
 }
 
