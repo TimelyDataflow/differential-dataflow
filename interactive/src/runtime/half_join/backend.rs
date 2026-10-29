@@ -18,12 +18,12 @@ use differential_dogs3::operators::half_join::proxy::{data_time, HalfJoinInstanc
 use differential_dataflow::trace::chunk::Chunk;
 
 use corgi::arrange::{equal_idx, gather_lanes};
-use corgi::{Graph, NumOp, Shape, Value as CValue};
+use corgi::{shape_of_value, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::chunk::{colliding_keys, ident, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::runtime::col_times::{ColTimes, Lanes};
 use crate::runtime::container::CorgiContainer;
-use crate::runtime::join::{leaf_valued, primitive_values, stage_collision, Probe, RunRef, SideScratch, COORD_BITS};
+use crate::runtime::join::{demanded, leaf_valued, primitive_values, stage_collision, Probe, Reads, RunRef, SideScratch, COORD_BITS};
 use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda, Time};
 
@@ -35,12 +35,15 @@ const BLOCK: usize = if cfg!(test) { 3 } else { 1 << 14 };
 
 /// The corgi [`ProxyHalfJoinBackend`]: released runs and arranged chunks, both in identifier
 /// order, presented a block of identifiers at a time, and the matched pairs projected. The
-/// projection is compiled once, at the shapes it reads, and shared by every unit of work.
+/// projection is compiled once, at the shapes it reads, narrowed to the fields it reads, and
+/// shared by every unit of work.
 pub(crate) struct CorgiHalfJoinBackend {
     /// The number of lanes in a time as data: the scope depth, plus one.
     width: usize,
-    /// The projection, at the shapes of the key, the update's value, and the arranged value.
-    projection: ([Shape; 3], Graph<NumOp>),
+    /// The projection, narrowed to take its input projected by `reads.argument`.
+    graph: Graph<NumOp>,
+    /// What the graph reads of the key, the update's value, and the arranged value.
+    reads: Reads,
     /// Identifiers in the current block that cover more than one real key, ascending. `advance`
     /// writes this and the immediately following `cross` reads it; only matches under these
     /// identifiers need a real-key comparison.
@@ -54,7 +57,10 @@ impl CorgiHalfJoinBackend {
     pub(crate) fn new(projection: &Lambda, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
         let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("half_join: type error at shapes ({k}, {v0}, {v1}): {e}"));
-        CorgiHalfJoinBackend { width, projection: ([k, v0, v1], g), colliding: Vec::new() }
+        let input = Shape::Prod(vec![k, v0, v1]);
+        let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+            .unwrap_or_else(|e| panic!("half_join: narrowing a compiled projection at {input}: {e}"));
+        CorgiHalfJoinBackend { width, graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), colliding: Vec::new() }
     }
 }
 
@@ -277,18 +283,24 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         }
         let pair = |i: usize| matches.pairs[kept.as_ref().map_or(i, |kept| kept[i])];
 
-        // The projection over (key, val, arranged val).
+        // The projection over (key, val, arranged val), each projected to what it reads before
+        // gathering; the collision checks above compared the original keys. The time as data
+        // (the value's second field) is not the projection's to read: `advance` presented it.
+        let rows = rs.len();
+        let [dk, d0, d1] = &self.reads.columns;
         let fields: Vec<&[CValue]> = runs.iter().map(run_fields).collect();
-        let out_keys = gather_lanes(&keys.iter().map(|&k| Some(k)).collect::<Vec<_>>(), &rs, &us);
-        let vals = gather_lanes(&fields.iter().map(|f| Some(&f[0])).collect::<Vec<_>>(), &rs, &us);
-        let arranged_vals = if primitive { rewrap(chunks[0].vals(), tokens) } else {
-            let sources: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
-            gather_lanes(&sources, &cs, &js)
+        let gathered = |cols: &[Cow<'_, CValue>], rs: &[usize], us: &[usize]| {
+            gather_lanes(&cols.iter().map(|c| Some(&**c)).collect::<Vec<_>>(), rs, us)
         };
-        let shapes = [corgi::shape_of_value(&out_keys), corgi::shape_of_value(&vals), corgi::shape_of_value(&arranged_vals)];
-        let (pinned, graph) = &self.projection;
-        assert!(*pinned == shapes, "half_join: a block of shape {shapes:?} reached a projection compiled at {pinned:?}");
-        let mut out = corgi::eval_graph(graph, CValue::Prod(vec![out_keys, vals, arranged_vals])).into_prod("half_join projection").unwrap();
+        let out_keys = if *dk == Demand::None { CValue::Unit(rows) } else { gathered(&demanded(dk, keys.iter().copied()), &rs, &us) };
+        let vals = if *d0 == Demand::None { CValue::Unit(rows) } else { gathered(&demanded(d0, fields.iter().map(|f| &f[0])), &rs, &us) };
+        let arranged_vals = if *d1 == Demand::None { CValue::Unit(rows) } else if primitive {
+            d1.project(rewrap(chunks[0].vals(), tokens)).expect("the arranged value's demand")
+        } else { gathered(&demanded(d1, chunks.iter().map(|c| c.vals())), &cs, &js) };
+        let argument = self.reads.argument.project(CValue::Prod(vec![out_keys, vals, arranged_vals])).expect("the half join's input has the shape its demand is on");
+        let shape = shape_of_value(&argument);
+        assert!(shape == self.reads.shape, "half_join: a block read as {shape} reached a projection narrowed to {}", self.reads.shape);
+        let mut out = corgi::eval_graph(&self.graph, argument).into_prod("half_join projection").unwrap();
         let out_val = out.pop().unwrap();
         let out_key = out.pop().unwrap();
 
@@ -308,7 +320,6 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         let data = to_lanes(&mut stream.iter().map(|row| &row.1.data), stream.len());
         let time2 = to_lanes(&mut arranged.iter().map(|row| &row.1), arranged.len());
         // The data time of each match: the lane-wise max is the join in a product of chains.
-        let rows = rs.len();
         let joined: Vec<CValue> = (0..width).map(|l| {
             CValue::i64((0..rows).map(|i| { let (a, b) = pair(i); data[l][a].max(time2[l][b]) }).collect())
         }).collect();
@@ -542,6 +553,51 @@ mod tests {
                     }
                     assert_eq!(consolidated(got), consolidated(expect), "seed {seed}, strict {strict}, hashed {hashed}");
                 }
+            }
+        }
+    }
+    /// Narrowed to what its projection reads, a half join gives the unnarrowed half join's rows:
+    /// over wide update and arranged values, keys read or not, integer and hashed keys, and a
+    /// projection that reads nothing.
+    #[test]
+    fn narrowed_projection_matches_the_unnarrowed_half_join() {
+        for hashed in [false, true] {
+            let key_col = |ks: &[i64]| if hashed { CValue::Prod(vec![ints(ks), ints(&ks.iter().map(|k| k * 7).collect::<Vec<_>>())]) } else { ints(ks) };
+            let wide = |xs: &[i64]| CValue::Prod((0..4).map(|f| ints(&xs.iter().map(|x| 10 * f + x).collect::<Vec<_>>())).collect());
+            let mut rng = Rng(7);
+            let batches: Vec<NativeBatch> = (0..2).map(|_| {
+                let n = 1 + rng.below(20) as usize;
+                let ks: Vec<i64> = (0..n).map(|_| rng.below(6) as i64).collect();
+                let vs: Vec<i64> = (0..n).map(|_| rng.below(100) as i64).collect();
+                let ts: Vec<Time> = (0..n).map(|_| t(rng.below(3), rng.below(3))).collect();
+                let ds: Vec<Diff> = (0..n).map(|_| rng.diff()).collect();
+                Rc::new(columns_to_batch(present_key(key_col(&ks)), wide(&vs), ts.into_iter().collect(), ds))
+            }).collect();
+            let n = 30;
+            let ks: Vec<i64> = (0..n).map(|_| rng.below(8) as i64).collect();
+            let vs: Vec<i64> = (0..n).map(|_| rng.below(10) as i64).collect();
+            let ss: Vec<(i64, i64)> = (0..n).map(|_| (2 + rng.below(2) as i64, 2 + rng.below(2) as i64)).collect();
+            let ts: Vec<Time> = (0..n).map(|_| t(2, rng.below(3))).collect();
+            let ds: Vec<Diff> = (0..n).map(|_| rng.diff()).collect();
+            let run = Run::new(key_col(&ks), CValue::Prod(vec![wide(&vs), lifted(&ss)]), ts.iter().cloned().collect(), ds);
+            let lower: Antichain<Time> = ts.iter().cloned().collect();
+            let key = if hashed { Shape::Prod(vec![Shape::Int, Shape::Int]) } else { Shape::Int };
+            let shapes = [key, Shape::Prod(vec![Shape::Int; 4]), Shape::Prod(vec![Shape::Int; 4])];
+            let bodies = ["(k, (a, e))", "((), (d, h))", "(k, ())", "((), ())", "(k, (v0, v1))", if hashed { "let (x, _) = k in (x, g)" } else { "(k, (b, f))" }];
+            for body in bodies {
+                let lambda = Lambda::new(format!("let (k, v0, v1) = input in let (a, b, c, d) = v0 in let (e, f, g, h) = v1 in {body}"), &corgi::Scope::default());
+                let narrowed = CorgiHalfJoinBackend::new(&lambda, 2, shapes.clone());
+                let original = CorgiHalfJoinBackend {
+                    width: 2, graph: compile_projection(&lambda, &shapes).unwrap(),
+                    reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), colliding: Vec::new(),
+                };
+                let rows = |backend: CorgiHalfJoinBackend| {
+                    let mut tactic = ProxyHalfJoinTactic::new(backend, true);
+                    consolidated(tactic.prep(vec![run.clone()], batches.clone(), lower.clone()).flat_map(|c| c.into_updates()).collect())
+                };
+                let got = rows(narrowed);
+                assert!(!got.is_empty(), "the case meets something");
+                assert_eq!(got, rows(original), "hashed {hashed}, body {body}");
             }
         }
     }
