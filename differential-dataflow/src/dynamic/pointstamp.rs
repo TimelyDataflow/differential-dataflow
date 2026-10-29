@@ -18,15 +18,16 @@ use smallvec::SmallVec;
 /// A sequence of timestamps, partially ordered by the product order.
 ///
 /// Sequences of different lengths are compared as if extended indefinitely by `T::minimum()`.
+/// `N` coordinates are stored inline (one by default); longer sequences spill to the heap.
 /// Sequences are guaranteed to be "minimal", and may not end with `T::minimum()` entries.
 #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize, Columnar)]
 #[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
-pub struct PointStamp<T> {
+pub struct PointStamp<T, const N: usize = 1> {
     /// A sequence of timestamps corresponding to timestamps in a sequence of nested scopes.
-    vector: SmallVec<[T; 1]>,
+    vector: SmallVec<[T; N]>,
 }
 
-impl<T: Timestamp> PartialEq<[T]> for PointStamp<T> {
+impl<T: Timestamp, const N: usize> PartialEq<[T]> for PointStamp<T, N> {
     fn eq(&self, other: &[T]) -> bool {
         self.vector.iter()
             .zip(other.iter().chain(std::iter::repeat(&T::minimum())))
@@ -34,15 +35,15 @@ impl<T: Timestamp> PartialEq<[T]> for PointStamp<T> {
     }
 }
 
-impl<T: Timestamp> PartialEq<PointStamp<T>> for [T] {
-    fn eq(&self, other: &PointStamp<T>) -> bool {
+impl<T: Timestamp, const N: usize> PartialEq<PointStamp<T, N>> for [T] {
+    fn eq(&self, other: &PointStamp<T, N>) -> bool {
         self.iter()
             .zip(other.vector.iter().chain(std::iter::repeat(&T::minimum())))
             .all(|(t1, t2)| t1.eq(t2))
     }
 }
 
-impl<T: Timestamp> PartialOrder<[T]> for PointStamp<T> {
+impl<T: Timestamp, const N: usize> PartialOrder<[T]> for PointStamp<T, N> {
     fn less_equal(&self, other: &[T]) -> bool {
         self.vector.iter()
             .zip(other.iter().chain(std::iter::repeat(&T::minimum())))
@@ -50,19 +51,19 @@ impl<T: Timestamp> PartialOrder<[T]> for PointStamp<T> {
     }
 }
 
-impl<T: Timestamp> PartialOrder<PointStamp<T>> for [T] {
-    fn less_equal(&self, other: &PointStamp<T>) -> bool {
+impl<T: Timestamp, const N: usize> PartialOrder<PointStamp<T, N>> for [T] {
+    fn less_equal(&self, other: &PointStamp<T, N>) -> bool {
         self.iter()
             .zip(other.vector.iter().chain(std::iter::repeat(&T::minimum())))
             .all(|(t1, t2)| t1.less_equal(t2))
     }
 }
 
-impl<T: Timestamp> PointStamp<T> {
+impl<T: Timestamp, const N: usize> PointStamp<T, N> {
     /// Create a new sequence.
     ///
     /// This method will modify `vector` to ensure it does not end with `T::minimum()`.
-    pub fn new(mut vector: SmallVec<[T; 1]>) -> Self {
+    pub fn new(mut vector: SmallVec<[T; N]>) -> Self {
         while vector.last() == Some(&T::minimum()) {
             vector.pop();
         }
@@ -73,12 +74,12 @@ impl<T: Timestamp> PointStamp<T> {
     /// This method is the support way to mutate the contents of `self`, by extracting
     /// the vector and then re-introducing it with `PointStamp::new` to re-establish
     /// the invariant that the vector not end with `T::minimum`.
-    pub fn into_inner(self) -> SmallVec<[T; 1]> {
+    pub fn into_inner(self) -> SmallVec<[T; N]> {
         self.vector
     }
 }
 
-impl<T> std::ops::Deref for PointStamp<T> {
+impl<T, const N: usize> std::ops::Deref for PointStamp<T, N> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         &self.vector
@@ -87,7 +88,7 @@ impl<T> std::ops::Deref for PointStamp<T> {
 
 // Implement timely dataflow's `PartialOrder` trait.
 use timely::order::PartialOrder;
-impl<T: Timestamp> PartialOrder for PointStamp<T> {
+impl<T: Timestamp, const N: usize> PartialOrder for PointStamp<T, N> {
     fn less_equal(&self, other: &Self) -> bool {
         // Every present coordinate must be less-equal the corresponding coordinate,
         // where absent corresponding coordinates are `T::minimum()`. Coordinates
@@ -101,7 +102,7 @@ impl<T: Timestamp> PartialOrder for PointStamp<T> {
 }
 
 use timely::progress::timestamp::Refines;
-impl<T: Timestamp> Refines<()> for PointStamp<T> {
+impl<T: Timestamp, const N: usize> Refines<()> for PointStamp<T, N> {
     fn to_inner(_outer: ()) -> Self {
         Self { vector: Default::default() }
     }
@@ -131,8 +132,8 @@ pub struct PointStampSummary<TS> {
     pub actions: Vec<TS>,
 }
 
-impl<T: Timestamp> PathSummary<PointStamp<T>> for PointStampSummary<T::Summary> {
-    fn results_in(&self, timestamp: &PointStamp<T>) -> Option<PointStamp<T>> {
+impl<T: Timestamp, const N: usize> PathSummary<PointStamp<T, N>> for PointStampSummary<T::Summary> {
+    fn results_in(&self, timestamp: &PointStamp<T, N>) -> Option<PointStamp<T, N>> {
         // Get a slice of timestamp coordinates appropriate for consideration.
         let timestamps = if let Some(retain) = self.retain {
             if retain < timestamp.vector.len() {
@@ -214,7 +215,7 @@ impl<TS: PartialOrder> PartialOrder for PointStampSummary<TS> {
 
 // Implement timely dataflow's `Timestamp` trait.
 use timely::progress::Timestamp;
-impl<T: Timestamp> Timestamp for PointStamp<T> {
+impl<T: Timestamp, const N: usize> Timestamp for PointStamp<T, N> {
     fn minimum() -> Self {
         Self::new(Default::default())
     }
@@ -224,14 +225,16 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 // Implement differential dataflow's `Lattice` trait.
 // This extends the `PartialOrder` implementation with additional structure.
 use crate::lattice::Lattice;
-impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
+impl<T: Lattice + Timestamp, const N: usize> Lattice for PointStamp<T, N> {
     #[inline(always)]
     fn join(&self, other: &Self) -> Self {
         match (self.vector.len(), other.vector.len()) {
             (0, _) => return other.clone(),
             (_, 0) => return self.clone(),
-            (1, 1) => return Self {
-                vector: SmallVec::from_buf([self.vector[0].join(&other.vector[0])]),
+            (1, 1) => {
+                let mut vector = SmallVec::new();
+                vector.push(self.vector[0].join(&other.vector[0]));
+                return Self { vector };
             },
             (a, b) if a == b => {
                 let mut result = self.clone();
@@ -295,22 +298,22 @@ mod columnation {
     use smallvec::SmallVec;
     use crate::dynamic::pointstamp::PointStamp;
 
-    impl<T: Columnation+Clone> Columnation for PointStamp<T> {
-        type InnerRegion = PointStampStack<T::InnerRegion>;
+    impl<T: Columnation+Clone, const N: usize> Columnation for PointStamp<T, N> {
+        type InnerRegion = PointStampStack<T::InnerRegion, N>;
     }
 
     /// Stack for PointStamp. Part of Columnation implementation.
-    pub struct PointStampStack<R: Region<Item: Columnation+Clone>>(<SmallVec<[R::Item; 1]> as Columnation>::InnerRegion);
+    pub struct PointStampStack<R: Region<Item: Columnation+Clone>, const N: usize = 1>(<SmallVec<[R::Item; N]> as Columnation>::InnerRegion);
 
-    impl<R: Region<Item: Columnation+Clone>> Default for PointStampStack<R> {
+    impl<R: Region<Item: Columnation+Clone>, const N: usize> Default for PointStampStack<R, N> {
         #[inline]
         fn default() -> Self {
             Self(Default::default())
         }
     }
 
-    impl<R: Region<Item: Columnation+Clone>> Region for PointStampStack<R> {
-        type Item = PointStamp<R::Item>;
+    impl<R: Region<Item: Columnation+Clone>, const N: usize> Region for PointStampStack<R, N> {
+        type Item = PointStamp<R::Item, N>;
 
         #[inline]
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {

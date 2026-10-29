@@ -20,7 +20,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.25.1" }
 #timely = { version = "0.31", default-features = false }
-columnar = { version = "0.13", default-features = false }
+columnar = { version = "0.13.3", default-features = false }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
