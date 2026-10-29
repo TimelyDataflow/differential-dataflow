@@ -18,7 +18,8 @@ use interactive::server::{host_time, Command as ServerCommand, HostContainer, Ho
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
-use timely::dataflow::operators::vec::{Input as VecInput, Map};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::core::UnorderedInput;
 use timely::dataflow::operators::{CapabilitySet, Exchange, Probe};
 use timely::worker::Worker;
 
@@ -119,8 +120,8 @@ pub fn run_worker(
     let work_queue = Rc::new(RefCell::new(VecDeque::new()));
     let queue_out = work_queue.clone();
     let peers = worker.peers();
-    let input = worker.dataflow::<u64, _, _>(|scope| {
-        let (input, stream) = scope.new_input::<Work>();
+    let input = worker.dataflow::<HostTime, _, _>(|scope| {
+        let (input, stream) = scope.new_unordered_input::<timely::container::CapacityContainerBuilder<Vec<Work>>>();
         stream
             .flat_map(move |work| work.distribute(peers))
             .exchange(|(target, _work)| *target)
@@ -154,6 +155,7 @@ pub fn run_worker(
     let mut next_token = 0u64;
     let mut intake_closed = false;
     let mut shutdown = false;
+    let mut admitted = Vec::new();
 
     while !shutdown {
         let next_work = { work_queue.borrow_mut().pop_front() };
@@ -193,7 +195,6 @@ pub fn run_worker(
             continue;
         }
 
-        let mut admitted = false;
         if let Some(events) = events.as_ref() {
             // Bound each intake turn so a continuously busy network cannot
             // starve the Timely scheduler that distributes the admitted work.
@@ -211,45 +212,31 @@ pub fn run_worker(
                             .checked_add(1)
                             .expect("control request token overflow");
                         responses.insert(token, resp);
-                        work_input
-                            .as_mut()
-                            .expect("worker 0 owns command input")
-                            .send(Work::Request {
-                                token,
-                                reqid,
-                                command: kind,
-                                connection_id,
-                                logical_count: None,
-                            });
-                        admitted = true;
+                        admitted.push(Work::Request {
+                            token,
+                            reqid,
+                            command: kind,
+                            connection_id,
+                            logical_count: None,
+                        });
                     }
                     Ok(ControlEvent::SessionEnded(connection)) => {
-                        work_input
-                            .as_mut()
-                            .expect("worker 0 owns command input")
-                            .send(Work::SessionEnded(connection));
-                        admitted = true;
+                        admitted.push(Work::SessionEnded(connection));
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if !intake_closed {
-                            work_input
-                                .as_mut()
-                                .expect("worker 0 owns command input")
-                                .send(Work::Shutdown);
+                            admitted.push(Work::Shutdown);
                             intake_closed = true;
-                            admitted = true;
                         }
                         break;
                     }
                 }
             }
 
-            if admitted {
-                work_input
-                    .as_mut()
-                    .expect("worker 0 owns command input")
-                    .flush();
+            if !admitted.is_empty() {
+                let (input, capability) = work_input.as_mut().expect("worker 0 owns command input");
+                input.activate().session(capability).give_container(&mut admitted);
                 // Move the newly admitted batch into the distributed stream.
                 worker.step();
                 continue;
@@ -405,7 +392,7 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.import_as_of().outer).and_then(|report| {
+                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.epoch().saturating_sub(1)).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() })
                     })).map_err(|_| "plan printing panicked".to_string())?;
@@ -509,7 +496,7 @@ fn start_tail(
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
-    let shutdown = interactive::server::host_dataflow(worker, |_, scope| {
+    let shutdown = interactive::server::host_dataflow(worker, |scope| {
         let (containers, shutdown) = trace.import_containers(scope, "TailImport", server.import_as_of());
         let pending = Arc::new(AtomicUsize::new(0));
         let (mut upper, mut dropped) = (None::<OuterTime>, false);
@@ -541,18 +528,18 @@ fn start_tail(
                         match format {
                             ReadFormat::Corgi => out("data", frame::encode(&updates, epochs)),
                             ReadFormat::Columns => {
-                                let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).outer).collect();
+                                let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).first().copied().unwrap_or(0)).collect();
                                 send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", epochs, updates.diffs, updates.keys, updates.vals));
                             }
                             ReadFormat::Rows => {
                                 for row in 0..updates.len() {
-                                    send(response, &tag, "data", render_row(&updates, row, Some(times.get(row).outer)));
+                                    send(response, &tag, "data", render_row(&updates, row, Some(times.get(row).first().copied().unwrap_or(0))));
                                 }
                             }
                         }
                     });
                     if format == ReadFormat::Corgi {
-                        if let Some(t) = frontier.frontier().iter().map(|t| t.outer).min() {
+                        if let Some(t) = frontier.frontier().iter().map(|t| t.first().copied().unwrap_or(0)).min() {
                             if upper != Some(t) {
                                 upper = Some(t);
                                 out("progress", t.to_le_bytes().to_vec());

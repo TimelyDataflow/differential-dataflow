@@ -695,7 +695,6 @@ where
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
-    use differential_dataflow::dynamic::pointstamp::PointStamp;
     use crate::runtime::chunk::present_key;
     use crate::ir::Time;
 
@@ -714,7 +713,7 @@ mod tests {
 
     /// Random `(key, value, time, diff)` rows over few keys and values, so that they collide.
     fn random_rows(seed: u64, count: usize, keys: u64) -> Vec<(u64, (u64, u64), Time, Diff)> {
-        let stamp = |outer, coords: &[u64]| Time::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        let stamp = |outer, coords: &[u64]| Time::new(std::iter::once(outer).chain(coords.iter().copied()).collect());
         let times = [stamp(0, &[]), stamp(1, &[2, 3]), stamp(2, &[1, 4]), stamp(3, &[2])];
         let mut state = seed;
         let mut next = |n: u64| {
@@ -932,9 +931,9 @@ mod tests {
         // Two retires' inputs: the first at outer times 0 and 1, the second from 2 on.
         let early = random_rows(0x51ED_270B_2A4F_3C11, 200, 6);
         let late: Vec<_> = random_rows(0x0BAD_5EED, 120, 6).into_iter()
-            .map(|(k, v, t, d)| (k, v, Time::new(t.outer + 2, t.inner), d)).collect();
-        let early: Vec<_> = early.into_iter().filter(|r| r.2.outer < 2).collect();
-        let stamp = |outer| Time::new(outer, PointStamp::new(std::iter::empty().collect()));
+            .map(|(k, v, t, d)| (k, v, Time::new(std::iter::once(t.first().copied().unwrap_or(0) + 2).chain(t.iter().skip(1).copied()).collect()), d)).collect();
+        let early: Vec<_> = early.into_iter().filter(|r| r.2.first().copied().unwrap_or(0) < 2).collect();
+        let stamp = |outer| crate::server::host_time(outer);
 
         // A lambda: the weighted sum of the values' first fields, once, and how many values, twice negated.
         let lambda = crate::ir::Lambda::new("let (_, vals) = input in \

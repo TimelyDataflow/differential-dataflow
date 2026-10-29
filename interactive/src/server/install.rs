@@ -121,8 +121,8 @@ impl Server {
 
         #[allow(clippy::type_complexity)]
         let (published, inputs): (Vec<(String, crate::backend::corgi::ExportTrace, Option<crate::backend::corgi::ExportTap>)>, Vec<(usize, ServerInput)>) =
-            host_dataflow(worker, |outer, scope| {
-                use timely::dataflow::operators::core::Input as _;
+            host_dataflow(worker, |scope| {
+                use timely::dataflow::operators::core::UnorderedInput as _;
                 use timely::dataflow::operators::Probe;
                 use differential_dataflow::AsCollection;
                 use crate::backend::corgi::{export_containers, Arr, CorgiImport};
@@ -136,10 +136,10 @@ impl Server {
                     .iter()
                     .map(|imp| match &imp.from {
                         st::Source::Input(n) => {
-                            let (handle, stream) = outer.new_input::<InputContainer>();
+                            let (handle, stream) = scope.new_unordered_input::<timely::container::CapacityContainerBuilder<InputContainer>>();
                             let shape = imp.shape.clone().expect("an input declares its shape (checked above)");
                             inputs.push((*n, ServerInput::new(handle, shape)));
-                            CorgiImport::Columns(stream.as_collection().enter(scope))
+                            CorgiImport::Columns(stream.as_collection())
                         }
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it, as
@@ -191,7 +191,6 @@ impl Server {
         let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
         for (pos, mut handle) in inputs {
             handle.advance_to(self.epoch);
-            handle.flush();
             by_pos.insert(pos, handle);
         }
         self.programs.insert(

@@ -1,6 +1,7 @@
 //! Reading published traces: snapshots, keyed peeks, and export taps' change streams.
 
 use super::*;
+use timely::PartialOrder;
 
 impl Server {
     /// This worker's share of trace `name`, consolidated as of the current epoch, read from its
@@ -9,15 +10,16 @@ impl Server {
         use differential_dataflow::trace::TraceReader;
         let name = canonical_source_name(name);
         let epoch = self.epoch;
+        let through = host_time(epoch);
         let mut trace = self.traces.get(&name).cloned().ok_or_else(|| format!("no trace {:?}", name))?;
         let batches = trace
-            .batches_through(Antichain::from_elem(host_time(epoch)).borrow())
+            .batches_through(Antichain::from_elem(through.clone()).borrow())
             .ok_or_else(|| format!("trace {:?} has no readable cut at epoch {}", name, epoch))?;
         let parts = crate::backend::corgi::batch_containers(batches)
             .into_iter()
             .map(|HostContainer { keys, vals, times, diffs }| {
                 let part = Updates { keys, vals, diffs };
-                let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).outer < epoch).collect();
+                let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).less_than(&through)).collect();
                 if before.len() == part.len() { part } else { part.select(&before) }
             })
             .collect();
@@ -42,6 +44,7 @@ impl Server {
 
         let name = canonical_source_name(name);
         let epoch = self.epoch;
+        let through = host_time(epoch);
         let mut published = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
         let as_of = self.import_as_of();
         let shape = self.shapes[&name].clone();
@@ -49,7 +52,8 @@ impl Server {
         let parts_in = parts.clone();
         let mut probe = ProbeHandle::new();
         let id = worker.next_dataflow_index();
-        host_dataflow(worker, |_, scope| {
+        host_dataflow(worker, |scope| {
+            let through = through.clone();
             // The dataflow is dropped once drained, which releases the import.
             let (containers, _shutdown) = published.import_containers(scope, "SnapshotImport", as_of);
             containers
@@ -59,14 +63,14 @@ impl Server {
                         input.for_each(|_cap, data| {
                             let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
                             let part = Updates { keys, vals, diffs };
-                            let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).outer < epoch).collect();
+                            let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).less_than(&through)).collect();
                             parts_in.borrow_mut().push(if before.len() == part.len() { part } else { part.select(&before) });
                         });
                     }
                 })
                 .probe_with(&mut probe);
         });
-        while probe.less_than(&host_time(epoch)) {
+        while probe.less_than(&through) {
             // Remote data or progress wakes idle workers; do not busy-poll.
             worker.step_or_park(None);
         }

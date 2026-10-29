@@ -54,7 +54,7 @@ impl Server {
             input.give_columns(rows, self.epoch).expect("diagnostics rows have their source's shape");
         }
         input.advance_to(self.epoch);
-        input.flush();
+
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
         self.programs.insert(

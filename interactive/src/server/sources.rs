@@ -3,8 +3,11 @@
 
 use super::*;
 
-/// A container of corgi columns at an epoch, as an input takes them.
-pub(super) type InputContainer = crate::runtime::container::CorgiContainer<OuterTime, Diff>;
+/// A container of corgi columns at the program time, as an input takes them.
+pub(super) type InputContainer = HostContainer;
+
+type InputHandle = timely::dataflow::operators::core::unordered_input::UnorderedHandle<HostTime, timely::container::CapacityContainerBuilder<InputContainer>>;
+type InputCapability = timely::dataflow::operators::ActivateCapability<HostTime>;
 
 /// The number of rows an input converts to columns at once, and a generator emits at once.
 pub(super) const COLUMN_BATCH: usize = 1 << 16;
@@ -12,17 +15,15 @@ pub(super) const COLUMN_BATCH: usize = 1 << 16;
 /// An installed program's positional `input N`, or a generated source's: an input of corgi
 /// containers at one shape, the input's declared one or its source's.
 pub(super) struct ServerInput {
-    handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<InputContainer>>,
+    handle: InputHandle,
+    capability: InputCapability,
     /// The shape of every update the input holds.
     pub(super) shape: RowShape,
 }
 
 impl ServerInput {
-    pub(super) fn new(
-        handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<InputContainer>>,
-        shape: RowShape,
-    ) -> Self {
-        ServerInput { handle, shape }
+    pub(super) fn new((handle, capability): (InputHandle, InputCapability), shape: RowShape) -> Self {
+        ServerInput { handle, capability, shape }
     }
 
     /// Add `recipe`'s rows at `indices`, each with multiplicity `diff` at `time`, as columns.
@@ -62,16 +63,13 @@ impl ServerInput {
         if !container.times.is_empty() {
             let shape = (corgi::shape_of_value(&container.keys), corgi::shape_of_value(&container.vals));
             assert!(shape == self.shape, "a container of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape));
-            self.handle.send_batch(&mut container);
+            self.handle.activate().session(&self.capability).give_container(&mut container);
         }
     }
 
+    /// Hold the frontier at this epoch; dropping the input releases its capability.
     pub(super) fn advance_to(&mut self, time: OuterTime) {
-        self.handle.advance_to(time);
-    }
-
-    pub(super) fn flush(&mut self) {
-        self.handle.flush();
+        self.capability.downgrade(&host_time(time));
     }
 }
 
@@ -257,7 +255,6 @@ impl Server {
         // union is the full source exactly once.
         input.generate(recipe, (0..recipe.rows_len()).filter(|e| (*e as usize) % peers == index), 0, 1);
         input.advance_to(self.epoch);
-        input.flush();
 
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
@@ -286,7 +283,6 @@ impl Server {
             input.give_columns(clock_rows(&[(self.epoch, 1)]), self.epoch).expect("clock rows have the clock's shape");
         }
         input.advance_to(self.epoch);
-        input.flush();
 
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
@@ -310,12 +306,12 @@ impl Server {
         let probe = ProbeHandle::new();
         let dataflow_id = worker.next_dataflow_index();
         self.note_dataflow(dataflow_id, name);
-        let (handle, trace) = host_dataflow(worker, |outer, scope| {
-            use timely::dataflow::operators::core::Input as _;
+        let (handle, trace) = host_dataflow(worker, |scope| {
+            use timely::dataflow::operators::core::UnorderedInput as _;
             use timely::dataflow::operators::Probe;
             use differential_dataflow::AsCollection;
-            let (handle, stream) = outer.new_input::<InputContainer>();
-            let arranged = crate::backend::corgi::arrange_export(stream.as_collection().enter(scope));
+            let (handle, stream) = scope.new_unordered_input::<timely::container::CapacityContainerBuilder<InputContainer>>();
+            let arranged = crate::backend::corgi::arrange_export(stream.as_collection());
             arranged.stream.probe_with(&probe);
             (handle, arranged.trace)
         });
@@ -340,7 +336,7 @@ mod tests {
             let container = recipe.container(&indices, 4, -1);
             let (k, v) = recipe.shape();
             assert_eq!((corgi::shape_of_value(&container.keys), corgi::shape_of_value(&container.vals)), (k, v), "{name}");
-            let rows: Vec<_> = indices.iter().map(|&e| (recipe.row(e), 4, -1)).collect();
+            let rows: Vec<_> = indices.iter().map(|&e| (recipe.row(e), host_time(4), -1)).collect();
             assert_eq!(container.into_updates(), rows, "{name}");
         }
     }

@@ -3,9 +3,9 @@
 //! The tree walk — scopes as timely regions, feedback variables, item-order
 //! rendering — lives once in `render_tree`, generic over a `Backend`. A
 //! backend fixes the differential container and supplies the substrate leaf
-//! operators (`linear`/`join`/`reduce`/`arrange`/`inspect`/`leave_dynamic`);
-//! everything else (enter/leave/concat/feedback) is DD's own container-generic
-//! machinery. Time is always `ir::Time`; only the container varies.
+//! operators (`linear`/`join`/`reduce`/`arrange`/`inspect`);
+//! enter/leave/concat/feedback and dropping child coordinates with `retime` are
+//! container-generic. Time is always `ir::Time`; only the container varies.
 //!
 //! The server is a thin driver: it picks a backend and calls `render_tree`.
 
@@ -13,10 +13,9 @@
 pub(crate) mod corgi;
 
 use timely::Container;
-use timely::order::Product;
 use timely::dataflow::Scope;
-use timely::progress::Timestamp;
-use differential_dataflow::Collection;
+use timely::progress::{PathSummary, Timestamp};
+use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::dynamic::pointstamp::PointStampSummary;
 use differential_dataflow::dynamic::feedback_summary;
@@ -55,7 +54,32 @@ pub(crate) trait Backend {
     /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
-    fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
+}
+
+/// Apply `step` to capabilities and rows, advertising the same summary to progress tracking.
+fn retime<'s, C>(c: Collection<'s, Time, C>, step: PointStampSummary<u64>, name: &str) -> Collection<'s, Time, C>
+where
+    C: Container + ResultsIn<PointStampSummary<u64>>,
+{
+    use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
+    use timely::dataflow::operators::CapabilitySet;
+    use timely::progress::Antichain;
+
+    let mut builder = OperatorBuilder::new(name.to_string(), c.inner.scope());
+    let (output, stream) = builder.new_output();
+    let mut output = OutputBuilder::from(output);
+    let mut input = builder.new_input_connection(c.inner, Pipeline, [(0, Antichain::from_elem(step.clone()))]);
+    builder.build(move |_capability| move |_frontier| {
+        let mut output = output.activate();
+        input.for_each(|cap, data| {
+            // A message may carry several times: hold a capability for each, moved as the rows are.
+            let caps: CapabilitySet<_> = cap.stamp().iter().filter_map(|t| step.results_in(t)).map(|t| cap.delayed(&t, 0)).collect();
+            let mut moved = std::mem::take(data).results_in(&step);
+            output.session(&caps).give_container(&mut moved);
+        });
+    });
+    stream.as_collection()
 }
 
 /// Which statement built which operators: every operator whose worker-unique identifier is in
@@ -120,7 +144,7 @@ impl<'s, B: Backend> Rendered<'s, B> {
 }
 
 /// A rendered scope item: an operator's value, or a child scope's surrendered
-/// exports (already returned to this scope's depth via `leave_dynamic`).
+/// exports (already returned to this scope's depth via `retime`).
 enum RItem<'s, B: Backend> {
     Op(Rendered<'s, B>),
     Sub(Vec<Collection<'s, Time, B::Container>>),
@@ -162,7 +186,7 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
 /// Render one scope at `depth` (root = 0): feedback vars first (they're listed,
 /// not scanned for), then items in order, then binds close the loops, then the
 /// exports are surrendered. The returned collections are at this scope's depth;
-/// popping the coordinate (`leave_dynamic`) is the caller's job. `shapes` are the
+/// popping the coordinate (`retime`) is the caller's job. `shapes` are the
 /// scope's collections' shapes, which install inferred, all of them known: the
 /// operators compile against them before any data arrives.
 pub(crate) fn render_tree<'s, B: Backend>(
@@ -199,7 +223,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
     let mut var_handles: Vec<Option<Variable<'s, Time, B::Container>>> = Vec::new();
     let mut var_cols: Vec<Collection<'s, Time, B::Container>> = Vec::new();
     for _ in &s.vars {
-        let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(depth, 1));
+        let step = feedback_summary::<u64>(depth + 1, 1);
         let (var, col) = Variable::new(scope, step);
         var_handles.push(Some(var));
         var_cols.push(col);
@@ -258,7 +282,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
                     let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
-                let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| B::leave_dynamic(c, depth + 1)).collect();
+                let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| retime(c, PointStampSummary { retain: Some(depth + 1), actions: Vec::new() }, "LeaveDynamic")).collect();
                 items.push(RItem::Sub(left));
             },
         }

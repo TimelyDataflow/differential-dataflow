@@ -15,7 +15,6 @@ use std::marker::PhantomData;
 
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::lattice::Lattice;
-use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
 
@@ -33,20 +32,10 @@ impl Lanes for u64 {
     fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self { coords.next().unwrap_or(0) }
 }
 
-impl Lanes for PointStamp<u64> {
+impl<const N: usize> Lanes for PointStamp<u64, N> {
     fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { self.iter().copied() }
     // `new` strips trailing zeros, which is the canonical form.
     fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self { PointStamp::new(coords.collect()) }
-}
-
-impl<B: Lanes> Lanes for Product<u64, B> {
-    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ {
-        std::iter::once(self.outer).chain(self.inner.coordinates())
-    }
-    fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self {
-        let outer = coords.next().unwrap_or(0);
-        Product::new(outer, B::from_coordinates(coords))
-    }
 }
 
 /// A timestamp usable as a lane column: DD's time algebra plus [`Lanes`].
@@ -66,14 +55,6 @@ impl LaneSummary for u64 {
 
 impl LaneSummary for PointStampSummary<u64> {
     fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (self.retain, self.actions.clone()) }
-}
-
-/// The outer summary on lane 0, the inner on the lanes after it.
-impl<B: LaneSummary> LaneSummary for Product<u64, B> {
-    fn lane_steps(&self) -> (Option<usize>, Vec<u64>) {
-        let (retain, adds) = self.inner.lane_steps();
-        (retain.map(|r| r + 1), std::iter::once(self.outer).chain(adds).collect())
-    }
 }
 
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
@@ -298,7 +279,7 @@ impl<T> ColTimes<T> {
     /// row's result overflowed and was dropped, and `None` when every row survived.
     pub(crate) fn results_in<S: LaneSummary>(&mut self, step: &S) -> Option<Vec<usize>> {
         let (retain, adds) = step.lane_steps();
-        if let Some(retain) = retain { self.lanes.truncate(retain); }
+        if let Some(retain) = retain { self.truncate(retain); }
         self.widen(adds.len());
         let len = self.len;
         let mut alive: Option<Vec<bool>> = None;
@@ -326,12 +307,6 @@ impl<T> ColTimes<T> {
         assert!(lanes.iter().all(|lane| lane.len() == len), "every lane must hold {len} rows");
         ColTimes { lanes, len, _t: PhantomData }
     }
-
-    /// The same lanes, read as times of type `U`. Coordinates `U` has beyond the lanes read as zero,
-    /// so this enters a scope: an outer time is the inner time whose added coordinates are zero.
-    pub(crate) fn retime<U>(self) -> ColTimes<U> {
-        ColTimes { lanes: self.lanes, len: self.len, _t: PhantomData }
-    }
 }
 
 impl<T: Lanes> FromIterator<T> for ColTimes<T> {
@@ -355,10 +330,10 @@ mod tests {
     use super::*;
     use timely::progress::Antichain;
 
-    type T = Product<u64, PointStamp<u64>>;
+    type T = crate::ir::Time;
 
     fn t(outer: u64, coords: &[u64]) -> T {
-        Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+        T::new(std::iter::once(outer).chain(coords.iter().copied()).collect())
     }
 
     #[test]
@@ -415,11 +390,11 @@ mod tests {
         let times: Vec<T> = vec![t(0, &[]), t(0, &[2]), t(1, &[1, 1]), t(2, &[0, 3]), t(3, &[4]), t(1, &[5, 0, 2])];
         let col: ColTimes<T> = times.iter().cloned().collect();
         let steps = [
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 1] }),
-            Product::new(1u64, PointStampSummary { retain: Some(1), actions: vec![] }),
-            Product::new(0u64, PointStampSummary { retain: Some(0), actions: vec![7] }),
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 0, 0, 1] }),
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![u64::MAX - 3] }),
+            PointStampSummary { retain: None, actions: vec![0, 0, 1] },
+            PointStampSummary { retain: Some(2), actions: vec![1] },
+            PointStampSummary { retain: Some(1), actions: vec![0, 7] },
+            PointStampSummary { retain: None, actions: vec![0, 0, 0, 0, 1] },
+            PointStampSummary { retain: None, actions: vec![0, u64::MAX - 3] },
         ];
         for step in &steps {
             let mut out = col.clone();

@@ -99,7 +99,7 @@ impl Server {
         let buffer_in = buffer.clone();
         let mut published = self.published(&source).expect("checked above");
         let as_of = self.import_as_of();
-        let shutdown = host_dataflow(worker, |_, scope| {
+        let shutdown = host_dataflow(worker, |scope| {
             use timely::dataflow::operators::{Inspect, Probe};
             let (containers, shutdown) = published.import_containers(scope, "BindImport", as_of);
             containers
