@@ -7,23 +7,22 @@ use super::*;
 pub type OuterTime = u64;
 
 /// The time programs and published traces run at: an epoch, then one coordinate per enclosing
-/// loop. A program's root collections, and so its published traces, are at `(e, [])`.
+/// loop. A program's root collections, and so its published traces, are at `[e]`.
 pub type HostTime = crate::ir::Time;
 
-/// Epoch `e` as a program time, `(e, [])`.
+/// Epoch `e` as a program time, `[e]`.
 pub fn host_time(e: OuterTime) -> HostTime {
-    timely::order::Product::new(e, PointStamp::default())
+    HostTime::new([e])
 }
 
 /// Build a dataflow whose operators run at [`HostTime`]: `build` gets a scope at that time.
 ///
-/// Timely roots a dataflow at a time that refines `()`, which `HostTime` does not, so the scope
-/// sits one level in, under a root at the epoch. Nothing iterates there: only inputs, which a
-/// root must hold, cross into it (see [`ServerInput`]), and every trace is built and read at
-/// `HostTime`.
+/// The scope sits one level in, under a root at the epoch: timely's `new_input` wants a totally
+/// ordered time, so the inputs live at the root and cross into it (see [`ServerInput`]), and
+/// every trace is built and read at `HostTime`. Nothing iterates there.
 pub fn host_dataflow<R>(
     worker: &mut Worker,
     build: impl FnOnce(timely::dataflow::Scope<'_, OuterTime>, timely::dataflow::Scope<'_, HostTime>) -> R,
 ) -> R {
-    worker.dataflow::<OuterTime, _, _>(|outer| outer.iterative::<PointStamp<OuterTime>, _, _>(|scope| build(outer, scope)))
+    worker.dataflow::<OuterTime, _, _>(|outer| outer.scoped::<HostTime, _, _>("Iterative", |scope| build(outer, scope)))
 }

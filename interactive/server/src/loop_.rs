@@ -405,7 +405,7 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.import_as_of().outer).and_then(|report| {
+                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.import_as_of().lane(0)).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() })
                     })).map_err(|_| "plan printing panicked".to_string())?;
@@ -536,23 +536,23 @@ fn start_tail(
                     input.for_each(|_time, data| {
                         let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
                         let updates = Updates { keys, vals, diffs };
-                        // A published trace's times are `(epoch, [])`: its rows go out at their epochs.
+                        // A published trace's times are `[epoch]`: its rows go out at their epochs.
                         let epochs = &times.raw_lanes()[..times.raw_lanes().len().min(1)];
                         match format {
                             ReadFormat::Corgi => out("data", frame::encode(&updates, epochs)),
                             ReadFormat::Columns => {
-                                let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).outer).collect();
+                                let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).lane(0)).collect();
                                 send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", epochs, updates.diffs, updates.keys, updates.vals));
                             }
                             ReadFormat::Rows => {
                                 for row in 0..updates.len() {
-                                    send(response, &tag, "data", render_row(&updates, row, Some(times.get(row).outer)));
+                                    send(response, &tag, "data", render_row(&updates, row, Some(times.get(row).lane(0))));
                                 }
                             }
                         }
                     });
                     if format == ReadFormat::Corgi {
-                        if let Some(t) = frontier.frontier().iter().map(|t| t.outer).min() {
+                        if let Some(t) = frontier.frontier().iter().map(|t| t.lane(0)).min() {
                             if upper != Some(t) {
                                 upper = Some(t);
                                 out("progress", t.to_le_bytes().to_vec());

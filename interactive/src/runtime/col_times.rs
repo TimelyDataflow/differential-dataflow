@@ -7,17 +7,17 @@
 //! built where DD wants one (`get`, `to_vec`, and the residual frontier).
 //!
 //! The total order is the lexicographic order of the lanes, which is the timestamps' own `Ord`:
-//! a `PointStamp` strips trailing zeros, and a shorter prefix sorts first just as zero padding does.
+//! a `Time` reads an absent coordinate as zero, so a shorter prefix sorts as its zero-padded form.
 //! The partial order and the lattice operations are lane-wise, as a product of chains is distributive.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
-use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::lattice::Lattice;
-use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
+
+use crate::time::{Time, TimeSummary};
 
 /// A timestamp that is a sequence of integer coordinates, each with minimum zero.
 /// Absent trailing coordinates are zero.
@@ -33,20 +33,9 @@ impl Lanes for u64 {
     fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self { coords.next().unwrap_or(0) }
 }
 
-impl Lanes for PointStamp<u64> {
+impl Lanes for Time {
     fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { self.iter().copied() }
-    // `new` strips trailing zeros, which is the canonical form.
-    fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self { PointStamp::new(coords.collect()) }
-}
-
-impl<B: Lanes> Lanes for Product<u64, B> {
-    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ {
-        std::iter::once(self.outer).chain(self.inner.coordinates())
-    }
-    fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self {
-        let outer = coords.next().unwrap_or(0);
-        Product::new(outer, B::from_coordinates(coords))
-    }
+    fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self { Time::new(coords) }
 }
 
 /// A timestamp usable as a lane column: DD's time algebra plus [`Lanes`].
@@ -64,16 +53,8 @@ impl LaneSummary for u64 {
     fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (None, vec![*self]) }
 }
 
-impl LaneSummary for PointStampSummary<u64> {
+impl LaneSummary for TimeSummary {
     fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (self.retain, self.actions.clone()) }
-}
-
-/// The outer summary on lane 0, the inner on the lanes after it.
-impl<B: LaneSummary> LaneSummary for Product<u64, B> {
-    fn lane_steps(&self) -> (Option<usize>, Vec<u64>) {
-        let (retain, adds) = self.inner.lane_steps();
-        (retain.map(|r| r + 1), std::iter::once(self.outer).chain(adds).collect())
-    }
 }
 
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
@@ -238,7 +219,10 @@ impl<T> ColTimes<T> {
                 None => meet = Some(f.coordinates().collect()),
             }
         }
-        let meet = meet.unwrap();
+        let mut meet = meet.unwrap();
+        // A frontier element may spell a time with trailing zeros (`[e, 0]` is `[e]`); those
+        // raise nothing, and the column must not gain a lane for them.
+        while meet.last() == Some(&0) { meet.pop(); }
         self.widen(meet.len());
         for (lane, &m) in self.lanes.iter_mut().zip(&meet) {
             if m == 0 { continue; }
@@ -287,11 +271,6 @@ impl<T> ColTimes<T> {
         assert_eq!(values.len(), self.len);
         self.widen(k + 1);
         for (x, &v) in self.lanes[k].iter_mut().zip(values) { *x = (*x).max(v); }
-    }
-
-    /// Keep only the first `width` coordinates of every row.
-    pub(crate) fn truncate(&mut self, width: usize) {
-        self.lanes.truncate(width);
     }
 
     /// Apply a path summary to every row, in place. Returns the surviving row indices when some
@@ -355,10 +334,10 @@ mod tests {
     use super::*;
     use timely::progress::Antichain;
 
-    type T = Product<u64, PointStamp<u64>>;
+    type T = Time;
 
     fn t(outer: u64, coords: &[u64]) -> T {
-        Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+        Time::new(std::iter::once(outer).chain(coords.iter().copied()))
     }
 
     #[test]
@@ -407,19 +386,18 @@ mod tests {
     }
 
     /// The edge operations on lanes must agree with the same operations on owned timestamps: a path
-    /// summary on every row, raising one coordinate, reading one coordinate, and truncation.
+    /// summary on every row, raising one coordinate, and reading one coordinate.
     #[test]
     fn edge_operations_match_owned_times() {
-        use differential_dataflow::dynamic::pointstamp::PointStampSummary;
         use timely::progress::PathSummary;
         let times: Vec<T> = vec![t(0, &[]), t(0, &[2]), t(1, &[1, 1]), t(2, &[0, 3]), t(3, &[4]), t(1, &[5, 0, 2])];
         let col: ColTimes<T> = times.iter().cloned().collect();
         let steps = [
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 1] }),
-            Product::new(1u64, PointStampSummary { retain: Some(1), actions: vec![] }),
-            Product::new(0u64, PointStampSummary { retain: Some(0), actions: vec![7] }),
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 0, 0, 1] }),
-            Product::new(0u64, PointStampSummary { retain: None, actions: vec![u64::MAX - 3] }),
+            TimeSummary { retain: None, actions: vec![0, 0, 1] },
+            TimeSummary { retain: Some(2), actions: vec![1] },
+            TimeSummary { retain: Some(1), actions: vec![0, 7] },
+            TimeSummary { retain: None, actions: vec![0, 0, 0, 0, 1] },
+            TimeSummary { retain: None, actions: vec![0, u64::MAX - 3] },
         ];
         for step in &steps {
             let mut out = col.clone();
@@ -436,9 +414,6 @@ mod tests {
         assert_eq!(raised.to_vec(), expected);
         assert_eq!(col.lane(1), vec![0, 2, 1, 0, 4, 5]);
         assert_eq!(col.lane(9), vec![0; 6]);
-        let mut cut = col.clone();
-        cut.truncate(2);
-        assert_eq!(cut.to_vec(), vec![t(0, &[]), t(0, &[2]), t(1, &[1]), t(2, &[0]), t(3, &[4]), t(1, &[5])]);
         let rebuilt = ColTimes::<T>::from_raw_lanes(col.raw_lanes().to_vec(), col.len());
         assert_eq!(rebuilt.to_vec(), times);
     }

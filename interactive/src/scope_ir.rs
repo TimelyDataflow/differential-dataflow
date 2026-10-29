@@ -20,9 +20,9 @@
 //!
 //! Structurally, every `{ .. }` renders as a timely region (`enter_region` /
 //! `leave_region`): real dataflow nesting, timestamp *type* unchanged.
-//! Temporally, an *iterating* scope additionally pushes a `PointStamp`
-//! coordinate (`enter_dynamic` / `leave_dynamic`): a timestamp *value*, the
-//! iteration counter. A scope iterates iff it has `vars`; there is no
+//! Temporally, an *iterating* scope additionally pushes a time
+//! coordinate (`backend::retime`, entering and leaving): a timestamp *value*,
+//! the iteration counter. A scope iterates iff it has `vars`; there is no
 //! separate kind field to fall out of sync with that. When acyclic scopes
 //! earn distinct (region-only) rendering, `Scope` becomes an enum so each
 //! variant carries only its valid fields.

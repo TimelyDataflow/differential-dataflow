@@ -158,8 +158,7 @@ mod test {
     }
 
     fn time(outer: u64, coords: &[u64]) -> Time {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
-        timely::order::Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+        Time::new(std::iter::once(outer).chain(coords.iter().copied()))
     }
 
     /// One batch per key/value shape family. A corgi column is homogeneous — every row of a

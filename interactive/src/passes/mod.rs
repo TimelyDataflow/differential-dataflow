@@ -282,7 +282,7 @@ mod schedule_tests {
     fn options_and_observations_follow_the_same_schedule() {
         let text = include_str!("../../tests/plan_pairs/cases/as_of_shared.ddp");
         let source = |_: &Source| Some((Shape::Int, Shape::Int));
-        let time = Time::new(7, Default::default());
+        let time = Time::new([7]);
         for projection in [false, true] {
             for as_of_drop in [false, true] {
                 let config = Config { projection, as_of_drop, ..Config::all() };
@@ -310,7 +310,7 @@ mod schedule_tests {
         ] {
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
             let mut optimized = String::new();
-            run(&mut program, &|_| None, &Config::all(), &Time::new(1, Default::default()), &mut |name, program, changes| {
+            run(&mut program, &|_| None, &Config::all(), &Time::new([1]), &mut |name, program, changes| {
                 if name == "after optimizer" { optimized = format!("{program:?}"); }
                 if matches!(name, "after projection" | "after as-of drop") {
                     assert_eq!(changes.iter().any(|c| matches!(c, Change::Skipped)), expected_skip);

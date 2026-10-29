@@ -66,7 +66,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::trace::TraceReader;
 use timely::dataflow::operators::CapabilitySet;

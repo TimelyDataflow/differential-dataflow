@@ -269,8 +269,7 @@ mod test {
     }
 
     fn time() -> Time {
-        use differential_dataflow::dynamic::pointstamp::PointStamp;
-        timely::order::Product::new(0, PointStamp::new(Default::default()))
+        Time::new([0])
     }
 
     /// Partition `updates`, of keys of shape `key` and `Int` values, across `peers` destinations

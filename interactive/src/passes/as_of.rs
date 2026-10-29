@@ -54,8 +54,8 @@ fn drop_in_scope(s: &mut Scope, depth: usize, as_of: &Time) -> usize {
     }
     // The as-of time as `lift` writes it at this depth: the epoch, then one lane per scope. A time
     // with more coordinates than this scope has lanes is not one this scope's lift can write.
-    if as_of.inner.len() > depth { return inserted; }
-    let lanes: Vec<u64> = std::iter::once(as_of.outer).chain((0..depth).map(|j| as_of.inner.get(j).copied().unwrap_or(0))).collect();
+    if as_of.len() > depth + 1 { return inserted; }
+    let lanes: Vec<u64> = (0..=depth).map(|j| as_of.lane(j)).collect();
 
     let uses = uses(s);
     let mut covered = vec![false; s.items.len()];

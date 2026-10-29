@@ -11,6 +11,8 @@
 // The IR's vocabulary, and the expression language its slots are written in.
 // `Lambda`, `LinearOp`, `Reducer`, `Diff`.
 pub mod ir;
+// The timestamp: `Time`, a list of integer coordinates, and its path summary.
+pub mod time;
 // `Lambda`, and the registry of host functions: `Function`, `register`, `lookup`.
 pub mod lambda;
 // Crate-only: canonical reducer definitions and value projection composition.

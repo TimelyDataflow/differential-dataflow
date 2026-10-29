@@ -3,7 +3,7 @@
 //! keywords. The program structure lives in `scope_ir`.
 
 pub type Diff = i64;
-pub(crate) type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
+pub(crate) use crate::time::Time;
 
 /// A slot of the IR: a lambda of the expression language (see `crate::lambda`).
 pub use crate::lambda::Lambda;

@@ -128,13 +128,10 @@ fn gather_rows(c: &CC, rows: &[usize]) -> CC {
 
 #[cfg(test)]
 mod test_util {
-    use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use timely::order::Product;
-
     use super::*;
 
-    /// The time `(outer, [inner])`, at scope depth one.
-    pub(super) fn t(outer: u64, inner: u64) -> Time { Product::new(outer, PointStamp::new(smallvec::smallvec![inner])) }
+    /// The time `[outer, inner]`, at scope depth one.
+    pub(super) fn t(outer: u64, inner: u64) -> Time { Time::new([outer, inner]) }
     pub(super) fn ints(xs: &[i64]) -> CValue { CValue::i64(xs.to_vec()) }
     pub(super) fn lifted(s: &[(i64, i64)]) -> CValue { CValue::Prod(vec![ints(&s.iter().map(|p| p.0).collect::<Vec<_>>()), ints(&s.iter().map(|p| p.1).collect::<Vec<_>>())]) }
     pub(super) fn container(keys: &[i64], vals: &[i64], s: &[(i64, i64)], times: &[Time], diffs: &[Diff]) -> CC {

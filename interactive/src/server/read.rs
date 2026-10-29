@@ -17,7 +17,7 @@ impl Server {
             .into_iter()
             .map(|HostContainer { keys, vals, times, diffs }| {
                 let part = Updates { keys, vals, diffs };
-                let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).outer < epoch).collect();
+                let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).lane(0) < epoch).collect();
                 if before.len() == part.len() { part } else { part.select(&before) }
             })
             .collect();
@@ -59,7 +59,7 @@ impl Server {
                         input.for_each(|_cap, data| {
                             let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
                             let part = Updates { keys, vals, diffs };
-                            let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).outer < epoch).collect();
+                            let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i).lane(0) < epoch).collect();
                             parts_in.borrow_mut().push(if before.len() == part.len() { part } else { part.select(&before) });
                         });
                     }
