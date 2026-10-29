@@ -55,18 +55,19 @@ const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
 pub(super) const COORD_BITS: u32 = 48;
 
-/// What the projection reads of `(key, val0, val1)`.
-struct Reads {
+/// What a projection reads of its three inputs `(key, val0, val1)`; the half join's are the
+/// key, the update's value and the arranged value.
+pub(super) struct Reads {
     /// Each input's demand, applied to its columns before gathering.
-    columns: [Demand; 3],
+    pub(super) columns: [Demand; 3],
     /// Once gathered, retained inputs are taken whole; unread inputs are dropped.
-    argument: Demand,
+    pub(super) argument: Demand,
     /// The shape the narrowed graph takes.
-    shape: Shape,
+    pub(super) shape: Shape,
 }
 
 impl Reads {
-    fn new(demand: Demand, input: &Shape) -> Self {
+    pub(super) fn new(demand: Demand, input: &Shape) -> Self {
         let shape = demand.projected_shape(input).expect("a demand on the join's input");
         let Demand::Prod(parts) = &demand else {
             return Reads { columns: std::array::from_fn(|_| demand.clone()), argument: demand, shape };
@@ -277,7 +278,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
 }
 
 /// Borrow whole columns; projecting partial ones shares their leaves and costs only their shape.
-fn demanded<'a>(demand: &Demand, cols: impl Iterator<Item = &'a CValue>) -> Vec<Cow<'a, CValue>> {
+pub(super) fn demanded<'a>(demand: &Demand, cols: impl Iterator<Item = &'a CValue>) -> Vec<Cow<'a, CValue>> {
     if *demand == Demand::None { return Vec::new(); }
     cols.map(|col| match demand {
         Demand::All => Cow::Borrowed(col),
