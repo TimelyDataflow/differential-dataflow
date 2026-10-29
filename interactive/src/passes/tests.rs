@@ -41,7 +41,7 @@ fn shared_edges_and_rejected_shapes_stay() {
     let p = optimized(r#"export "bad" = input 0 : (int, int)
         | map(((k, v), _) -> (k, v)) | map((k, _) -> (k, ()));
     "#);
-    assert!(!crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
+    assert!(!crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
     assert!(dead_code::run(&mut p.root) > 0);
     assert!(p.root.imports.iter().any(|i| matches!(i.from, Source::Input(7))));
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
-    assert!(crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
+    assert!(crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
     assert_eq!(dead_code::run(&mut p.root), 0);
     let report = crate::plan::report(r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
     assert!(report.unresolved.is_empty());
@@ -102,7 +102,7 @@ fn dead_child_exports_remap_parent_and_sibling_readers() {
     assert_eq!(t.imports[0].from, Source::Parent(Ref::ChildExport(0, 0)));
     assert_eq!(t.imports[1].from, Source::Parent(Ref::ChildExport(0, 1)));
     assert!(!p.root.names.iter().any(|(name, _)| name == "unused"));
-    assert!(crate::shapes::infer(&p, &|_| None).1.conflicts.is_empty());
+    assert!(crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
     assert_eq!(dead_code::run(&mut p.root), 0);
 }
 

@@ -13,10 +13,10 @@ fn count(scope: &Scope) -> usize {
 fn rewrite(text: &str, config: Config, removed: usize) -> Program {
     let mut p = program(text);
     let before = count(&p.root);
-    let exports = crate::shapes::infer(&p, &|_| None).0.exports;
+    let exports = crate::shapes::infer(&p, &|_| None, 1).0.exports;
     super::super::optimize_with(&mut p, &|_| None, 1, &config, &mut crate::passes::Timings::default(), &mut |_, _, _, _, _, _| {});
     assert_eq!(count(&p.root) + removed, before);
-    let (shapes, problems) = crate::shapes::infer(&p, &|_| None);
+    let (shapes, problems) = crate::shapes::infer(&p, &|_| None, 1);
     assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     assert_eq!(shapes.exports, exports);
     let once = format!("{p:?}");
@@ -122,7 +122,7 @@ fn switches_and_unlabelled_ir() {
     }
     clear(&mut p.root);
     assert!(run(&mut p.root, true, true, &mut super::Timings::default(), &mut |_, _, _, _, _, _| {}));
-    let (_, problems) = crate::shapes::infer(&p, &|_| None);
+    let (_, problems) = crate::shapes::infer(&p, &|_| None, 1);
     assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
     assert_eq!(Config::parse("none,hoist-arranges"), Config::parse("none,hoist-invariant"));
     let first = crate::plan::report(text, &|_| None, &hoist()).unwrap();

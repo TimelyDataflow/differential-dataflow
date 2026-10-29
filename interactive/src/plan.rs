@@ -125,7 +125,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
         _ => None,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::server::host_time(as_of), &mut |name, program, changes| {
+    let timings = crate::passes::run(&mut program, &resolve, passes, &crate::server::host_time(as_of), 1, &mut |name, program, changes| {
         let previous = stages.last().map(|stage| &stage.program);
         let changes = stage_changes(name, changes, previous, program, &resolve);
         stages.push(stage(name, program.clone(), changes, &resolve));
@@ -181,7 +181,7 @@ fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&
 }
 
 fn stage(name: &'static str, program: Program, changes: Vec<String>, source: &dyn Fn(&Source) -> Option<RowShape>) -> Stage {
-    let (shapes, problems) = shapes::infer(&program, source);
+    let (shapes, problems) = shapes::infer(&program, source, 1);
     let unresolved = program.root.imports.iter().filter_map(|import| match &import.from {
         Source::Trace(name) if source(&import.from).is_none() => Some(name.clone()),
         _ => None,
@@ -429,7 +429,7 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
                         format!("{name}({})", slots.lambda(l, shape, &format!("{at}/{name}[{i}]"))),
                     _ => name.into(),
                 });
-                input = input.and_then(|(k, v)| shapes::linear_shapes(std::slice::from_ref(op), k, v, depth).ok()?.pop());
+                input = input.and_then(|(k, v)| shapes::linear_shapes(std::slice::from_ref(op), k, v, crate::level::Level { root: 1, depth }).ok()?.pop());
             }
             let Node::Linear { input, .. } = node else { unreachable!() };
             format!("{} | linear [ {} ]", names.of(input), printed.join(" | "))
@@ -603,7 +603,7 @@ fn statements(program: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -
             }
         }
     }
-    let (shapes, _) = shapes::infer(program, source);
+    let (shapes, _) = shapes::infer(program, source, 1);
     let mut result = BTreeMap::new();
     visit(&program.root, &shapes, "root", &mut result);
     result

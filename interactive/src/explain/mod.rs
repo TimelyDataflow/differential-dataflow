@@ -716,7 +716,7 @@ impl RowModel for Val {
 /// The shape of a query row against `p`'s first export, `(key, (val, q))`,
 /// when the export's shape follows from `p`'s declared sources.
 fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
-    let (shapes, _) = crate::shapes::infer(p, &|_| None);
+    let (shapes, _) = crate::shapes::infer(p, &|_| None, 1);
     let export = shapes.exports.first()?.clone()?;
     Some((export.key, corgi::Shape::Prod(vec![export.val, corgi::Shape::Int])))
 }
@@ -792,7 +792,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     // A demand variable no query reaches is bound only to demand derived from itself, which says
     // nothing of its shape: it declares the shape of the variable's rows as demand,
     // `(K, (V, chain…, q))`, with a coordinate per scope enclosing it.
-    let (shapes, _) = crate::shapes::infer(p, &|_| None);
+    let (shapes, _) = crate::shapes::infer(p, &|_| None, 1);
     for a in &var_addrs {
         let dv = ex.variable(&format!("demand_var_{:?}_{:?}", a.path, a.site));
         if let (Ref::Var(i), Site::Var(v)) = (&dv, &a.site) {

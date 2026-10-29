@@ -83,13 +83,8 @@ pub struct Problems {
 }
 
 /// Infer the shapes of `program`'s collections. `source` supplies the shape of a root source
-/// that carries no ascription.
-pub fn infer(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shape, Shape)>) -> (ScopeShapes, Problems) {
-    infer_with_root(program, source, 1)
-}
-
-/// Infer shapes with `root` root coordinates, followed by one coordinate per loop.
-pub fn infer_with_root(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shape, Shape)>, root: usize) -> (ScopeShapes, Problems) {
+/// that carries no ascription. Times have `root` root coordinates, then one per loop.
+pub fn infer(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shape, Shape)>, root: usize) -> (ScopeShapes, Problems) {
     assert!(root > 0);
     let level = Level::root(root);
     let imports: Vec<Option<CollShape>> = program.root.imports.iter().map(|imp| {
@@ -235,13 +230,13 @@ fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Optio
     shapes.vars
 }
 
-/// The shape of a time at scope depth `depth` as data: the epoch and one coordinate per scope.
-fn time_shape(depth: usize) -> Shape {
-    Shape::Prod(vec![Shape::Int; depth + 1])
+/// The shape of a time at `level` as data: the root coordinates and one per loop.
+fn time_shape(level: Level) -> Shape {
+    Shape::Prod(vec![Shape::Int; level.width()])
 }
 
-/// The shapes a linear chain at scope depth `depth` sees: before each op, then after the last.
-pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> Result<Vec<(Shape, Shape)>, String> {
+/// The shapes a linear chain at `level` sees: before each op, then after the last.
+pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Level) -> Result<Vec<(Shape, Shape)>, String> {
     let (mut k, mut v) = (key, val);
     let mut steps = Vec::with_capacity(ops.len() + 1);
     for op in ops {
@@ -264,8 +259,8 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
                 Shape::Unit => Shape::Prod(vec![Shape::Int]),
                 other => Shape::Prod(vec![other, Shape::Int]),
             },
-            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(depth)]),
-            LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, depth)?,
+            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(level)]),
+            LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, level)?,
         }
     }
     steps.push((k, v));
@@ -294,13 +289,13 @@ fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, Stri
 }
 
 /// The `(key, val)` shapes of a `join_function` lambda's output rows. The lambda gives a list of
-/// `((key, val), time, diff)`, with `time` the shape of a time at this depth.
-fn join_function_shape(lambda: &Lambda, env: &[Shape], depth: usize) -> Result<(Shape, Shape), String> {
-    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(depth));
+/// `((key, val), time, diff)`, with `time` the shape of a time at this level.
+fn join_function_shape(lambda: &Lambda, env: &[Shape], level: Level) -> Result<(Shape, Shape), String> {
+    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(level));
     let shape = slot_shape(lambda, env).map_err(|e| format!("join_function: {e}"))?;
     let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
     match &**elem {
-        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(depth) && fs[2] == Shape::Int => match &fs[0] {
+        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(level) && fs[2] == Shape::Int => match &fs[0] {
             Shape::Prod(kv) if kv.len() == 2 => Ok((kv[0].clone(), kv[1].clone())),
             _ => Err(wrong(&shape)),
         },
@@ -313,7 +308,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
     match node {
         st::Node::Linear { input, ops } => {
             let c = shapes.of(input)?;
-            match linear_shapes(ops, c.key, c.val, level.width() - 1) {
+            match linear_shapes(ops, c.key, c.val, level) {
                 Ok(mut steps) => { let (k, v) = steps.pop().unwrap(); Some(CollShape::new(k, v, level)) }
                 Err(e) => fail(e),
             }
@@ -339,11 +334,11 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
             let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
             if s.key != a.key { return fail(format!("half_join keys {} and {}", s.key, a.key)); }
             let v = match s.val {
-                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(level.width() - 1) => fs[0].clone(),
-                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(level.width() - 1))),
+                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(level) => fs[0].clone(),
+                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(level))),
             };
             match pair_shape(projection, &[s.key, v, a.val]) {
-                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(level.width() - 1)]), level)),
+                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(level)]), level)),
                 Err(e) => fail(format!("half_join: {e}")),
             }
         }
@@ -367,7 +362,7 @@ mod tests {
     fn shapes_of(src: &str) -> (ScopeShapes, Problems) {
         let mut p = lower::lower_tree(parse::pipe::parse(src));
         crate::passes::optimize(&mut p);
-        infer(&p, &|_| None)
+        infer(&p, &|_| None, 1)
     }
 
     const REACH: &str = r#"

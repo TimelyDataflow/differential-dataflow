@@ -396,7 +396,7 @@ impl Printer<'_> {
                     };
                     expr += &format!(" | {word}");
                     if let Some(l) = lambda { expr += &format!("({})", self.lambda(l, shape)?); }
-                    row = row.and_then(|(k, v)| shapes::linear_shapes(std::slice::from_ref(op), k, v, depth).ok()?.pop());
+                    row = row.and_then(|(k, v)| shapes::linear_shapes(std::slice::from_ref(op), k, v, crate::level::Level { root: 1, depth }).ok()?.pop());
                 }
                 expr
             }

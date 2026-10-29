@@ -24,7 +24,7 @@ pub mod scope_ir;
 pub mod parse;
 // `lower_tree`: parsed statements to a scope tree.
 pub mod lower;
-// `infer`, every collection's shape (`CollShape`, `ScopeShapes`, `Problems`), and `linear_shapes`.
+// `infer` and every collection's shape (`CollShape`, `ScopeShapes`, `Problems`).
 pub mod shapes;
 
 // Scope-tree rewriting: one module, with `passes::run` as the preparation entry point.

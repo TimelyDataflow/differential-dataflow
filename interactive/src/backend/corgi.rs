@@ -302,7 +302,7 @@ impl Backend for CorgiBackend {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
         // `level` is the scope depth (locates the iteration coordinate for LiftIter).
         // Every op compiles now, at the shape it will see.
-        let steps = crate::shapes::linear_shapes(&ops, k, v, level.width() - 1).expect("install inferred these shapes");
+        let steps = crate::shapes::linear_shapes(&ops, k, v, level).expect("install inferred these shapes");
         let plans: Vec<Plan> = ops.iter().zip(steps).map(|(op, (key, val))| Plan::new(op, key, val, level)).collect();
         c.inner
             .unary(Pipeline, "CorgiLinear", move |_, _| {

@@ -142,6 +142,7 @@ impl Change {
 /// `source` supplies provider shapes, including generated sources. A declared trace
 /// shape alone does not resolve its provider. Observations include the lowered tree
 /// and every stage, even one that is switched off, has no changes, or is skipped.
+/// Times have `root` root coordinates, followed by one per loop.
 /// All row and arrangement times must be at or beyond `as_of`.
 ///
 /// Identical import slots are always interned, as in lowering, even with all optional
@@ -150,17 +151,6 @@ impl Change {
 /// Projection and as-of candidates must infer without problems and preserve the optimizer's
 /// export shapes. A rejected candidate leaves the last accepted program in place.
 pub fn run(
-    program: &mut Program,
-    source: &dyn Fn(&Source) -> Option<RowShape>,
-    config: &Config,
-    as_of: &Time,
-    observe: &mut dyn FnMut(&'static str, &Program, &[Change]),
-) -> Timings {
-    run_with_root(program, source, config, as_of, 1, observe)
-}
-
-/// Prepare a program with an explicitly declared root time width.
-pub fn run_with_root(
     program: &mut Program,
     source: &dyn Fn(&Source) -> Option<RowShape>,
     config: &Config,
@@ -188,7 +178,7 @@ pub fn run_with_root(
     }
     timings.observe("after optimizer", program, &changes, observe);
     let start = Instant::now();
-    let (shapes, problems) = timings.pass_mut(Pass::ShapeInference).infer_with_root(program, source, root);
+    let (shapes, problems) = timings.pass_mut(Pass::ShapeInference).infer(program, source, root);
     let valid = problems.conflicts.is_empty() && problems.unknown.is_empty()
         && program.root.vars.is_empty()
         && program.root.imports.iter().all(|import| match &import.from {
@@ -197,7 +187,7 @@ pub fn run_with_root(
             Source::Parent(_) => false,
         });
     let accept = |candidate: &Program, timings: &mut Timings| {
-        let (checked, problems) = timings.pass_mut(Pass::ShapeInference).infer_with_root(candidate, source, root);
+        let (checked, problems) = timings.pass_mut(Pass::ShapeInference).infer(candidate, source, root);
         problems.conflicts.is_empty() && problems.unknown.is_empty() && checked.exports == shapes.exports
     };
     changes.clear();
@@ -275,8 +265,8 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
             changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, timings, observe);
         }
         if config.compose_maps {
-            let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer_with_root(program, source, root);
-            changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes));
+            let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer(program, source, root);
+            changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes, crate::level::Level::root(root)));
         }
         // Import slots name edges, not distinct computations. Keep them interned even
         // with optional rewrites off, including programs supplied directly as IR.
@@ -300,7 +290,7 @@ mod schedule_tests {
                 let config = Config { projection, as_of_drop, ..Config::all() };
                 let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
                 let mut stages = Vec::new();
-                run(&mut program, &source, &config, &time, &mut |name, program, changes| {
+                run(&mut program, &source, &config, &time, 1, &mut |name, program, changes| {
                     for change in changes {
                         assert!(!matches!(change, Change::Rejected | Change::Skipped));
                     }
@@ -322,7 +312,7 @@ mod schedule_tests {
         ] {
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
             let mut optimized = String::new();
-            run(&mut program, &|_| None, &Config::all(), &crate::server::host_time(1), &mut |name, program, changes| {
+            run(&mut program, &|_| None, &Config::all(), &crate::server::host_time(1), 1, &mut |name, program, changes| {
                 if name == "after optimizer" { optimized = format!("{program:?}"); }
                 if matches!(name, "after projection" | "after as-of drop") {
                     assert_eq!(changes.iter().any(|c| matches!(c, Change::Skipped)), expected_skip);

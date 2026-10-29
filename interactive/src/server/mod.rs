@@ -207,8 +207,9 @@ struct Installed {
     exports: Vec<String>,
     /// The timely dataflow id, used to `drop_dataflow` on teardown.
     dataflow_id: usize,
-    /// Declared root width and the default point used by program-wide advances.
+    /// Number of root time coordinates declared by this program.
     root_width: usize,
+    /// Default point used by program-wide advances.
     now: HostTime,
     /// Whether this is a user program, a generated source, or the clock — see
     /// [`Origin`]. Generated/clock entries advance and drop like any program but
@@ -222,9 +223,13 @@ struct Installed {
 
 /// Progress and read validity belong to each export, including shared sources.
 struct Output {
+    /// Number of root time coordinates in this export.
     width: usize,
+    /// Installed program that publishes this trace.
     owner: String,
+    /// This worker's observed frontier of the export arrangement.
     probe: ProbeHandle<HostTime>,
+    /// Earliest readable point, advanced by logical compaction.
     since: HostTime,
 }
 

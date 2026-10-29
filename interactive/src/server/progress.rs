@@ -46,7 +46,13 @@ impl Server {
         }
         let inputs: Vec<_> = installed.inputs.keys().copied().collect();
         let exports = installed.exports.clone();
-        for &input in &inputs { self.validate_feed(&name, input, point)?; }
+        for &input in &inputs {
+            let frontier = installed.inputs[&input].time();
+            if !frontier.less_equal(point) {
+                return Err(format!("cannot advance input {name:?}/{input} from frontier {frontier:?} to requested target {point:?}"));
+            }
+            self.validate_feed(&name, input, point)?;
+        }
         for input in inputs { self.advance_input(&name, input, point)?; }
         self.programs.get_mut(&name).unwrap().now = point.clone();
         let mut frontier = Antichain::new();
@@ -70,7 +76,7 @@ impl Server {
 
     // A conservative target derived from commanded capabilities, never worker-local probes.
     // Imports form a DAG (producers exist before consumers); the set avoids revisiting diamonds.
-    fn collect_frontier(&self, prog: &str, seen: &mut std::collections::HashSet<String>, frontier: &mut Antichain<HostTime>) {
+    pub(super) fn collect_frontier(&self, prog: &str, seen: &mut std::collections::HashSet<String>, frontier: &mut Antichain<HostTime>) {
         if !seen.insert(prog.to_string()) { return; }
         let installed = &self.programs[prog];
         for input in installed.inputs.values() { frontier.insert(input.time().clone()); }

@@ -23,8 +23,8 @@ pub(super) struct ServerInput {
 }
 
 impl ServerInput {
-    pub(super) fn new((handle, capability): (InputHandle, InputCapability), shape: RowShape) -> Self {
-        ServerInput { handle, capability, shape, width: 1 }
+    pub(super) fn new((handle, capability): (InputHandle, InputCapability), shape: RowShape, width: usize) -> Self {
+        ServerInput { handle, capability, shape, width }
     }
 
     /// Add `recipe`'s rows at `indices`, each with multiplicity `diff` at `time`, as columns.
@@ -330,7 +330,7 @@ impl Server {
             (handle, arranged.trace)
         });
         self.traces.insert(name.to_string(), trace);
-        let input = ServerInput::new(handle, shape.clone());
+        let input = ServerInput::new(handle, shape.clone(), 1);
         self.shapes.insert(name.to_string(), shape);
         self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), probe: probe.clone(), since: self.import_as_of() });
         (input, dataflow_id, probe)

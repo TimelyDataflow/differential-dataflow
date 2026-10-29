@@ -97,7 +97,7 @@ impl Server {
         // an install error, before creating sources or changing the server's catalog.
         let mut optimized = prog.clone();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::passes::run_with_root(&mut optimized, &|source| match source {
+            crate::passes::run(&mut optimized, &|source| match source {
                 st::Source::Trace(t) => self.source_shape(t),
                 _ => None,
             }, &self.passes, &as_of, root_width, &mut |_, _, _| {});
@@ -160,8 +160,7 @@ impl Server {
                         st::Source::Input(n) => {
                             let (handle, stream) = scope.new_unordered_input::<timely::container::CapacityContainerBuilder<InputContainer>>();
                             let shape = imp.shape.clone().expect("an input declares its shape (checked above)");
-                            let mut input = ServerInput::new(handle, shape);
-                            input.width = root_width;
+                            let input = ServerInput::new(handle, shape, root_width);
                             inputs.push((*n, input));
                             CorgiImport::Columns(stream.as_collection())
                         }
@@ -255,7 +254,7 @@ impl Server {
                 }
             }
         }
-        let (shapes, problems) = crate::shapes::infer_with_root(prog, &|src| match src {
+        let (shapes, problems) = crate::shapes::infer(prog, &|src| match src {
             st::Source::Trace(t) => published(t),
             _ => None,
         }, root_width);

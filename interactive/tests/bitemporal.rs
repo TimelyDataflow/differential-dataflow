@@ -196,8 +196,8 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             for point in points {
                 let expected = fed.expected(point);
                 for export in EXPORTS {
-                    // Only the owner exports depend on the widened seed trace.
-                    if shared && export.starts_with("owner_") && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
+                    // Reads conservatively require the whole program and its imports to close the point.
+                    if shared && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
                     let got: Rows = server.snapshot_as_of(worker, export, &at(point)).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     if !w0 { continue; }
@@ -205,14 +205,8 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                     checks += 1;
                 }
             }
-            // The default snapshot is the last closed epoch over every event time.
-            if s >= 1 {
-                let latest = server.snapshot(worker, "balance").unwrap().rows();
-                let as_of = server.snapshot_as_of(worker, "balance", &at((s - 1, u64::MAX))).unwrap().rows();
-                assert_eq!(latest, as_of);
-            }
         }
-        // A point compacted away is refused; an open point read would wait.
+        // A point compacted away is refused.
         let now = server.now("bank").unwrap().clone();
         if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
@@ -464,6 +458,19 @@ fn independent_inputs_and_time_shapes() {
             server.advance_input("split", 0, &at((1, 0))).unwrap();
             server.wait_for(worker, "left", &at((1, 0))).unwrap();
             // Input 1 and the exports using it remain open at the minimum.
+            let error = server.snapshot(worker, "left").unwrap_err();
+            assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
+            assert_eq!(server.peek(worker, "left", None).unwrap_err(), error);
+            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
+            server.advance_input("split", 0, &at((5, 0))).unwrap();
+            let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
+            assert_eq!(error, format!("cannot advance input \"split\"/0 from frontier {:?} to requested target {:?}", at((5, 0)), at((3, 7))));
+            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
+            assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
+            assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
+            if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
+            server.advance_input("split", 1, &at((2, 0))).unwrap();
+            for export in ["left", "seen", "delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
             let left = server.snapshot_as_of(worker, "left", &at((0, u64::MAX))).unwrap();
             let seen = server.snapshot_as_of(worker, "seen", &at((0, u64::MAX))).unwrap();
             let keyed = server.peek_as_of(worker, "left", Some("7"), &at((0, 0))).unwrap();
@@ -473,14 +480,6 @@ fn independent_inputs_and_time_shapes() {
                 let rows: Rows = seen.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(sorted(rows), vec![(vec![7], vec![0, 0, 256, 256], 1), (vec![8], vec![0, 5, 256, 256], 1)]);
             }
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
-            server.advance_input("split", 0, &at((2, 0))).unwrap();
-            assert!(server.advance_to(worker, "split", &at((1, 0))).is_err());
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
-            assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
-            assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
-            if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
-            server.advance_input("split", 1, &at((2, 0))).unwrap();
             let delta = server.snapshot_as_of(worker, "delta", &at((0, u64::MAX))).unwrap();
             if worker.index() == 0 {
                 let rows: Rows = delta.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
@@ -492,10 +491,30 @@ fn independent_inputs_and_time_shapes() {
             let import = lower::lower_tree(parse::pipe::parse(r#"export "wide" = import "left" | lift;"#));
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
+            server.wait_for(worker, "wide", &at((2, 0))).unwrap();
             let wide = server.snapshot_as_of(worker, "wide", &HostTime::new(smallvec::smallvec![0, 5, 0])).unwrap();
             if worker.index() == 0 {
                 let rows: Rows = wide.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(sorted(rows), vec![(vec![7], vec![1, 0, 3, 0], 1), (vec![8], vec![1, 0, 5, 0], 1)]);
+            }
+
+            // A consumer advance cannot close points held open by a width-one import.
+            let producer = lower::lower_tree(parse::pipe::parse(r#"export "lagging" = input 0 : (int, int);"#));
+            server.install(worker, "producer", &producer).unwrap();
+            for width in [1, 2] {
+                let name = format!("consumer{width}");
+                let consumer = lower::lower_tree(parse::pipe::parse(&format!("export \"{name}\" = import \"lagging\";")));
+                server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
+                server.advance_to(worker, &name, &at((3, 0))).unwrap();
+                let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };
+                let error = server.snapshot_as_of(worker, &name, &point).unwrap_err();
+                assert!(error.contains("not closed") && error.contains("input/import frontier"), "{error}");
+                assert_eq!(server.peek_as_of(worker, &name, None, &point).unwrap_err(), error);
+                let default_error = server.snapshot(worker, &name).unwrap_err();
+                assert_eq!(server.peek(worker, &name, None).unwrap_err(), default_error);
+                // Loading a published trace calls snapshot_local, with the same read checks.
+                assert_eq!(server.load(worker, "split", 1, &name, 1).unwrap_err(), default_error);
+                if width == 1 { assert_eq!(default_error, error); }
             }
         }).unwrap();
         for result in guards.join() { result.unwrap(); }

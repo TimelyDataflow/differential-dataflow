@@ -312,7 +312,7 @@ pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let empty = HashMap::new();
     let mut distinct = HashMap::new();
     let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut distinct) };
-    let (shapes, _) = crate::shapes::infer(&program, &|_| None);
+    let (shapes, _) = crate::shapes::infer(&program, &|_| None, 1);
     crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &mut Vec::new());
     program
 }

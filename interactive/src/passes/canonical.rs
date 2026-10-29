@@ -2,20 +2,21 @@
 
 use corgi::{Graph, NodeRef, NumOp, Op, Shape};
 use crate::ir::{Lambda, LinearOp};
+use crate::level::Level;
 use crate::lambda::{normalize::canonical, Projection};
 use crate::scope_ir::{Item, Node, Ref, Scope};
 use crate::shapes::{ItemShapes, ScopeShapes};
 
 /// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
 /// Structural fusion has already respected shared edges. No other operator is crossed.
-pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> usize {
+pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: Level) -> usize {
     let mut changed = 0;
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
         match (item, shape) {
-            (Item::Sub(child), ItemShapes::Sub(shapes)) => changed += canonical_linear(child, shapes),
+            (Item::Sub(child), ItemShapes::Sub(shapes)) => changed += canonical_linear(child, shapes, level.child()),
             (Item::Op(Node::Linear { input, ops }), _) => {
                 let steps = shapes.of(input).and_then(|s| {
-                    crate::shapes::linear_shapes(ops, s.key, s.val, s.time - 1).ok()
+                    crate::shapes::linear_shapes(ops, s.key, s.val, level).ok()
                 });
                 let mut pending = Vec::new();
                 for (i, op) in std::mem::take(ops).into_iter().enumerate() {

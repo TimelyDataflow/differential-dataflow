@@ -4,8 +4,8 @@ use super::*;
 use timely::PartialOrder;
 
 impl Server {
-    /// This worker's share of trace `name`, consolidated as of the current epoch, read from its
-    /// batches without a dataflow. Unlike [`Server::snapshot`], nothing moves between workers.
+    /// This worker's share of a width-one trace, consolidated as of the current epoch, read
+    /// from its batches without a dataflow. Uses the same read checks as [`Server::snapshot`].
     pub(crate) fn snapshot_local(&self, name: &str) -> Result<Updates, String> {
         use differential_dataflow::trace::TraceReader;
         let name = canonical_source_name(name);
@@ -36,6 +36,8 @@ impl Server {
     /// sharded across workers, not each worker's slice, in key-then-value order.
     /// The other workers get no updates. The dataflow is dropped as soon as it
     /// has drained. Filtering and rendering are the caller's.
+    /// Programs wider than one coordinate must name a point with [`Server::snapshot_as_of`].
+    /// An unclosed point is refused without waiting for inputs or imports to advance.
     pub fn snapshot(
         &mut self,
         worker: &mut Worker,
@@ -48,8 +50,8 @@ impl Server {
         }
     }
 
-    /// Accumulate updates <= `point`. Waits only for this export to close the point;
-    /// callers must advance its upstream inputs first, on every worker.
+    /// Accumulate updates <= `point`. Refuses points not closed by the program's input and
+    /// import frontiers. Collective across workers; drains work already issued by the caller.
     pub fn snapshot_as_of(&mut self, worker: &mut Worker, name: &str, point: &HostTime) -> Result<Updates, String> {
         self.readable(name, point)?;
         use timely::dataflow::operators::Probe;
@@ -83,7 +85,8 @@ impl Server {
                 .probe_with(&mut probe);
         });
         while probe.less_equal(point) {
-            // Remote data or progress wakes idle workers; do not busy-poll.
+            // `readable` established that no future command is needed to close this point.
+            // Drain the import and gather, including remote data and already-issued progress.
             worker.step_or_park(None);
         }
         worker.drop_dataflow(id);
@@ -93,16 +96,24 @@ impl Server {
 
     fn latest(&self, name: &str) -> Result<Option<HostTime>, String> {
         let output = self.outputs.get(name).ok_or_else(|| format!("no trace {name:?}"))?;
+        if output.width > 1 {
+            return Err(format!("trace {name:?} has root width {}; name a point with snapshot_as_of or peek_as_of", output.width));
+        }
         let epoch = self.programs[&output.owner].now.get(0).copied().unwrap_or(0);
         if epoch == 0 { return Ok(None); }
-        let mut point = vec![u64::MAX; output.width];
-        point[0] = epoch - 1;
-        Ok(Some(HostTime::new(point.into())))
+        Ok(Some(host_time(epoch - 1)))
     }
 
     fn readable(&self, name: &str, point: &HostTime) -> Result<(), String> {
         let output = self.output(name, point)?;
         if !output.since.less_equal(point) { return Err(format!("point {point:?} is before trace {name:?}'s read floor {:?}", output.since)); }
+        // Commanded capabilities are identical across workers. A local probe alone can lag
+        // on some workers, causing them to refuse while others enter the collective gather.
+        let mut frontier = Antichain::new();
+        self.collect_frontier(&output.owner, &mut std::collections::HashSet::new(), &mut frontier);
+        if frontier.less_equal(point) {
+            return Err(format!("trace {name:?} is not closed at {point:?}: input/import frontier {:?}; advance its inputs and imports before reading", frontier.elements()));
+        }
         Ok(())
     }
 
