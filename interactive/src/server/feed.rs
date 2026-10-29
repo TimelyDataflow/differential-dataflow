@@ -11,7 +11,13 @@ impl Server {
     /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once a
     /// `tick` advances the input past `time`.
     pub fn feed(&mut self, prog: &str, input: usize, rows: &str, time: Option<OuterTime>) -> Result<(), String> {
-        self.validate_feed(prog, input, time.unwrap_or(self.epoch))?;
+        let time = time.map(host_time).unwrap_or(self.input_frontier(prog, input)?.clone());
+        self.feed_at(prog, input, rows, &time)
+    }
+
+    /// Feed rows at a point of the target program's declared root width.
+    pub fn feed_at(&mut self, prog: &str, input: usize, rows: &str, time: &HostTime) -> Result<(), String> {
+        self.validate_feed(prog, input, time)?;
         let (key, val) = &self.programs[&canonical_source_name(prog)].inputs[&input].shape;
         let mut decoder = crate::runtime::feed::FeedDecoder::new(key, val);
         for (number, line) in rows.lines().map(str::trim).enumerate() {
@@ -19,14 +25,19 @@ impl Server {
                 decoder.push_line(line).map_err(|error| format!("row {}: {error}", number + 1))?;
             }
         }
-        self.feed_columns(prog, input, decoder.finish(), time)
+        self.feed_columns_at(prog, input, decoder.finish(), time)
     }
 
     /// Stage rows already read into columns at `time` (default the current epoch), each with
     /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
     /// otherwise.
     pub fn feed_columns(&mut self, prog: &str, input: usize, columns: Updates, time: Option<OuterTime>) -> Result<(), String> {
-        let time = time.unwrap_or(self.epoch);
+        let time = time.map(host_time).unwrap_or(self.input_frontier(prog, input)?.clone());
+        self.feed_columns_at(prog, input, columns, &time)
+    }
+
+    /// Feed columns at a point; validates both the shape and the input's own frontier.
+    pub fn feed_columns_at(&mut self, prog: &str, input: usize, columns: Updates, time: &HostTime) -> Result<(), String> {
         self.validate_feed(prog, input, time)?;
         self.programs
             .get_mut(&canonical_source_name(prog))
@@ -34,7 +45,7 @@ impl Server {
             .inputs
             .get_mut(&input)
             .expect("feed input was prevalidated")
-            .give_columns(columns, time)
+            .give_columns_at(columns, time)
     }
 
     /// Bulk-load rows into positional `input` of `prog` at the current epoch.
@@ -73,8 +84,8 @@ impl Server {
         source: &str,
         diff: Diff,
     ) -> Result<u64, String> {
-        let time = self.epoch;
-        self.validate_feed(prog, input, time)?;
+        let time = self.input_frontier(prog, input)?.clone();
+        self.validate_feed(prog, input, &time)?;
         if self.loads_from_trace(source) {
             return self.load_trace(prog, input, source, diff);
         }
@@ -123,6 +134,7 @@ impl Server {
             .get_mut(&canonical_source_name(prog))
             .expect("load target was prevalidated");
         if let Some(recipe @ Recipe::Random { churn: 1.., .. }) = recipe {
+            if installed.root_width != 1 { return Err("churning recipes currently require width 1".into()); }
             if diff != 1 {
                 return Err(format!("load: a churning recipe {:?} must be fed with diff=1", source));
             }
@@ -130,10 +142,15 @@ impl Server {
         }
         let handle = installed.inputs.get_mut(&input).expect("load input was prevalidated");
         if let Some(recipe) = recipe {
-            handle.generate(recipe, (0..recipe.rows_len()).filter(|e| mine(*e)), time, diff);
+            let mut indices = (0..recipe.rows_len()).filter(|e| mine(*e)).peekable();
+            while indices.peek().is_some() {
+                let batch: Vec<_> = indices.by_ref().take(COLUMN_BATCH).collect();
+                let HostContainer { keys, vals, diffs, .. } = recipe.container(&batch, 0, diff);
+                handle.give_columns_at(Updates { keys, vals, diffs }, &time)?;
+            }
         }
         if let Some(rows) = rows {
-            handle.give_columns(rows, time)?;
+            handle.give_columns_at(rows, &time)?;
         }
         Ok(total)
     }
@@ -165,25 +182,20 @@ impl Server {
             });
         }
         let rows = updates.len() as u64;
+        let time = self.input_frontier(prog, input)?.clone();
         self.programs
             .get_mut(&canonical_source_name(prog))
             .expect("load target was prevalidated")
             .inputs
             .get_mut(&input)
             .expect("load input was prevalidated")
-            .give_columns(updates, self.epoch)?;
+            .give_columns_at(updates, &time)?;
         Ok(rows)
     }
 
     /// Check everything about an input target that can fail without changing
     /// its handle. Both singular and batched feeds validate before applying.
-    fn validate_feed(&self, prog: &str, input: usize, time: OuterTime) -> Result<(), String> {
-        if time < self.epoch {
-            return Err(format!(
-                "cannot feed at time {} < current epoch {}",
-                time, self.epoch
-            ));
-        }
+    pub(super) fn validate_feed(&self, prog: &str, input: usize, time: &HostTime) -> Result<(), String> {
         let prog = canonical_source_name(prog);
         let installed = self
             .programs
@@ -202,6 +214,9 @@ impl Server {
         }
         if !installed.inputs.contains_key(&input) {
             return Err(format!("program {:?} has no input {}", prog, input));
+        }
+        if time.len() > installed.root_width || !installed.inputs[&input].time().less_equal(time) {
+            return Err(format!("cannot feed at {time:?}: input {prog:?}/{input} has width {} and frontier {:?}", installed.root_width, installed.inputs[&input].time()));
         }
         Ok(())
     }

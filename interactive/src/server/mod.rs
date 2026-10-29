@@ -71,6 +71,8 @@ use differential_dataflow::trace::TraceReader;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
+use timely::PartialOrder;
+use differential_dataflow::lattice::Lattice;
 use timely::worker::Worker;
 
 use crate::runtime::container::Updates;
@@ -85,6 +87,7 @@ mod install;
 mod read;
 mod sources;
 mod time;
+mod progress;
 
 pub use self::evaluate::evaluate;
 pub use self::sources::gen_field_seeded;
@@ -94,6 +97,7 @@ use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, S
 pub use self::sources::generated_shape;
 
 /// A published export as its readers see it: a trace of corgi chunks.
+/// Its declared root width is available from [`Server::trace_width`].
 #[derive(Clone)]
 pub struct Published(pub crate::backend::corgi::ExportTrace);
 
@@ -203,10 +207,9 @@ struct Installed {
     exports: Vec<String>,
     /// The timely dataflow id, used to `drop_dataflow` on teardown.
     dataflow_id: usize,
-    /// This program's own probe (every export is probed with it), so `tick`
-    /// waits per-program. A shared probe would strand a dropped program's
-    /// handle at its last frontier and wedge `tick` forever.
-    probe: ProbeHandle<HostTime>,
+    /// Declared root width and the default point used by program-wide advances.
+    root_width: usize,
+    now: HostTime,
     /// Whether this is a user program, a generated source, or the clock — see
     /// [`Origin`]. Generated/clock entries advance and drop like any program but
     /// are not writable by `feed`.
@@ -215,6 +218,14 @@ struct Installed {
     /// for inputs that churn each `tick` (a generated `random:` source's own
     /// input, or a program input bulk-loaded from such a recipe).
     generators: HashMap<usize, (Recipe, u64)>,
+}
+
+/// Progress and read validity belong to each export, including shared sources.
+struct Output {
+    width: usize,
+    owner: String,
+    probe: ProbeHandle<HostTime>,
+    since: HostTime,
 }
 
 /// A stable, transport-friendly description of one installed dataflow.
@@ -233,6 +244,7 @@ type Captured = Rc<RefCell<Vec<HostContainer>>>;
 
 /// A live registry of installed programs and the traces they publish.
 pub struct Server {
+    outputs: HashMap<String, Output>,
     /// Published export name -> trace of corgi chunks, which every reader reads as containers.
     traces: HashMap<String, crate::backend::corgi::ExportTrace>,
     /// With export taps: each export's new batches on this worker, drained by `take_changes`: a
@@ -250,7 +262,7 @@ pub struct Server {
     importers: HashMap<String, usize>,
     /// Live export→input bindings, drained by each `tick`.
     bindings: Vec<Binding>,
-    /// The current open epoch; inputs sit here until `tick` closes it.
+    /// Compatibility clock for the width-1 API and shared generated sources.
     epoch: OuterTime,
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
@@ -265,6 +277,7 @@ impl Server {
     /// A fresh server with the host clock at epoch 0.
     pub fn new() -> Self {
         Server {
+            outputs: HashMap::new(),
             traces: HashMap::new(),
             taps: HashMap::new(),
             export_taps: false,
@@ -415,6 +428,7 @@ impl Server {
         }
         for ex in &installed.exports {
             self.traces.remove(ex);
+            self.outputs.remove(ex);
             self.shapes.remove(ex);
             self.taps.remove(ex);
         }
@@ -454,7 +468,7 @@ impl Server {
         // Diagnostics of everything since the last tick enter at the epoch being closed.
         self.process_diagnostics(worker);
         self.feed_diagnostics(cur);
-        for installed in self.programs.values_mut() {
+        for installed in self.programs.values_mut().filter(|p| p.root_width == 1) {
             // The clock's single row advances by one each tick (worker 0 owns
             // it): retract the current epoch, add the next — an O(1) change.
             if w0 && installed.origin == Origin::Clock {
@@ -470,24 +484,26 @@ impl Server {
                     if let Some(h) = installed.inputs.get_mut(input) {
                         // Retract rows `cursor ..` of the window, and add the rows `edges` later.
                         let window = *cursor .. *cursor + churn;
-                        h.generate(recipe, window.clone().filter(mine), cur, -1);
-                        h.generate(recipe, window.map(|e| e + edges).filter(mine), cur, 1);
+                        let time = cur.max(h.time().get(0).copied().unwrap_or(0));
+                        h.generate(recipe, window.clone().filter(mine), time, -1);
+                        h.generate(recipe, window.map(|e| e + edges).filter(mine), time, 1);
                         *cursor += churn;
                     }
                 }
             }
+            installed.now = installed.now.join(&host_time(next));
             for handle in installed.inputs.values_mut() {
-                handle.advance_to(next);
+                handle.advance_to_point(&handle.time().join(&host_time(next)));
             }
         }
         self.epoch = next;
 
-        // Wait for every *live* program to catch up. Per-program probes mean a
+        // Wait for every live width-1 export to catch up. Per-export probes mean a
         // dropped program leaves nothing behind to wait on. Binding taps are
         // waited on too, so each buffer holds every change through the epoch
         // just closed before it is drained below.
         let epoch = self.epoch;
-        while self.programs.values().any(|p| p.probe.less_than(&host_time(epoch)))
+        while self.outputs.values().filter(|o| o.width == 1).any(|o| !progress::caught_up(&o.probe, &host_time(epoch)))
             || self.bindings.iter().any(|b| b.probe.less_than(&host_time(epoch)))
         {
             // Remote data or progress wakes idle workers; do not busy-poll.
@@ -510,7 +526,7 @@ impl Server {
             match handle {
                 Some(handle) => {
                     for container in binding.buffer.borrow_mut().drain(..) {
-                        handle.give_at(container, epoch);
+                        handle.give_at(container, epoch.max(handle.time().get(0).copied().unwrap_or(0)));
                     }
                 }
                 None => binding.buffer.borrow_mut().clear(),
@@ -530,10 +546,10 @@ impl Server {
         // `epoch`, sliding it out of peek's window and leaving peek with only the
         // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
         // tick only runs at epoch >= 1.)
-        let frontier = Antichain::from_elem(host_time(self.epoch.saturating_sub(1)));
-        for trace in self.traces.values_mut() {
-            trace.set_logical_compaction(frontier.borrow());
-            trace.set_physical_compaction(frontier.borrow());
+        let names: Vec<_> = self.outputs.iter().filter(|(_, o)| o.width == 1).map(|(n, _)| n.clone()).collect();
+        for name in names {
+            let since = self.outputs[&name].since.join(&self.import_as_of());
+            self.compact(&name, &since).expect("monotone legacy compaction");
         }
     }
 }

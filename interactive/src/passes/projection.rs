@@ -935,33 +935,34 @@ pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<usize, String> {
-    pushdown_timed(program, source, &mut super::Measurement::default())
+    pushdown_timed(program, source, 1, &mut super::Measurement::default())
 }
 
 pub(super) fn pushdown_timed(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
+    root: usize,
     inference: &mut super::Measurement,
 ) -> Result<usize, String> {
     let original = program.clone();
-    let (mut shapes, problems) = inference.infer(program, source);
+    let (mut shapes, problems) = inference.infer_with_root(program, source, root);
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
     let exports = shapes.exports.clone();
     let mut changed = 0;
     for _ in 0..16 {
-        let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
-        let (checked, problems) = inference.infer(program, source);
+        let fused = fuse_reduce_maps(&mut program.root, &shapes, root - 1);
+        let (checked, problems) = inference.infer_with_root(program, source, root);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         let mut builder = Builder::default();
-        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, 0) else { break };
+        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, root - 1) else { break };
         for export in &plan.exports {
             builder.graph.seeds.extend(export.all());
         }
         let live = builder.graph.closure();
         let masked = rewrite_scope(&mut program.root, &plan, &live);
-        let (checked, problems) = inference.infer(program, source);
+        let (checked, problems) = inference.infer_with_root(program, source, root);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         changed += fused + masked;
         if fused + masked == 0 { return Ok(changed); }

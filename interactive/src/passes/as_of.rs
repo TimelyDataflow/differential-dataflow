@@ -22,8 +22,8 @@ use crate::scope_ir::{Item, Node, Program, Ref, Scope};
 
 /// Insert, at each lifted stream all of whose paths reach a strict half join, a filter that drops
 /// its updates at `as_of`. Returns the number of filters inserted.
-pub(super) fn drop_dead_as_of(prog: &mut Program, as_of: &Time) -> usize {
-    drop_in_scope(&mut prog.root, 0, as_of)
+pub(super) fn drop_dead_as_of(prog: &mut Program, as_of: &Time, root: usize) -> usize {
+    drop_in_scope(&mut prog.root, root - 1, as_of)
 }
 
 /// Whether `op` leaves every row's time as it is. Only these may sit between a lift and the strict
@@ -187,7 +187,7 @@ mod tests {
         let mut prog = crate::lower::lower_tree(crate::parse::pipe::parse(src));
         crate::passes::optimize(&mut prog);
         let as_of = crate::server::host_time(AS_OF);
-        let inserted = drop_dead_as_of(&mut prog, &as_of);
+        let inserted = drop_dead_as_of(&mut prog, &as_of, 1);
         let (_, problems) = crate::shapes::infer(&prog, &|s| match s {
             Source::Trace(_) => Some((corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int]), corgi::Shape::Unit)),
             _ => None,

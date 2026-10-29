@@ -48,7 +48,7 @@ impl Server {
         self.process_diagnostics(worker);
         self.feed_diagnostics(self.epoch);
         let shape = crate::diag::shape(name).expect("a diagnostics source");
-        let (mut input, dataflow_id, probe) = self.install_source(worker, name, shape);
+        let (mut input, dataflow_id, _probe) = self.install_source(worker, name, shape);
         let seed = self.diagnostics.as_ref().and_then(|d| d.borrow().snapshot(name));
         if let Some(rows) = seed {
             input.give_columns(rows, self.epoch).expect("diagnostics rows have their source's shape");
@@ -64,7 +64,8 @@ impl Server {
                 imports: Vec::new(),
                 exports: vec![name.to_string()],
                 dataflow_id,
-                probe,
+                root_width: 1,
+                now: host_time(self.epoch),
                 origin: Origin::Diagnostics,
                 generators: HashMap::new(),
             },

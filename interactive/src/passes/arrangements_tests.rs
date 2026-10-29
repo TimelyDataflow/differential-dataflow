@@ -14,13 +14,13 @@ fn rewrite(text: &str, config: Config, removed: usize) -> Program {
     let mut p = program(text);
     let before = count(&p.root);
     let exports = crate::shapes::infer(&p, &|_| None).0.exports;
-    super::super::optimize_with(&mut p, &|_| None, &config, &mut crate::passes::Timings::default(), &mut |_, _, _, _, _, _| {});
+    super::super::optimize_with(&mut p, &|_| None, 1, &config, &mut crate::passes::Timings::default(), &mut |_, _, _, _, _, _| {});
     assert_eq!(count(&p.root) + removed, before);
     let (shapes, problems) = crate::shapes::infer(&p, &|_| None);
     assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     assert_eq!(shapes.exports, exports);
     let once = format!("{p:?}");
-    super::super::optimize_with(&mut p, &|_| None, &config, &mut crate::passes::Timings::default(), &mut |_, _, _, _, _, _| {});
+    super::super::optimize_with(&mut p, &|_| None, 1, &config, &mut crate::passes::Timings::default(), &mut |_, _, _, _, _, _| {});
     assert_eq!(once, format!("{p:?}"));
     p
 }

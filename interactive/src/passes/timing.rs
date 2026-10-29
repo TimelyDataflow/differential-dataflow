@@ -38,9 +38,9 @@ impl Measurement {
         changes > 0
     }
 
-    pub(crate) fn infer(&mut self, program: &Program, source: &dyn Fn(&Source) -> Option<RowShape>) -> (ScopeShapes, Problems) {
+    pub(super) fn infer_with_root(&mut self, program: &Program, source: &dyn Fn(&Source) -> Option<RowShape>, root: usize) -> (ScopeShapes, Problems) {
         let start = Instant::now();
-        let result = shapes::infer(program, source);
+        let result = shapes::infer_with_root(program, source, root);
         self.record(start.elapsed(), 0);
         result
     }

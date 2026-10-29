@@ -5,8 +5,8 @@ use super::*;
 /// The host epoch: the server's clock, which `tick` advances.
 pub type OuterTime = u64;
 
-/// The time programs and published traces run at: coordinate 0 is the epoch, and coordinate
-/// `j` is loop depth `j`. Root collections have only the epoch (empty at epoch zero).
+/// The time programs and published traces run at: the first `k` coordinates are the root,
+/// followed by one per loop. The legacy epoch API uses `k = 1`. Trailing zeros are trimmed.
 pub type HostTime = crate::ir::Time;
 
 /// Epoch `e` as a program time, with trailing zeros trimmed.

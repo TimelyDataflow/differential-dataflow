@@ -13,6 +13,7 @@
 pub(crate) mod corgi;
 
 use timely::Container;
+use crate::level::Level;
 use timely::dataflow::Scope;
 use timely::progress::{PathSummary, Timestamp};
 use differential_dataflow::{AsCollection, Collection};
@@ -40,7 +41,7 @@ pub(crate) trait Backend {
     type Arr<'scope>: Clone;
 
     /// `shape` is the input's row shape, as install inferred it.
-    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, shape: st::RowShape) -> Collection<'s, Time, Self::Container>;
+    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: Level, shape: st::RowShape) -> Collection<'s, Time, Self::Container>;
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s>;
     /// Bring an arrangement into a child region. Regions share the timestamp, so this shares
     /// the trace rather than rebuilding it.
@@ -50,7 +51,7 @@ pub(crate) trait Backend {
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Lambda, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
-    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
@@ -192,11 +193,11 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
 pub(crate) fn render_tree<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
-    depth: usize,
+    level: Level,
     imports: Vec<Rendered<'s, B>>,
     shapes: &ScopeShapes,
 ) -> Vec<Collection<'s, Time, B::Container>> {
-    render_scope::<B>(s, scope, depth, imports, shapes).iter().map(Rendered::collection).collect()
+    render_scope::<B>(s, scope, level, imports, shapes).iter().map(Rendered::collection).collect()
 }
 
 /// [`render_tree`], with each export as it was rendered: an exported arrangement stays one, so
@@ -204,7 +205,7 @@ pub(crate) fn render_tree<'s, B: Backend>(
 pub(crate) fn render_scope<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
-    depth: usize,
+    level: Level,
     imports: Vec<Rendered<'s, B>>,
     shapes: &ScopeShapes,
 ) -> Vec<Rendered<'s, B>> {
@@ -223,7 +224,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
     let mut var_handles: Vec<Option<Variable<'s, Time, B::Container>>> = Vec::new();
     let mut var_cols: Vec<Collection<'s, Time, B::Container>> = Vec::new();
     for _ in &s.vars {
-        let step = feedback_summary::<u64>(depth + 1, 1);
+        let step = feedback_summary::<u64>(level.width(), 1);
         let (var, col) = Variable::new(scope, step);
         var_handles.push(Some(var));
         var_cols.push(col);
@@ -239,7 +240,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
                 let rendered = match node {
                     st::Node::Linear { input, ops } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();
-                        Rendered::Collection(B::linear(c, ops.clone(), depth, shape_of(input)))
+                        Rendered::Collection(B::linear(c, ops.clone(), level, shape_of(input)))
                     },
                     st::Node::Concat(refs) => {
                         let mut c = resolve(&items, &imports, &var_cols, &refs[0]).collection();
@@ -255,7 +256,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
                     st::Node::HalfJoin { stream, arrangement, strict, projection } => {
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
-                        Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
+                        Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer, limit } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
@@ -279,10 +280,10 @@ pub(crate) fn render_scope<'s, B: Backend>(
                 let exported = scope.region_named(&child.name, |region| {
                     let entered: Vec<_> = child_imports.iter().map(|imp| imp.enter(region)).collect();
                     let ItemShapes::Sub(child_shapes) = &shapes.items[index] else { panic!("a child scope's shapes are a scope's") };
-                    let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
+                    let exports = render_tree::<B>(child, region, level.child(), entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
-                let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| retime(c, PointStampSummary { retain: Some(depth + 1), actions: Vec::new() }, "LeaveDynamic")).collect();
+                let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| retime(c, PointStampSummary { retain: Some(level.width()), actions: Vec::new() }, "LeaveDynamic")).collect();
                 items.push(RItem::Sub(left));
             },
         }
