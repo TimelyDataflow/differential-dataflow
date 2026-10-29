@@ -34,7 +34,7 @@ impl Lanes for u64 {
 }
 
 impl Lanes for Time {
-    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { self.iter().copied() }
+    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { self.as_slice().iter().copied() }
     fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self { Time::new(coords) }
 }
 
@@ -220,8 +220,8 @@ impl<T> ColTimes<T> {
             }
         }
         let mut meet = meet.unwrap();
-        // A frontier element may spell a time with trailing zeros (`[e, 0]` is `[e]`); those
-        // raise nothing, and the column must not gain a lane for them.
+        // Width is storage, not identity: `[e, 0]` is `[e]`. Trailing zeros raise nothing,
+        // so omit them to avoid allocating lanes that would hold only zeros.
         while meet.last() == Some(&0) { meet.pop(); }
         self.widen(meet.len());
         for (lane, &m) in self.lanes.iter_mut().zip(&meet) {

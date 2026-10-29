@@ -3,7 +3,8 @@
 //! Order and lattice operations read absent coordinates as zero: `[e]` and `[e, 0]` are
 //! equal, and the empty list is the minimum. The partial order, join and meet are coordinate-wise;
 //! `Ord` is lexicographic. Lengths are preserved, with join taking the longer length and meet
-//! the shorter. [`TimeSummary`] adds or removes coordinates as collections cross scopes.
+//! the shorter. Stored width is not identity. [`TimeSummary`] advances coordinates for feedback
+//! and removes child coordinates on leaving a scope; entering a scope leaves times unchanged.
 //!
 //! Up to three coordinates are stored inline, with unused lanes held at zero so comparisons
 //! and lattice operations can use the whole array. Longer times use a vector.
@@ -59,7 +60,18 @@ impl Time {
         if lanes.len() > INLINE { Time { repr: Heap(lanes) } } else { Time::new(lanes) }
     }
 
-    /// The coordinates.
+    /// The number of stored coordinates. Width is storage, not identity: `[e]` and `[e, 0]`
+    /// are the same time. Do not use width to decide what a time means; use [`Self::lane`].
+    #[inline]
+    pub fn width(&self) -> usize {
+        match &self.repr {
+            Inline(_, len) => *len as usize,
+            Heap(lanes) => lanes.len(),
+        }
+    }
+
+    /// The stored coordinates. Their length is storage, not identity: `[e]` and `[e, 0]`
+    /// are the same time. Use [`Self::lane`] to read coordinates, including absent zeros.
     #[inline]
     pub fn as_slice(&self) -> &[u64] {
         match &self.repr {
@@ -77,7 +89,7 @@ impl Time {
         }
     }
 
-    /// Append a coordinate: entering a scope appends a zero.
+    /// Append a stored coordinate. Appending zero leaves the time equal to itself.
     pub fn push(&mut self, x: u64) {
         match &mut self.repr {
             Inline(lanes, len) if (*len as usize) < INLINE => {
@@ -129,14 +141,6 @@ impl Default for Time {
     }
 }
 
-impl std::ops::Deref for Time {
-    type Target = [u64];
-    #[inline]
-    fn deref(&self) -> &[u64] {
-        self.as_slice()
-    }
-}
-
 impl std::fmt::Debug for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.as_slice()).finish()
@@ -180,7 +184,7 @@ impl PartialEq for Time {
     fn eq(&self, other: &Self) -> bool {
         match (&self.repr, &other.repr) {
             (Inline(a, _), Inline(b, _)) => a == b,
-            _ => padded::eq(self, other),
+            _ => padded::eq(self.as_slice(), other.as_slice()),
         }
     }
 }
@@ -198,7 +202,7 @@ impl Ord for Time {
     fn cmp(&self, other: &Self) -> Ordering {
         match (&self.repr, &other.repr) {
             (Inline(a, _), Inline(b, _)) => a.cmp(b),
-            _ => padded::cmp(self, other),
+            _ => padded::cmp(self.as_slice(), other.as_slice()),
         }
     }
 }
@@ -215,7 +219,7 @@ impl PartialOrder for Time {
     fn less_equal(&self, other: &Self) -> bool {
         match (&self.repr, &other.repr) {
             (Inline(a, _), Inline(b, _)) => a.iter().zip(b).all(|(x, y)| x <= y),
-            _ => padded::less_equal(self, other),
+            _ => padded::less_equal(self.as_slice(), other.as_slice()),
         }
     }
 }
@@ -227,7 +231,7 @@ impl Lattice for Time {
             (Inline(a, na), Inline(b, nb)) => {
                 Time { repr: Inline(std::array::from_fn(|j| a[j].max(b[j])), (*na).max(*nb)) }
             }
-            _ => Time::from_vec(padded::zip_with(self, other, u64::max)),
+            _ => Time::from_vec(padded::zip_with(self.as_slice(), other.as_slice(), u64::max)),
         }
     }
 
@@ -240,7 +244,7 @@ impl Lattice for Time {
                 }
                 *na = (*na).max(*nb);
             }
-            (Heap(a), _) if a.len() >= other.len() => {
+            (Heap(a), _) if a.len() >= other.width() => {
                 for (x, y) in a.iter_mut().zip(other.as_slice()) {
                     *x = (*x).max(*y);
                 }
@@ -257,8 +261,8 @@ impl Lattice for Time {
                 Time { repr: Inline(std::array::from_fn(|j| a[j].min(b[j])), (*na).min(*nb)) }
             }
             _ => {
-                let mut lanes = padded::zip_with(self, other, u64::min);
-                lanes.truncate(self.len().min(other.len()));
+                let mut lanes = padded::zip_with(self.as_slice(), other.as_slice(), u64::min);
+                lanes.truncate(self.width().min(other.width()));
                 Time::from_vec(lanes)
             }
         }
@@ -316,11 +320,6 @@ pub struct TimeSummary {
 }
 
 impl TimeSummary {
-    /// Entering a scope of `width` coordinates: a time one shorter gains a zero.
-    pub fn enter(width: usize) -> Self {
-        TimeSummary { retain: None, actions: vec![0; width] }
-    }
-
     /// Leaving to a scope of `width` coordinates: the rest are dropped.
     pub fn leave(width: usize) -> Self {
         TimeSummary { retain: Some(width), actions: Vec::new() }
@@ -336,8 +335,8 @@ impl TimeSummary {
 
 impl PathSummary<Time> for TimeSummary {
     fn results_in(&self, t: &Time) -> Option<Time> {
-        let kept = self.retain.map_or(t.len(), |r| r.min(t.len()));
-        let mut out = t[..kept].to_vec();
+        let kept = self.retain.map_or(t.width(), |r| r.min(t.width()));
+        let mut out = t.as_slice()[..kept].to_vec();
         for (j, &a) in self.actions.iter().enumerate() {
             if j < kept {
                 out[j] = out[j].checked_add(a)?;
@@ -374,9 +373,7 @@ impl PartialOrder for TimeSummary {
     fn less_equal(&self, other: &Self) -> bool {
         // Summaries with different `retain`s are incomparable: some coordinate may come out
         // either larger or smaller, depending on the time.
-        self.retain == other.retain
-            && self.actions.len() <= other.actions.len()
-            && self.actions.iter().zip(&other.actions).all(|(a, b)| a <= b)
+        self.retain == other.retain && padded::less_equal(&self.actions, &other.actions)
     }
 }
 
@@ -388,19 +385,21 @@ mod tests {
         Time::new(lanes.iter().copied())
     }
 
-    /// Entering and leaving nested scopes to depth 3, by summary and by the owned operations,
-    /// with the feedback summary at each depth: times inside a scope have its width. Depth 3
-    /// is one coordinate past the inline storage, so this crosses to the heap and back.
+    /// Padding and truncating storage to depth 3, by summary and by the owned operations,
+    /// with feedback at each depth. Padding does not change a time; scope entry needs none.
+    /// Depth 3 crosses to the heap and back.
     #[test]
     fn enter_feedback_leave_to_depth_three() {
         let mut t = s(&[7]);
         for depth in 1..=3 {
             let width = depth + 1;
-            let entered = TimeSummary::enter(width).results_in(&t).unwrap();
+            let entered = TimeSummary { retain: None, actions: vec![0; width] }.results_in(&t).unwrap();
+            assert_eq!(entered, t);
+            let stepped = TimeSummary::advance(depth, 1).results_in(&t).unwrap();
             t.push(0);
             assert_eq!(entered, t);
-            assert_eq!(entered.len(), width);
-            let stepped = TimeSummary::advance(depth, 1).results_in(&t).unwrap();
+            assert_eq!(entered.width(), width);
+            assert_eq!(TimeSummary::advance(depth, 1).results_in(&t), Some(stepped.clone()));
             assert_eq!(stepped.lane(depth), 1);
             assert!(t.less_equal(&stepped) && !stepped.less_equal(&t));
             t = stepped;
@@ -413,13 +412,12 @@ mod tests {
             let left = TimeSummary::leave(width).results_in(&t).unwrap();
             t.truncate(width);
             assert_eq!(left, t);
-            assert_eq!(left.len(), width);
+            assert_eq!(left.width(), width);
         }
         assert_eq!(t, s(&[7]));
         assert_eq!(t.join(&s(&[6, 4])), s(&[7, 4]));
-        // A loop's round trip composes to the loop's own step at its lane, and enter then leave
-        // to a summary that acts as the identity.
-        let round = TimeSummary::enter(2).followed_by(&TimeSummary::advance(1, 1)).unwrap().followed_by(&TimeSummary::leave(1)).unwrap();
+        // Entry is the identity; feedback then leave drops the loop's step.
+        let round = TimeSummary::default().followed_by(&TimeSummary::advance(1, 1)).unwrap().followed_by(&TimeSummary::leave(1)).unwrap();
         assert_eq!(round.results_in(&s(&[3])), Some(s(&[3])));
         let twice = TimeSummary::advance(1, 1).followed_by(&TimeSummary::advance(1, 1)).unwrap();
         assert_eq!(twice, TimeSummary::advance(1, 2));
@@ -448,8 +446,8 @@ mod tests {
         assert_eq!(s(&[4, 0, 0, 1]).cmp(&s(&[4])), Ordering::Greater);
         assert_eq!(s(&[4, 1]).join(&s(&[5])), s(&[5, 1]));
         assert_eq!(s(&[4, 1]).meet(&s(&[5])), s(&[4, 0]));
-        assert_eq!(s(&[4, 1]).meet(&s(&[5])).len(), 1, "the meet is as short as the shorter time");
-        assert_eq!(s(&[4, 1, 2, 3]).meet(&s(&[5, 0])).len(), 2);
+        assert_eq!(s(&[4, 1]).meet(&s(&[5])).width(), 1, "the meet is as short as the shorter time");
+        assert_eq!(s(&[4, 1, 2, 3]).meet(&s(&[5, 0])).width(), 2);
         assert_eq!(s(&[4, 1, 2]).join(&s(&[3, 5, 1])), s(&[4, 5, 2]));
         assert_eq!(s(&[4, 1, 2]).meet(&s(&[3, 5, 1])), s(&[3, 1, 1]));
         let mut t = s(&[4]);
@@ -459,5 +457,17 @@ mod tests {
         assert_eq!(t, s(&[4, 2, 0, 9]));
         assert_eq!(<Time as Refines<u64>>::to_inner(9), s(&[9]));
         assert_eq!(<Time as Refines<u64>>::to_outer(s(&[9, 3])), 9u64);
+        for retain in [None, Some(1), Some(3)] {
+            let a = TimeSummary { retain, actions: vec![0, 0, 1] };
+            let b = TimeSummary { retain, actions: vec![0, 0, 1, 0] };
+            assert!(a.less_equal(&b) && b.less_equal(&a));
+            let c = TimeSummary { retain, actions: vec![0, 0, 1, 1] };
+            assert!(a.less_equal(&c) && !c.less_equal(&a));
+            for (x, y) in &pairs {
+                assert_eq!(a.results_in(x), b.results_in(y));
+            }
+        }
+        assert!(!TimeSummary::default().less_equal(&TimeSummary::leave(1)));
+        assert!(!TimeSummary::leave(1).less_equal(&TimeSummary::default()));
     }
 }

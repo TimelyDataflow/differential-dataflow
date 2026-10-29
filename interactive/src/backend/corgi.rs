@@ -258,7 +258,7 @@ impl<'scope> Arr<'scope> {
 /// arrangement. Every later stream time is at or beyond some such frontier element, and advancing
 /// arranged times to it keeps their order against those stream times, strict and not.
 fn step_back(t: &Time, out: &mut Antichain<Time>) {
-    out.insert(Time::new(t.iter().map(|x| x.saturating_sub(1))));
+    out.insert(Time::new((0..t.width()).map(|j| t.lane(j).saturating_sub(1))));
 }
 
 /// The updates of a stream of columnar batches, as corgi containers, read as of `since`.

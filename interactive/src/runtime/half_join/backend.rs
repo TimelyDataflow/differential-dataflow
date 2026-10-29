@@ -292,14 +292,14 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         let out_val = out.pop().unwrap();
         let out_key = out.pop().unwrap();
 
-        // The presented times as lanes, once per block: a coordinate beyond the scope's width
-        // can only be zero, which the lanes already hold.
+        // The presented times as lanes, once per block. Width is storage, not identity:
+        // absent coordinates are zero, and stored zeros beyond the scope's lanes are immaterial.
         let width = self.width;
         let to_lanes = |times: &mut dyn Iterator<Item = &Time>, rows: usize| -> Vec<Vec<i64>> {
             let mut lanes = vec![vec![0i64; rows]; width];
             for (i, t) in times.enumerate() {
                 for (l, c) in t.coordinates().enumerate() {
-                    if l < width { lanes[l][i] = c as i64; } else { assert!(c == 0, "half_join: {t:?} is wider than its scope, {width}"); }
+                    if l < width { lanes[l][i] = c as i64; } else { assert!(c == 0, "half_join: {t:?} has a nonzero coordinate beyond its scope's {width} lanes"); }
                 }
             }
             lanes
@@ -314,8 +314,7 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         debug_assert!((0..rows).all(|i| {
             let (a, b) = pair(i);
             let t = data_time(&stream[a].1, &arranged[b].1);
-            let coords: Vec<i64> = t.coordinates().map(|c| c as i64).collect();
-            coords.iter().enumerate().all(|(l, &c)| joined[l].as_i64("lane").unwrap()[i] == c)
+            joined.iter().enumerate().all(|(l, lane)| lane.as_i64("lane").unwrap()[i] == t.lane(l) as i64)
         }), "half_join: the lane-wise data time must agree with the tactic's rule");
         // Each row keeps its update's own time, which the unit's capabilities cover: the driver
         // ships the block stamped with all of them.
@@ -363,7 +362,7 @@ mod tests {
         let arranged = Rc::new(columns_to_batch(
             present_key(ints(&[1, 1, 1, 1, 1])),
             ints(&[50, 100, 200, 300, 400]),
-            [t(0, 1), t(0, 5), t(1, 0), t(2, 0), t(1, 2)].into_iter().collect(),
+            [Time::new([0, 1, 0, 0]), t(0, 5), Time::new([1]), t(2, 0), t(1, 2)].into_iter().collect(),
             vec![1, 1, 1, 1, 1],
         ));
         // Updates of key 1 at (1, [0]) and at (0, [3]), each with its own time as data.

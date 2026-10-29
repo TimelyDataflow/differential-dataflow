@@ -4,7 +4,7 @@
 //! rendering — lives once in `render_tree`, generic over a `Backend`. A
 //! backend fixes the differential container and supplies the substrate leaf
 //! operators (`linear`/`join`/`reduce`/`arrange`/`inspect`); everything else
-//! (enter/leave/concat/feedback, and the time coordinate a scope adds, `retime`)
+//! (enter/leave/concat/feedback, and dropping child coordinates with `retime`)
 //! is container-generic. Time is always `ir::Time`; only the container varies.
 //!
 //! The server is a thin driver: it picks a backend and calls `render_tree`.
@@ -119,15 +119,12 @@ impl<'s, B: Backend> Clone for Rendered<'s, B> {
 }
 
 impl<'s, B: Backend> Rendered<'s, B> {
-    /// Bring the value into a child region whose times have `width` coordinates. Rows gain the
-    /// child's coordinate; an arrangement enters as the same trace, its times at the parent's
-    /// width, which the child reads as zero in its own coordinate.
-    fn enter<'r>(&self, region: Scope<'r, Time>, width: usize) -> Rendered<'r, B> {
-        let rows = |c: &Collection<'s, Time, B::Container>| retime(c.clone().enter(region), TimeSummary::enter(width), "EnterDynamic");
+    /// Bring the value into a child region unchanged. An absent child coordinate is already zero.
+    fn enter<'r>(&self, region: Scope<'r, Time>) -> Rendered<'r, B> {
         match self {
-            Rendered::Collection(c) => Rendered::Collection(rows(c)),
+            Rendered::Collection(c) => Rendered::Collection(c.clone().enter(region)),
             Rendered::Arrangement(a) => Rendered::Arrangement(B::enter_region(a.clone(), region)),
-            Rendered::Both(a, c) => Rendered::Both(B::enter_region(a.clone(), region), rows(c)),
+            Rendered::Both(a, c) => Rendered::Both(B::enter_region(a.clone(), region), c.clone().enter(region)),
         }
     }
     pub(crate) fn collection(&self) -> Collection<'s, Time, B::Container> {
@@ -274,11 +271,10 @@ pub(crate) fn render_scope<'s, B: Backend>(
                     st::Source::Parent(r) => resolve(&items, &imports, &var_cols, r),
                     other => panic!("non-root scope with external source {:?}", other),
                 }).collect();
-                // Each `{}` scope is a real timely region: imports enter it and gain the
-                // child's time coordinate, the child renders inside, exports leave it
-                // structurally, and then drop the child's coordinate.
+                // Each `{}` scope is a real timely region: imports enter unchanged, the child
+                // renders inside, exports leave structurally, then drop the child's coordinate.
                 let exported = scope.region_named(&child.name, |region| {
-                    let entered: Vec<_> = child_imports.iter().map(|imp| imp.enter(region, depth + 2)).collect();
+                    let entered: Vec<_> = child_imports.iter().map(|imp| imp.enter(region)).collect();
                     let ItemShapes::Sub(child_shapes) = &shapes.items[index] else { panic!("a child scope's shapes are a scope's") };
                     let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()

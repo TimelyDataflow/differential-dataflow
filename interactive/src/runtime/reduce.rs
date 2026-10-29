@@ -916,7 +916,8 @@ mod tests {
     /// true hash lane gives, for each reducer, at every window size.
     #[test]
     fn colliding_keys_reduce_apart() {
-        use timely::progress::{Antichain, Timestamp};
+        use timely::progress::{Antichain, PathSummary, Timestamp};
+        use crate::time::TimeSummary;
         use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
         use differential_dataflow::operators::reduce::ReduceTactic;
         use crate::runtime::chunk::recover_key;
@@ -931,7 +932,7 @@ mod tests {
         // Two retires' inputs: the first at outer times 0 and 1, the second from 2 on.
         let early = random_rows(0x51ED_270B_2A4F_3C11, 200, 6);
         let late: Vec<_> = random_rows(0x0BAD_5EED, 120, 6).into_iter()
-            .map(|(k, v, t, d)| (k, v, Time::new(std::iter::once(t.lane(0) + 2).chain(t[1..].iter().copied())), d)).collect();
+            .map(|(k, v, t, d)| (k, v, TimeSummary::advance(0, 2).results_in(&t).unwrap(), d)).collect();
         let early: Vec<_> = early.into_iter().filter(|r| r.2.lane(0) < 2).collect();
         let time = |outer| Time::new([outer]);
 

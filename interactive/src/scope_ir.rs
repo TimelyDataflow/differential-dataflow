@@ -70,7 +70,7 @@ pub enum Source {
 /// The shape of a collection's rows: its key's and its value's.
 pub type RowShape = (corgi::Shape, corgi::Shape);
 
-/// A value brought into a scope — `enter_region` (+ `enter_dynamic` if iterating).
+/// A value brought into a region with its times unchanged; absent child coordinates are zero.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Import {
     pub name: String,
@@ -81,7 +81,7 @@ pub struct Import {
     pub shape: Option<RowShape>,
 }
 
-/// A value surrendered up — `leave_region` (+ `leave_dynamic` if iterating).
+/// A value surrendered up: leave the region, then drop the child's coordinate with `retime`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Export {
     pub name: String,

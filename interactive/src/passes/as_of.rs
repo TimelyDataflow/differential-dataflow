@@ -53,8 +53,8 @@ fn drop_in_scope(s: &mut Scope, depth: usize, as_of: &Time) -> usize {
         if let Item::Sub(child) = item { inserted += drop_in_scope(child, depth + 1, as_of); }
     }
     // The as-of time as `lift` writes it at this depth: the epoch, then one lane per scope. A time
-    // with more coordinates than this scope has lanes is not one this scope's lift can write.
-    if as_of.len() > depth + 1 { return inserted; }
+    // fits when all coordinates beyond the scope's lanes are zero; width is only storage.
+    if (depth + 1..as_of.width()).any(|j| as_of.lane(j) != 0) { return inserted; }
     let lanes: Vec<u64> = (0..=depth).map(|j| as_of.lane(j)).collect();
 
     let uses = uses(s);
@@ -184,10 +184,13 @@ mod tests {
 
     /// The program, optimized as install sees it, and the filters the rewrite inserts.
     fn rewrite(src: &str) -> (Program, usize) {
+        rewrite_at(src, &crate::server::host_time(AS_OF))
+    }
+
+    fn rewrite_at(src: &str, as_of: &Time) -> (Program, usize) {
         let mut prog = crate::lower::lower_tree(crate::parse::pipe::parse(src));
         crate::passes::optimize(&mut prog);
-        let as_of = crate::server::host_time(AS_OF);
-        let inserted = drop_dead_as_of(&mut prog, &as_of);
+        let inserted = drop_dead_as_of(&mut prog, as_of);
         let (_, problems) = crate::shapes::infer(&prog, &|s| match s {
             Source::Trace(_) => Some((corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int]), corgi::Shape::Unit)),
             _ => None,
@@ -217,18 +220,29 @@ mod tests {
 
     #[test]
     fn a_delta_join_drops_the_as_of_time_on_its_strict_path_only() {
-        let (prog, inserted) = rewrite(r#"
+        let src = r#"
             let a = import "a";
             let b = import "b";
             export "r" = ((a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
                         + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)))));
-        "#);
+        "#;
+        let (prog, inserted) = rewrite(src);
         assert_eq!(inserted, 1);
         let found = filters(&prog.root);
         assert_eq!(found.len(), 1);
         let (at, lambda) = &found[0];
         assert_eq!(stream_reader(&prog.root, *at), vec![true], "the filter sits on the path of the strict half join");
         assert!(lambda.contains(&format!("(t0, {AS_OF}) ne")), "{lambda}");
+        for as_of in [Time::new([AS_OF, 0]), Time::new([AS_OF, 0, 0, 0])] {
+            let (padded, count) = rewrite_at(src, &as_of);
+            assert_eq!(count, inserted, "padding does not change which times fit the scope");
+            assert_eq!(filters(&padded.root), found);
+        }
+        for as_of in [Time::new([AS_OF, 1]), Time::new([AS_OF, 0, 0, 1])] {
+            let (outside, count) = rewrite_at(src, &as_of);
+            assert_eq!(count, 0, "a nonzero coordinate beyond the scope cannot be lifted");
+            assert!(filters(&outside.root).is_empty());
+        }
     }
 
     #[test]

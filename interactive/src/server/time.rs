@@ -24,5 +24,6 @@ pub fn host_dataflow<R>(
     worker: &mut Worker,
     build: impl FnOnce(timely::dataflow::Scope<'_, OuterTime>, timely::dataflow::Scope<'_, HostTime>) -> R,
 ) -> R {
+    // Keep "Iterative" for comparisons across profiles and diagnostics, although nothing iterates here.
     worker.dataflow::<OuterTime, _, _>(|outer| outer.scoped::<HostTime, _, _>("Iterative", |scope| build(outer, scope)))
 }

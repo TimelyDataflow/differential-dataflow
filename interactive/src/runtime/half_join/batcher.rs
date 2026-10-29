@@ -114,7 +114,9 @@ impl TimeChunk {
 /// Staged updates as rows `(t, key, val)`, their times written as `width` lanes, and their diffs.
 fn stage_rows(stage: Vec<CC>, width: usize) -> Option<(CValue, Vec<Diff>)> {
     if stage.is_empty() { return None; }
-    assert!(stage.iter().all(|c| c.times.width() <= width), "half_join: a time wider than its scope");
+    // Width is storage, not identity; only nonzero coordinates outside the scope are invalid.
+    assert!(stage.iter().all(|c| c.times.raw_lanes().iter().skip(width).flatten().all(|&x| x == 0)),
+        "half_join: a nonzero time coordinate beyond the scope's lanes");
     let keys = concat_blocks(&stage.iter().map(|c| c.keys.clone()).collect::<Vec<_>>());
     let vals = concat_blocks(&stage.iter().map(|c| c.vals.clone()).collect::<Vec<_>>());
     let lanes = (0..width).map(|k| CValue::i64(stage.iter().flat_map(|c| c.times.lane(k)).map(|x| x as i64).collect())).collect();
@@ -241,10 +243,8 @@ impl Batcher<CC> for HalfJoinBatcher {
         let width = self.width;
         let least = frontier.iter().min();
         let bound: Option<Vec<i64>> = least.map(|b| {
-            let mut lanes: Vec<i64> = b.coordinates().map(|x| x as i64).collect();
-            assert!(lanes.len() <= width, "half_join: a frontier wider than its scope");
-            lanes.resize(width, 0);
-            lanes
+            assert!((width..b.width()).all(|j| b.lane(j) == 0), "half_join: a nonzero frontier coordinate beyond the scope's lanes");
+            (0..width).map(|j| b.lane(j) as i64).collect()
         });
         let bound_col: Option<ColTimes<Time>> = least.map(|b| std::iter::once(b.clone()).collect());
         let strict = self.strict;
@@ -313,7 +313,7 @@ mod tests {
     fn releases_by_the_least_frontier_element() {
         let released = |strict: bool, frontier: &[Time]| -> (Vec<Time>, Vec<Time>) {
             let mut batcher = HalfJoinBatcher::new(strict, 2);
-            let times = [t(1, 0), t(0, 5), t(0, 2)];
+            let times = [Time::new([1]), Time::new([0, 5, 0]), Time::new([0, 2, 0, 0])];
             batcher.insert(&mut container(&[1, 2, 3], &[0, 0, 0], &[(0, 0); 3], &times, &[1, 1, 1]));
             let frontier: Antichain<Time> = frontier.iter().cloned().collect();
             let (out, lower) = batcher.extract(frontier.borrow());
@@ -325,6 +325,9 @@ mod tests {
         };
         assert_eq!(released(true, &[t(1, 0)]), (vec![t(0, 2), t(0, 5), t(1, 0)], vec![]));
         assert_eq!(released(false, &[t(1, 0)]), (vec![t(0, 2), t(0, 5)], vec![t(1, 0)]));
+        for strict in [false, true] {
+            assert_eq!(released(strict, &[Time::new([1])]), released(strict, &[Time::new([1, 0, 0, 0])]));
+        }
         // (0, [5]) and (1, [0]) are incomparable, so both bound what is kept.
         assert_eq!(released(false, &[t(0, 3), t(2, 0)]), (vec![t(0, 2)], vec![t(0, 5), t(1, 0)]));
         assert_eq!(released(true, &[]), (vec![t(0, 2), t(0, 5), t(1, 0)], vec![]));

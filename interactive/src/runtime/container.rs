@@ -167,7 +167,7 @@ impl<'de> serde::Deserialize<'de> for Updates {
 // --- Container traits required by the `Backend` bound + iterative scopes ---
 // Diffs live in Rust and times in lanes, so these are plain passes; the corgi key/val columns only
 // move (`gather`) when `ResultsIn` drops rows. `Enter`/`Leave` are identity for DDIR's same-Time
-// dynamic timestamp model (region entry doesn't change the time type; `leave_dynamic` pops the coord).
+// regions; after leaving a region, `retime` drops the child's coordinate with a summary.
 
 impl<T: Timestamp, R: Abelian + 'static> Negate for CorgiContainer<T, R> {
     fn negate(mut self) -> Self {
