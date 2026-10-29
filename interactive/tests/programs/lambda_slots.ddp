@@ -1,8 +1,8 @@
 -- The slots that take one lambda: `value` (the value as written, with no tuple around it),
 -- `filter`, `flatmap` (a row per element, valued `(position, element)`) and `delay` (a row
--- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment may sit inside a lambda written over
--- several lines. Declared types and the built-in `Option` are enums a lambda builds and takes
--- apart, also when a payload is itself a sum.
+-- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment
+-- may sit inside a lambda written over several lines. Declared types and the built-in `Option`
+-- are enums a lambda builds and takes apart, also when a payload is itself a sum.
 
 type Size = Small int | Big (int, int);
 type Inner = A int | B;

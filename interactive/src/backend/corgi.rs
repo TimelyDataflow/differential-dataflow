@@ -86,10 +86,10 @@ impl Plan {
 /// path inside the dataflow — and each op's graph was compiled when the operator was built
 /// (`plans`). An empty batch passes through untouched: it has no rows to compute.
 /// The data<->time ops are columnar and total: LiftIter reads the iteration coordinate out of
-/// `times` and
-/// appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction explodes
-/// its list column as FlatMap does and joins each element's time lanes into `times`. `level`
-/// is the scope depth (it locates that coordinate, and fixes the number of lanes as data).
+/// `times` and appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction
+/// explodes its list column as FlatMap does and joins each element's time lanes into `times`.
+/// `level` is the scope depth (it locates that coordinate, and fixes the number of lanes as
+/// data).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
     // A container with no rows may have no SHAPE either, and each op below checks its batch's
     // shapes: an empty batch passes through untouched (every `LinearOp` maps zero rows to zero

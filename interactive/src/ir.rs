@@ -49,7 +49,8 @@ pub enum LinearOp {
     /// Each row becomes the rows of a lambda giving a list of `((key, val), time, diff)`.
     /// The time is a tuple of `Int`s as `Lift` gives it; the output row's time is the
     /// join of the input's time with it, coordinate-wise max, and its diff is the
-    /// product of the two diffs. Zero is the bottom coordinate, so it
-    /// leaves that coordinate unchanged. `delay(t)` is `[((key, val), t, 1)]`.
+    /// product of the two diffs. A negative coordinate is below every time, and zero is the
+    /// bottom coordinate, so either leaves that coordinate unchanged. `delay(t)` is
+    /// `[((key, val), t, 1)]`.
     JoinFunction(Lambda),
 }

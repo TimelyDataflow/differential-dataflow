@@ -51,6 +51,12 @@ fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, R
     clone_rec(orig, out, import_map, &[], false)
 }
 
+/// As [`clone_into`], for the forward clone inside the explanation loop: each lambda's time
+/// gains that loop's round after the epoch.
+fn clone_forward(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, Ref)> {
+    clone_rec(orig, out, import_map, &[], true)
+}
+
 /// The identity check: a program cloned into a fresh root computes the same
 /// named exports as the original (the extra `$host:` exports ride along,
 /// unconsumed). Pinned by the `clone_identity_preserves_*` tests.
@@ -773,7 +779,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     }).collect();
     let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.restrict(ex_src[k].clone(), dsets[k].clone())).collect();
     let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| { let env = ex.project(r.clone(), envelope()); ex.presence(env) }).collect();
-    let forward: BTreeMap<Addr, Ref> = clone_rec(&p.root, &mut ex.s, &fwd_inputs, &[], true).into_iter()
+    let forward: BTreeMap<Addr, Ref> = clone_forward(&p.root, &mut ex.s, &fwd_inputs).into_iter()
         .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, ex.presence(host)) })
         .collect();
     ex.s.exports.clear();
