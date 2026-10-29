@@ -67,8 +67,8 @@ impl Pass {
 }
 
 /// Stage times exclude observer callbacks. Pass times are nested within the stages;
-/// they include optimizer calls made by projection, even on rejected candidates.
-/// Shape inference covers the schedule and projection checks, excluding report snapshots.
+/// they include the optimizer's cleanup after projection.
+/// Shape inference covers the schedule and projection's checks, excluding report snapshots.
 #[derive(Clone, Debug, Default)]
 pub struct Timings {
     /// `run` receives lowered IR. The caller supplies this measurement when available.
@@ -82,7 +82,7 @@ pub struct Timings {
     pub optimizer_rounds: usize,
     /// Hoisting rounds before structural fusion, including the final stable round.
     pub hoist_rounds: usize,
-    /// Projection/optimizer alternations, including the final stable round.
+    /// Narrowing rounds: one, plus one per round in which some site declined.
     pub projection_rounds: usize,
 }
 

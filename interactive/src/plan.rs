@@ -159,17 +159,21 @@ fn stage_changes(name: &str, changes: &[crate::passes::Change], before: Option<&
             )),
             // Aggregate counters are for timings, not deterministic statement diffs.
             Change::Rewritten { .. } => {},
-            Change::Masked(masked) => {
-                result.push(format!("{masked} field masks and map fusions"));
-                result.extend(changed_statements(before.unwrap(), after, source, "masked"));
+            Change::Narrowed(fields) => {
+                result.push(format!("{fields} fields narrowed to ()"));
+                result.extend(changed_statements(before.unwrap(), after, source, "narrowed"));
             }
             Change::AsOf(inserted) => {
                 result.push(format!("inserted {inserted} filters dropping G where continuing paths reach a strict half join"));
                 result.extend(changed_statements(before.unwrap(), after, source, "added as-of filter to"));
             }
-            Change::NoProjection => result.push("no fields masked (the pass also returns zero for unsupported or rejected candidates)".into()),
+            Change::NarrowingNotes { respelled, declined } => {
+                if *respelled > 0 { result.push(format!("{respelled} lambdas respelled from their graphs")); }
+                if *declined > 0 { result.push(format!("{declined} sites kept as written: their narrowing did not type or respell")); }
+            }
+            Change::NoProjection => result.push("no fields narrowed".into()),
             Change::Rejected => result.push(if name == "after projection" {
-                "projection candidate rejected by shape/export checks; kept the optimizer output"
+                "narrowing gave a program that does not type; kept the optimizer output"
             } else {
                 "as-of candidate rejected by shape/export checks; kept the previous stage"
             }.into()),
@@ -274,7 +278,7 @@ impl Report {
         for pass in Pass::ALL { row(&format!("  {}", pass.name()), self.timings.pass(pass)); }
         writeln!(out, "Fixed-point rounds: optimizer={}, initial hoisting={}, projection={}",
             self.timings.optimizer_rounds, self.timings.hoist_rounds, self.timings.projection_rounds).unwrap();
-        out.push_str("Pass totals include projection's optimizer calls and rejected candidates. Do not add them to stages.\n");
+        out.push_str("Pass totals include the optimizer's cleanup after projection. Do not add them to stages.\n");
         out.push_str("Shape inference includes schedule and projection checks; snapshot inference is in report snapshots.\n");
         out.push_str("Changes count rewrite observations (bulk compositions count once); stage changes count accepted rewrites.\n");
         out.push_str("Zero runs means not called. Projection includes provider/shape checks even when switched off.\n");

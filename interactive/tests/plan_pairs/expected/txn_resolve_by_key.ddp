@@ -5,9 +5,10 @@ let intents = input 0 : ((int, int, int), (int));
 let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
 let wid_idx = wid | arrange;
 let read_entries = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((a, _, b), (c)) -> ((b), (1, a, c)));
-let read_entries_idx = read_entries | arrange;
+let store_entries_map = read_entries | map((k, (_, _, _)) -> (k, ((), (), ())));
+let store_entries_idx = store_entries_map | arrange;
 let store_idx = store | arrange;
-let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
+let store_entries = store_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
 res: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var rollback;

@@ -33,7 +33,7 @@ pub struct CollShape {
 }
 
 impl CollShape {
-    fn new(key: Shape, val: Shape, depth: usize) -> Self {
+    pub(crate) fn new(key: Shape, val: Shape, depth: usize) -> Self {
         CollShape { key, val, time: depth + 1, diff: Shape::Int }
     }
 }
@@ -274,7 +274,7 @@ fn pair_shape(projection: &Lambda, rows: &[Shape]) -> Result<(Shape, Shape), Str
 
 /// The output value shape of `reduce(lambda)` over a key of shape `key` with values of shape `val`:
 /// the lambda reads the key and a `List` of `(val, diff)`, and must give a `List` of `(val, diff)`.
-fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, String> {
+pub(crate) fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, String> {
     let env = [key.clone(), Shape::List(Box::new(Shape::Prod(vec![val.clone(), Shape::Int])))];
     match slot_shape(lambda, &env).map_err(|e| format!("reduce: {e}"))? {
         Shape::List(e) => match *e {

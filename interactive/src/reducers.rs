@@ -199,12 +199,14 @@ mod tests {
             let running = crate::lambda::compile_reduce(&lambda, &Shape::Int, &shape).unwrap();
             let printed = crate::lambda::compile_reduce(&reparsed, &Shape::Int, &shape).unwrap();
             assert_eq!(running, printed, "{sugar:?}: {}", lambda.src);
-            // The spelling emitted by ddir-plan is already valid DDP. Replanning it
-            // must not add a mask to the output that was narrowed in the expression.
+            // The spelling emitted by ddir-plan is already valid DDP. Replanning it narrows
+            // nothing more of the output (count and collect ignore their input values).
             let text = format!("export \"out\" = input 0 : (int, (int, int)) | reduce(input -> {});", lambda.src);
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(&text));
             crate::passes::optimize(&mut program);
-            assert_eq!(crate::passes::projection::pushdown(&mut program, &|_| None).unwrap(), 0);
+            let outcome = crate::passes::narrow::narrow(&mut program, &|_| None).unwrap();
+            assert_eq!(outcome.reducers, 0, "{sugar:?}: {outcome:?}");
+            assert_eq!(crate::passes::narrow::narrow(&mut program, &|_| None).unwrap().fields, 0, "{sugar:?}");
         }
         // Nonempty input with zero total count emits nothing; a negative total is retained.
         let lambda = crate::lambda::compile_reduce(&Sugar::Count.lambda(), &Shape::Int, &Shape::Int).unwrap();

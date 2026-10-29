@@ -43,8 +43,8 @@ The optimizer composes adjacent maps, cancels adjacent negations, drops identity
 maps. Before structural fusion in each round, `dead-code` removes unread
 computations, child exports, imports, and aliases so dead readers do not count
 as uses. Root inputs, inspections, and feedback in retained scopes stay.
-Projection uses the same cleanup
-schedule after introducing masks. Unit tests in `src/passes/tests.rs` evaluate
+Projection narrows lambdas, reducers and the rows before arrangements to the
+fields something reads, then runs the same cleanup schedule once. Unit tests in `src/passes/tests.rs` evaluate
 each accepted map rewrite on generated batches of 0, 1, 17, and 64 rows. They
 cover this manifest and the 81 other checked-in review programs, including BI.
 

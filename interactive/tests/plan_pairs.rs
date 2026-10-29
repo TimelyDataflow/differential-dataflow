@@ -157,8 +157,8 @@ fn check_report(case: &Case, report: &Report) {
                     _ => false,
                 })
                 .and_then(|(_, shape)| shape.as_ref().map(|s| (s.key.clone(), s.val.clone())));
-            let masks = interactive::passes::projection::pushdown(&mut again, &source).unwrap();
-            assert_eq!(masks, 0, "{}: {}: repeated projection count changed", case.name, stage.name);
+            let narrowed = interactive::passes::narrow::narrow(&mut again, &source).unwrap().fields;
+            assert_eq!(narrowed, 0, "{}: {}: repeated projection narrowed fields", case.name, stage.name);
             assert_eq!(format!("{again:?}"), format!("{:?}", stage.program), "{}: second projection changed the plan", case.name);
         }
     }

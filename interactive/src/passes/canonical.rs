@@ -1,15 +1,21 @@
 //! Local, shape-preserving rewrites over the scope tree.
 
 use corgi::{Graph, NodeRef, NumOp, Op, Shape};
-use crate::ir::{Lambda, LinearOp};
+use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::lambda::{normalize::canonical, Projection};
 use crate::scope_ir::{Item, Node, Ref, Scope};
 use crate::shapes::{ItemShapes, ScopeShapes};
 
-/// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
-/// Structural fusion has already respected shared edges. No other operator is crossed.
+/// Compose adjacent maps, remove identity maps, cancel adjacent negations, and fold a value
+/// projection of a reduce with no other reader into its reducer, so the reduce's arrangement
+/// holds what that reader reads. Structural fusion has already respected shared edges. No
+/// other operator is crossed.
 pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> usize {
     let mut changed = 0;
+    let counts = super::structural::use_counts(scope, &vec![false; scope.items.len()]);
+    for i in 0..scope.items.len() {
+        changed += fold_into_reduce(scope, shapes, &counts, i);
+    }
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
         match (item, shape) {
             (Item::Sub(child), ItemShapes::Sub(shapes)) => changed += canonical_linear(child, shapes),
@@ -92,6 +98,32 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes) -> usize
     changed
 }
 
+/// Item `i`, a chain reading a reduce nobody else reads and starting with a map that only
+/// rewires the value, loses that map: the reducer applies the projection itself.
+fn fold_into_reduce(scope: &mut Scope, shapes: &ScopeShapes, counts: &[usize], i: usize) -> usize {
+    let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { return 0 };
+    let j = *j;
+    if counts[j] != 1 || !matches!(&scope.items[j], Item::Op(Node::Reduce { .. })) { return 0; }
+    let Some(LinearOp::Project(map)) = ops.first() else { return 0 };
+    let Some(output) = shapes.of(&Ref::Local(j)) else { return 0 };
+    let input = Shape::Prod(vec![output.key.clone(), output.val.clone()]);
+    let Some(projection) = map.graph().ok().and_then(|graph| canonical(graph, &input).ok()).and_then(|graph| wiring(&graph)) else { return 0 };
+    let Some(value) = projection.value(&output.key, &output.val) else { return 0 };
+    let Item::Op(Node::Reduce { input: reduce_input, reducer, .. }) = &scope.items[j] else { unreachable!() };
+    let Some(rows) = shapes.of(reduce_input) else { return 0 };
+    let folded = reducer.project(&value, &rows.key, &rows.val);
+    let Reducer::Expr(lambda) = &folded;
+    // The reducer must still give exactly what the map gave.
+    let Ok(composed) = crate::shapes::reduce_shape(lambda, &rows.key, &rows.val) else { return 0 };
+    let Ok(expected) = crate::lambda::slot_shape(map, &[output.key.clone(), output.val.clone()]) else { return 0 };
+    if Shape::Prod(vec![output.key, composed]) != expected { return 0; }
+    let Item::Op(Node::Reduce { reducer, .. }) = &mut scope.items[j] else { unreachable!() };
+    *reducer = folded;
+    let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };
+    ops.remove(0);
+    1
+}
+
 fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
     let mut builder = corgi::Builder::default();
     let mut output_id = builder.input();
@@ -102,7 +134,7 @@ fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
         output_id = builder.graft(graph, output_id);
     }
     let graph = builder.finish(output_id);
-    let mut composed = Lambda { src: String::new(), graph: Ok(std::sync::Arc::new(graph)), added_by: None };
+    let mut composed = Lambda { src: String::new(), graph: Ok(std::sync::Arc::new(graph)), added_by: None, scope: None };
     let graph = composed.graph().ok()?;
     let graph = canonical(graph, input).ok()?;
     if corgi::shape_of(&graph, input).ok()? != output { return None; }

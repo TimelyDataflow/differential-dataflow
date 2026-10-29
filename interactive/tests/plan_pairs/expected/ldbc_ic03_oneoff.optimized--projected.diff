@@ -1,0 +1,21 @@
+--- optimized
++++ projected
+@@ -33,14 +33,14 @@
+ let hop1_idx2 = hop1 | arrange;
+ let hop2 = hop1_idx2 | join(friend_idx, (_, req, (g, _)) -> (g, req));
+ let circle_rows = hop1 + hop2;
+-let circle_filter = circle_rows | filter((node, (_, who, _, _)) -> (node, who) ne);
+-let circle_idx = circle_filter | arrange;
++let circle_rows2 = circle_rows | filter((node, (_, who, _, _)) -> (node, who) ne) | map((k, (v0, _, v2, v3)) -> (k, (v0, (), v2, v3)));
++let circle_idx = circle_rows2 | arrange;
+ let person_idx = person | arrange;
+ let circle_join = circle_idx | join(person_idx, (node, (rid, _, x, y), (_, _, _, _, _, _, _, city, _, _, _)) -> (city, (rid, node, x, y)));
+ let circle_idx2 = circle_join | arrange;
+ let circle_join2 = circle_idx2 | join(place_idx, (_, (rid, node, x, y), (_, _, home)) -> ((rid, node), (x, y, home)));
+-let circle_rows2 = circle_join2 | filter((_, (x, y, home)) -> ((home, x) ne, (home, y) ne) all) | map((key, _) -> (key, ()));
+-let circle_idx3 = circle_rows2 | arrange;
++let circle_rows3 = circle_join2 | filter((_, (x, y, home)) -> ((home, x) ne, (home, y) ne) all) | map((key, _) -> (key, ()));
++let circle_idx3 = circle_rows3 | arrange;
+ let circle = circle_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let visits_idx = visits | arrange;
+ let seen = visits_idx | join(circle, (key, (ix, iy), ()) -> (key, (ix, iy)));

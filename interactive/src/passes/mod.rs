@@ -4,7 +4,8 @@ mod structural;
 mod dead_code;
 mod arrangements;
 mod canonical;
-pub mod projection;
+mod demand;
+pub mod narrow;
 mod as_of;
 mod timing;
 pub use timing::{Measurement, Pass, Timings};
@@ -45,7 +46,7 @@ fn item_ordinals(scope: &Scope) -> Vec<usize> {
 type Observe<'a> = dyn FnMut(&str, &Scope, &[usize], &'static str, usize, usize) + 'a;
 
 /// Which passes `run` applies. Every pass is optional: the runtime runs any program the
-/// language accepts, with the same answers, whichever of them ran. The default excludes projection.
+/// language accepts, with the same answers, whichever of them ran. The default is all of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
     /// Remove unread computations, child exports, imports, and aliases; keep root inputs.
@@ -58,14 +59,14 @@ pub struct Config {
     pub hoist_invariant: bool,
     /// Compose adjacent maps, drop identity maps, cancel paired negations.
     pub compose_maps: bool,
-    /// Replace fields nothing reads by `()`.
+    /// Narrow what statements produce and arrange to the fields something reads (`narrow`).
     pub projection: bool,
     /// Drop updates at the as-of time that only strict half joins would read.
     pub as_of_drop: bool,
 }
 
 impl Default for Config {
-    fn default() -> Self { Self { projection: false, ..Self::all() } }
+    fn default() -> Self { Self::all() }
 }
 
 impl Config {
@@ -118,7 +119,11 @@ pub enum Change {
     Structural { path: String, action: &'static str, from: ItemName, to: ItemName },
     /// Aggregate rewrites without statement-level display diffs.
     Rewritten { pass: Pass, count: usize },
-    Masked(usize),
+    /// Field positions narrowed to `()`.
+    Narrowed(usize),
+    /// Lambdas respelled from their graphs because their text could not be edited in place,
+    /// and sites kept as written because their narrowing did not type or respell.
+    NarrowingNotes { respelled: usize, declined: usize },
     AsOf(usize),
     NoProjection,
     Rejected,
@@ -132,7 +137,7 @@ impl Change {
     pub fn count(&self) -> usize {
         match self {
             Self::Structural { .. } => 1,
-            Self::Rewritten { count, .. } | Self::Masked(count) | Self::AsOf(count) => *count,
+            Self::Rewritten { count, .. } | Self::Narrowed(count) | Self::AsOf(count) => *count,
             _ => 0,
         }
     }
@@ -147,8 +152,8 @@ impl Change {
 /// Identical import slots are always interned, as in lowering, even with all optional
 /// passes off. This also normalizes programs supplied directly as IR.
 /// Optimization runs before checking providers so unread imports can disappear.
-/// Projection and as-of candidates must infer without problems and preserve the optimizer's
-/// export shapes. A rejected candidate leaves the last accepted program in place.
+/// Projection and as-of drop need a program that infers without problems; each checks that its
+/// result does too and preserves the optimizer's export shapes, else the stage is left as it was.
 pub fn run(
     program: &mut Program,
     source: &dyn Fn(&Source) -> Option<RowShape>,
@@ -191,25 +196,21 @@ pub fn run(
     changes.clear();
     if !config.projection { changes.push(Change::Off("projection")); }
     else if valid {
-        let mut candidate = program.clone();
-        let mut masked = 0;
-        let mut converged = false;
-        for _ in 0..16 {
-            timings.projection_rounds += 1;
-            let count = projection::pushdown_timed(&mut candidate, source, timings.pass_mut(Pass::ShapeInference)).unwrap_or(0);
-            if count == 0 { converged = true; break; }
-            // Masks expose optimizer rewrites. In turn, merging identical masks can
-            // give a reduce one reader and make its remaining map fusible.
-            optimize_with(&mut candidate, source, config, &mut timings, &mut |_, _, _, _, _, _| {});
-            if !accept(&candidate, &mut timings) { break; }
-            masked += count;
+        match narrow::narrow_timed(program, source, timings.pass_mut(Pass::ShapeInference)) {
+            Ok(outcome) => {
+                timings.projection_rounds = outcome.rounds;
+                if outcome.respelled > 0 || outcome.declined > 0 {
+                    changes.push(Change::NarrowingNotes { respelled: outcome.respelled, declined: outcome.declined });
+                }
+                if outcome.fields > 0 {
+                    changes.push(Change::Narrowed(outcome.fields));
+                    // Narrowing leaves identity maps and maps before chains for the optimizer.
+                    optimize_with(program, source, config, &mut timings, &mut |_, _, _, _, _, _| {});
+                } else { changes.push(Change::NoProjection); }
+            }
+            // A result that would not type is never installed; the program is unchanged.
+            Err(_) => changes.push(Change::Rejected),
         }
-        if converged {
-            if masked > 0 {
-                changes.push(Change::Masked(masked));
-                *program = candidate;
-            } else { changes.push(Change::NoProjection); }
-        } else { changes.push(Change::Rejected); }
     } else { changes.push(Change::Skipped); }
     timings.projection.record(start.elapsed(), changes.iter().map(Change::count).sum());
     timings.observe("after projection", program, &changes, observe);
@@ -322,9 +323,9 @@ mod schedule_tests {
 
     #[test]
     fn config_words_apply_in_order_from_default() {
-        assert_eq!(Config::default(), Config { projection: false, ..Config::all() });
+        assert_eq!(Config::default(), Config::all());
         assert_eq!(Config::parse("").unwrap(), Config::default());
-        assert_eq!(Config::parse("projection").unwrap(), Config::all());
+        assert_eq!(Config::parse("-projection").unwrap(), Config { projection: false, ..Config::all() });
         assert_eq!(Config::parse("all,-projection").unwrap(), Config::parse("-projection").unwrap());
         assert_eq!(Config::parse("none, structural").unwrap(), Config { structural: true, ..Config::none() });
         assert_eq!(Config::parse("none").unwrap().off(), Config::NAMES);
