@@ -18,7 +18,7 @@
 //!   type error, reported with corgi's message.
 //! - **Compiling a slot** for the runtime to evaluate, one function per operator kind
 //!   (`compile_projection`, `compile_predicate`, `compile_flatmap`, `compile_reduce`,
-//!   `compile_join_function`, `compile_scalar`).
+//!   `compile_join_function`).
 //! - **Composing lambdas** (`Lambda::compose`), which explain and the projection pass use to
 //!   write new slots from existing ones.
 //! - **Registered functions** ([`register`]): how an embedding program extends the language.
@@ -37,7 +37,7 @@ pub(crate) mod normalize;
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
 /// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
 /// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
-/// the registered functions and the Float functions as words `call` reaches, and the program's
+/// the registered functions and the base words `call` reaches, and the program's
 /// `type` declarations as enums. A parse error is kept, and reported where the program is compiled
 /// or run. A composed lambda's graph is authoritative: its readable `src` is
 /// reconstructed from the component sources and may reparse to a different
@@ -426,15 +426,6 @@ pub(crate) fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Sh
     Err(format!("join_function output is not a list of ((key, val), time, diff) with {width} time coordinates: {out}"))
 }
 
-/// Compile an `EnterAt`'s lambda → an `Int` column; a non-integer is the type error (the round is
-/// read as one integer per row).
-pub(crate) fn compile_scalar(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match slot_graph(lambda, &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::Int) => Ok(k),
-        (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
-    }
-}
-
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
 /// `Int`; any other shape is a type error.
 pub(crate) fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
@@ -453,7 +444,7 @@ pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<N
     }
 }
 
-/// The scope every DDIR program's lambdas start from: the Float functions as words, and the
+/// The scope every DDIR program's lambdas start from: the Float functions, `bit_length`, and the
 /// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
 /// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
 /// payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its
@@ -468,6 +459,10 @@ pub(crate) fn base_scope() -> corgi::Scope {
             let out = word.build(&mut b, input);
             scope.word(name, b.finish(out)).unwrap();
         }
+        let mut b = Builder::<NumOp>::default();
+        let input = b.input();
+        let out = b.add(NumOp::Host(corgi::HostOp(std::sync::Arc::new(BitLength))), vec![input]);
+        scope.word("bit_length", b.finish(out)).unwrap();
         scope.declare("enum Option = None () | Some").unwrap();
         scope.declare("enum Result = Ok | Err").unwrap();
         scope
@@ -476,7 +471,23 @@ pub(crate) fn base_scope() -> corgi::Scope {
 
 /// Whether `name` is one of the words every lambda's scope starts with (a registered function may
 /// not take its name).
-fn is_base_word(name: &str) -> bool { FloatWord::all().any(|(word, _)| word == name) }
+fn is_base_word(name: &str) -> bool { base_words().any(|word| word == name) }
+
+fn base_words() -> impl Iterator<Item = &'static str> {
+    FloatWord::all().map(|(name, _)| name).chain(["bit_length"])
+}
+
+/// The bit length of an Int viewed as a u64: zero gives 0, negative integers give 64.
+/// The base scope shares one kernel across every call, as it does for the Float words.
+struct BitLength;
+impl corgi::HostKernel for BitLength {
+    fn name(&self) -> &str { "bit_length" }
+    fn input(&self) -> &Shape { &Shape::Int }
+    fn output(&self) -> &Shape { &Shape::Int }
+    fn eval(&self, input: CValue) -> Res<CValue> {
+        Ok(CValue::int(input.as_i64("bit_length")?.iter().map(|&x| i64::from(64 - (x as u64).leading_zeros()))))
+    }
+}
 
 /// The registered function `f` as a word: one host-kernel node over the call's input, which is its
 /// argument when it takes one, and the tuple of its arguments (or `()`) otherwise.

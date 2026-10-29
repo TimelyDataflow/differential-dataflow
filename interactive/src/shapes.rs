@@ -241,9 +241,9 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
         let env = [k.clone(), v.clone()];
         match op {
             LinearOp::Project(p) => (k, v) = pair_shape(p, &env).map_err(|e| format!("map: {e}"))?,
-            LinearOp::Filter(t) | LinearOp::EnterAt(t) => match slot_shape(t, &env)? {
+            LinearOp::Filter(t) => match slot_shape(t, &env)? {
                 Shape::Int => {}
-                s => return Err(format!("predicate or delay of shape {s}, not an integer")),
+                s => return Err(format!("predicate of shape {s}, not an integer")),
             },
             LinearOp::Negate => {}
             LinearOp::FlatMap(t) => match slot_shape(t, &env)? {

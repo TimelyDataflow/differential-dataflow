@@ -496,7 +496,7 @@ fn build_scope(
                                     builder.presence(&after, &before);
                                     builder.lambda(&after, &[&before], lambda);
                                 }
-                                LinearOp::Filter(lambda) | LinearOp::EnterAt(lambda) => {
+                                LinearOp::Filter(lambda) => {
                                     builder.identity(&after, &before);
                                     builder.scalar_lambda(&after, &[&before], lambda);
                                 }

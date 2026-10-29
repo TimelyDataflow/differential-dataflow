@@ -36,7 +36,7 @@ use differential_dogs3::operators::half_join::half_join_with_tactic;
 use crate::runtime::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{BackendFrontier, ProxyJoinTactic, ProxyReduceTactic};
 use differential_dogs3::operators::half_join::proxy::ProxyHalfJoinTactic;
-use crate::lambda::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
+use crate::lambda::{compile_flatmap, compile_join_function, compile_predicate, compile_projection};
 use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, Lambda, LinearOp, Reducer, Time};
 use crate::scope_ir as st;
@@ -64,7 +64,6 @@ impl Plan {
         let (what, graph) = match op {
             LinearOp::Project(p) => ("map", Some(compile_projection(p, &[kshape.clone(), vshape.clone()]))),
             LinearOp::Filter(cond) => ("filter", Some(compile_predicate(cond, k, v))),
-            LinearOp::EnterAt(field) => ("enter_at", Some(compile_scalar(field, k, v))),
             LinearOp::FlatMap(list) => ("flatmap", Some(compile_flatmap(list, k, v))),
             LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level + 1))),
             LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => ("", None),
@@ -86,11 +85,11 @@ impl Plan {
 /// column + a structural explode; Negate = Rust. Every slot is columnar — there is no row-wise
 /// path inside the dataflow — and each op's graph was compiled when the operator was built
 /// (`plans`). An empty batch passes through untouched: it has no rows to compute.
-/// The data<->time ops are columnar and total: EnterAt reads its delay field as a column and
-/// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
-/// appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction explodes
-/// its list column as FlatMap does and joins each element's time lanes into `times`. `level`
-/// is the scope depth (it locates that coordinate, and fixes the number of lanes as data).
+/// The data<->time ops are columnar and total: LiftIter reads the iteration coordinate out of
+/// `times` and appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction
+/// explodes its list column as FlatMap does and joins each element's time lanes into `times`.
+/// `level` is the scope depth (it locates that coordinate, and fixes the number of lanes as
+/// data).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
     // A container with no rows may have no SHAPE either, and each op below checks its batch's
     // shapes: an empty batch passes through untouched (every `LinearOp` maps zero rows to zero
@@ -128,21 +127,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
                 }
                 c
             }
-            LinearOp::EnterAt(_) => {
-                let g = plan.graph(&kshape, &vshape);
-                // The key and val columns are IDENTITY here — only times change. Evaluate the
-                // delay field to an `Int` column and join it into each time in place. Joining
-                // `PointStamp([0,..,0, delay])` takes a coordinate-wise maximum at the loop's
-                // lane and leaves every other coordinate unchanged, so the delta never has
-                // to be built. The epoch is lane 0; a loop at depth `level` uses lane `level`.
-                let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
-                    .into_i64("enter_at delay")
-                    .unwrap();
-                let delays: Vec<u64> = raw.iter().map(|&r| 256 * (64 - (r as u64).leading_zeros() as u64)).collect();
-                c.times.lane_max(level.saturating_sub(1) + 1, &delays);
-                c
-            }
-            // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
+            // A value read OUT of each row's time. Vals gain one
             // integer field; keys, times and diffs are untouched, and no slot is compiled.
             //
             // A tuple gains a field, and unit is the empty tuple: columnar it arrives as
@@ -315,7 +300,7 @@ impl Backend for CorgiBackend {
 
     fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize, (k, v): st::RowShape) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
-        // `level` is the scope depth (locates the iteration coordinate for LiftIter/EnterAt).
+        // `level` is the scope depth (locates the iteration coordinate for LiftIter).
         // Every op compiles now, at the shape it will see.
         let steps = crate::shapes::linear_shapes(&ops, k, v, level).expect("install inferred these shapes");
         let plans: Vec<Plan> = ops.iter().zip(steps).map(|(op, (key, val))| Plan::new(op, key, val, level)).collect();

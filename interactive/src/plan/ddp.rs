@@ -390,7 +390,7 @@ impl Printer<'_> {
                     let shape = row.as_ref().map(|(k, v)| Shape::Prod(vec![k.clone(), v.clone()]));
                     let (word, lambda) = match op {
                         LinearOp::Project(l) => ("map", Some(l)), LinearOp::Filter(l) => ("filter", Some(l)),
-                        LinearOp::EnterAt(l) => ("enter_at", Some(l)), LinearOp::FlatMap(l) => ("flatmap", Some(l)),
+                        LinearOp::FlatMap(l) => ("flatmap", Some(l)),
                         LinearOp::JoinFunction(l) => ("join_function", Some(l)), LinearOp::Negate => ("negate", None),
                         LinearOp::Lift => ("lift", None), LinearOp::LiftIter => ("lift_iter", None),
                     };

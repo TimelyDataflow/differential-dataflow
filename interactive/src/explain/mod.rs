@@ -16,9 +16,9 @@
 //! embedding level.
 //!
 //! A scope exports its lifted internals, and the cascade through enclosing
-//! scopes is the recursion. The embedding depth is not a parameter: the
-//! renderer derives depth structurally, so a clone needn't know where it will
-//! sit.
+//! scopes is the recursion. The forward clone inserts an explanation-loop
+//! coordinate into each `join_function` time; the renderer derives the rest
+//! of the depth structurally.
 
 use crate::ir::LinearOp;
 use crate::scope_ir::{Bind, Export, Import, Item, Node, Program, Ref, Scope, Source, Var};
@@ -48,7 +48,13 @@ pub(crate) enum Site {
 /// Returns the host-visible ref at the `out` level for every site in the
 /// subtree.
 fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, Ref)> {
-    clone_rec(orig, out, import_map, &[])
+    clone_rec(orig, out, import_map, &[], false)
+}
+
+/// As [`clone_into`], for the forward clone inside the explanation loop: each lambda's time
+/// gains that loop's round after the epoch.
+fn clone_forward(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Addr, Ref)> {
+    clone_rec(orig, out, import_map, &[], true)
 }
 
 /// The identity check: a program cloned into a fresh root computes the same
@@ -86,7 +92,7 @@ fn clone_node(node: &Node, m: impl Fn(&Ref) -> Ref) -> Node {
     }
 }
 
-fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) -> Vec<(Addr, Ref)> {
+fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize], forward: bool) -> Vec<(Addr, Ref)> {
     let addr = |site: Site| Addr { path: path.to_vec(), site };
     let mut visible: Vec<(Addr, Ref)> = Vec::new();
 
@@ -104,7 +110,22 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
     for (i, item) in orig.items.iter().enumerate() {
         match item {
             Item::Op(node) => {
-                let cloned = clone_node(node, |r| map_ref(r, &locals, &subs, import_map, var_base));
+                let mut cloned = clone_node(node, |r| map_ref(r, &locals, &subs, import_map, var_base));
+                if forward {
+                    if let Node::Linear { ops, .. } = &mut cloned {
+                        for op in ops {
+                            if let LinearOp::JoinFunction(lambda) = op {
+                                // Epoch, explanation round, then the original loop coordinates.
+                                // Zero leaves the explanation round unchanged.
+                                *lambda = slot(2, &[(lambda, tup(vec![var(0), var(1)]))], |out| {
+                                    let mut time = vec!["t.0".into(), "0".into()];
+                                    time.extend((1..=path.len()).map(|j| format!("t.{j}")));
+                                    format!("{} map ((row, t, d) -> (row, {}, d))", out[0], tup(time))
+                                });
+                            }
+                        }
+                    }
+                }
                 let out_idx = out.items.len();
                 out.items.push(Item::Op(cloned));
                 locals[i] = Some(Ref::Local(out_idx));
@@ -147,7 +168,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                 let ident: Vec<Ref> = (0..child.imports.len()).map(Ref::Import).collect();
                 let mut child_path = path.to_vec();
                 child_path.push(i);
-                let child_visible = clone_rec(child, &mut child_out, &ident, &child_path);
+                let child_visible = clone_rec(child, &mut child_out, &ident, &child_path, forward);
 
                 // Lift each subtree site at this scope's exit and export it:
                 // the lift folds this scope's iteration coordinate into the
@@ -494,6 +515,34 @@ impl Sb {
         // Reform the demanded input (k, (V_in, chain_in, q)).
         self.project(filtered, <Val as RowModel>::strip(in_len, out_len, in_len))
     }
+
+    /// Evaluate the list as data, pairing each output with its source row, chain and time.
+    /// Demand the source when chain_in joined with that time is <= chain_out. Only loop
+    /// coordinates in the demand's chain are compared; dropping the epoch and other
+    /// coordinates can widen an explanation but cannot omit a contributing row.
+    fn emit_lookup_join_function(&mut self, dep_y: Ref, side: &Side, out_len: usize, lambda: &Lambda) -> Ref {
+        let in_len = side.user_len;
+        let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
+        let rekeyed = self.project(src, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
+        let list = slot(2, &[(lambda, tup(vec![f(0, 0), format!("{}.1.0", var(0))]))], |out| out[0].clone());
+        let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list)]);
+        // FlatMap's value is (position, ((key, val), time, diff)).
+        let nonzero = self.filter(exploded, predicate(format!("({}.1.2, 0) ne", var(1))));
+        let pair = self.project(nonzero, projection(format!("{}.1.0", var(1)), tup(vec![var(0), format!("{}.1.1", var(1))]), 2));
+        let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
+        // Wide value: (V_in, chain_in..., chain_out..., q, time).
+        let source = format!("{}.0", var(2));
+        let mut wide = vec![format!("{source}.1.0")];
+        wide.extend((0..in_len).map(|j| format!("{source}.1.{}", 1 + j)));
+        wide.extend(fidx(1, 0, out_len + 1));
+        wide.push(f(2, 1));
+        let joined = self.join(dep_keyed, pair, projection(format!("{source}.0"), tup(wide), 3));
+        let filtered = match <Val as RowModel>::time_le(in_len, out_len) { Some(c) => self.filter(joined, c), None => joined };
+        let time = f(1, in_len + out_len + 2);
+        let cond = and_all((0..out_len).map(|j| le(format!("{time}.{}", out_len - j), f(1, 1 + in_len + j))).collect());
+        let filtered = match cond { Some(c) => self.filter(filtered, predicate(c)), None => filtered };
+        self.project(filtered, <Val as RowModel>::strip(in_len, out_len, in_len))
+    }
 }
 
 /// The `Value` data model for explain: a demand row is `(K, (V, chain…, q))`
@@ -730,7 +779,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     }).collect();
     let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.restrict(ex_src[k].clone(), dsets[k].clone())).collect();
     let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| { let env = ex.project(r.clone(), envelope()); ex.presence(env) }).collect();
-    let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
+    let forward: BTreeMap<Addr, Ref> = clone_forward(&p.root, &mut ex.s, &fwd_inputs).into_iter()
         .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, ex.presence(host)) })
         .collect();
     ex.s.exports.clear();
@@ -939,28 +988,19 @@ impl<'a> Reverse<'a> {
                         let contrib = ex.filter(dep_this, cond);
                         self.push(ex, path, input, contrib);
                     }
-                    LinearOp::Negate | LinearOp::EnterAt(_) => {
-                        // Negate: pure pass-through. EnterAt: sound but
-                        // over-broad pass-through; the routing adapter handles
-                        // any depth difference.
+                    LinearOp::Negate => {
                         self.push(ex, path, input, dep_this);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
-                    // Both read or write the whole time, whose width is the scope depth, and the
-                    // forward clone runs one scope deeper than the program it clones.
-                    //
-                    // Lift's backward rule is trivial, demand `(k, v)` for `(k, (v, t))`; only its
-                    // forward clone is the problem, and it would read different times there.
-                    //
-                    // JoinFunction can follow FlatMap's rule: a pair table that re-keys each input
-                    // row by itself and evaluates the lambda as data, not as a delay, so each output
-                    // `(key, val)` sits beside its source row, chain, and the lambda's time `t`. The
-                    // time width is then just data and the clone's depth does not matter. The time
-                    // filter can be exact, `chain_in ∨ t ≤ chain_out`, compared on the chain's
-                    // coordinates only; the epoch and coordinates outside the chain are dropped,
-                    // which is over-broad and so still sound.
+                    // Lift reads the whole time, and the forward clone runs one scope deeper.
                     LinearOp::Lift => panic!("explain: lift is not supported"),
-                    LinearOp::JoinFunction(_) => panic!("explain: join_function is not supported"),
+                    LinearOp::JoinFunction(lambda) => {
+                        let target = resolve(self.orig, path, input);
+                        let side = self.side(&target);
+                        let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
+                        let contrib = ex.emit_lookup_join_function(dep, &side, out_len, lambda);
+                        self.contribs.entry(target).or_default().push(contrib);
+                    }
                     LinearOp::FlatMap(list) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);

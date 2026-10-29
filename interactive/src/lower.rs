@@ -188,7 +188,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             *expr = Expr::ResolvedPath { anchor: key.anchor, target: key.target, field: key.field };
         }
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-        | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::FlatMap(e, _)
+        | Expr::Negate(e) | Expr::LiftIter(e) | Expr::FlatMap(e, _)
         | Expr::Lift(e) | Expr::JoinFunction(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) =>
             resolve_expr(e, here, item, scopes, plan),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => {
@@ -247,7 +247,7 @@ fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
         Expr::ResolvedPath { .. } => {},
         Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-            | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
+            | Expr::Negate(e) | Expr::LiftIter(e)
             | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expr_free_names(l, out); expr_free_names(r, out); },
@@ -383,7 +383,6 @@ impl ScopeLower {
             Expr::Map(e, p)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Project(p.clone())] }) },
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
             Expr::Negate(e)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Negate] }) },
-            Expr::EnterAt(e, f) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::EnterAt(f.clone())] }) },
             Expr::FlatMap(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::FlatMap(t.clone())] }) },
             Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
             Expr::Lift(e)       => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Lift] }) },

@@ -46,7 +46,6 @@ pub enum Expr {
     Reduce(Box<Expr>, Reducer),
     Filter(Box<Expr>, Lambda),
     Negate(Box<Expr>),
-    EnterAt(Box<Expr>, Lambda),
     /// Append the current user-iter coord (at the operator's scope depth)
     /// to each row's value. Time itself is unchanged.
     ///

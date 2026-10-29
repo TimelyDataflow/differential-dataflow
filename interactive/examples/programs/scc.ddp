@@ -8,7 +8,7 @@ outer: {
     let scc = edges + trim;
 
     fwd: {
-        let nodes = edges | map((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
+        let nodes = edges | map((_, dst) -> (dst, dst)) | delay((_, n) -> (0, 0, (256, n call bit_length) mul));
         let labels = proposals + nodes | min;
         set proposals = labels | join(scc, (_, label, dst) -> (dst, label));
     }
@@ -20,7 +20,7 @@ outer: {
         | map((dst, (src, _, _)) -> (dst, src));
 
     bwd: {
-        let nodes = trans | map((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
+        let nodes = trans | map((_, dst) -> (dst, dst)) | delay((_, n) -> (0, 0, (256, n call bit_length) mul));
         let labels = proposals + nodes | min;
         set proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
     }
