@@ -6,7 +6,8 @@
 //!   * ids — a key's id is the identifier its arrangement is sorted by (the key itself when it is a
 //!     primitive integer, else its hash lane). A value's id names a row in a pool of columns: the
 //!     chunks' own value columns, and the output columns this backend builds. Within a window, a
-//!     key's equal input values share one id, found by corgi's segmented sort; output values are
+//!     key's equal input values share one id, found by corgi's segmented sort. A proven weighted
+//!     sum compares projected values here; other reducers keep whole-value identity. Output values are
 //!     matched to the current output by structural comparison. Nothing hashes values.
 //!   * collisions — a hashed key's identifier may hold several real keys. Chunks sort each
 //!     identifier's rows by real key, so a window finds them with two comparisons per run. Their
@@ -138,6 +139,8 @@ pub(crate) struct CorgiReduceBackend<T> {
     graph: Graph<NumOp>,
     /// What the graph reads of its input.
     reads: Reads,
+    /// The reducer is invariant under consolidation of equal projected values.
+    project_values: bool,
     /// How many of each key's first values the graph is handed, if not all.
     limit: Option<usize>,
     /// The current window's input values: its chunks' value columns, projected by `reads.value`.
@@ -214,11 +217,17 @@ impl<T> CorgiReduceBackend<T> {
             .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
         // The graph rebuilt to read only what it reads, and the demand saying what that is.
         let input = Shape::Prod(vec![kshape, Shape::List(Box::new(Shape::Prod(vec![vshape, Shape::Int])))]);
-        let narrowed = corgi::compile(graph, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+        let compiled = corgi::compile(graph, &input)
+            .unwrap_or_else(|e| panic!("reduce: compiling at {input}: {e}"));
+        // A limit observes whole-value order and entry boundaries. Demand alone does not prove
+        // that merging those entries is valid; the sum analysis also checks disappearing groups.
+        let project_values = limit.is_none() && crate::passes::reduce_demand::projection(&compiled).is_some();
+        let narrowed = corgi::narrow(compiled, &Demand::All)
             .unwrap_or_else(|e| panic!("reduce: narrowing a compiled graph at {input}: {e}"));
         CorgiReduceBackend {
             graph: narrowed.graph,
             reads: Reads::new(narrowed.input, &input),
+            project_values,
             limit,
             input: Pool::default(),
             output: Pool::default(),
@@ -258,6 +267,7 @@ fn present<T: ColTime + Ord>(
     keys: &[i64],
     matches: &Matches,
     colliding: &[bool],
+    projected: Option<&[CValue]>,
     refs: &mut Vec<(usize, usize)>,
     bridge: &mut ProxyBridge<T, Diff, i64>,
 ) {
@@ -280,8 +290,13 @@ fn present<T: ColTime + Ord>(
         (labels, rows, label_keys) = split_real_keys(chunks, colliding, labels, rows);
     }
     let key_of = |label: u64| label_keys.as_ref().map_or(label as usize, |keys: &Vec<usize>| keys[label as usize]);
-    let vals: Vec<CValue> = chunks.iter().map(|chunk| chunk.vals().clone()).collect();
-    let (sorted, groups) = sort_blocks(&labels, &gather_refs(&vals, rows.iter().copied()));
+    // Output and unproven input reducers retain whole-value identity and order.
+    let whole;
+    let vals = if let Some(projected) = projected { projected } else {
+        whole = chunks.iter().map(|chunk| chunk.vals().clone()).collect::<Vec<_>>();
+        &whole
+    };
+    let (sorted, groups) = sort_blocks(&labels, &gather_refs(vals, rows.iter().copied()));
     let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
     let (mut start, mut updates) = (0, Vec::new());
     for group in groups.chunk_by(|a, b| a == b) {
@@ -484,11 +499,12 @@ where
         // equal values share an id, so an exactly cancelling pair vanishes here, and its time
         // survives in `window.seeds` above. Input ids name rows for this window only.
         self.input.refs.clear();
-        present(&in_chunks, keys, &matches, colliding, &mut self.input.refs, &mut window.input);
+        let projected = (self.project_values && self.reads.value != Demand::All).then_some(&self.input.columns[..]);
+        present(&in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
         // The output history, same keys. Output ids name rows for the whole retire, and the rows
         // that hold their keys are at the same positions of the output chunks' key columns.
         let fresh = self.output.refs.len();
-        present(&out_chunks, keys, &out_matches, colliding, &mut self.output.refs, &mut window.output);
+        present(&out_chunks, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
         self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
 
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
@@ -698,6 +714,28 @@ mod tests {
     use crate::runtime::chunk::present_key;
     use crate::ir::Time;
 
+    /// Demand is insufficient: entry counts, limits, extrema on signed lists and zero-emitting
+    /// sums must keep whole-value identity. A weighted sum that suppresses zero may consolidate.
+    #[test]
+    fn projected_values_require_a_mergeable_reducer() {
+        let shape = (Shape::Int, Shape::Prod(vec![Shape::Int, Shape::Int]));
+        let sum = "let n = vals map (((v, _), d) -> (v, d) mul) fold_add in (n, (n, 1)) enlist filter";
+        for (body, limit, expected) in [
+            (sum, None, true), (sum, Some(1), false),
+            ("(vals map ((_, d) -> d) fold_add, 1) enlist", None, false),
+            ("(vals len, 1) enlist", None, false),
+            ("(vals head.0.0, 1) enlist", Some(1), false),
+            ("(vals map (((v, _), _) -> v) fold_min, 1) enlist", None, false),
+            ("(vals map (((v, _), _) -> v) fold_max, 1) enlist", None, false),
+        ] {
+            let lambda = crate::ir::Lambda::new(format!("let (_, vals) = input in {body}"), &corgi::Scope::default());
+            let backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(lambda), limit, shape.clone());
+            assert_eq!(backend.project_values, expected, "{body}, limit={limit:?}");
+        }
+        let backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, shape);
+        assert!(backend.project_values);
+    }
+
     /// The rows of a column of `Int` leaves, products of them, or units, as vectors.
     fn rows_of(col: &CValue) -> Vec<Vec<u64>> {
         let fields: Vec<Vec<i64>> = match col {
@@ -769,7 +807,7 @@ mod tests {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
                 let (mut refs, mut bridge) = (Vec::new(), Vec::new());
-                present(&chunks, &keys, &search(&chunks, &keys), &[], &mut refs, &mut bridge);
+                present(&chunks, &keys, &search(&chunks, &keys), &[], None, &mut refs, &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));

@@ -5,6 +5,7 @@ mod dead_code;
 mod arrangements;
 mod canonical;
 pub mod projection;
+pub(crate) mod reduce_demand;
 mod as_of;
 mod timing;
 pub use timing::{Measurement, Pass, Timings};
