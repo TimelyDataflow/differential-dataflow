@@ -23,7 +23,7 @@ use corgi::{shape_of_value, Demand, Graph, NumOp, Shape, Value as CValue};
 use crate::runtime::chunk::{colliding_keys, ident, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::runtime::col_times::{ColTimes, Lanes};
 use crate::runtime::container::CorgiContainer;
-use crate::runtime::join::{demanded, leaf_valued, primitive_values, stage_collision, Probe, Reads, RunRef, SideScratch, COORD_BITS};
+use crate::runtime::join::{demanded, primitive_values, stage_collision, Probe, Reads, RunRef, SideProj, SideScratch, COORD_BITS};
 use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda, Time};
 
@@ -173,10 +173,11 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         let chunks = arranged_chunks(&instance.batches);
         // An empty arrangement meets nothing; the stream rows are presented and skipped.
         if chunks.is_empty() { return; }
-        let leaf_vals = leaf_valued(&chunks);
+        // The arranged values are compared whole here: the half join's `cross` gathers them whole.
+        let proj = SideProj::new(&chunks, &corgi::Demand::All);
         let probes: Vec<Probe<'_, Time>> = chunks.iter().enumerate()
             .filter(|(_, c)| { let ids = ident(c.keys()); ids[0] <= last && ids[ids.len() - 1] >= first })
-            .map(|(cid, c)| Probe::new(c, cid, &needles, leaf_vals))
+            .map(|(cid, c)| Probe::new(c, cid, &needles, &proj))
             .collect();
         let matched: Vec<bool> = (0..needles.len()).map(|n| probes.iter().any(|p| p.lo[n] < p.hi[n])).collect();
 
