@@ -4,7 +4,7 @@ use super::*;
 use timely::PartialOrder;
 
 impl Server {
-    /// This worker's share of a width-one trace, consolidated as of the current epoch, read
+    /// This worker's share of a width-one trace, consolidated at its latest closed point, read
     /// from its batches without a dataflow. Uses the same read checks as [`Server::snapshot`].
     pub(crate) fn snapshot_local(&self, name: &str) -> Result<Updates, String> {
         use differential_dataflow::trace::TraceReader;
@@ -13,7 +13,7 @@ impl Server {
         let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &self.shapes[&name])); };
         self.readable(&name, &point)?;
         let output = &self.outputs[&name];
-        if output.probe.less_equal(&point) { return Err(format!("trace {name:?} is not complete at {point:?}")); }
+        if output.probe.less_equal(&point) { return Err(format!("trace {name:?} is not complete at {}", format_point(&point, output.width))); }
         let mut trace = self.traces[&name].clone();
         let upper = output.probe.with_frontier(|f| f.to_owned());
         let batches = trace.batches_through(upper.borrow()).ok_or_else(|| format!("trace {name:?} has no readable cut"))?;
@@ -31,13 +31,14 @@ impl Server {
     /// Return the consolidated closed-past contents of a trace on worker 0, as columns.
     ///
     /// Builds a transient dataflow that imports the trace, **sends every
-    /// container whole to worker 0**, and consolidates them as of the current
-    /// epoch — so the result is the complete contents even when the trace is
+    /// container whole to worker 0**, and consolidates them at the latest closed
+    /// point — so the result is the complete contents even when the trace is
     /// sharded across workers, not each worker's slice, in key-then-value order.
     /// The other workers get no updates. The dataflow is dropped as soon as it
     /// has drained. Filtering and rendering are the caller's.
     /// Programs wider than one coordinate must name a point with [`Server::snapshot_as_of`].
-    /// An unclosed point is refused without waiting for inputs or imports to advance.
+    /// The point is just before the frontier of the inputs and imports this export depends on.
+    /// Returns empty if no point is closed, and reads through `u64::MAX` if the frontier is empty.
     pub fn snapshot(
         &mut self,
         worker: &mut Worker,
@@ -50,8 +51,10 @@ impl Server {
         }
     }
 
-    /// Accumulate updates <= `point`. Refuses points not closed by the program's input and
-    /// import frontiers. Collective across workers; drains work already issued by the caller.
+    /// Accumulate updates <= `point`. Refuses points not closed by the input and import
+    /// frontiers this export depends on. Collective across workers; drains work already issued
+    /// by the caller, without waiting for future input or import advances.
+    /// Refusals name each blocking input and the import path through which it is read.
     pub fn snapshot_as_of(&mut self, worker: &mut Worker, name: &str, point: &HostTime) -> Result<Updates, String> {
         self.readable(name, point)?;
         use timely::dataflow::operators::Probe;
@@ -99,22 +102,46 @@ impl Server {
         if output.width > 1 {
             return Err(format!("trace {name:?} has root width {}; name a point with snapshot_as_of or peek_as_of", output.width));
         }
-        let epoch = self.programs[&output.owner].now.get(0).copied().unwrap_or(0);
-        if epoch == 0 { return Ok(None); }
-        Ok(Some(host_time(epoch - 1)))
+        match self.read_frontier(name).elements().iter().map(|t| t.get(0).copied().unwrap_or(0)).min() {
+            Some(epoch) => Ok(epoch.checked_sub(1).map(host_time)),
+            None => Ok(Some(host_time(u64::MAX))),
+        }
     }
 
     fn readable(&self, name: &str, point: &HostTime) -> Result<(), String> {
         let output = self.output(name, point)?;
-        if !output.since.less_equal(point) { return Err(format!("point {point:?} is before trace {name:?}'s read floor {:?}", output.since)); }
+        if !output.since.less_equal(point) { return Err(format!("point {} is before trace {name:?}'s read floor {}", format_point(point, output.width), format_point(&output.since, output.width))); }
         // Commanded capabilities are identical across workers. A local probe alone can lag
         // on some workers, causing them to refuse while others enter the collective gather.
-        let mut frontier = Antichain::new();
-        self.collect_frontier(&output.owner, &mut std::collections::HashSet::new(), &mut frontier);
+        let frontier = self.read_frontier(name);
         if frontier.less_equal(point) {
-            return Err(format!("trace {name:?} is not closed at {point:?}: input/import frontier {:?}; advance its inputs and imports before reading", frontier.elements()));
+            let blockers = self.read_blockers(&canonical_source_name(name), point);
+            let reason = if blockers.len() == 1 { format!(" {}", blockers[0]) }
+                else { format!("\n  - {}", blockers.join("\n  - ")) };
+            return Err(format!("trace {name:?} is not closed at {}:{reason}", format_point(point, output.width)));
         }
         Ok(())
+    }
+
+    /// Keep every blocking input, including those subsumed in the combined antichain.
+    /// Imports form a DAG; retain distinct paths so each blocking import is named.
+    fn read_blockers(&self, name: &str, point: &HostTime) -> Vec<String> {
+        let output = &self.outputs[name];
+        let installed = &self.programs[&output.owner];
+        let mut blockers = Vec::new();
+        for input in &output.inputs {
+            let frontier = installed.inputs[input].time();
+            if frontier.less_equal(point) {
+                blockers.push(format!("input {input} of program {:?} is at write frontier {}", output.owner,
+                    format_frontier(&Antichain::from_elem(frontier.clone()), installed.root_width)));
+            }
+        }
+        for trace in &output.imports {
+            blockers.extend(self.read_blockers(trace, point).into_iter().map(|blocker| format!("import {trace:?} -> {blocker}")));
+        }
+        blockers.sort();
+        blockers.dedup();
+        blockers
     }
 
     /// [`Server::snapshot`], with only the updates whose key is `key`, if one is given: text read

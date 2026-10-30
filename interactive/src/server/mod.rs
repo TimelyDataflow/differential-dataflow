@@ -92,6 +92,7 @@ mod progress;
 pub use self::evaluate::evaluate;
 pub use self::sources::gen_field_seeded;
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
+use self::time::{format_point, format_frontier};
 use self::bind::Binding;
 use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
 pub use self::sources::generated_shape;
@@ -227,6 +228,9 @@ struct Output {
     width: usize,
     /// Installed program that publishes this trace.
     owner: String,
+    /// Root inputs and imported traces whose data can reach this export.
+    inputs: Vec<usize>,
+    imports: Vec<String>,
     /// This worker's observed frontier of the export arrangement.
     probe: ProbeHandle<HostTime>,
     /// Earliest readable point, advanced by logical compaction.
@@ -302,10 +306,10 @@ impl Server {
         self.epoch
     }
 
-    /// The time a program installed now, or a binding, snapshot or tail started now, reads the
-    /// published traces it imports as of: the epoch before the current one, as a program time.
+    /// The compatibility import floor for a program installed now, or a binding or tail
+    /// started now: the epoch before the current one, as a program time.
     ///
-    /// [`Server::tick`] compacts every published trace to it, so their accumulations are correct
+    /// [`Server::tick`] compacts every width-one trace to it, so their accumulations are correct
     /// from it on; before it a trace's batches can hold counts no time had (a retraction advanced
     /// to it beside the insertion it retracts), on which an iterative scope need not converge.
     /// Every import advances the times it reads to it, as DD's `import_frontier` reads a trace.
