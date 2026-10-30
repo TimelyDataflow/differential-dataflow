@@ -87,6 +87,9 @@ impl Server {
         let time = self.input_frontier(prog, input)?.clone();
         self.validate_feed(prog, input, &time)?;
         if self.loads_from_trace(source) {
+            if self.programs[&canonical_source_name(prog)].manual || self.programs[&self.outputs[&canonical_source_name(source)].owner].manual {
+                return Err("feed from trace requires legacy mode on both ends; use point feeds for manual programs".into());
+            }
             return self.load_trace(prog, input, source, diff);
         }
         let (index, peers) = (worker.index(), worker.peers());
@@ -134,7 +137,7 @@ impl Server {
             .get_mut(&canonical_source_name(prog))
             .expect("load target was prevalidated");
         if let Some(recipe @ Recipe::Random { churn: 1.., .. }) = recipe {
-            if installed.root_width != 1 { return Err("churning recipes currently require width 1".into()); }
+            if installed.manual { return Err("churning recipes require legacy mode".into()); }
             if diff != 1 {
                 return Err(format!("load: a churning recipe {:?} must be fed with diff=1", source));
             }

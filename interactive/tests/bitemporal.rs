@@ -206,9 +206,14 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 }
             }
         }
-        // A point compacted away is refused.
+        // Manual advances retain history until explicit compaction.
         let now = server.now("bank").unwrap().clone();
-        if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
+        if lane(&now, 0) >= 2 {
+            let old = at((lane(&now, 0) - 2, 0));
+            assert!(server.snapshot_as_of(worker, "balance", &old).is_ok());
+            server.compact("balance", &at((lane(&now, 0) - 1, 0))).unwrap();
+            assert!(server.snapshot_as_of(worker, "balance", &old).is_err());
+        }
         if shared {
             let narrow = lower::lower_tree(parse::pipe::parse(r#"export "bad" = import "balance";"#));
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
@@ -540,17 +545,17 @@ fn independent_inputs_and_time_shapes() {
                 let point_text = if width == 1 { "[2]" } else { "[2,max]" };
                 assert_eq!(error, format!("trace {name:?} is not closed at {point_text}: import \"lagging\" -> input 0 of program \"producer\" is at write frontier {{[0]}}"));
                 assert_eq!(server.peek_as_of(worker, &name, None, &point).unwrap_err(), error);
-                // Width one has no closed point yet; wider traces still require an explicit point.
-                // Loading a published trace calls snapshot_local, with the same read checks.
+                // Width one reads its latest closed point (none yet); wider traces require a point.
                 if width == 1 {
                     assert!(server.snapshot(worker, &name).unwrap().is_empty());
                     assert!(server.peek(worker, &name, None).unwrap().is_empty());
-                    assert_eq!(server.load(worker, "split", 1, &name, 1).unwrap(), 0);
                 } else {
                     let default_error = server.snapshot(worker, &name).unwrap_err();
                     assert_eq!(server.peek(worker, &name, None).unwrap_err(), default_error);
-                    assert_eq!(server.load(worker, "split", 1, &name, 1).unwrap_err(), default_error);
+                    assert!(default_error.contains("name a point"));
                 }
+                // The legacy trace-copy shorthand has no source as-of and is refused on manual targets.
+                assert!(server.load(worker, "split", 1, &name, 1).unwrap_err().contains("requires legacy mode"));
             }
         }).unwrap();
         for result in guards.join() { result.unwrap(); }

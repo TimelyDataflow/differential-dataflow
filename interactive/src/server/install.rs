@@ -19,15 +19,22 @@ impl Server {
         name: &str,
         prog: &st::Program,
     ) -> Result<(), String> {
-        self.install_with_root(worker, name, prog, 1, self.import_as_of())
+        self.install_inner(worker, name, prog, 1, self.import_as_of(), false)
     }
 
     /// Install with `root_width` root coordinates and an explicit import/read floor.
     /// Wider imports are refused; narrower imports share their trace unchanged.
-    /// New inputs start at `as_of` (at the compatibility epoch for width 1).
+    /// New inputs start at `as_of`; progress and retention are manual at every width.
     pub fn install_with_root(
         &mut self, worker: &mut Worker, name: &str, prog: &st::Program,
         root_width: usize, as_of: HostTime,
+    ) -> Result<(), String> {
+        self.install_inner(worker, name, prog, root_width, as_of, true)
+    }
+
+    fn install_inner(
+        &mut self, worker: &mut Worker, name: &str, prog: &st::Program,
+        root_width: usize, as_of: HostTime, manual: bool,
     ) -> Result<(), String> {
         if root_width == 0 || as_of.len() > root_width {
             return Err("root width must be positive and contain the as-of point".into());
@@ -62,6 +69,9 @@ impl Server {
                 if let Some(output) = self.outputs.get(&key) {
                     if output.width > root_width {
                         return Err(format!("cannot import trace {key:?} of width {} into width {root_width}", output.width));
+                    }
+                    if !manual && self.programs[&output.owner].manual {
+                        return Err("legacy programs cannot import manual producers".into());
                     }
                     if !output.since.less_equal(&as_of) || !self.traces.get_mut(&key).unwrap().get_logical_compaction().less_equal(&as_of) {
                         return Err(format!("as-of {as_of:?} is before trace {key:?}'s compaction frontier"));
@@ -224,7 +234,7 @@ impl Server {
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
         }
-        let now = if root_width == 1 { as_of.join(&host_time(self.epoch)) } else { as_of.clone() };
+        let now = if !manual { as_of.join(&host_time(self.epoch)) } else { as_of.clone() };
         let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
         for (pos, mut handle) in inputs {
             handle.advance_to_point(&now);
@@ -238,6 +248,7 @@ impl Server {
                 exports: export_names,
                 dataflow_id,
                 root_width,
+                manual,
                 now,
                 origin: Origin::Program,
                 generators: HashMap::new(),

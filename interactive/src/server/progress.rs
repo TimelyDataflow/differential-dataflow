@@ -26,6 +26,21 @@ impl Server {
         Ok(())
     }
 
+    /// Compare and advance one input's singleton write frontier. Failure changes nothing.
+    pub fn advance_write(&mut self, prog: &str, input: usize, lower: &HostTime, upper: &HostTime) -> Result<(), String> {
+        self.validate_feed(prog, input, lower)?;
+        let current = self.input_frontier(prog, input)?;
+        if current != lower {
+            return Err(format!("write frontier mismatch: expected {lower:?}, current {current:?}"));
+        }
+        self.advance_input(prog, input, upper)
+    }
+
+    /// This worker's observed output frontier (may lag issued advances).
+    pub fn trace_upper(&self, trace: &str) -> Option<Vec<HostTime>> {
+        self.outputs.get(&canonical_source_name(trace)).map(|o| o.probe.with_frontier(|f| f.to_vec()))
+    }
+
     /// Wait for this export alone to reach a point frontier. Advance all of its producers
     /// first: this does not advance imports or unrelated inputs. Collective across workers.
     pub fn wait_for(&self, worker: &mut Worker, trace: &str, point: &HostTime) -> Result<(), String> {
@@ -46,6 +61,7 @@ impl Server {
         }
         let inputs: Vec<_> = installed.inputs.keys().copied().collect();
         let exports = installed.exports.clone();
+        let manual = installed.manual;
         for &input in &inputs {
             let frontier = installed.inputs[&input].time();
             if !frontier.less_equal(point) {
@@ -62,8 +78,10 @@ impl Server {
         for trace in &installed.imports { self.collect_frontier(trace, &mut seen, &mut frontier); }
         for export in exports {
             self.wait_for_frontier(worker, &export, &frontier)?;
-            let since = self.outputs[&export].since.join(&host_time(point.get(0).copied().unwrap_or(0).saturating_sub(1)));
-            self.compact(&export, &since)?;
+            if !manual {
+                let since = self.outputs[&export].since.join(&host_time(point.get(0).copied().unwrap_or(0).saturating_sub(1)));
+                self.compact(&export, &since)?;
+            }
         }
         Ok(())
     }
@@ -118,6 +136,11 @@ impl Server {
     /// The declared width and readable history are independent of the stored point's length.
     pub fn trace_width(&self, trace: &str) -> Option<usize> {
         self.outputs.get(&canonical_source_name(trace)).map(|o| o.width)
+    }
+
+    /// Whether the trace's owner uses explicit clocks and retention.
+    pub fn trace_manual(&self, trace: &str) -> Option<bool> {
+        self.outputs.get(&canonical_source_name(trace)).map(|o| self.programs[&o.owner].manual)
     }
 
     pub fn trace_since(&self, trace: &str) -> Option<&HostTime> {
