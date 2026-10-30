@@ -156,10 +156,11 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         }
         rows.sort_unstable();
         let lanes: Vec<Vec<Cow<'_, [i64]>>> = runs.iter().map(|run| data_lanes(run, self.width)).collect();
+        let time_readers: Vec<_> = runs.iter().map(|run| run.times().reader()).collect();
         for &(id, r, u) in &rows {
             let (r, u) = (r as usize, u as usize);
             let lifted = Lifted {
-                time: runs[r].times().get(u),
+                time: time_readers[r].get(u),
                 data: Time::from_coordinates(lanes[r].iter().map(|lane| lane[u] as u64)),
             };
             stream.push(((id, ((r as u64) << COORD_BITS) | u as u64), lifted, runs[r].diffs()[u]));

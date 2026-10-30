@@ -282,7 +282,8 @@ fn present<T: ColTime + Ord>(
     let key_of = |label: u64| label_keys.as_ref().map_or(label as usize, |keys: &Vec<usize>| keys[label as usize]);
     let vals: Vec<CValue> = chunks.iter().map(|chunk| chunk.vals().clone()).collect();
     let (sorted, groups) = sort_blocks(&labels, &gather_refs(&vals, rows.iter().copied()));
-    let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
+    let time_readers: Vec<_> = chunks.iter().map(|chunk| chunk.times().reader()).collect();
+    let update = |(chunk, row): (usize, usize)| (time_readers[chunk].get(row), chunks[chunk].diffs()[row]);
     let (mut start, mut updates) = (0, Vec::new());
     for group in groups.chunk_by(|a, b| a == b) {
         let members = &sorted[start..start + group.len()];
@@ -471,10 +472,18 @@ where
 
         // The seeds are the novel batches' RAW (key, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely.
-        window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
+        window.seeds.reserve(in_chunks[prior..].iter().zip(&matches[prior..]).map(|(chunk, found)| {
+            if chunk.times().is_constant() { found.len() } else { found.iter().map(|(_, rows)| rows.len()).sum() }
+        }).sum());
         for (chunk, found) in in_chunks[prior..].iter().zip(&matches[prior..]) {
+            let times = chunk.times().reader();
             for (index, rows) in found {
-                window.seeds.extend(rows.clone().map(|row| (keys[*index], chunk.times().get(row))));
+                if chunk.times().is_constant() {
+                    // Seeds are a set: equal-time rows of one key contribute one seed.
+                    if !rows.is_empty() { window.seeds.push((keys[*index], times.get(rows.start))); }
+                } else {
+                    window.seeds.extend(rows.clone().map(|row| (keys[*index], times.get(row))));
+                }
             }
         }
         window.seeds.sort_unstable();

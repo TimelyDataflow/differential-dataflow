@@ -16,3 +16,7 @@ pub(crate) mod half_join;
 pub(crate) mod join;
 pub(crate) mod reduce;
 mod search;
+
+mod col_diffs;
+
+mod row_map;
