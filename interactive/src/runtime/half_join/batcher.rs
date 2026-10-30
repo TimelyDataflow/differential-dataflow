@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
@@ -28,7 +29,8 @@ const TIME_TARGET: usize = if cfg!(test) { 5 } else { 1 << 16 };
 
 /// Updates in the total order on their times: rows `(t, key, val)`, where `t` is the update's own
 /// time as a `Prod` of `Int` lanes, sorted in corgi's structural order and consolidated. The
-/// structural order on the lanes is lexicographic, which is the total order on times.
+/// structural order on the lanes is lexicographic. In root scopes wider than one lane, a
+/// chunk is either awaiting assignment or belongs to one step's time-ordered ladder.
 pub(super) struct TimeChunk {
     /// `Prod([t, key, val])`.
     rows: CValue,
@@ -67,6 +69,24 @@ impl TimeChunk {
         }
         if kept.is_empty() { return None; }
         Some(TimeChunk::new(gather(&rows, &keep), kept))
+    }
+
+    /// A step partition's rows and lower bound. Compare lanes to find minimal row indices,
+    /// then materialize only those timestamps required for capability maintenance.
+    fn select_columns(&self, indices: &[usize]) -> Self {
+        let rows = gather(&self.rows, indices);
+        let diffs = indices.iter().map(|&i| self.diffs[i]).collect();
+        let lanes = time_lanes(&rows);
+        let le = |i: usize, j: usize| lanes.iter().all(|lane| (lane[i] as u64) <= lane[j] as u64);
+        let mut minimal = Vec::new();
+        for i in 0..indices.len() {
+            if minimal.iter().any(|&m| le(m, i)) { continue; }
+            minimal.retain(|&m| !le(i, m));
+            minimal.push(i);
+        }
+        let lower = minimal.into_iter().map(|i| Time::from_coordinates(lanes.iter().map(|lane| lane[i] as u64))).collect();
+        drop(lanes);
+        Self { rows, diffs, start: 0, lower }
     }
 
     /// The number of rows not yet released.
@@ -201,29 +221,38 @@ impl Merger for TimeMerger {
 
 /// Stages a lifted stream's updates and releases those the arrangement's frontier has unblocked.
 ///
-/// An update at `t` is unblocked once no arrangement time that precedes it in the total order can
+/// Root half joins release whole broadcast steps once the arrangement reaches their boundary.
+/// Loop half joins use lexicographic release: an update at `t` is unblocked once no arrangement
+/// time that precedes it in the total order can
 /// still arrive: the frontier's least element `b` bounds every time yet to come, so `t ≤ b` suffices
 /// when only strictly earlier times meet `t`, and `t < b` when equal ones do too. An empty frontier
 /// unblocks everything.
 ///
-/// Updates wait in a merge ladder of chains in time order, so what a frontier releases from each
-/// chain is a prefix: whole chunks from its front, and part of at most one more. Arrivals the
-/// frontier already unblocks skip the ladder. What one extraction releases is put in identifier
-/// order, ready to meet the arrangement in its order.
+/// In wider root scopes, unassigned rows wait in a merge ladder; each new boundary moves
+/// the rows it passes to that step's ladder. Arrangement progress releases a prefix of whole
+/// steps. In loops (and at width one), release is a lexicographic prefix: whole chunks and
+/// part of at most one more; already unblocked arrivals skip the ladder. Released rows are
+/// put in identifier order, ready to meet the arrangement.
 pub(crate) struct HalfJoinBatcher {
+    pub(crate) steps: Option<super::steps::SharedSteps>,
     strict: bool,
     /// The number of lanes in a time: the scope depth, plus one.
     width: usize,
     /// Arrivals not yet sorted.
     stage: Vec<CC>,
     ladder: MergeLadder<TimeMerger>,
+    /// In wider root scopes, `ladder` contains only unassigned updates. Each ladder here
+    /// contains one step, so its chains are ordered by (step, time) and released whole.
+    stepped: BTreeMap<u64, MergeLadder<TimeMerger>>,
+    /// The next broadcast boundary that the unassigned ladder has not examined.
+    next_step: u64,
     /// The minimal times among retained updates.
     lower: Antichain<Time>,
 }
 
 impl HalfJoinBatcher {
     pub(crate) fn new(strict: bool, width: usize) -> Self {
-        HalfJoinBatcher { strict, width, stage: Vec::new(), ladder: MergeLadder::new(None, 0), lower: Antichain::new() }
+        HalfJoinBatcher { steps: None, strict, width, stage: Vec::new(), ladder: MergeLadder::new(None, 0), stepped: BTreeMap::new(), next_step: 0, lower: Antichain::new() }
     }
 }
 
@@ -238,6 +267,65 @@ impl Batcher<CC> for HalfJoinBatcher {
     }
 
     fn extract<'a>(&'a mut self, frontier: AntichainRef<'_, Time>) -> (Option<Vec<Run>>, AntichainRef<'a, Time>) {
+        // Step release closes a whole boundary. Strictness is applied when pairs meet;
+        // both halves must know the complete step before comparing within it.
+        if self.steps.is_some() && self.width != 1 { return self.extract_steps(frontier); }
+        let eligible = self.steps.as_ref().and_then(|s| s.borrow().eligible(frontier));
+        if self.steps.is_some() {
+            let frontier = eligible.unwrap_or_else(|| Antichain::from_elem(Time::default()));
+            // In one lane, passing the boundary is exactly t < frontier.min(). Keep the
+            // existing prefix extraction fast path, with the SAME whole-step release rule.
+            return self.extract_lex(frontier.borrow(), false);
+        }
+        self.extract_lex(frontier, self.strict)
+    }
+}
+
+impl HalfJoinBatcher {
+    fn extract_steps<'a>(&'a mut self, frontier: AntichainRef<'_, Time>) -> (Option<Vec<Run>>, AntichainRef<'a, Time>) {
+        let steps = self.steps.as_ref().unwrap().clone();
+        let steps = steps.borrow();
+        let mut changed = false;
+        // Existing unassigned rows see each new boundary once. No arrival, broadcast, or
+        // arrangement change means no row inspection, partition, merge, or lower rebuild.
+        for (step, boundary) in steps.from(self.next_step) {
+            changed |= assign_step(&mut self.ladder, &mut self.stepped, step, boundary);
+        }
+        self.next_step = steps.next();
+
+        // Messages may arrive after their boundary. Find their FIRST retained step before
+        // adding their still-unassigned remainder to the already examined ladder.
+        if let Some(chunk) = stage_rows(std::mem::take(&mut self.stage), self.width)
+            .and_then(|(rows, diffs)| TimeChunk::form(rows, diffs)) {
+            changed = true;
+            let mut arrivals = MergeLadder::new(None, 0);
+            arrivals.insert_chain(vec![chunk]);
+            for (step, boundary) in steps.from(0) {
+                if arrivals.chains().next().is_none() { break; }
+                assign_step(&mut arrivals, &mut self.stepped, step, boundary);
+            }
+            arrivals.retain_chains(|chain| self.ladder.insert_chain(std::mem::take(chain)));
+        }
+
+        // Whole steps are a prefix of the map and of every tagged chain. Previously
+        // assigned rows never participate in a frontier membership test again.
+        let mut released = Vec::new();
+        if let Some(through) = steps.eligible_step(frontier) {
+            while self.stepped.first_key_value().is_some_and(|(&step, _)| step <= through) {
+                let (_, mut ladder) = self.stepped.pop_first().unwrap();
+                ladder.retain_chains(|chain| released.append(chain));
+                changed = true;
+            }
+        }
+        if changed {
+            self.lower = self.ladder.chains().chain(self.stepped.values().flat_map(|l| l.chains()))
+                .flatten().flat_map(|c| c.lower.iter().cloned()).collect();
+        }
+        let result = (!released.is_empty()).then(|| into_runs(released, Vec::new(), self.width));
+        (result, self.lower.borrow())
+    }
+
+    fn extract_lex<'a>(&'a mut self, frontier: AntichainRef<'_, Time>, strict: bool) -> (Option<Vec<Run>>, AntichainRef<'a, Time>) {
         let width = self.width;
         let least = frontier.iter().min();
         let bound: Option<Vec<i64>> = least.map(|b| {
@@ -247,7 +335,6 @@ impl Batcher<CC> for HalfJoinBatcher {
             lanes
         });
         let bound_col: Option<ColTimes<Time>> = least.map(|b| std::iter::once(b.clone()).collect());
-        let strict = self.strict;
 
         // Arrivals the bound already unblocks are released without entering the ladder.
         let (mut staged, mut blocked) = (Vec::new(), Vec::new());
@@ -287,6 +374,55 @@ impl Batcher<CC> for HalfJoinBatcher {
     }
 }
 
+/// Move newly assigned rows to one step's ladder. The mask is evaluated one lane at a
+/// time, with unsigned coordinates; no timestamp is materialized for membership tests.
+fn assign_step(
+    unassigned: &mut MergeLadder<TimeMerger>,
+    stepped: &mut BTreeMap<u64, MergeLadder<TimeMerger>>,
+    step: u64,
+    frontier: AntichainRef<'_, Time>,
+) -> bool {
+    let mut changed = false;
+    unassigned.retain_chains(|chain| {
+        let mut assigned = Vec::new();
+        let mut retained = Vec::new();
+        for chunk in chain.drain(..) {
+            // If the frontier dominates all minimal times, it dominates every row.
+            if chunk.lower.iter().all(|t| frontier.less_equal(t)) { retained.push(chunk); continue; }
+            let lanes = chunk.lanes();
+            let mut beyond = vec![false; chunk.len()];
+            let mut dominated = vec![true; chunk.len()];
+            for f in frontier.iter() {
+                dominated.fill(true);
+                for (lane, bound) in f.coordinates().enumerate() {
+                    if bound == 0 { continue; }
+                    match lanes.get(lane) {
+                        Some(xs) => for (d, &x) in dominated.iter_mut().zip(&xs[chunk.start..]) { *d &= bound <= x as u64; },
+                        None => dominated.fill(false),
+                    }
+                }
+                for (b, d) in beyond.iter_mut().zip(&dominated) { *b |= d; }
+            }
+            drop(lanes);
+            let (later, now): (Vec<usize>, Vec<usize>) = (chunk.start..chunk.diffs.len()).partition(|&i| beyond[i - chunk.start]);
+            if now.is_empty() { retained.push(chunk); }
+            else if later.is_empty() { assigned.push(chunk); }
+            else {
+                assigned.push(chunk.select_columns(&now));
+                retained.push(chunk.select_columns(&later));
+            }
+        }
+        *chain = retained;
+        if !assigned.is_empty() {
+            changed = true;
+            let ladder = stepped.entry(step).or_insert_with(|| MergeLadder::new(None, 0));
+            ladder.insert_chain(assigned);
+            if ladder.chains().all(|chain| chain.is_empty()) { stepped.remove(&step); }
+        }
+    });
+    changed
+}
+
 /// Released rows, from chunks and from arrivals released on arrival, as runs in identifier order.
 /// Each source is dropped once its runs are formed.
 fn into_runs(released: Vec<TimeChunk>, staged: Vec<CC>, width: usize) -> Vec<Run> {
@@ -307,6 +443,49 @@ mod tests {
     use super::super::test_util::*;
     use crate::runtime::chunk::{ident, recover_key};
     use crate::runtime::container::CorgiContainer;
+
+    /// Broadcast delivery can lead both the stream and its arrangement. Late arrivals
+    /// must join their original step, and arrangement catch-up releases only its prefix.
+    #[test]
+    fn assigns_once_and_releases_step_prefixes() {
+        use std::{cell::RefCell, rc::Rc};
+        use super::super::steps::Steps;
+        let steps = Rc::new(RefCell::new(Steps::default()));
+        let mut batcher = HalfJoinBatcher::new(false, 2);
+        batcher.steps = Some(steps.clone());
+        batcher.insert(&mut container(&[1, 2, 3], &[0; 3], &[(0, 0); 3], &[t(2, 0), t(1, 4), t(0, 5)], &[1; 3]));
+        let stalled = Antichain::from_elem(t(0, 0));
+        steps.borrow_mut().receive(&mut vec![(2, vec![t(0, 6)])]);
+        assert!(batcher.extract(stalled.borrow()).0.is_none());
+        assert!(batcher.stepped.is_empty(), "a numbering gap assigns nothing");
+        steps.borrow_mut().receive(&mut vec![(0, vec![t(0, 0)]), (1, vec![t(0, 1)])]);
+        assert!(batcher.extract(stalled.borrow()).0.is_none());
+        assert_eq!(batcher.stepped.keys().copied().collect::<Vec<_>>(), vec![1, 2]);
+        assert!(batcher.ladder.chains().next().is_none(), "every row has its step despite arrangement lag");
+        let lower = batcher.lower.clone();
+        for _ in 0..10 {
+            assert!(batcher.extract(stalled.borrow()).0.is_none());
+            assert_eq!(batcher.lower, lower);
+        }
+        batcher.insert(&mut container(&[4], &[0], &[(0, 0)], &[t(3, 0)], &[1]));
+        assert!(batcher.extract(stalled.borrow()).0.is_none());
+        let mut released = |frontier: Time| {
+            let bound = Antichain::from_elem(frontier);
+            let mut times: Vec<_> = batcher.extract(bound.borrow()).0.unwrap_or_default().iter().flat_map(|r| r.times().to_vec()).collect();
+            times.sort(); times
+        };
+        assert_eq!(released(t(0, 1)), vec![t(2, 0), t(3, 0)]);
+        assert_eq!(released(t(0, 6)), vec![t(0, 5), t(1, 4)]);
+        assert!(batcher.lower.is_empty());
+        let mut canceled = HalfJoinBatcher::new(false, 2);
+        canceled.steps = Some(steps);
+        for diff in [1, -1] {
+            canceled.insert(&mut container(&[5], &[0], &[(0, 0)], &[t(7, 0)], &[diff]));
+            assert!(canceled.extract(stalled.borrow()).0.is_none());
+        }
+        assert!(canceled.stepped.is_empty(), "canceled steps must not accumulate behind a lagging arrangement");
+        assert!(canceled.lower.is_empty());
+    }
 
     /// The batcher releases what the frontier's least element unblocks, and bounds what it keeps.
     #[test]

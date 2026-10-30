@@ -4,7 +4,8 @@
 //! and its own inputs are fed from epoch `e` on, so every time in the
 //! program, and every time an arrangement presents to a half join, is at or beyond `G`. An update
 //! at exactly `G` can then meet only arranged rows at exactly `G`, and a strict half join, which
-//! needs `t2 < t`, meets none. An update keeps its own time along a chain of half joins, so once a
+//! needs `t2 < t`, meets none. This argument holds for any linear extension of the
+//! product order, including broadcast frontier steps: no time at or beyond `G` precedes `G`. An update keeps its own time along a chain of half joins, so once a
 //! lifted stream's every path reaches a strict half join, its updates at `G` produce nothing. In
 //! a delta join that is every path but the one whose half joins are all non-strict: those paths
 //! would carry the imports' whole history only to discard it.

@@ -38,6 +38,7 @@ const BLOCK: usize = if cfg!(test) { 3 } else { 1 << 14 };
 /// projection is compiled once, at the shapes it reads, narrowed to the fields it reads, and
 /// shared by every unit of work.
 pub(crate) struct CorgiHalfJoinBackend {
+    pub(crate) steps: Option<super::steps::SharedSteps>,
     /// The number of lanes in a time as data: the scope depth, plus one.
     width: usize,
     /// The projection, narrowed to take its input projected by `reads.argument`.
@@ -60,7 +61,7 @@ impl CorgiHalfJoinBackend {
         let input = Shape::Prod(vec![k, v0, v1]);
         let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
             .unwrap_or_else(|e| panic!("half_join: narrowing a compiled projection at {input}: {e}"));
-        CorgiHalfJoinBackend { width, graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), colliding: Vec::new() }
+        CorgiHalfJoinBackend { steps: None, width, graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), colliding: Vec::new() }
     }
 }
 
@@ -115,6 +116,10 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
     type ROut = Diff;
     type Output = CC;
     type Stream = Vec<Run>;
+
+    fn compare_times(&self, a: &Time, b: &Time) -> std::cmp::Ordering {
+        self.steps.as_ref().map_or_else(|| a.cmp(b), |s| s.borrow().compare(a, b))
+    }
 
     /// The batcher releases runs already in identifier order.
     fn stage(&mut self, runs: Vec<Run>) -> Vec<Run> {
@@ -588,7 +593,7 @@ mod tests {
                 let lambda = Lambda::new(format!("let (k, v0, v1) = input in let (a, b, c, d) = v0 in let (e, f, g, h) = v1 in {body}"), &corgi::Scope::default());
                 let narrowed = CorgiHalfJoinBackend::new(&lambda, 2, shapes.clone());
                 let original = CorgiHalfJoinBackend {
-                    width: 2, graph: compile_projection(&lambda, &shapes).unwrap(),
+                    steps: None, width: 2, graph: compile_projection(&lambda, &shapes).unwrap(),
                     reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), colliding: Vec::new(),
                 };
                 let rows = |backend: CorgiHalfJoinBackend| {

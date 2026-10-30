@@ -51,7 +51,7 @@ pub(crate) trait Backend {
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Lambda, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
-    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, shapes: (st::RowShape, st::RowShape), steps: Option<crate::runtime::half_join::steps::StepStream<'s>>) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
@@ -197,7 +197,7 @@ pub(crate) fn render_tree<'s, B: Backend>(
     imports: Vec<Rendered<'s, B>>,
     shapes: &ScopeShapes,
 ) -> Vec<Collection<'s, Time, B::Container>> {
-    render_scope::<B>(s, scope, level, imports, shapes).iter().map(Rendered::collection).collect()
+    render_scope::<B>(s, scope, level, imports, shapes, None).iter().map(Rendered::collection).collect()
 }
 
 /// [`render_tree`], with each export as it was rendered: an exported arrangement stays one, so
@@ -208,6 +208,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
     level: Level,
     imports: Vec<Rendered<'s, B>>,
     shapes: &ScopeShapes,
+    steps: Option<crate::runtime::half_join::steps::StepStream<'s>>,
 ) -> Vec<Rendered<'s, B>> {
     let shape_of = |r: &st::Ref| {
         let c = shapes.of(r).expect("install refuses a program with a collection of unknown shape");
@@ -256,7 +257,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
                     st::Node::HalfJoin { stream, arrangement, strict, projection } => {
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
-                        Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement))))
+                        Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement)), steps.clone()))
                     },
                     st::Node::Reduce { input, reducer, limit } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();

@@ -46,6 +46,8 @@ where
     type Output = Bk::Output;
     type Stream = Bk::Stream;
 
+    fn compare_times(&self, left: &T, right: &T) -> std::cmp::Ordering { self.inner().compare_times(left, right) }
+
     fn stage(&mut self, chunks: Vec<C0>) -> Bk::Stream { self.inner_mut().stage(chunks) }
 
     fn advance(

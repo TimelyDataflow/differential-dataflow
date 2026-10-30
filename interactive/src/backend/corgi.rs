@@ -33,7 +33,9 @@ use crate::runtime::container::CorgiContainer;
 use crate::runtime::exchange::CorgiPact;
 use crate::runtime::half_join::{CorgiHalfJoinBackend, HalfJoinBatcher};
 use crate::runtime::join::CorgiJoinBackend;
-use differential_dogs3::operators::half_join::half_join_with_tactic;
+use differential_dogs3::operators::half_join::{half_join_with_tactic, half_join_with_tactic_and_control};
+use crate::runtime::half_join::steps::{self, StepStream, Steps};
+use differential_dataflow::trace::TraceReader;
 use crate::runtime::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{BackendFrontier, ProxyJoinTactic, ProxyReduceTactic};
 use differential_dogs3::operators::half_join::proxy::ProxyHalfJoinTactic;
@@ -356,7 +358,7 @@ impl Backend for CorgiBackend {
         join_with_tactic::<_, _, _, CC>(l.arranged, r.arranged, "Join", ProxyJoinTactic::new(backend)).as_collection()
     }
 
-    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
+    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, ((k, v0), (_, v1)): (st::RowShape, st::RowShape), steps: Option<StepStream<'s>>) -> Collection<'s, Time, CC> {
         // dogs3's driver owns progress and yielding; corgi supplies when an update is unblocked
         // (`HalfJoinBatcher`) and the data of released updates and arranged rows
         // (`CorgiHalfJoinBackend`); dogs3's proxy half-join tactic decides which pairs meet.
@@ -373,10 +375,27 @@ impl Backend for CorgiBackend {
         // one operator.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
         let Arr { arranged, since } = arrangement;
-        let backend = CorgiHalfJoinBackend::new(projection, level.width(), [k, v0.swap_remove(0), v1]);
+        let mut backend = CorgiHalfJoinBackend::new(projection, level.width(), [k, v0.swap_remove(0), v1]);
+        let history = steps.as_ref().map(|_| std::rc::Rc::new(std::cell::RefCell::new(Steps::default())));
+        backend.steps = history.clone();
         let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
-        half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level.width()), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
+        let mut batcher = HalfJoinBatcher::new(strict, level.width());
+        batcher.steps = history.clone();
+        let tactic = ProxyHalfJoinTactic::new(backend, strict);
+        if let Some(history) = history {
+            let receive = history.clone();
+            half_join_with_tactic_and_control(stream.inner, arranged, CorgiPact, yielding, batcher, tactic, steps,
+                move |data| receive.borrow_mut().receive(data),
+                move |trace, future| {
+                    let mut history = history.borrow_mut();
+                    let since = history.compaction(future);
+                    trace.set_logical_compaction(since.borrow());
+                },
+            ).as_collection()
+        } else {
+            half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, batcher, tactic).as_collection()
+        }
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
@@ -437,11 +456,14 @@ pub(crate) fn render_program<'s>(
     root: usize,
 ) -> Vec<Arranged<'s, ExportTrace>> {
     assert_eq!(s.imports.len(), imports.len());
+    // Nested scopes retain lexicographic half joins: root progress does not close loop rounds.
+    let steps = s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::HalfJoin { .. })))
+        .then(|| steps::boundary(scope, &imports));
     let imports = imports.into_iter().map(|imp| match imp {
         CorgiImport::Columns(c) => crate::backend::Rendered::Collection(c),
         CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(a),
     }).collect();
-    let rendered = crate::backend::render_scope::<CorgiBackend>(s, scope, Level::root(root), imports, shapes);
+    let rendered = crate::backend::render_scope::<CorgiBackend>(s, scope, Level::root(root), imports, shapes, steps);
     // An export that is not already an arrangement is arranged here, after its statement has
     // rendered: label those operators with the export, for diagnostics.
     let logger = scope.worker().logger_for::<crate::backend::LabelEventBuilder>("ddir/labels");
