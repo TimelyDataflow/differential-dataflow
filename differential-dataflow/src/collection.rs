@@ -1051,6 +1051,17 @@ pub mod vec {
             self.arrange_named::<Ba, Tr>("Arrange", batcher)
         }
 
+        /// Arranges with relaxed frontier interest and no channel for importing the trace.
+        pub fn arrange_intra<Ba, Tr>(self, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, crate::operators::arrange::TraceIntra<Tr>>
+        where
+            Ba: crate::batcher::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
+            Tr: crate::trace::Trace<Time=T> + 'static,
+        {
+            let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
+            let arranged = crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, "ArrangeIntra", false, batcher);
+            Arranged { stream: arranged.stream, trace: arranged.trace.into_intra() }
+        }
+
         /// As [`Collection::arrange`] but with the ability to name the operator.
         pub fn arrange_named<Ba, Tr>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
@@ -1058,7 +1069,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, name, batcher)
+            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, name, true, batcher)
         }
     }
 

@@ -130,12 +130,12 @@ mod reachability {
             let edges_arr = arrange_core::<_, _,
                 _,
                 ValSpine<Node, Node, IterTime, Diff>,
-            >(edges_inner.inner, edges_pact, "Edges", ValBatcher::new);
+            >(edges_inner.inner, edges_pact, "Edges", true, ValBatcher::new);
 
             let reach_arr = arrange_core::<_, _,
                 _,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(reach.inner, reach_pact, "Reach", ValBatcher::new);
+            >(reach.inner, reach_pact, "Reach", true, ValBatcher::new);
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
@@ -159,7 +159,7 @@ mod reachability {
             let combined_arr = arrange_core::<_, _,
                 _,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(combined.inner, combined_pact, "Combined", ValBatcher::new);
+            >(combined.inner, combined_pact, "Combined", true, ValBatcher::new);
 
             // reduce_abelian on the columnar arrangement.
             let result = combined_arr.reduce_abelian::<_,

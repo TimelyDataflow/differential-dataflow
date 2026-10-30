@@ -44,7 +44,7 @@ fn both(stream: Vec<((u64, u64, u64), u64, i64)>, arranged: Vec<((u64, u64), u64
 
             let hashed = arranged.map(|(k, v)| (k.hashed(), (k, v)));
             let arr = arrange_core::<_, Vec<((u64, (u64, u64)), u64, i64)>, _, VChunkSpine<u64, (u64, u64), u64, i64>>(
-                hashed.inner, Exchange::new(|((h, _), _, _): &((u64, _), _, _)| *h), "Arrange", VChunkBatcher::new);
+                hashed.inner, Exchange::new(|((h, _), _, _): &((u64, _), _, _)| *h), "Arrange", true, VChunkBatcher::new);
             let backend = VecHalfJoinBackend::with_window(|k: &u64, v: &u64, v2: &u64| (*k, *v, *v2), window);
             let pact = Exchange::new(|((k, _, _), _, _): &((u64, u64, u64), u64, i64)| k.hashed());
             half_join_with_tactic(stream.inner, arr, pact, frontier_func, |_, _| false, BlobList::new(strict), ProxyHalfJoinTactic::new(backend, strict))

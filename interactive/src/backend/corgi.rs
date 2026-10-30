@@ -331,7 +331,7 @@ impl Backend for CorgiBackend {
         Arr::built(arrange_core::<_, CC, _, CTrace>(
             c.inner,
             CorgiPact,
-            "CorgiArrange",
+            "CorgiArrange", true,
             ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new,
         ))
     }
@@ -385,7 +385,7 @@ impl Backend for CorgiBackend {
         // As for the join, the wrapper at the minimum is one comparison per unit.
         let Arr { arranged, since } = a;
         let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
-        Arr::built(reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(backend).with_key_batch_size(256)))
+        Arr::built(reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", true, ProxyReduceTactic::new(backend).with_key_batch_size(256)))
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
