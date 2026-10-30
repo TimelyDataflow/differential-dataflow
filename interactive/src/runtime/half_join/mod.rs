@@ -10,8 +10,8 @@
 //! `lift` writes it, and `t` the update's own time. It meets each arranged row `(key, v1)` at time
 //! `t2` with `t2 < t` in the total order on times (`≤` unless strict), giving
 //! `(key', (val', s ∨ t2))` at time `t` with the product of the diffs, where `(key', val')` is the
-//! projection over `(key, val, v1)`. The total order is the lexicographic order of the time lanes,
-//! which is DD's `Ord` on these times.
+//! projection over `(key, val, v1)`. Root half joins compare broadcast step, then lexicographic
+//! time; nested half joins use DD's lexicographic `Ord` on these times.
 //!
 //! The batcher keeps arrivals in time order and releases them as runs in identifier order; the
 //! backend reads a unit's runs by identifier a block at a time. A [`Run`] is what passes between
@@ -156,3 +156,5 @@ mod test_util {
         rows
     }
 }
+
+pub(crate) mod steps;

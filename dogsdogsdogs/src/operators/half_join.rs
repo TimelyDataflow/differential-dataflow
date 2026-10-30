@@ -23,8 +23,7 @@ use timely::{Container, ContainerBuilder};
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
-use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::generic::OutputBuilderSession;
+use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 
@@ -67,12 +66,12 @@ pub trait HalfJoinTactic<T, B, C0, C1> {
 /// A likely implementation is an exchange by a hash of a common key.
 pub fn half_join_with_tactic<'scope, Tr, FF, P, Y, Bat, Tac, CIn, CMid, C>(
     stream: Stream<'scope, Tr::Time, CIn>,
-    mut arrangement: Arranged<'scope, Tr>,
+    arrangement: Arranged<'scope, Tr>,
     pact: P,
     frontier_func: FF,
     yield_function: Y,
-    mut batcher: Bat,
-    mut tactic: Tac,
+    batcher: Bat,
+    tactic: Tac,
 ) -> Stream<'scope, Tr::Time, C>
 where
     Tr: TraceReader + Clone + 'static,
@@ -84,13 +83,61 @@ where
     CIn: Container,
     C: Container + 'static,
 {
+    half_join_with_tactic_and_control(
+        stream, arrangement, pact, yield_function, batcher, tactic,
+        None::<Stream<'scope, Tr::Time, Vec<()>>>, |_| {},
+        move |trace, frontier| {
+            let mut compact = Antichain::new();
+            for time in frontier.iter() { frontier_func(time, &mut compact); }
+            trace.set_logical_compaction(compact.borrow());
+        },
+    )
+}
+
+/// A half join with an optional progress-independent control stream.
+///
+/// `receive` runs before extraction. `compact` receives the lower frontier of all future,
+/// staged, and deferred stream updates and sets the trace's compaction policy. Shared state
+/// can coordinate these callbacks with the batcher and tactic. Control messages cannot mint
+/// output capabilities; the streamed updates supply every output capability.
+pub fn half_join_with_tactic_and_control<'scope, Tr, P, Y, Bat, Tac, CIn, CMid, C, D, R, F>(
+    stream: Stream<'scope, Tr::Time, CIn>,
+    mut arrangement: Arranged<'scope, Tr>,
+    pact: P,
+    yield_function: Y,
+    mut batcher: Bat,
+    mut tactic: Tac,
+    control: Option<Stream<'scope, Tr::Time, Vec<D>>>,
+    mut receive: R,
+    mut compact: F,
+) -> Stream<'scope, Tr::Time, C>
+where
+    Tr: TraceReader + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, CIn>,
+    Y: Fn(std::time::Instant, usize) -> bool + 'static,
+    Bat: Batcher<CIn, Time = Tr::Time, Output = Vec<CMid>> + 'static,
+    Tac: HalfJoinTactic<Tr::Time, Tr::Batch, CMid, C> + 'static,
+    CIn: Container,
+    C: Container + 'static,
+    D: Clone + 'static,
+    R: FnMut(&mut Vec<D>) + 'static,
+    F: FnMut(&mut Tr, AntichainRef<'_, Tr::Time>) + 'static,
+{
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
     let mut arrangement_trace = Some(arrangement.trace);
     let arrangement_stream = arrangement.stream;
 
     let scope = stream.scope();
-    stream.binary_frontier(arrangement_stream, pact, Pipeline, "HalfJoin", move |_, info| {
+    let mut builder = OperatorBuilder::new("HalfJoin".into(), scope);
+    let mut input1 = builder.new_input(stream, pact);
+    let mut input2 = builder.new_input(arrangement_stream, Pipeline);
+    let (output, result) = builder.new_output();
+    let mut output = OutputBuilder::<_, NoopBuilder<C>>::from(output);
+    // No control-to-output path: its minimum-time messages must not pin data progress.
+    let mut control = control.map(|s| builder.new_input_connection(s, Pipeline, []));
+    let info = builder.operator_info();
+    builder.build(move |_| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = scope.activator_for(info.address);
@@ -103,10 +150,10 @@ where
         // tactic, yields output containers, shipped stamped with all of the paired capabilities.
         let mut todo: VecDeque<(CapabilitySet<Tr::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
-        move |(input1, frontier1), (input2, frontier2), output| {
-
-            // The driver ships only finished containers, so it pins the operator output to `NoopBuilder<C>`.
-            let output: &mut OutputBuilderSession<'_, Tr::Time, NoopBuilder<C>> = output;
+        move |frontiers| {
+            let (frontier1, frontier2) = (&frontiers[0], &frontiers[1]);
+            let mut output = output.activate();
+            if let Some(control) = &mut control { control.for_each(|_, data| receive(data)); }
 
             // Stage all arriving updates, retaining capabilities that cover them.
             input1.for_each(|capability, data| {
@@ -154,15 +201,16 @@ where
             // The logical merging frontier depends on input1, on staged updates, and on the
             // deferred work that has already been released to the tactic.
             let mut frontier = Antichain::new();
-            for time in frontier1.frontier().iter() { frontier_func(time, &mut frontier); }
-            for cap in caps.iter() { frontier_func(cap.time(), &mut frontier); }
-            for (caps, _) in todo.iter() { for cap in caps.iter() { frontier_func(cap.time(), &mut frontier); } }
-            arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
+            for time in frontier1.frontier().iter() { frontier.insert(time.clone()); }
+            for cap in caps.iter() { frontier.insert(cap.time().clone()); }
+            for (caps, _) in todo.iter() { for cap in caps.iter() { frontier.insert(cap.time().clone()); } }
+            if let Some(trace) = arrangement_trace.as_mut() { compact(trace, frontier.borrow()); }
 
             // If no updates incoming, no updates held in `batcher`, and no work in `todo`, we can drop the trace.
             if frontier1.is_empty() && caps.is_empty() && todo.is_empty() { arrangement_trace = None; }
         }
-    })
+    });
+    result
 }
 
 /// The proxy half-join tactic and backend trait, built over differential's `int_proxy` surface.

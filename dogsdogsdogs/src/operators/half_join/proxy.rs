@@ -27,8 +27,9 @@
 //!
 //! # Times
 //!
-//! The comparison is in the total order `Ord` on `T`, which [`Timestamp`] promises is a linear
-//! extension of the partial order. Any linear extension serves, so long as every half join of one
+//! The comparison defaults to `Ord` on `T`, which [`Timestamp`] promises is a linear
+//! extension of the partial order. A backend can supply a different linear extension through
+//! [`ProxyHalfJoinBackend::compare_times`], coordinated with its batcher's release policy. Any linear extension serves, so long as every half join of one
 //! delta query uses the same one; `TotalOrder` (the partial order being total) is not required,
 //! and product times are welcome. Output data times use the lattice join; nothing here needs the
 //! lattice to be distributive.
@@ -88,6 +89,10 @@ pub trait ProxyHalfJoinBackend<T, B, C0> {
     type Output;
     /// The released updates of one unit, in the form the backend reads them a block at a time.
     type Stream;
+
+    /// Total order used to match times. It must agree with the batcher's release policy,
+    /// extend the partial order, and remain consistent for all outstanding work.
+    fn compare_times(&self, left: &T, right: &T) -> Ordering where T: Ord { left.cmp(right) }
 
     /// Put one unit's released containers in the form `advance` reads: sorted by key, say.
     fn stage(&mut self, chunks: Vec<C0>) -> Self::Stream;
@@ -313,6 +318,7 @@ where
     /// Match the whole of the current block into the match buffers.
     fn work(&mut self) {
         let (stream, arranged) = (&self.stream, &self.arranged);
+        let backend = self.backend.borrow();
         let (mut i, mut j) = (0usize, 0usize);
         while i < stream.len() && j < arranged.len() {
             let (ki, kj) = (stream[i].0.0, arranged[j].0.0);
@@ -325,7 +331,7 @@ where
                     while e0 < stream.len() && stream[e0].0.0 == ki { e0 += 1; }
                     let mut e1 = j;
                     while e1 < arranged.len() && arranged[e1].0.0 == ki { e1 += 1; }
-                    half_join_key(stream, i..e0, arranged, j..e1, self.strict, &mut self.order, &mut self.matches);
+                    half_join_key(stream, i..e0, arranged, j..e1, self.strict, &mut self.order, &mut self.matches, |a, b| backend.compare_times(a, b));
                     i = e0;
                     j = e1;
                 }
@@ -345,8 +351,8 @@ where
 /// Whether an arranged time precedes an update's own, in the total order: strictly, or also when
 /// equal unless `strict`.
 #[inline]
-fn precedes<T: Ord>(arranged: &T, time: &T, strict: bool) -> bool {
-    match arranged.cmp(time) {
+fn precedes(order: Ordering, strict: bool) -> bool {
+    match order {
         Ordering::Less => true,
         Ordering::Equal => !strict,
         Ordering::Greater => false,
@@ -373,6 +379,7 @@ fn half_join_key<T, R0, R1, RO, K: Copy + Ord, V0: Copy + Ord, V1: Copy + Ord>(
     strict: bool,
     order: &mut TimeOrder,
     matches: &mut HalfJoinMatches<RO>,
+    compare: impl Fn(&T, &T) -> Ordering,
 ) where
     T: Lattice + Timestamp,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
@@ -385,7 +392,7 @@ fn half_join_key<T, R0, R1, RO, K: Copy + Ord, V0: Copy + Ord, V1: Copy + Ord>(
     if r0.len() < 16 || r1.len() < 16 {
         for a in r0 {
             for b in r1.clone() {
-                if precedes(&arranged[b].1, &stream[a].1.time, strict) { emit(a, b); }
+                if precedes(compare(&arranged[b].1, &stream[a].1.time), strict) { emit(a, b); }
             }
         }
     }
@@ -393,13 +400,13 @@ fn half_join_key<T, R0, R1, RO, K: Copy + Ord, V0: Copy + Ord, V1: Copy + Ord>(
         let TimeOrder { stream: order0, arranged: order1 } = order;
         order0.clear();
         order0.extend(r0);
-        order0.sort_unstable_by(|&a, &b| stream[a].1.time.cmp(&stream[b].1.time));
+        order0.sort_unstable_by(|&a, &b| compare(&stream[a].1.time, &stream[b].1.time));
         order1.clear();
         order1.extend(r1);
-        order1.sort_unstable_by(|&a, &b| arranged[a].1.cmp(&arranged[b].1));
+        order1.sort_unstable_by(|&a, &b| compare(&arranged[a].1, &arranged[b].1));
         let mut prefix = 0;
         for &a in order0.iter() {
-            while prefix < order1.len() && precedes(&arranged[order1[prefix]].1, &stream[a].1.time, strict) { prefix += 1; }
+            while prefix < order1.len() && precedes(compare(&arranged[order1[prefix]].1, &stream[a].1.time), strict) { prefix += 1; }
             for &b in &order1[..prefix] { emit(a, b); }
         }
     }
