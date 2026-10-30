@@ -90,11 +90,17 @@ impl Part<'_> {
             let mut order: Vec<(i64, usize)> = (lo..hi).map(|i| (ids[i], i)).collect();
             order.sort_unstable_by_key(|&(id, _)| id);
             let rows: Vec<usize> = order.into_iter().map(|(_, i)| i).collect();
-            let lanes = (0..width).map(|k| rows.iter().map(|&i| self.times.at(k, i)).collect()).collect();
+            let times = match &self.times {
+                PartTimes::Col(times) => times.gather(&rows),
+                PartTimes::Lanes(_) => {
+                    let lanes = (0..width).map(|k| rows.iter().map(|&i| self.times.at(k, i)).collect()).collect();
+                    ColTimes::from_raw_lanes(lanes, rows.len())
+                }
+            };
             out.push(Run {
                 keys: gather(&keys, &rows),
                 vals: gather(self.vals, &rows),
-                times: ColTimes::from_raw_lanes(lanes, rows.len()),
+                times,
                 diffs: rows.iter().map(|&i| self.diffs[i]).collect(),
             });
         }
@@ -112,7 +118,7 @@ impl PartTimes<'_> {
     fn at(&self, k: usize, i: usize) -> u64 {
         match self {
             PartTimes::Lanes(lanes) => lanes.get(k).map_or(0, |lane| lane[i] as u64),
-            PartTimes::Col(times) => times.raw_lanes().get(k).map_or(0, |lane| lane[i]),
+            PartTimes::Col(times) => times.at(k, i),
         }
     }
 }

@@ -368,11 +368,18 @@ pub(super) struct SideScratch<T> {
     tds: Vec<(T, Diff)>,
     /// Cross-chunk value-merge heads, reused across keys.
     heads: Vec<(usize, usize)>,
+    /// One joined constant time per chunk for this block, shared across its key ranges.
+    constant_times: Vec<Option<(CorgiChunk<T, Diff>, T)>>,
+    lower: Option<T>,
 }
 
 impl<T: ColTime> SideScratch<T> {
     pub(super) fn new() -> Self {
-        SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new() }
+        SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new(), constant_times: Vec::new(), lower: None }
+    }
+
+    fn constant_time(&self, run: &RunRef<'_, T>) -> Option<T> {
+        if run.chunk.times().is_constant() { self.constant_times[run.cid].as_ref().map(|(_, t)| t.clone()) } else { None }
     }
 
     fn push(&mut self, coord: u64, time: T, diff: Diff) {
@@ -388,11 +395,22 @@ impl<T: ColTime> SideScratch<T> {
     /// Entries end sorted by `(token, time)`.
     pub(super) fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
         self.entries.clear();
+        if self.lower.as_ref() != Some(lower) {
+            self.constant_times.clear();
+            self.lower = Some(lower.clone());
+        }
+        for run in runs.iter().filter(|r| r.chunk.times().is_constant()) {
+            if self.constant_times.len() <= run.cid { self.constant_times.resize_with(run.cid + 1, || None); }
+            let slot = &mut self.constant_times[run.cid];
+            if slot.as_ref().is_none_or(|(chunk, _)| !chunk.same_storage(run.chunk)) {
+                *slot = Some((run.chunk.clone(), run.chunk.times().get_joined(0, lower)));
+            }
+        }
         if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
             for run in runs {
+                let cached = self.constant_time(run);
                 let ids = int_lane(run.chunk.vals()).unwrap();
-                self.entries.extend((run.s..run.e).map(|row| {
-                    let time = run.chunk.times().get_joined(row, lower);
+                self.entries.extend((run.s..run.e).zip(run.chunk.times().joined_range(run.s..run.e, lower, cached)).map(|(row, time)| {
                     (ids[row] as u64, time, run.chunk.diffs()[row])
                 }));
             }
@@ -405,11 +423,11 @@ impl<T: ColTime> SideScratch<T> {
             // so adjacent consolidation suffices only if advanced times stay ordered.
             let coord_hi = (run.cid as u64) << COORD_BITS;
             let mut v_start = run.s;
-            for row in run.s..run.e {
+            let cached = self.constant_time(run);
+            for (row, time) in (run.s..run.e).zip(run.chunk.times().joined_range(run.s..run.e, lower, cached)) {
                 if row > v_start && !run.val_eq(row, run, v_start) {
                     v_start = row;
                 }
-                let time = run.chunk.times().get_joined(row, lower);
                 self.push(coord_hi | v_start as u64, time, run.chunk.diffs()[row]);
             }
             if self.entries.windows(2).any(|w| w[0].0 == w[1].0 && w[0].1 > w[1].1) {
@@ -439,8 +457,8 @@ impl<T: ColTime> SideScratch<T> {
                     let run = &runs[ri];
                     if run.val_eq(row, &runs[ri_min], row_min) {
                         let r_end = run.val_run_end(row);
-                        for r in row..r_end {
-                            let time = run.chunk.times().get_joined(r, lower);
+                        let cached = self.constant_time(run);
+                        for (r, time) in (row..r_end).zip(run.chunk.times().joined_range(row..r_end, lower, cached)) {
                             self.tds.push((time, run.chunk.diffs()[r]));
                         }
                         coord = coord.min(((run.cid as u64) << COORD_BITS) | row as u64);

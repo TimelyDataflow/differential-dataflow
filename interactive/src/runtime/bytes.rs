@@ -11,7 +11,7 @@
 //!   run of its stored bytes. A batch of a million `(u64, u64)` keys is two headers and two 8 MB
 //!   writes — no per-row framing, no per-row dispatch.
 //! * `times` are a lane column ([`ColTimes`](crate::runtime::col_times::ColTimes)): the section is
-//!   its lane count, its row count, and then each lane's words in turn.
+//!   its lane count and row count, with a tagged constant/dictionary form when compressed.
 //! * `diffs` go through `columnar`'s [`Stash`], the same encoder DD's own columnar updates use.
 //!
 //! Every section is a whole number of 64-bit words, so each begins 8-aligned in an 8-aligned
@@ -40,25 +40,44 @@ use crate::runtime::container::CorgiContainer;
 /// A columnar column of `T` backed either by an owned container or by received bytes.
 type ColStash<T> = Stash<<T as Columnar>::Container, Bytes>;
 
-/// The time section's size: `u64 lanes | u64 rows | lanes * rows` words.
+/// Dense sections retain the original format. Dictionary sections have:
+/// `tagged_width | rows | entries | coordinate_lanes | byte_indices | padding`.
+/// A constant has one entry and no row indices.
+const DICT_TAG: u64 = 1 << 62;
 fn times_len<T>(times: &ColTimes<T>) -> usize {
-    16 + 8 * times.raw_lanes().len() * times.len()
-}
-
-fn write_times<T, W: std::io::Write>(times: &ColTimes<T>, writer: &mut W) {
-    writer.write_all(&(times.raw_lanes().len() as u64).to_le_bytes()).unwrap();
-    writer.write_all(&(times.len() as u64).to_le_bytes()).unwrap();
-    for lane in times.raw_lanes() {
-        for x in lane { writer.write_all(&x.to_le_bytes()).unwrap(); }
+    match times.dictionary() {
+        Some((entries, ids)) => 24 + 8 * entries * times.width() + (ids.len() + 7) / 8 * 8,
+        None => 16 + 8 * times.width() * times.len(),
     }
 }
-
+fn write_times<T, W: std::io::Write>(times: &ColTimes<T>, writer: &mut W) {
+    let dict = times.dictionary();
+    writer.write_all(&(times.width() as u64 | if dict.is_some() { DICT_TAG } else { 0 }).to_le_bytes()).unwrap();
+    writer.write_all(&(times.len() as u64).to_le_bytes()).unwrap();
+    if let Some((entries, _)) = dict { writer.write_all(&(entries as u64).to_le_bytes()).unwrap(); }
+    for lane in times.stored_lanes() { for x in lane { writer.write_all(&x.to_le_bytes()).unwrap(); } }
+    if let Some((_, ids)) = dict {
+        writer.write_all(ids).unwrap();
+        writer.write_all(&[0; 7][..(8 - ids.len() % 8) % 8]).unwrap();
+    }
+}
 fn read_times<T>(bytes: &[u8]) -> ColTimes<T> {
-    let (width, rows) = (header_word(bytes, 0), header_word(bytes, 1));
-    assert_eq!(bytes.len(), 16 + 8 * width * rows, "time section: {} bytes for {width} lanes of {rows} rows", bytes.len());
-    let words: Vec<u64> = bytes[16..].chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
-    let lanes = if rows == 0 { vec![Vec::new(); width] } else { words.chunks_exact(rows).map(<[u64]>::to_vec).collect() };
-    ColTimes::from_raw_lanes(lanes, rows)
+    let tagged = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let width = (tagged & !DICT_TAG) as usize;
+    let rows = header_word(bytes, 1);
+    let dictionary = tagged & DICT_TAG != 0;
+    let (entries, offset) = if dictionary { (header_word(bytes, 2), 24) } else { (rows, 16) };
+    let lane_bytes = width.checked_mul(entries).unwrap().checked_mul(8).unwrap();
+    let ids_bytes = if dictionary && entries > 1 { rows } else { 0 };
+    let index_start = offset + lane_bytes;
+    assert_eq!(bytes.len(), index_start + (ids_bytes + 7) / 8 * 8, "time section length");
+    let words: Vec<u64> = bytes[offset..index_start].chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+    let lanes = if entries == 0 { vec![Vec::new(); width] } else { words.chunks_exact(entries).map(<[u64]>::to_vec).collect() };
+    if dictionary {
+        ColTimes::from_dictionary(lanes, entries, bytes[index_start..index_start + ids_bytes].to_vec(), rows)
+    } else {
+        ColTimes::from_raw_lanes(lanes, rows)
+    }
 }
 
 /// Read a `u64` length word out of the framing header.
@@ -93,16 +112,8 @@ impl<T, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
         // The four columns are one table, so they must agree on how many rows it has. Checking
         // that here is not ceremony — it is the only layer that knows the answer.
         //
-        // `corgi::bytes` guarantees a structurally sound `Value`, but not a *small* one: the
-        // payload-free constructors declare rows without spending bytes, so a `Unit` can name a
-        // trillion rows in sixteen bytes and nothing inside corgi can call that wrong. The time
-        // column can. It is stored per row, so its length is the row count this message actually
-        // paid for, and every other column has to match it.
-        //
-        // What this does not reach is a claim nested *under a `List`*, where flattening
-        // legitimately multiplies and the row count no longer bounds the element count. That is
-        // the sender's honesty, which is the boundary a cluster-internal exchange accepts anyway;
-        // a caller that wants a hard ceiling has `corgi::bytes::declared_rows`.
+        // Counts in all four sections must agree. Dictionary times can describe many rows in
+        // little space; diffs are still dense here. This is a cluster-internal format.
         let rows = container.times.len();
         assert_eq!(container.diffs.len(), rows, "corgi container: {} diffs for {rows} times", container.diffs.len());
         assert_eq!(container.keys.len(), rows, "corgi container: {} keys for {rows} times", container.keys.len());
@@ -213,6 +224,59 @@ mod test {
     fn container_of(name: &str, updates: Vec<Update>) -> CorgiContainer<Time, Diff> {
         let (k, v) = shapes_of(name);
         CorgiContainer::from_updates(updates, &k, &v)
+    }
+
+    #[test]
+    fn dictionary_times_wire_and_legacy_dense() {
+        let updates = (0..1000).map(|i| ((i.to_string(), "1".into()), time(2, &[3]), 1)).collect();
+        let c = container_of("scalars", updates);
+        assert_eq!(super::times_len(&c.times), 40);
+        assert_eq!(round_trip(&c).times.to_vec(), c.times.to_vec());
+        let mut legacy = Vec::new();
+        for word in [1u64, 3, 7, 7, 9] { legacy.extend_from_slice(&word.to_le_bytes()); }
+        assert_eq!(super::read_times::<u64>(&legacy).to_vec(), vec![7, 7, 9]);
+        let dense: crate::runtime::col_times::ColTimes<u64> = (0..1000).collect();
+        let mut bytes = Vec::new();
+        super::write_times(&dense, &mut bytes);
+        assert_eq!(bytes.len(), super::times_len(&dense));
+        assert_eq!(super::read_times::<u64>(&bytes).to_vec(), dense.to_vec());
+    }
+
+    #[test]
+    fn extract_advance_settle_round_trip() {
+        use std::collections::VecDeque;
+        use differential_dataflow::trace::chunk::Chunk;
+        use timely::progress::Antichain;
+        use crate::runtime::chunk::CorgiChunk;
+
+        let chunk = |keys: std::ops::Range<i64>, times: Vec<u64>| {
+            let len = times.len();
+            CorgiChunk::from_columns(
+                corgi::Value::i64(keys.collect()),
+                corgi::Value::Unit(len), times.into_iter().map(|t| time(t, &[])).collect(), vec![1; len],
+            )
+        };
+        let mut input = VecDeque::from([chunk(10..21, vec![1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 5])]);
+        let frontier = Antichain::from_elem(time(3, &[]));
+        let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+        CorgiChunk::extract(&mut input, frontier.borrow(), &mut Antichain::new(), &mut keep, &mut ship);
+        assert!(input.is_empty());
+        assert_eq!(keep[0].times().to_vec(), vec![time(5, &[])]);
+        let mut advanced = VecDeque::new();
+        CorgiChunk::advance(&mut ship, frontier.borrow(), true, &mut advanced);
+        assert!(ship.is_empty());
+        advanced.push_front(chunk(0..10, vec![3; 10]));
+        let mut settled = VecDeque::new();
+        CorgiChunk::settle(&mut advanced, true, &mut settled);
+        assert!(advanced.is_empty());
+        assert_eq!(settled.len(), 1);
+        let c = settled.pop_front().unwrap();
+        let back = round_trip(&CorgiContainer {
+            keys: c.keys().clone(), vals: c.vals().clone(),
+            times: c.times().clone(), diffs: c.diffs().to_vec(),
+        });
+        let expected: Vec<_> = (0..20).map(|k| ((k.to_string(), "tuple()".into()), time(3, &[]), 1)).collect();
+        assert_eq!(back.into_updates(), expected);
     }
 
     /// Every update survives the round trip, with its time and diff, for every shape family.
