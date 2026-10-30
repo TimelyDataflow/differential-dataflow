@@ -13,6 +13,8 @@
 //! computing them:
 //! - `workers`: two to five workers, against one.
 //! - `scratch`: the accumulated input evaluated in one go, against the incremental run.
+//! - `multitemporal`: widths two and three at every point of a small grid, against width one
+//!   on the inputs accumulated in the product order. Skips programs that observe or change time.
 //! - `optimize`: the program unoptimized, installed with every pass switched off.
 //! - `subset`: the lowered program installed with a reproducible random pass subset.
 //! - `subset-asof`: the delta form installed over compacted history, with all versus random passes.
@@ -47,6 +49,8 @@
 //!   derive from it; `DIFFTEST_CASE_FILE=<file>` checks a case as a failure prints it, edited by
 //!   hand if you like (the derived programs aside).
 //! - `DIFFTEST_PASSES=none,projection` overrides the seed-derived subset for replay.
+//! - `DIFFTEST_MT_WORKERS=2` runs `multitemporal` with two workers (default one); both its
+//!   wide install and fresh width-one references use the seed-derived pass subset.
 //! - `DIFFTEST_SECONDS=10800` bounds a sweep between cases; `DIFFTEST_MINIMIZE=0` saves
 //!   original failures for later minimization. Each case logs its subset and outcome.
 //! - A case that makes no progress for two minutes stops the sweep, naming its seed.
@@ -57,7 +61,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use interactive::passes::Config;
 use interactive::scope_ir::Program;
-use interactive::server::{self, Server};
+use interactive::server::{self, HostTime, Server};
 use interactive::{explain, lower, parse};
 
 // ===== Random source =====
@@ -1029,6 +1033,165 @@ fn scratch(p: &Program, case: &Case) -> Result<Vec<Exports>, String> {
     Ok(seen)
 }
 
+/// Inspect the unoptimized tree, including dead code and nested scopes. Exhaustive matches make
+/// adding an IR operator require deciding whether it obeys snapshot reducibility.
+fn multitemporal_skip(scope: &interactive::scope_ir::Scope) -> Option<&'static str> {
+    use interactive::ir::LinearOp;
+    use interactive::scope_ir::{Item, Node, Source};
+    for import in &scope.imports {
+        match &import.from {
+            Source::Trace(_) => return Some("external trace (including clock), not supplied by the case"),
+            Source::Input(_) | Source::Parent(_) => {}
+        }
+    }
+    for item in &scope.items {
+        let reason = match item {
+            Item::Sub(child) => multitemporal_skip(child),
+            Item::Op(node) => match node {
+                Node::Linear { ops, .. } => ops.iter().find_map(|op| match op {
+                    LinearOp::Lift => Some("time-reading lift"),
+                    LinearOp::LiftIter => Some("time-reading lift_iter"),
+                    LinearOp::JoinFunction(_) => Some("time-writing delay/join_function"),
+                    LinearOp::Project(_) | LinearOp::Filter(_) | LinearOp::Negate | LinearOp::FlatMap(_) => None,
+                }),
+                Node::HalfJoin { .. } => Some("time-reading half_join"),
+                Node::Inspect { .. } => Some("inspect prints update times"),
+                Node::Concat(_) | Node::Arrange(_) | Node::Join { .. } | Node::Reduce { .. } => None,
+            },
+        };
+        if reason.is_some() { return reason; }
+    }
+    None
+}
+
+/// Assign every original update a point in [0, 3)^width. Match retractions to live insertions
+/// (splitting multiplicities when necessary) and put them strictly later in the product order,
+/// so every down-set has nonnegative input counts, as the generator's original epochs do.
+fn multitemporal_feeds(case: &Case, width: usize) -> Result<BTreeMap<(usize, Vec<u64>), Vec<String>>, String> {
+    let mut rng = Rng(case.seed ^ 0x6d75_6c74_6974_696d ^ width as u64);
+    let mut live: BTreeMap<(usize, String), Vec<(Vec<u64>, i64)>> = BTreeMap::new();
+    let mut feeds: BTreeMap<(usize, Vec<u64>), Vec<String>> = BTreeMap::new();
+    for epoch in &case.epochs {
+        for (&input, lines) in epoch {
+            for line in lines {
+                let (row, diff) = line.rsplit_once(" diff=").unwrap_or((line, "1"));
+                let diff: i64 = diff.parse().map_err(|e| format!("bad feed diff: {e}"))?;
+                let copies = live.entry((input, row.to_string())).or_default();
+                if diff > 0 {
+                    // Leave room for a strictly later retraction in at least one coordinate.
+                    let point: Vec<u64> = (0..width).map(|_| rng.below(2) as u64).collect();
+                    copies.push((point.clone(), diff));
+                    feeds.entry((input, point)).or_default().push(format!("{row} diff={diff}"));
+                } else if diff < 0 {
+                    let mut remaining = diff.checked_neg().ok_or("feed diff overflows")?;
+                    while remaining > 0 {
+                        let (inserted, count) = copies.last_mut().ok_or("retraction without a preceding insertion")?;
+                        let take = remaining.min(*count);
+                        let mut point: Vec<u64> = inserted.iter().map(|&x| x + rng.below(3 - x as usize) as u64).collect();
+                        if point == *inserted { point[rng.below(width)] += 1; }
+                        feeds.entry((input, point)).or_default().push(format!("{row} diff={}", -take));
+                        remaining -= take;
+                        *count -= take;
+                        if *count == 0 { copies.pop(); }
+                    }
+                }
+            }
+        }
+    }
+    Ok(feeds)
+}
+
+/// Compare each newly closed grid point with a fresh width-one install, fed once and ticked.
+/// Only input capabilities advance: bulk program advances would compact away early points.
+fn multitemporal(case: &Case, p: &Program) -> Result<(), String> {
+    use timely::PartialOrder;
+    let workers = multitemporal_workers();
+    for width in [2, 3] {
+        let feeds = multitemporal_feeds(case, width)?;
+        let p = p.clone();
+        let passes = subset(case.seed);
+        let seed = case.seed;
+        let guards = timely::execute(timely::Config::process(workers), move |worker| -> Result<(), String> {
+            let at = |coords: &[u64]| HostTime::new(coords.iter().copied().collect());
+            let inputs: Vec<usize> = p.root.imports.iter().filter_map(|i| match i.from {
+                interactive::scope_ir::Source::Input(n) => Some(n), _ => None,
+            }).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let mut server = Server::new();
+            server.set_passes(passes);
+            server.install_with_root(worker, "p", &p, width, at(&vec![0; width]))?;
+            if worker.index() == 0 {
+                for ((input, point), lines) in &feeds { server.feed_at("p", *input, &lines.join("\n"), &at(point))?; }
+            }
+            let points: Vec<Vec<u64>> = (0..3usize.pow(width as u32)).map(|mut n| {
+                (0..width).map(|_| { let x = (n % 3) as u64; n /= 3; x }).collect()
+            }).collect();
+            let mut checked = vec![false; points.len()];
+            let mut frontiers = vec![vec![0; width]; inputs.len()];
+            let mut advances: Vec<(usize, usize)> = (0..inputs.len()).flat_map(|i| (0..width).map(move |d| (i, d))).collect();
+            let mut rng = Rng(seed ^ 0x0061_6476_616e_6365 ^ width as u64);
+            let mut mismatch = None;
+            loop {
+                if !advances.is_empty() {
+                    // Randomly interleave independent, monotone per-input coordinate advances.
+                    let which = rng.below(advances.len());
+                    let (input, lane) = advances[which];
+                    frontiers[input][lane] += 1;
+                    server.advance_input("p", inputs[input], &at(&frontiers[input]))?;
+                    if frontiers[input][lane] == 3 { advances.swap_remove(which); }
+                }
+                for (i, point) in points.iter().enumerate() {
+                    if checked[i] || frontiers.iter().any(|f| at(f).less_equal(&at(point))) { continue; }
+                    checked[i] = true;
+                    tick();
+                    let mut reference = Server::new();
+                    reference.set_passes(passes);
+                    reference.install(worker, "reference", &p)?;
+                    if worker.index() == 0 {
+                        // Sum multiplicities explicitly, independently of the wide runtime.
+                        let mut accumulated: BTreeMap<(usize, &str), i64> = BTreeMap::new();
+                        for ((input, time), lines) in &feeds {
+                            if !time.iter().zip(point).all(|(t, p)| t <= p) { continue; }
+                            for line in lines {
+                                let (row, diff) = line.rsplit_once(" diff=").unwrap();
+                                *accumulated.entry((*input, row)).or_default() += diff.parse::<i64>().unwrap();
+                            }
+                        }
+                        for ((input, row), diff) in accumulated {
+                            if diff != 0 { reference.feed("reference", input, &format!("{row} diff={diff}"), None)?; }
+                        }
+                    }
+                    reference.tick(worker);
+                    for export in &p.root.exports {
+                        let context = |e| format!("point {point:?}, export {:?}: {e}", export.name);
+                        let got = sorted(server.snapshot_as_of(worker, &export.name, &at(point)).map_err(context)?.rows());
+                        let want = sorted(reference.snapshot(worker, &export.name).map_err(context)?.rows());
+                        if worker.index() == 0 && got != want && mismatch.is_none() {
+                            mismatch = Some(format!("width {width}, point {point:?}, export {:?}, workers {workers}\nwide: {got:?}\nwidth one: {want:?}", export.name));
+                        }
+                    }
+                    reference.drop_program(worker, "reference")?;
+                }
+                if advances.is_empty() { break; }
+            }
+            assert!(checked.iter().all(|c| *c), "every grid point must close");
+            server.drop_program(worker, "p")?;
+            // All workers must finish the collective reads, even when worker zero disagrees.
+            mismatch.map_or(Ok(()), Err)
+        }).map_err(|e| format!("startup: {e}"))?;
+        for result in guards.join() {
+            result.map_err(|e| format!("worker panicked: {}", FIRST_PANIC.lock().unwrap().take().unwrap_or(e)))?
+                .map_err(|e| format!("multitemporal width {width}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn multitemporal_workers() -> usize {
+    let workers = std::env::var("DIFFTEST_MT_WORKERS").map_or(1, |s| s.parse().expect("positive DIFFTEST_MT_WORKERS"));
+    assert!(workers > 0, "positive DIFFTEST_MT_WORKERS");
+    workers
+}
+
 fn sorted(mut rows: Rows) -> Rows { rows.sort(); rows }
 
 /// Whether `v` holds no NaN or infinity, which feed text cannot read.
@@ -1149,14 +1312,15 @@ fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
+enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall, Multitemporal }
 
 impl Oracle {
     /// The oracles, by the names `DIFFTEST_ORACLES` takes.
-    const NAMED: [(&'static str, Oracle); 13] = [
+    const NAMED: [(&'static str, Oracle); 14] = [
         ("workers", Oracle::Workers), ("scratch", Oracle::Scratch), ("optimize", Oracle::Optimize),
         ("subset", Oracle::Subset), ("subset-asof", Oracle::SubsetAsOf), ("plan", Oracle::Plan), ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
         ("bind", Oracle::Bind), ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
+        ("multitemporal", Oracle::Multitemporal),
     ];
     fn all() -> Vec<Oracle> { Self::NAMED.iter().map(|(_, o)| *o).collect() }
     fn parse(s: &str) -> Oracle {
@@ -1176,6 +1340,8 @@ impl Oracle {
 #[derive(Clone, Debug)]
 enum Outcome {
     Pass,
+    /// Multitemporal is inapplicable; any other selected oracles passed.
+    Skipped(String),
     /// The program did not parse, lower or install: most likely the generator's fault.
     Refused(String),
     /// An oracle disagreed, or a run panicked once the program had installed.
@@ -1184,6 +1350,15 @@ enum Outcome {
 
 fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
     let src = case.render(false);
+    let mut skipped = None;
+    let untimed = if oracles.contains(&Oracle::Multitemporal) {
+        let p = match program(&src, false) { Ok(p) => p, Err(e) => return Outcome::Refused(e) };
+        if let Some(reason) = multitemporal_skip(&p.root) {
+            skipped = Some(format!("multitemporal: {reason}"));
+            if oracles == [Oracle::Multitemporal] { return Outcome::Skipped(skipped.unwrap()); }
+        }
+        Some(p)
+    } else { None };
     let opt = match program(&src, true) { Ok(p) => p, Err(e) => return Outcome::Refused(e) };
     let base = match run(&opt, 1, case) {
         Ok(r) => r,
@@ -1194,6 +1369,13 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
     for &oracle in oracles {
         let other = match oracle {
             Oracle::Panic | Oracle::RoundTrip => continue,
+            Oracle::Multitemporal => {
+                if skipped.is_some() { continue; }
+                match multitemporal(case, untimed.as_ref().unwrap()) {
+                    Ok(()) => continue,
+                    Err(e) => return Outcome::Fail(oracle, e),
+                }
+            }
             // Two to five workers, by the seed.
             Oracle::Workers => run(&opt, 2 + (case.seed % 4) as usize, case),
             // Every row fed up front, at its future time, on two workers.
@@ -1287,7 +1469,7 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
             Err(e) => return Outcome::Fail(oracle, e),
         }
     }
-    Outcome::Pass
+    skipped.map_or(Outcome::Pass, Outcome::Skipped)
 }
 
 /// Explain the first export's rows after the last epoch: each row's demand-sets alone must
@@ -1514,7 +1696,8 @@ fn prune(c: &mut Case) {
 fn report(small: &Case, seed: u64, oracle: Oracle, why_small: &str, why: &str) -> String {
     let comment = |text: &str| text.lines().map(|l| format!("--   {l}\n")).collect::<String>();
     let name = oracle.name();
-    let run = "cargo test --release -p interactive --test difftest -- --ignored --nocapture";
+    let run = format!("{}cargo test --release -p interactive --test difftest -- --ignored --nocapture",
+        if oracle == Oracle::Multitemporal { format!("DIFFTEST_MT_WORKERS={} ", multitemporal_workers()) } else { String::new() });
     let passes = pass_names(subset(seed));
     let saved = if std::env::var("DIFFTEST_MINIMIZE").as_deref() == Ok("0") { "saved (not minimized)" } else { "minimized" };
     format!(
@@ -1540,7 +1723,7 @@ fn late_install_regressions() {
     for seed in [40000075, 40000160, 40000519] {
         match check(&generate(seed), &oracles) {
             Outcome::Pass => {}
-            Outcome::Refused(e) => panic!("seed {seed} refused: {e}"),
+            Outcome::Refused(e) | Outcome::Skipped(e) => panic!("seed {seed} refused: {e}"),
             Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
         }
     }
@@ -1552,7 +1735,7 @@ fn late_install_regressions() {
 fn passes_are_optional() {
     for seed in 0..24 {
         match check(&generate(seed), &[Oracle::Optimize, Oracle::Subset]) {
-            Outcome::Pass | Outcome::Refused(_) => {}
+            Outcome::Pass | Outcome::Refused(_) | Outcome::Skipped(_) => {}
             Outcome::Fail(oracle, why) => panic!("seed {seed}, {} oracle: {why}", oracle.name()),
         }
     }
@@ -1661,6 +1844,7 @@ fn difftest() {
         let _ = std::panic::take_hook();
         match outcome {
             Outcome::Pass => println!("pass"),
+            Outcome::Skipped(e) => println!("skipped: {e}"),
             Outcome::Refused(e) => println!("refused: {e}"),
             Outcome::Fail(oracle, why) => panic!("FAIL {} oracle\n{why}", oracle.name()),
         }
@@ -1677,7 +1861,8 @@ fn difftest() {
             std::process::exit(3);
         }
     });
-    let (mut passed, mut refused, mut failed) = (0, 0, 0);
+    let (mut passed, mut skipped, mut refused, mut failed) = (0, 0, 0, 0);
+    let mut skips: BTreeMap<String, usize> = BTreeMap::new();
     let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
     let started = std::time::Instant::now();
     let seconds: u64 = env("DIFFTEST_SECONDS", "10800").parse().unwrap();
@@ -1693,6 +1878,10 @@ fn difftest() {
         println!("case {s}: passes={} {outcome:?}", pass_names(subset(s)));
         match outcome {
             Outcome::Pass => passed += 1,
+            Outcome::Skipped(e) => {
+                skipped += 1;
+                *skips.entry(e).or_default() += 1;
+            }
             Outcome::Refused(e) => {
                 refused += 1;
                 let first = e.lines().next().unwrap_or("").chars().take(120).collect::<String>();
@@ -1706,11 +1895,13 @@ fn difftest() {
                 let report = report(&small, s, oracle, &why_small, &why);
                 println!("{report}");
                 if let Some(dir) = &out { std::fs::write(dir.join(format!("finding-{s}.txt")), &report).unwrap(); }
+                if oracle == Oracle::Multitemporal { break; }
             }
         }
     }
     let _ = std::panic::take_hook();
-    println!("seeds {seed}..{end}: {passed} passed, {refused} refused, {failed} failed; elapsed {:.3}s", started.elapsed().as_secs_f64());
+    println!("seeds {seed}..{end}: {passed} passed, {skipped} skipped, {refused} refused, {failed} failed; elapsed {:.3}s", started.elapsed().as_secs_f64());
+    for (why, n) in &skips { println!("  skipped {n}: {why}"); }
     for (why, n) in &refusals { println!("  refused {n}: {why}"); }
     assert_eq!(failed, 0, "differential sweep found failures; see the saved cases");
 }
