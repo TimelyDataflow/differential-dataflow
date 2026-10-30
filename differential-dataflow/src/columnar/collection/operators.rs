@@ -110,6 +110,9 @@ where
         )],
     );
 
+    // This operator only forwards data.
+    builder.set_notify_for(0, timely::progress::operate::FrontierInterest::Never);
+
     builder.build(move |_capability| {
         let mut col_builder = Builder::<(K, V, DynTime<TOuter, T>, R)>::default();
         let mut time = DynTime::<TOuter, T>::default();

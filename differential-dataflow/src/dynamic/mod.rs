@@ -44,6 +44,8 @@ where
         let (output, stream) = builder.new_output();
         let mut output = OutputBuilder::from(output);
         let mut input = builder.new_input_connection(self.inner, Pipeline, [(0, Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } }))]);
+        // The operator only forwards data; it has no use for frontier advances.
+        builder.set_notify_for(0, timely::progress::operate::FrontierInterest::Never);
 
         builder.build(move |_capability| move |_frontier| {
             let mut output = output.activate();

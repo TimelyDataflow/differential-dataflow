@@ -240,7 +240,7 @@ fn run_timely_dataflow(times: u64, keys_per_time: u64, workers: usize, sample_se
                 _, _,
                 _,
                 ValSpine<u64, u64, u64, i64>,
-            >(stream, Pipeline, "ColumnarSpillArrange", ValBatcher::new);
+            >(stream, Pipeline, "ColumnarSpillArrange", true, ValBatcher::new);
             arranged.stream.probe_with(&mut probe);
         });
 

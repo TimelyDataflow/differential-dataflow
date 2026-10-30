@@ -99,6 +99,7 @@ pub mod lattice;
 pub mod batcher;
 pub mod trace;
 pub mod input;
+pub mod idle;
 pub mod difference;
 pub mod dynamic;
 pub mod collection;
