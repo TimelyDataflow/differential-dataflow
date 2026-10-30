@@ -91,7 +91,7 @@ fn dead_code_switch_controls_pruning_before_fusion() {
     let run = |config| {
         let mut p = original.clone();
         let timings = passes::run(&mut p, &|_| Some((corgi::Shape::Int, corgi::Shape::Int)),
-            &config, &interactive::server::host_time(1), &mut |_, _, _| {});
+            &config, &interactive::server::host_time(1), 1, &mut |_, _, _| {});
         (p, timings)
     };
     let (kept, off_times) = run(off);

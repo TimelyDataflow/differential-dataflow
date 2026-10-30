@@ -142,6 +142,7 @@ impl Change {
 /// `source` supplies provider shapes, including generated sources. A declared trace
 /// shape alone does not resolve its provider. Observations include the lowered tree
 /// and every stage, even one that is switched off, has no changes, or is skipped.
+/// Times have `root` root coordinates, followed by one per loop.
 /// All row and arrangement times must be at or beyond `as_of`.
 ///
 /// Identical import slots are always interned, as in lowering, even with all optional
@@ -154,13 +155,14 @@ pub fn run(
     source: &dyn Fn(&Source) -> Option<RowShape>,
     config: &Config,
     as_of: &Time,
+    root: usize,
     observe: &mut dyn FnMut(&'static str, &Program, &[Change]),
 ) -> Timings {
     let mut timings = Timings::default();
     timings.observe("as lowered", program, &[], observe);
     let start = Instant::now();
     let mut changes = Vec::new();
-    optimize_with(program, source, config, &mut timings, &mut |path, scope, ordinals, action, from, to| {
+    optimize_with(program, source, root, config, &mut timings, &mut |path, scope, ordinals, action, from, to| {
         changes.push(Change::Structural {
             path: path.into(), action,
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
@@ -176,7 +178,7 @@ pub fn run(
     }
     timings.observe("after optimizer", program, &changes, observe);
     let start = Instant::now();
-    let (shapes, problems) = timings.pass_mut(Pass::ShapeInference).infer(program, source);
+    let (shapes, problems) = timings.pass_mut(Pass::ShapeInference).infer(program, source, root);
     let valid = problems.conflicts.is_empty() && problems.unknown.is_empty()
         && program.root.vars.is_empty()
         && program.root.imports.iter().all(|import| match &import.from {
@@ -185,7 +187,7 @@ pub fn run(
             Source::Parent(_) => false,
         });
     let accept = |candidate: &Program, timings: &mut Timings| {
-        let (checked, problems) = timings.pass_mut(Pass::ShapeInference).infer(candidate, source);
+        let (checked, problems) = timings.pass_mut(Pass::ShapeInference).infer(candidate, source, root);
         problems.conflicts.is_empty() && problems.unknown.is_empty() && checked.exports == shapes.exports
     };
     changes.clear();
@@ -196,11 +198,11 @@ pub fn run(
         let mut converged = false;
         for _ in 0..16 {
             timings.projection_rounds += 1;
-            let count = projection::pushdown_timed(&mut candidate, source, timings.pass_mut(Pass::ShapeInference)).unwrap_or(0);
+            let count = projection::pushdown_timed(&mut candidate, source, root, timings.pass_mut(Pass::ShapeInference)).unwrap_or(0);
             if count == 0 { converged = true; break; }
             // Masks expose optimizer rewrites. In turn, merging identical masks can
             // give a reduce one reader and make its remaining map fusible.
-            optimize_with(&mut candidate, source, config, &mut timings, &mut |_, _, _, _, _, _| {});
+            optimize_with(&mut candidate, source, root, config, &mut timings, &mut |_, _, _, _, _, _| {});
             if !accept(&candidate, &mut timings) { break; }
             masked += count;
         }
@@ -218,7 +220,7 @@ pub fn run(
     if !config.as_of_drop { changes.push(Change::Off("as-of-drop")); }
     else if valid {
         let mut candidate = program.clone();
-        let inserted = as_of::drop_dead_as_of(&mut candidate, as_of);
+        let inserted = as_of::drop_dead_as_of(&mut candidate, as_of, root);
         if inserted > 0 {
             if accept(&candidate, &mut timings) {
                 changes.push(Change::AsOf(inserted));
@@ -233,10 +235,10 @@ pub fn run(
 
 /// Optimize every scope in place with every optimizer pass, without provider shapes.
 pub fn optimize(program: &mut Program) {
-    optimize_with(program, &|_| None, &Config::all(), &mut Timings::default(), &mut |_, _, _, _, _, _| {});
+    optimize_with(program, &|_| None, 1, &Config::all(), &mut Timings::default(), &mut |_, _, _, _, _, _| {});
 }
 
-fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, config: &Config, timings: &mut Timings, observe: &mut Observe<'_>) {
+fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, root: usize, config: &Config, timings: &mut Timings, observe: &mut Observe<'_>) {
     // Move pure statements before fusion can absorb them into a time-sensitive chain.
     // Finish dependent moves too: a hoisted arrange can expose a join, then a map.
     if config.hoist_invariant {
@@ -263,8 +265,8 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
             changed |= arrangements::run(&mut program.root, config.collapse_parent_arranges, config.hoist_invariant, timings, observe);
         }
         if config.compose_maps {
-            let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer(program, source);
-            changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes));
+            let (shapes, _) = timings.pass_mut(Pass::ShapeInference).infer(program, source, root);
+            changed |= timings.pass_mut(Pass::ComposeMaps).rewrites(|| canonical::canonical_linear(&mut program.root, &shapes, crate::level::Level::root(root)));
         }
         // Import slots name edges, not distinct computations. Keep them interned even
         // with optional rewrites off, including programs supplied directly as IR.
@@ -288,7 +290,7 @@ mod schedule_tests {
                 let config = Config { projection, as_of_drop, ..Config::all() };
                 let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
                 let mut stages = Vec::new();
-                run(&mut program, &source, &config, &time, &mut |name, program, changes| {
+                run(&mut program, &source, &config, &time, 1, &mut |name, program, changes| {
                     for change in changes {
                         assert!(!matches!(change, Change::Rejected | Change::Skipped));
                     }
@@ -310,7 +312,7 @@ mod schedule_tests {
         ] {
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
             let mut optimized = String::new();
-            run(&mut program, &|_| None, &Config::all(), &crate::server::host_time(1), &mut |name, program, changes| {
+            run(&mut program, &|_| None, &Config::all(), &crate::server::host_time(1), 1, &mut |name, program, changes| {
                 if name == "after optimizer" { optimized = format!("{program:?}"); }
                 if matches!(name, "after projection" | "after as-of drop") {
                     assert_eq!(changes.iter().any(|c| matches!(c, Change::Skipped)), expected_skip);

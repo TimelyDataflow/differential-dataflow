@@ -12,7 +12,7 @@ use interactive::{lower, parse};
 fn program(src: &str, hoist_invariant: bool) -> Program {
     let mut p = lower::lower_tree(parse::pipe::parse(src));
     let config = interactive::passes::Config { hoist_invariant, ..interactive::passes::Config::all() };
-    interactive::passes::run(&mut p, &|_| None, &config, &Default::default(), &mut |_, _, _| {});
+    interactive::passes::run(&mut p, &|_| None, &config, &Default::default(), 1, &mut |_, _, _| {});
     p
 }
 

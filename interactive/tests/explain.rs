@@ -775,7 +775,7 @@ fn declared_sources_shape_the_rewrite() {
     assert_eq!(query.shape, Some((Shape::Prod(vec![Shape::Int]), Shape::Prod(vec![Shape::Unit, Shape::Int]))));
     // So does a rewrite through nested iterative scopes.
     for ex in [ex, explain::explain(&lowered(SCC_ROW))] {
-        let (_, problems) = interactive::shapes::infer(&ex, &|_| None);
+        let (_, problems) = interactive::shapes::infer(&ex, &|_| None, 1);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     }
 }

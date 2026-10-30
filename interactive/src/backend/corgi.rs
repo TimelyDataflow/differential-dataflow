@@ -7,6 +7,7 @@
 //! a row round-trip; `join`/`reduce` run through the int-proxy tactics ([`CorgiJoinBackend`],
 //! [`CorgiReduceBackend`]) over the columnar chunks.
 
+use crate::level::Level;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
@@ -58,14 +59,14 @@ pub(crate) struct Plan {
 impl Plan {
     /// `op` compiled at the shapes `kshape` and `vshape` it reads. A type error is a panic with
     /// corgi's message: install type-checked the program, so it is not reached. `level` is the
-    /// op's scope depth, which fixes the width of a time as data.
-    fn new(op: &LinearOp, kshape: Shape, vshape: Shape, level: usize) -> Plan {
+    /// op's root width and scope depth, which fix the width of a time as data.
+    fn new(op: &LinearOp, kshape: Shape, vshape: Shape, level: Level) -> Plan {
         let (k, v) = (&kshape, &vshape);
         let (what, graph) = match op {
             LinearOp::Project(p) => ("map", Some(compile_projection(p, &[kshape.clone(), vshape.clone()]))),
             LinearOp::Filter(cond) => ("filter", Some(compile_predicate(cond, k, v))),
             LinearOp::FlatMap(list) => ("flatmap", Some(compile_flatmap(list, k, v))),
-            LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level + 1))),
+            LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level.width()))),
             LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => ("", None),
         };
         let graph = graph.map(|g| g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}")));
@@ -88,9 +89,8 @@ impl Plan {
 /// The data<->time ops are columnar and total: LiftIter reads the iteration coordinate out of
 /// `times` and appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction
 /// explodes its list column as FlatMap does and joins each element's time lanes into `times`.
-/// `level` is the scope depth (it locates that coordinate, and fixes the number of lanes as
-/// data).
-fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
+/// `level` locates the iteration coordinate and fixes the number of lanes as data.
+fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
     // A container with no rows may have no SHAPE either, and each op below checks its batch's
     // shapes: an empty batch passes through untouched (every `LinearOp` maps zero rows to zero
     // rows), and nothing downstream reads its shape — `CorgiChunker::push_into` drops empty
@@ -135,9 +135,9 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
             // `Prod([Unit, iter])` would be a silent one-field-too-many divergence from the
             // shape `shapes` infers.
             LinearOp::LiftIter => {
-                // Loop depth `level` is lane `level`; at the root there is no iteration
+                // At the root there is no iteration
                 // coordinate and the value is zero.
-                let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
+                let iters: Vec<u64> = level.own_lane().map_or_else(|| vec![0; c.times.len()], |lane| c.times.lane(lane));
                 let lane = CValue::i64(iters.into_iter().map(|i| i as i64).collect());
                 let vals = match c.vals {
                     CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
@@ -146,10 +146,10 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
                 };
                 CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
-            // A time as data is every lane, the epoch and one per scope: `level + 1` lanes, zero
+            // A time as data is the root coordinates and one per scope: `level.width()` lanes, zero
             // where the column is narrower. Keys, times and diffs are untouched.
             LinearOp::Lift => {
-                let lanes = (0..=level).map(|j| CValue::i64(c.times.lane(j).into_iter().map(|x| x as i64).collect())).collect();
+                let lanes = (0..level.width()).map(|j| CValue::i64(c.times.lane(j).into_iter().map(|x| x as i64).collect())).collect();
                 let vals = CValue::Prod(vec![c.vals, CValue::Prod(lanes)]);
                 CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
@@ -298,7 +298,7 @@ impl Backend for CorgiBackend {
     type Container = CC;
     type Arr<'scope> = Arr<'scope>;
 
-    fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize, (k, v): st::RowShape) -> Collection<'s, Time, CC> {
+    fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: Level, (k, v): st::RowShape) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
         // `level` is the scope depth (locates the iteration coordinate for LiftIter).
         // Every op compiles now, at the shape it will see.
@@ -356,7 +356,7 @@ impl Backend for CorgiBackend {
         join_with_tactic::<_, _, _, CC>(l.arranged, r.arranged, "Join", ProxyJoinTactic::new(backend)).as_collection()
     }
 
-    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
+    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
         // dogs3's driver owns progress and yielding; corgi supplies when an update is unblocked
         // (`HalfJoinBatcher`) and the data of released updates and arranged rows
         // (`CorgiHalfJoinBackend`); dogs3's proxy half-join tactic decides which pairs meet.
@@ -373,10 +373,10 @@ impl Backend for CorgiBackend {
         // one operator.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
         let Arr { arranged, since } = arrangement;
-        let backend = CorgiHalfJoinBackend::new(projection, level + 1, [k, v0.swap_remove(0), v1]);
+        let backend = CorgiHalfJoinBackend::new(projection, level.width(), [k, v0.swap_remove(0), v1]);
         let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
-        half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
+        half_join_with_tactic(stream.inner, arranged, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level.width()), ProxyHalfJoinTactic::new(backend, strict)).as_collection()
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
@@ -434,13 +434,14 @@ pub(crate) fn render_program<'s>(
     scope: Scope<'s, Time>,
     imports: Vec<CorgiImport<'s>>,
     shapes: &crate::shapes::ScopeShapes,
+    root: usize,
 ) -> Vec<Arranged<'s, ExportTrace>> {
     assert_eq!(s.imports.len(), imports.len());
     let imports = imports.into_iter().map(|imp| match imp {
         CorgiImport::Columns(c) => crate::backend::Rendered::Collection(c),
         CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(a),
     }).collect();
-    let rendered = crate::backend::render_scope::<CorgiBackend>(s, scope, 0, imports, shapes);
+    let rendered = crate::backend::render_scope::<CorgiBackend>(s, scope, Level::root(root), imports, shapes);
     // An export that is not already an arrangement is arranged here, after its statement has
     // rendered: label those operators with the export, for diagnostics.
     let logger = scope.worker().logger_for::<crate::backend::LabelEventBuilder>("ddir/labels");

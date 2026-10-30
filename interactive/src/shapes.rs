@@ -2,7 +2,7 @@
 //!
 //! Every collection has one shape for all of its updates: a shape for its data, its time, and
 //! its diff. The data shape is a `(key, val)` pair of corgi shapes, while the IR keeps that split.
-//! The time is a product of integers, one for the outer coordinate and one per scope depth.
+//! The time is a product of integers, the root coordinates and one per scope depth.
 //! The diff is an integer.
 //!
 //! Shapes start at the program's sources, from their ascriptions or from the caller, and follow
@@ -17,6 +17,7 @@
 //! used at) are *conflicts*: the program has no meaning at those shapes.
 
 use corgi::Shape;
+use crate::level::Level;
 
 use crate::lambda::slot_shape;
 use crate::ir::{Lambda, LinearOp, Reducer};
@@ -27,14 +28,14 @@ use crate::scope_ir as st;
 pub struct CollShape {
     pub key: Shape,
     pub val: Shape,
-    /// The number of integer coordinates in a time: the outer one, plus one per scope depth.
+    /// The number of integer coordinates in a time: the root width, plus one per scope depth.
     pub time: usize,
     pub diff: Shape,
 }
 
 impl CollShape {
-    fn new(key: Shape, val: Shape, depth: usize) -> Self {
-        CollShape { key, val, time: depth + 1, diff: Shape::Int }
+    fn new(key: Shape, val: Shape, level: Level) -> Self {
+        CollShape { key, val, time: level.width(), diff: Shape::Int }
     }
 }
 
@@ -82,24 +83,26 @@ pub struct Problems {
 }
 
 /// Infer the shapes of `program`'s collections. `source` supplies the shape of a root source
-/// that carries no ascription.
-pub fn infer(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shape, Shape)>) -> (ScopeShapes, Problems) {
+/// that carries no ascription. Times have `root` root coordinates, then one per loop.
+pub fn infer(program: &st::Program, source: &dyn Fn(&st::Source) -> Option<(Shape, Shape)>, root: usize) -> (ScopeShapes, Problems) {
+    assert!(root > 0);
+    let level = Level::root(root);
     let imports: Vec<Option<CollShape>> = program.root.imports.iter().map(|imp| {
-        imp.shape.clone().or_else(|| source(&imp.from)).map(|(k, v)| CollShape::new(k, v, 0))
+        imp.shape.clone().or_else(|| source(&imp.from)).map(|(k, v)| CollShape::new(k, v, level))
     }).collect();
     let mut problems = Problems::default();
     for (imp, s) in program.root.imports.iter().zip(&imports) {
         if s.is_none() { problems.unknown.push(format!("root: source `{}` has no shape", imp.name)); }
     }
-    let shapes = infer_scope(&program.root, imports, 0, "root", &mut problems);
+    let shapes = infer_scope(&program.root, imports, level, "root", &mut problems);
     (shapes, problems)
 }
 
-fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at: &str, problems: &mut Problems) -> ScopeShapes {
+fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, level: Level, at: &str, problems: &mut Problems) -> ScopeShapes {
     // A declared variable starts at its declared shape; any other takes the shape bound to it.
-    let mut vars: Vec<Option<CollShape>> = s.vars.iter().map(|v| v.shape.clone().map(|(k, v)| CollShape::new(k, v, depth))).collect();
+    let mut vars: Vec<Option<CollShape>> = s.vars.iter().map(|v| v.shape.clone().map(|(k, v)| CollShape::new(k, v, level))).collect();
     if vars.iter().any(Option::is_none) {
-        vars = infer_variables(s, &imports, vars, depth, at);
+        vars = infer_variables(s, &imports, vars, level, at);
     }
     // Report diagnostics in source order once feedback shapes have settled.
     loop {
@@ -108,14 +111,14 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
         for (i, item) in s.items.iter().enumerate() {
             let here = format!("{at}/n{i}");
             let shape = match item {
-                st::Item::Op(node) => ItemShapes::Op(infer_node(node, &shapes, depth, &here, &mut pass)),
+                st::Item::Op(node) => ItemShapes::Op(infer_node(node, &shapes, level, &here, &mut pass)),
                 st::Item::Sub(child) => {
                     let child_imports = child.imports.iter().map(|imp| match &imp.from {
-                        st::Source::Parent(r) => shapes.of(r).map(|c| CollShape::new(c.key, c.val, depth + 1)),
+                        st::Source::Parent(r) => shapes.of(r).map(|c| CollShape::new(c.key, c.val, level.child())),
                         other => { pass.conflicts.push(format!("{here}: a nested scope imports {other:?}")); None }
                     }).collect();
                     let name = format!("{at}/{}", child.name);
-                    let c = infer_scope(child, child_imports, depth + 1, &name, &mut pass);
+                    let c = infer_scope(child, child_imports, level.child(), &name, &mut pass);
                     ItemShapes::Sub(c)
                 }
             };
@@ -132,7 +135,7 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
             }
         }
         if changed { continue; }
-        // Exports leave to the parent's depth. A declared export must match its value's shape,
+        // Exports leave to the parent's level. A declared export must match its value's shape,
         // and supplies it where the value's is unknown.
         shapes.exports = s.exports.iter().map(|e| {
             let value = shapes.of(&e.value);
@@ -145,7 +148,7 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
                 (None, Some((k, v))) => (k.clone(), v.clone()),
                 (None, None) => return None,
             };
-            Some(CollShape::new(k, v, depth.saturating_sub(1)))
+            Some(CollShape::new(k, v, level.parent()))
         }).collect();
         problems.unknown.extend(pass.unknown);
         problems.conflicts.extend(pass.conflicts);
@@ -155,7 +158,7 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
 
 /// Propagate new shapes only to their readers. Rescanning the whole scope per
 /// feedback variable takes quadratic time even for `set a = b` chains.
-fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Option<CollShape>>, depth: usize, at: &str) -> Vec<Option<CollShape>> {
+fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Option<CollShape>>, level: Level, at: &str) -> Vec<Option<CollShape>> {
     use std::collections::VecDeque;
     let count = s.items.len();
     let mut readers = vec![Vec::new(); count + s.vars.len()];
@@ -197,7 +200,7 @@ fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Optio
         } else {
             match &s.items[i] {
                 st::Item::Op(node) => {
-                    let next = infer_node(node, &shapes, depth, at, &mut ignored);
+                    let next = infer_node(node, &shapes, level, at, &mut ignored);
                     let ItemShapes::Op(old) = &mut shapes.items[i] else { unreachable!() };
                     let changed = *old != next;
                     *old = next;
@@ -205,10 +208,10 @@ fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Optio
                 }
                 st::Item::Sub(child) => {
                     let imports = child.imports.iter().map(|import| match &import.from {
-                        st::Source::Parent(r) => shapes.of(r).map(|c| CollShape::new(c.key, c.val, depth + 1)),
+                        st::Source::Parent(r) => shapes.of(r).map(|c| CollShape::new(c.key, c.val, level.child())),
                         _ => None,
                     }).collect();
-                    let next = infer_scope(child, imports, depth + 1, at, &mut ignored);
+                    let next = infer_scope(child, imports, level.child(), at, &mut ignored);
                     let changed = match &shapes.items[i] {
                         ItemShapes::Sub(old) => old.exports != next.exports,
                         _ => true,
@@ -227,13 +230,13 @@ fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Optio
     shapes.vars
 }
 
-/// The shape of a time at scope depth `depth` as data: the epoch and one coordinate per scope.
-fn time_shape(depth: usize) -> Shape {
-    Shape::Prod(vec![Shape::Int; depth + 1])
+/// The shape of a time at `level` as data: the root coordinates and one per loop.
+fn time_shape(level: Level) -> Shape {
+    Shape::Prod(vec![Shape::Int; level.width()])
 }
 
-/// The shapes a linear chain at scope depth `depth` sees: before each op, then after the last.
-pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> Result<Vec<(Shape, Shape)>, String> {
+/// The shapes a linear chain at `level` sees: before each op, then after the last.
+pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Level) -> Result<Vec<(Shape, Shape)>, String> {
     let (mut k, mut v) = (key, val);
     let mut steps = Vec::with_capacity(ops.len() + 1);
     for op in ops {
@@ -256,8 +259,8 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
                 Shape::Unit => Shape::Prod(vec![Shape::Int]),
                 other => Shape::Prod(vec![other, Shape::Int]),
             },
-            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(depth)]),
-            LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, depth)?,
+            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(level)]),
+            LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, level)?,
         }
     }
     steps.push((k, v));
@@ -286,13 +289,13 @@ fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, Stri
 }
 
 /// The `(key, val)` shapes of a `join_function` lambda's output rows. The lambda gives a list of
-/// `((key, val), time, diff)`, with `time` the shape of a time at this depth.
-fn join_function_shape(lambda: &Lambda, env: &[Shape], depth: usize) -> Result<(Shape, Shape), String> {
-    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(depth));
+/// `((key, val), time, diff)`, with `time` the shape of a time at this level.
+fn join_function_shape(lambda: &Lambda, env: &[Shape], level: Level) -> Result<(Shape, Shape), String> {
+    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(level));
     let shape = slot_shape(lambda, env).map_err(|e| format!("join_function: {e}"))?;
     let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
     match &**elem {
-        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(depth) && fs[2] == Shape::Int => match &fs[0] {
+        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(level) && fs[2] == Shape::Int => match &fs[0] {
             Shape::Prod(kv) if kv.len() == 2 => Ok((kv[0].clone(), kv[1].clone())),
             _ => Err(wrong(&shape)),
         },
@@ -300,13 +303,13 @@ fn join_function_shape(lambda: &Lambda, env: &[Shape], depth: usize) -> Result<(
     }
 }
 
-fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, problems: &mut Problems) -> Option<CollShape> {
+fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, problems: &mut Problems) -> Option<CollShape> {
     let mut fail = |e: String| { problems.conflicts.push(format!("{at}: {e}")); None };
     match node {
         st::Node::Linear { input, ops } => {
             let c = shapes.of(input)?;
-            match linear_shapes(ops, c.key, c.val, depth) {
-                Ok(mut steps) => { let (k, v) = steps.pop().unwrap(); Some(CollShape::new(k, v, depth)) }
+            match linear_shapes(ops, c.key, c.val, level) {
+                Ok(mut steps) => { let (k, v) = steps.pop().unwrap(); Some(CollShape::new(k, v, level)) }
                 Err(e) => fail(e),
             }
         }
@@ -323,7 +326,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             let (l, r) = (shapes.of(left)?, shapes.of(right)?);
             if l.key != r.key { return fail(format!("join keys {} and {}", l.key, r.key)); }
             match pair_shape(projection, &[l.key, l.val, r.val]) {
-                Ok((k, v)) => Some(CollShape::new(k, v, depth)),
+                Ok((k, v)) => Some(CollShape::new(k, v, level)),
                 Err(e) => fail(format!("join: {e}")),
             }
         }
@@ -331,11 +334,11 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
             if s.key != a.key { return fail(format!("half_join keys {} and {}", s.key, a.key)); }
             let v = match s.val {
-                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(depth) => fs[0].clone(),
-                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(depth))),
+                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(level) => fs[0].clone(),
+                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(level))),
             };
             match pair_shape(projection, &[s.key, v, a.val]) {
-                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(depth)]), depth)),
+                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(level)]), level)),
                 Err(e) => fail(format!("half_join: {e}")),
             }
         }
@@ -346,7 +349,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
                 Ok(v) => v,
                 Err(e) => return fail(e),
             };
-            Some(CollShape::new(c.key, v, depth))
+            Some(CollShape::new(c.key, v, level))
         }
     }
 }
@@ -359,7 +362,7 @@ mod tests {
     fn shapes_of(src: &str) -> (ScopeShapes, Problems) {
         let mut p = lower::lower_tree(parse::pipe::parse(src));
         crate::passes::optimize(&mut p);
-        infer(&p, &|_| None)
+        infer(&p, &|_| None, 1)
     }
 
     const REACH: &str = r#"
@@ -382,7 +385,7 @@ mod tests {
             let text = format!("let x = input 0 : (int, int); s: {{ {} }} export \"out\" = s::v127;", bindings.join(" "));
             let (shapes, problems) = shapes_of(&text);
             assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
-            assert_eq!(shapes.exports[0], Some(CollShape::new(Shape::Int, Shape::Int, 0)));
+            assert_eq!(shapes.exports[0], Some(CollShape::new(Shape::Int, Shape::Int, Level::root(1))));
         }
     }
 

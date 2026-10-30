@@ -10,6 +10,7 @@ use corgi::Shape;
 
 use crate::ir::{Lambda, LinearOp};
 use crate::lambda::Projection;
+use crate::level::Level;
 use crate::scope_ir::{self as st, Item, Node, Ref, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
@@ -424,7 +425,7 @@ fn build_scope(
     scope: &st::Scope,
     shapes: &ScopeShapes,
     parent: Option<&PlannedScope>,
-    depth: usize,
+    level: Level,
 ) -> Result<PlannedScope, String> {
     let imports = shapes
         .imports
@@ -479,7 +480,7 @@ fn build_scope(
                             ops,
                             before.shape.0.clone(),
                             before.shape.1.clone(),
-                            depth,
+                            level,
                         )?;
                         if ops.is_empty() {
                             builder.identity(&output, &before);
@@ -575,7 +576,7 @@ fn build_scope(
                 plan.items.push(PlannedItem::Op { output, stages });
             }
             (Item::Sub(child), ItemShapes::Sub(child_shapes)) => {
-                let child = build_scope(builder, child, child_shapes, Some(&plan), depth + 1)?;
+                let child = build_scope(builder, child, child_shapes, Some(&plan), level.child())?;
                 plan.items.push(PlannedItem::Sub(Box::new(child)));
             }
             _ => {
@@ -854,7 +855,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
 
 /// Fuse value maps before computing field demand. A shared reduction, a
 /// changed key, or a map that computes anything beyond tuple wiring is left alone.
-fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -> usize {
+fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, level: Level) -> usize {
     let mut dead = vec![false; scope.items.len()];
     let mut changed = 0;
     let mut counts = super::structural::use_counts(scope, &dead);
@@ -866,13 +867,13 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, depth: usize) -
     }).collect();
     for i in 0..scope.items.len() {
         if let (Item::Sub(child), ItemShapes::Sub(shapes)) = (&mut scope.items[i], &shapes.items[i]) {
-            changed += fuse_reduce_maps(child, shapes, depth + 1);
+            changed += fuse_reduce_maps(child, shapes, level.child());
         }
         let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { continue };
         let j = *j;
         if counts[j] != 1 || !matches!(&scope.items[j], Item::Op(Node::Reduce { .. })) { continue; }
         let Some(shape) = &input_shapes[i] else { continue };
-        let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), depth) else { continue };
+        let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), level) else { continue };
         let mut projections = Vec::new();
         for (op, (key, val)) in ops.iter().zip(&steps) {
             let LinearOp::Project(lambda) = op else { break };
@@ -911,7 +912,7 @@ pub fn demand_graph(
     program: &st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<DemandGraph, String> {
-    let (shapes, problems) = shapes::infer(program, source);
+    let (shapes, problems) = shapes::infer(program, source, 1);
     if !problems.conflicts.is_empty() {
         return Err(problems.conflicts.join("; "));
     }
@@ -919,7 +920,7 @@ pub fn demand_graph(
         return Err(problems.unknown.join("; "));
     }
     let mut builder = Builder::default();
-    let plan = build_scope(&mut builder, &program.root, &shapes, None, 0)?;
+    let plan = build_scope(&mut builder, &program.root, &shapes, None, Level::root(1))?;
     for export in &plan.exports {
         builder.graph.seeds.extend(export.all());
     }
@@ -935,33 +936,34 @@ pub fn pushdown(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
 ) -> Result<usize, String> {
-    pushdown_timed(program, source, &mut super::Measurement::default())
+    pushdown_timed(program, source, 1, &mut super::Measurement::default())
 }
 
 pub(super) fn pushdown_timed(
     program: &mut st::Program,
     source: &dyn Fn(&Source) -> Option<st::RowShape>,
+    root: usize,
     inference: &mut super::Measurement,
 ) -> Result<usize, String> {
     let original = program.clone();
-    let (mut shapes, problems) = inference.infer(program, source);
+    let (mut shapes, problems) = inference.infer(program, source, root);
     if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
         return Ok(0);
     }
     let exports = shapes.exports.clone();
     let mut changed = 0;
     for _ in 0..16 {
-        let fused = fuse_reduce_maps(&mut program.root, &shapes, 0);
-        let (checked, problems) = inference.infer(program, source);
+        let fused = fuse_reduce_maps(&mut program.root, &shapes, Level::root(root));
+        let (checked, problems) = inference.infer(program, source, root);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         let mut builder = Builder::default();
-        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, 0) else { break };
+        let Ok(plan) = build_scope(&mut builder, &program.root, &checked, None, Level::root(root)) else { break };
         for export in &plan.exports {
             builder.graph.seeds.extend(export.all());
         }
         let live = builder.graph.closure();
         let masked = rewrite_scope(&mut program.root, &plan, &live);
-        let (checked, problems) = inference.infer(program, source);
+        let (checked, problems) = inference.infer(program, source, root);
         if !problems.conflicts.is_empty() || !problems.unknown.is_empty() || checked.exports != exports { break; }
         changed += fused + masked;
         if fused + masked == 0 { return Ok(changed); }
@@ -983,12 +985,12 @@ mod tests {
             let dead = rows | map((k,v) -> ((k,v),v)) | distinct;
             export "out" = rows;"#;
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        let exports = shapes::infer(&program, &|_| None).0.exports;
+        let exports = shapes::infer(&program, &|_| None, 1).0.exports;
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
         let once = format!("{program:?}");
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
         assert_eq!(once, format!("{program:?}"));
-        assert_eq!(exports, shapes::infer(&program, &|_| None).0.exports);
+        assert_eq!(exports, shapes::infer(&program, &|_| None, 1).0.exports);
     }
 
     #[test]
@@ -1001,7 +1003,7 @@ mod tests {
         // The unrelated map can still be masked; violating the feedback declaration
         // would reject the whole candidate, including the unrelated field masks.
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
-        let (shapes, problems) = shapes::infer(&program, &|_| None);
+        let (shapes, problems) = shapes::infer(&program, &|_| None, 1);
         assert!(problems.conflicts.is_empty() && problems.unknown.is_empty());
         let ItemShapes::Sub(child) = &shapes.items[0] else { panic!("expected child") };
         let shape = child.vars[0].as_ref().unwrap();
@@ -1135,7 +1137,7 @@ mod tests {
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
         assert!(pushdown(&mut program, &|_| None).unwrap() >= 2);
-        let (_, check) = shapes::infer(&program, &|_| None);
+        let (_, check) = shapes::infer(&program, &|_| None, 1);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
         assert!(check.unknown.is_empty(), "{:?}", check.unknown);
     }
@@ -1169,7 +1171,7 @@ mod tests {
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
-        let (_, check) = shapes::infer(&program, &|_| None);
+        let (_, check) = shapes::infer(&program, &|_| None, 1);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
     }
 

@@ -104,6 +104,12 @@ jobs:
       # report is skipped (it prints, it does not assert).
       - name: Explanation suite (release, incl. ignored)
         run: cargo test --release -p interactive --test explain -- --include-ignored --skip report_demand_excess
+      # Multitemporal programs against brute-force oracles, ignored by default as they run slowly in
+      # debug: bitemporal balances and tri-temporal SCC with nested loops, at several worker counts.
+      - name: Multitemporal oracles
+        run: |
+          cargo test --release -p interactive --test bitemporal -- --include-ignored
+          cargo test --release -p interactive --test tritemporal -- --include-ignored
 
   # Check for clippy warnings
   clippy:

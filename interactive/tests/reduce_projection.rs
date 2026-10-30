@@ -61,7 +61,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
     let mut projected = original.clone();
     assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
     assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
-    let (shapes, problems) = interactive::shapes::infer(&projected, &|_| None);
+    let (shapes, problems) = interactive::shapes::infer(&projected, &|_| None, 1);
     assert!(problems.conflicts.is_empty());
     for (i, item) in projected.root.items.iter().enumerate() {
         if matches!(item, Item::Op(Node::Reduce { .. })) {

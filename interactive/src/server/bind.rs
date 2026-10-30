@@ -73,6 +73,9 @@ impl Server {
         if !installed.inputs.contains_key(&input) {
             return Err(format!("program {:?} has no input {}", target, input));
         }
+        if installed.root_width != 1 || self.outputs[&source].width != 1 {
+            return Err("tick bindings currently require width 1 on both ends".into());
+        }
         let declared = &installed.inputs[&input].shape;
         let shape = &self.shapes[&source];
         if declared != shape {

@@ -19,11 +19,12 @@ pub(super) struct ServerInput {
     capability: InputCapability,
     /// The shape of every update the input holds.
     pub(super) shape: RowShape,
+    pub(super) width: usize,
 }
 
 impl ServerInput {
-    pub(super) fn new((handle, capability): (InputHandle, InputCapability), shape: RowShape) -> Self {
-        ServerInput { handle, capability, shape }
+    pub(super) fn new((handle, capability): (InputHandle, InputCapability), shape: RowShape, width: usize) -> Self {
+        ServerInput { handle, capability, shape, width }
     }
 
     /// Add `recipe`'s rows at `indices`, each with multiplicity `diff` at `time`, as columns.
@@ -39,22 +40,27 @@ impl ServerInput {
 
     /// Add fed `columns` at `time`. Their shapes must be the input's, as its declaration says.
     pub(super) fn give_columns(&mut self, columns: Updates, time: OuterTime) -> Result<(), String> {
+        self.give_columns_at(columns, &host_time(time))
+    }
+
+    pub(super) fn give_columns_at(&mut self, columns: Updates, time: &HostTime) -> Result<(), String> {
         let shape = (corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals));
         if shape != self.shape {
             return Err(format!("a feed of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape)));
         }
         let Updates { keys, vals, diffs } = columns;
         let n = diffs.len();
-        let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
+        let times = crate::runtime::col_times::ColTimes::from_raw_lanes((0..self.width).map(|j| vec![time.get(j).copied().unwrap_or(0); n]).collect(), n);
         self.give(InputContainer { keys, vals, times, diffs });
         Ok(())
     }
 
     /// Add the updates of `container`, each at `time` whatever time it carries.
     pub(super) fn give_at(&mut self, container: HostContainer, time: OuterTime) {
+        let time = host_time(time);
         let HostContainer { keys, vals, times, diffs } = container;
         let n = times.len();
-        let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
+        let times = crate::runtime::col_times::ColTimes::from_raw_lanes((0..self.width).map(|j| vec![time.get(j).copied().unwrap_or(0); n]).collect(), n);
         self.give(InputContainer { keys, vals, times, diffs });
     }
 
@@ -69,7 +75,13 @@ impl ServerInput {
 
     /// Hold the frontier at this epoch; dropping the input releases its capability.
     pub(super) fn advance_to(&mut self, time: OuterTime) {
-        self.capability.downgrade(&host_time(time));
+        self.advance_to_point(&host_time(time));
+    }
+
+    pub(super) fn time(&self) -> &HostTime { self.capability.time() }
+
+    pub(super) fn advance_to_point(&mut self, time: &HostTime) {
+        self.capability.downgrade(time);
     }
 }
 
@@ -178,7 +190,7 @@ impl Recipe {
 
     /// The generated rows at `indices`, as columns of [`Recipe::shape`], each with multiplicity
     /// `diff` at `time`.
-    fn container(&self, indices: &[u64], time: OuterTime, diff: Diff) -> InputContainer {
+    pub(super) fn container(&self, indices: &[u64], time: OuterTime, diff: Diff) -> InputContainer {
         use corgi::Value as CValue;
         let n = indices.len();
         let keys = match self {
@@ -249,7 +261,7 @@ impl Server {
     /// it; not writable (see `feed`); dropped like any program once unused.
     pub(super) fn install_generated(&mut self, worker: &mut Worker, name: &str, recipe: Recipe) {
         let (index, peers) = (worker.index(), worker.peers());
-        let (mut input, dataflow_id, probe) = self.install_source(worker, name, recipe.shape());
+        let (mut input, dataflow_id, _probe) = self.install_source(worker, name, recipe.shape());
 
         // Each worker emits its shard (e % peers == index) at time 0, so the
         // union is the full source exactly once.
@@ -265,7 +277,8 @@ impl Server {
                 imports: Vec::new(),
                 exports: vec![name.to_string()],
                 dataflow_id,
-                probe,
+                root_width: 1,
+                now: host_time(self.epoch),
                 origin: Origin::Generated,
                 generators: HashMap::from([(0usize, (recipe, 0u64))]),
             },
@@ -277,7 +290,7 @@ impl Server {
     /// Produced on worker 0 only; `tick` advances it (see [`Server::tick`]).
     pub(super) fn install_clock(&mut self, worker: &mut Worker) {
         let w0 = worker.index() == 0;
-        let (mut input, dataflow_id, probe) = self.install_source(worker, "clock", clock_shape());
+        let (mut input, dataflow_id, _probe) = self.install_source(worker, "clock", clock_shape());
 
         if w0 {
             input.give_columns(clock_rows(&[(self.epoch, 1)]), self.epoch).expect("clock rows have the clock's shape");
@@ -293,7 +306,8 @@ impl Server {
                 imports: Vec::new(),
                 exports: vec!["clock".to_string()],
                 dataflow_id,
-                probe,
+                root_width: 1,
+                now: host_time(self.epoch),
                 origin: Origin::Clock,
                 generators: HashMap::new(),
             },
@@ -316,8 +330,9 @@ impl Server {
             (handle, arranged.trace)
         });
         self.traces.insert(name.to_string(), trace);
-        let input = ServerInput::new(handle, shape.clone());
+        let input = ServerInput::new(handle, shape.clone(), 1);
         self.shapes.insert(name.to_string(), shape);
+        self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), probe: probe.clone(), since: self.import_as_of() });
         (input, dataflow_id, probe)
     }
 }

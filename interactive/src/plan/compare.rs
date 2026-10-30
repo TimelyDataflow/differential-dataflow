@@ -54,7 +54,7 @@ fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> 
     Some(match node {
         Node::Linear { input, ops } => {
             let shape = shapes.of(input)?;
-            let mut steps = crate::shapes::linear_shapes(ops, shape.key, shape.val, shape.time - 1).ok()?;
+            let mut steps = crate::shapes::linear_shapes(ops, shape.key, shape.val, crate::level::Level::root(shape.time)).ok()?;
             steps.pop();
             steps.into_iter().map(|(k, v)| Shape::Prod(vec![k, v])).collect()
         }
