@@ -65,6 +65,7 @@ impl Server {
                 exports: vec![name.to_string()],
                 dataflow_id,
                 root_width: 1,
+                manual: false,
                 now: host_time(self.epoch),
                 origin: Origin::Diagnostics,
                 generators: HashMap::new(),

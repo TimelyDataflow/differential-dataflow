@@ -259,3 +259,39 @@ fronting proxy if a deployment ever needs one.
 The [LDBC-derived workload](../bench/ldbc/README.md) runs parameterized interactive
 queries and maintained BI queries together through this server. It includes a
 tiny correctness fixture and can read an existing SNB CSV snapshot for timing.
+
+### Explicit point clocks (manual mode)
+
+```
+load graph from graph.ddp width=2 as_of=[0,0] mode=manual
+feed graph 0 7 val=12 time=[3,9]
+feed graph 0 time=[3,9] begin
+7 val=13 diff=-1
+end-feed
+feed graph 0 frame N time=[3,9]
+advance_write graph 0 lower={[0,0]} upper={[4,0]}
+peek answer as_of=[3,9] nowait as corgi
+list
+```
+
+The framed feed header is followed by exactly N bytes in the existing binary format.
+Points have unsigned coordinates and no spaces; scalar `5` means `[5]`.
+A manual load requires all three options. Inputs and readable history start at
+`as_of`, independent of the compatibility epoch. `tick` neither advances nor
+compacts manual programs (including width 1). Feeds without `time` use that
+input's current singleton frontier. `advance_write` compares the required lower
+with the current frontier and advances one input componentwise; it does not wait.
+Both frontiers must be singletons, enclosed in braces. No append body is supported.
+
+An explicit peek includes updates componentwise <= its point, and refuses an
+unclosed point; `nowait` is optional and has the same behavior. Closed reads drain
+already issued work. The response ends with `as_of={point} kind=snapshot`.
+`list` includes program width/mode, each input's write frontier, and each trace's
+read frontier and observed upper (which may lag issued commands).
+
+Old syntax retains the legacy clock and retention behavior. Legacy programs cannot
+import manual producers. Tails, bindings and churning recipes require legacy mode;
+`feed ... from TRACE` requires legacy mode on both ends. Manual programs can use
+point feeds, static file/recipe feeds at their input frontier, and imports.
+This version does not expose antichain writes, read-frontier advancement,
+asynchronous reads, audit, or width options on `plan`.
