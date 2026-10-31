@@ -307,10 +307,15 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
+///
+/// `frontier_interest` is `true` for `Always` (required for imports), or `false` for
+/// `IfCapability`. With relaxed interest, use the trace only in this dataflow and give
+/// up its import channel with [`TraceAgent::into_intra`].
 pub fn arrange_core<'scope, P, C, Ba, Tr>(
     stream: Stream<'scope, Tr::Time, C>,
     pact: P,
     name: &str,
+    frontier_interest: bool,
     batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
 ) -> Arranged<'scope, TraceAgent<Tr>>
 where
@@ -340,7 +345,15 @@ where
     let reader_ref = &mut reader;
     let scope = stream.scope();
 
-    let stream = stream.unary_frontier(pact, name, move |_capability, info| {
+    use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
+    use timely::progress::operate::FrontierInterest;
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let info = builder.operator_info();
+    let mut input = builder.new_input(stream, pact);
+    builder.set_notify_for(0, if frontier_interest { FrontierInterest::Always } else { FrontierInterest::IfCapability });
+    let (output, stream) = builder.new_output();
+    let mut output = OutputBuilder::from(output);
+    builder.build(move |_capabilities| {
 
         // Acquire a logger for arrange events.
         let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
@@ -365,7 +378,9 @@ where
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
-        move |(input, frontier), output| {
+        move |frontiers| {
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages

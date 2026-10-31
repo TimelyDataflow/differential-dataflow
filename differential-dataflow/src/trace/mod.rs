@@ -171,13 +171,15 @@ pub trait TraceReader {
 
     /// Advances `upper` across any spans with no updates.
     ///
-    /// A span carrying no updates whose `lower` bound equals the current
-    /// contents of `upper` will advance `upper` to its `upper`.
-    /// Taken across all spans, this should advance `upper` across
-    /// update-free regions.
+    /// A span carrying no updates and containing the current frontier advances
+    /// it to the span's upper. Containment uses the partial order on frontiers.
+    /// A reader's former boundary can be inside a span after empty spans fuse.
     fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>) {
         self.map_spans(|span| {
-            if !span.has_updates() && span.lower() == upper {
+            if !span.has_updates()
+                && timely::order::PartialOrder::less_equal(span.lower(), &*upper)
+                && timely::order::PartialOrder::less_equal(&*upper, span.upper())
+            {
                 upper.clone_from(span.upper());
             }
         });

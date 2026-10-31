@@ -349,7 +349,24 @@ impl<B: SpineBatch+Clone+'static> Trace for Spine<B> {
 
         self.upper.clone_from(span.upper());
 
-        // TODO: Consolidate or discard spans with no updates.
+        // Empty pending spans carry no boundary that readers need for a cursor cut.
+        // Fuse adjacent ones even if physical compaction is held behind them.
+        if span_len(&span) == 0 {
+            if let Some(last) = self.pending.last_mut() {
+                if span_len(last) == 0 {
+                    *last = Span::empty(last.lower().clone(), span.upper().clone());
+                    self.logger.as_ref().map(|l| l.log(crate::logging::MergeEvent {
+                        operator: self.operator.global_id,
+                        scale: 0,
+                        length1: 0,
+                        length2: 0,
+                        complete: Some(0),
+                    }));
+                    self.consider_merges();
+                    return;
+                }
+            }
+        }
         self.pending.push(span);
         self.consider_merges();
     }
