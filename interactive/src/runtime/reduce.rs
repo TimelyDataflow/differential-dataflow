@@ -9,11 +9,20 @@
 //!     key's equal input values share one id, found by corgi's segmented sort. A proven weighted
 //!     sum compares projected values here; other reducers keep whole-value identity. Output values are
 //!     matched to the current output by structural comparison. Nothing hashes values.
+//!   * integer values — a value that is a primitive integer (perhaps in one-field products) is its
+//!     own id, mapped into `u64` with its sign bit flipped so that ids ascend in value order. Equal
+//!     values share an id with no sort, and no pool row names them: the reduction reads its values
+//!     from the ids, and emission writes the ids back as the value column. Input and output decide
+//!     this apart, by the shapes of the values they compare (for input, the projected values where
+//!     a weighted sum compares those, so a wide value read at one integer field counts), in each
+//!     window whose identifiers each hold one real key: always for integer keys, and for hashed
+//!     keys unless the window has a collision.
 //!   * collisions — a hashed key's identifier may hold several real keys. Chunks sort each
 //!     identifier's rows by real key, so a window finds them with two comparisons per run. Their
 //!     ids are then per real key, input and output alike: a colliding bracket is split by real key
 //!     before it is reduced, its output is matched by key as well as value, and every output id
-//!     records the row holding its key, which is what `emit` reads.
+//!     records the row holding its key, which is what `emit` reads. A value is not its own id in
+//!     such a window, as two real keys under one identifier may hold equal values.
 //!   * the value callback — `reduce_lambda` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, evaluating its expression over every bracket's key and `(val, diff)` list.
 //!     The resulting `(val, diff)` lists supply the desired output columns, never DDIR rows.
@@ -22,28 +31,30 @@
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
-//! Presentation assigns value ids in structural order (signed integers, lexicographic lists).
-//! Reduction expressions read their input lists in that order.
+//! Presentation assigns value ids in structural order (signed integers, lexicographic lists),
+//! whether ids name rows or are the values themselves. Reduction expressions read their input
+//! lists in that order.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
 //! (a columnar semijoin — matching the row-wise tactic's read).
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::rc::Rc;
 
-use differential_dataflow::consolidation::consolidate;
+use differential_dataflow::consolidation::{consolidate, consolidate_from};
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, equal_idx, gather_lanes, leaf_slice, sort_blocks};
 use corgi::{Bounds, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::col_times::{ColTime, ColTimes};
 use crate::runtime::search::matching_ranges;
-use crate::runtime::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
+use crate::runtime::chunk::{colliding_keys, columns_to_batch, ident, int_lane, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::lambda::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -68,6 +79,41 @@ fn gather_refs(columns: &[CValue], refs: impl Iterator<Item = (usize, usize)>) -
     let srcs: Vec<Option<&CValue>> = columns.iter().map(Some).collect();
     let (tags, offs): (Vec<usize>, Vec<usize>) = refs.unzip();
     gather_lanes(&srcs, &tags, &offs)
+}
+
+/// How many one-field products wrap an integer leaf of this shape, if it is one. Such a value
+/// orders as its integer does, and can be its own id.
+fn int_leaf(shape: &Shape) -> Option<usize> {
+    match shape {
+        Shape::Int => Some(0),
+        Shape::Prod(fields) if fields.len() == 1 => int_leaf(&fields[0]).map(|depth| depth + 1),
+        _ => None,
+    }
+}
+
+/// An integer's id: its bits with the sign bit flipped, so that ids ascend as integers do.
+fn int_id(value: i64) -> u64 { (value as u64) ^ (1 << 63) }
+
+/// The integer an id names: the inverse of [`int_id`].
+fn id_int(id: u64) -> i64 { (id ^ (1 << 63)) as i64 }
+
+/// The integers `ids` name, as a column in `depth` one-field products.
+fn int_column(depth: usize, ids: impl Iterator<Item = u64>) -> CValue {
+    let mut column = CValue::i64(ids.map(id_int).collect());
+    for _ in 0..depth { column = CValue::Prod(vec![column]); }
+    column
+}
+
+/// The ids of the integers at `rows`, each a `(column, row)` of `columns`. Columns held as `i64`s,
+/// as chunks hold integer values, are read where they are. If a row's column is held narrower,
+/// as a projected field may be, the rows are gathered and read together instead.
+fn int_ids(columns: &[CValue], rows: &[(usize, usize)]) -> Vec<u64> {
+    let lanes: Vec<Option<&[i64]>> = columns.iter().map(int_lane).collect();
+    if rows.iter().all(|&(column, _)| lanes[column].is_some()) {
+        return rows.iter().map(|&(column, row)| int_id(lanes[column].unwrap()[row])).collect();
+    }
+    let gathered = gather_refs(columns, rows.iter().copied());
+    leaf_slice(&gathered).expect("integer values").iter().map(|&value| int_id(value)).collect()
 }
 
 /// Where each of a list of chunks holds some ascending keys: per chunk, the `(key index, rows)` of
@@ -154,10 +200,32 @@ pub(crate) struct CorgiReduceBackend<T> {
     key_columns: Vec<CValue>,
     /// The output emitted so far: key rows in `key_columns`, value ids, times, and diffs.
     rows: (Vec<(usize, usize)>, Vec<u64>, ColTimes<T>, Vec<Diff>),
+    /// The emitted rows whose ids are output values rather than rows of `output`, as ranges.
+    value_rows: Vec<Range<usize>>,
+    /// If the input's values are integers, in how many one-field products.
+    int_input: Option<usize>,
+    /// If the output's values are integers, in how many one-field products.
+    int_output: Option<usize>,
+    /// How the current window's ids name values.
+    window_ids: WindowIds,
     /// Input records per window, bounding what the presentations cost at once.
     window_size: usize,
     /// The retire in progress.
     retire: Retire,
+}
+
+/// How the current window's ids name values: by rows of the pools, or as the integers themselves.
+/// Integers name themselves where the values are integers and each of the window's identifiers
+/// holds one real key.
+#[derive(Default)]
+struct WindowIds {
+    /// Whether input ids are the integer values themselves.
+    input_values: bool,
+    /// Whether output ids are the integer values themselves.
+    output_values: bool,
+    /// When either is, a row of `key_columns` holding each of the window's keys, if any does, as
+    /// such ids record none.
+    key_rows: Vec<Option<(usize, usize)>>,
 }
 
 /// A retire's keys and where its input chunks hold them, found once by its first window.
@@ -215,6 +283,7 @@ impl<T> CorgiReduceBackend<T> {
         let Reducer::Expr(lambda) = reducer;
         let graph = compile_reduce(&lambda, &kshape, &vshape)
             .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
+        let value_shape = vshape.clone();
         // The graph rebuilt to read only what it reads, and the demand saying what that is.
         let input = Shape::Prod(vec![kshape, Shape::List(Box::new(Shape::Prod(vec![vshape, Shape::Int])))]);
         let compiled = corgi::compile(graph, &input)
@@ -224,9 +293,24 @@ impl<T> CorgiReduceBackend<T> {
         let project_values = limit.is_none() && crate::passes::reduce_demand::projection(&compiled).is_some();
         let narrowed = corgi::narrow(compiled, &Demand::All)
             .unwrap_or_else(|e| panic!("reduce: narrowing a compiled graph at {input}: {e}"));
+        let reads = Reads::new(narrowed.input, &input);
+        // Input ids name the values `present` compares: projected, where the reducer merges equal
+        // projections (see `projects`), else whole.
+        let compared = if project_values && reads.value != Demand::All {
+            reads.value.projected_shape(&value_shape).expect("a demand on the reduce's values")
+        } else { value_shape };
+        let int_input = int_leaf(&compared);
+        // The graph's output is a list of `(val, diff)`.
+        let int_output = match corgi::shape_of(&narrowed.graph, &reads.shape) {
+            Ok(Shape::List(element)) => match *element {
+                Shape::Prod(fields) if fields.len() == 2 => int_leaf(&fields[0]),
+                _ => None,
+            },
+            _ => None,
+        };
         CorgiReduceBackend {
             graph: narrowed.graph,
-            reads: Reads::new(narrowed.input, &input),
+            reads,
             project_values,
             limit,
             input: Pool::default(),
@@ -234,6 +318,10 @@ impl<T> CorgiReduceBackend<T> {
             output_keys: Vec::new(),
             key_columns: Vec::new(),
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
+            value_rows: Vec::new(),
+            int_input,
+            int_output,
+            window_ids: WindowIds::default(),
             window_size: window_size.max(1),
             retire: Retire::default(),
         }
@@ -254,21 +342,32 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches 
     }).collect()
 }
 
+/// How [`present`] names each run of equal values under a key.
+enum Naming<'a> {
+    /// By a row: the next index of `refs`, where the run is recorded as the `(chunk, row)` of one
+    /// of its rows.
+    Rows(&'a mut Vec<(usize, usize)>),
+    /// By the value itself, an integer. Exact only where each identifier holds one real key.
+    Ints,
+}
+
 /// Present the records `chunks` hold for `keys`, at `matches`, into `bridge`, sorted by
 /// `((key, id), time)` and consolidated.
 ///
-/// Each key's rows are sorted by value, and each run of equal values gets one id: the next index
-/// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows. The keys `colliding`
-/// marks (by index; empty when none do) hold several real keys under one identifier: their rows are
-/// first split by real key, so that an id names one real key's value, and the row it is recorded
-/// at holds that key.
+/// Values are compared as `projected` holds them, a column per chunk, or else whole. Each key's
+/// rows are ordered by value, and each run of equal values gets one id, as `naming` says.
+/// Integers are ordered by their ids, which a chunk holds in order, so only a key that several
+/// chunks hold is sorted, and as integers. Otherwise rows are sorted by value. The keys
+/// `colliding` marks (by index; empty when none do) hold several real keys under one identifier:
+/// their rows are first split by real key, so that an id names one real key's value, and the row
+/// it is recorded at holds that key. Their values are never named by themselves.
 fn present<T: ColTime + Ord>(
     chunks: &[&CorgiChunk<T, Diff>],
     keys: &[i64],
     matches: &Matches,
     colliding: &[bool],
     projected: Option<&[CValue]>,
-    refs: &mut Vec<(usize, usize)>,
+    naming: Naming<'_>,
     bridge: &mut ProxyBridge<T, Diff, i64>,
 ) {
     // The matched `(chunk, row)`s, key by key, and each one's key index.
@@ -276,7 +375,10 @@ fn present<T: ColTime + Ord>(
         .flat_map(|(chunk, found)| found.iter().map(move |(key, rows)| (*key, chunk, rows.clone())))
         .collect();
     runs.sort_by_key(|run| run.0);
-    let (mut labels, mut rows) = (Vec::new(), Vec::new());
+    // At their final size: grown by doubling, window after window, these cost a presentation up to
+    // half again its time, by the allocator's state.
+    let total = runs.iter().map(|run| run.2.len()).sum();
+    let (mut labels, mut rows) = (Vec::with_capacity(total), Vec::with_capacity(total));
     for (key, chunk, range) in runs {
         labels.extend(range.clone().map(|_| key as u64));
         rows.extend(range.map(|row| (chunk, row)));
@@ -284,21 +386,40 @@ fn present<T: ColTime + Ord>(
     if rows.is_empty() {
         return;
     }
-    // Each label's key index; the identity unless real keys split some labels.
-    let mut label_keys = None;
-    if colliding.contains(&true) {
-        (labels, rows, label_keys) = split_real_keys(chunks, colliding, labels, rows);
-    }
-    let key_of = |label: u64| label_keys.as_ref().map_or(label as usize, |keys: &Vec<usize>| keys[label as usize]);
     // Output and unproven input reducers retain whole-value identity and order.
     let whole;
     let vals = if let Some(projected) = projected { projected } else {
         whole = chunks.iter().map(|chunk| chunk.vals().clone()).collect::<Vec<_>>();
         &whole
     };
-    let (sorted, groups) = sort_blocks(&labels, &gather_refs(vals, rows.iter().copied()));
     let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
-    let (mut start, mut updates) = (0, Vec::new());
+    let mut updates = Vec::new();
+    let refs = match naming {
+        Naming::Rows(refs) => refs,
+        Naming::Ints => {
+            assert!(!colliding.contains(&true), "present: a value names itself only under an identifier holding one real key");
+            let ids = int_ids(vals, &rows);
+            let mut order: Vec<usize> = (0..rows.len()).collect();
+            for block in order.chunk_by_mut(|&a, &b| labels[a] == labels[b]) {
+                if !block.is_sorted_by_key(|&i| ids[i]) { block.sort_by_key(|&i| ids[i]); }
+            }
+            for group in order.chunk_by(|&a, &b| labels[a] == labels[b] && ids[a] == ids[b]) {
+                updates.extend(group.iter().map(|&i| update(rows[i])));
+                consolidate(&mut updates);
+                let (key, id) = (keys[labels[group[0]] as usize], ids[group[0]]);
+                bridge.extend(updates.drain(..).map(|(time, diff)| ((key, id), time, diff)));
+            }
+            return;
+        }
+    };
+    // Each label's key index; the identity unless real keys split some labels.
+    let mut label_keys = None;
+    if colliding.contains(&true) {
+        (labels, rows, label_keys) = split_real_keys(chunks, colliding, labels, rows);
+    }
+    let key_of = |label: u64| label_keys.as_ref().map_or(label as usize, |keys: &Vec<usize>| keys[label as usize]);
+    let (sorted, groups) = sort_blocks(&labels, &gather_refs(vals, rows.iter().copied()));
+    let mut start = 0;
     for group in groups.chunk_by(|a, b| a == b) {
         let members = &sorted[start..start + group.len()];
         start += group.len();
@@ -370,8 +491,8 @@ where
     /// The harness presents each bracket consolidated, so its diffs are non-zero and its value ids
     /// ascend, which is value order: `present` numbers each key's values in sorted order. The
     /// brackets are presented as they are. One with no input has no output, and the lambda does not
-    /// see it.
-    fn reduce_lambda(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+    /// see it. `key_rows` holds the row holding each bracket's key, for those with input.
+    fn reduce_lambda(&self, ends: &[usize], input: &[(u64, Diff)], key_rows: &[Option<(usize, usize)>]) -> (CValue, Vec<Diff>, Vec<usize>) {
         // A limit hands the lambda each bracket's first values only; nothing past them is gathered.
         let limited = self.limit.and_then(|k| first_entries(k, ends, input));
         let (ends, input) = limited.as_ref().map_or((ends, input), |(ends, input)| (&ends[..], &input[..]));
@@ -381,7 +502,7 @@ where
         for (bi, &end) in ends.iter().enumerate() {
             if end > start {
                 blocks.push((bi, end));
-                key_refs.push(self.input.refs[input[start].0 as usize]);
+                key_refs.push(key_rows[bi].expect("a bracket with input has a row holding its key"));
             }
             start = end;
         }
@@ -390,7 +511,7 @@ where
         }
         let vals = match self.reads.value {
             Demand::None => CValue::Unit(input.len()),
-            _ => self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>()),
+            _ => self.input_values(input.iter().map(|&(id, _)| id)),
         };
         let diffs = CValue::i64(input.iter().map(|&(_, diff)| diff).collect());
         // Projected values may tie; whole ones ascend.
@@ -423,6 +544,73 @@ where
         }
         (out_vals, out_diffs, out_ends)
     }
+
+    /// The current window's input values that `ids` name, projected by what the graph reads of
+    /// them.
+    fn input_values(&self, ids: impl Iterator<Item = u64>) -> CValue {
+        match self.int_input.filter(|_| self.window_ids.input_values) {
+            // Ids of projected values are already what the graph reads.
+            Some(depth) if self.projects() => int_column(depth, ids),
+            Some(depth) => self.reads.value.project(int_column(depth, ids)).expect("an integer has the reduce's value shape"),
+            None => self.input.gather(&ids.collect::<Vec<_>>()),
+        }
+    }
+
+    /// Whether input values are compared as the graph reads them: the reducer is proven to merge
+    /// equal projected values, and it does not read them whole.
+    fn projects(&self) -> bool { self.project_values && self.reads.value != Demand::All }
+
+    /// The row of `key_columns` holding each bracket's key, for the brackets with input. Ids that
+    /// name rows of the input pool name rows holding their keys. Ids that are values do not, and
+    /// then each bracket is a key of the window (no identifier collides), whose row it has.
+    fn bracket_rows(&self, keys: &[i64], ends: &[usize], input: &[(u64, Diff)]) -> Vec<Option<(usize, usize)>> {
+        let window = &self.retire.keys[self.retire.window.clone()];
+        debug_assert!(!self.window_ids.input_values || keys.len() == ends.len(), "reduce: a bracket per key");
+        let mut start = 0;
+        ends.iter().enumerate().map(|(bracket, &end)| {
+            let first = std::mem::replace(&mut start, end);
+            (end > first).then(|| if self.window_ids.input_values {
+                let at = window.binary_search(&keys[bracket]).expect("a bracket's key is in its window");
+                self.window_ids.key_rows[at].expect("a key with input has a row holding it")
+            } else {
+                self.input.refs[input[first].0 as usize]
+            })
+        }).collect()
+    }
+
+    /// [`ProxyReduceBackend::reduce_corrections`] where output ids are values: each key's desired
+    /// rows, as ids, less its output, consolidated. Brackets are keys, as no identifier collides.
+    fn value_corrections(&self, keys: &[i64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        let key_rows = self.bracket_rows(keys, in_ends, input);
+        let (column, diffs, ends) = self.reduce_lambda(in_ends, input, &key_rows);
+        let desired = if diffs.is_empty() { Cow::Borrowed(&[][..]) } else { leaf_slice(&column).expect("the reduce's output values are integers") };
+        let (mut corr, mut corr_ends) = (Vec::with_capacity(output.len() + diffs.len()), Vec::with_capacity(keys.len()));
+        let (mut ds, mut os) = (0, 0);
+        for (&de, &oe) in ends.iter().zip(out_ends) {
+            let start = corr.len();
+            corr.extend(output[os..oe].iter().map(|&(id, diff)| (id, -diff)));
+            corr.extend(desired[ds..de].iter().zip(&diffs[ds..de]).map(|(&value, &diff)| (int_id(value), diff)));
+            consolidate_from(&mut corr, start);
+            corr_ends.push(corr.len());
+            (ds, os) = (de, oe);
+        }
+        (corr, corr_ends)
+    }
+
+    /// The output values the emitted `ids` name: the ids themselves in `value_rows`, and rows of
+    /// the output pool elsewhere.
+    fn output_values(&self, ids: &[u64], value_rows: &[Range<usize>]) -> CValue {
+        let Some(depth) = self.int_output.filter(|_| !value_rows.is_empty()) else { return self.output.gather(ids) };
+        let values = int_column(depth, ids.iter().copied());
+        if value_rows.len() == 1 && value_rows[0] == (0..ids.len()) { return values; }
+        // Some windows named rows of the pool (an identifier collided): gather from both.
+        let mut named = vec![false; ids.len()];
+        for rows in value_rows { named[rows.clone()].fill(true); }
+        let mut columns = self.output.columns.clone();
+        columns.push(values);
+        let at = columns.len() - 1;
+        gather_refs(&columns, ids.iter().zip(named).enumerate().map(|(row, (&id, named))| if named { (at, row) } else { self.output.refs[id as usize] }))
+    }
 }
 
 impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
@@ -437,6 +625,7 @@ where
 
     fn begin(&mut self, _description: Description<T>) {
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
+        self.value_rows.clear();
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64>) {
@@ -465,6 +654,7 @@ where
         }
 
         // Windows are bounded, as their presentations are all live at once.
+        let projects = self.projects();
         let retire = &mut self.retire;
         if !retire.advance(self.window_size) {
             *from = KeyPosition::End;
@@ -484,6 +674,19 @@ where
         retire.colliding = keys.iter().zip(&colliding).filter(|(_, c)| **c).map(|(key, _)| *key).collect();
         let colliding = if retire.colliding.is_empty() { &[][..] } else { &colliding[..] };
 
+        // Integer values name themselves where each identifier holds one real key. Their ids then
+        // record no rows, so the window notes a row holding each key, input or output.
+        let ids = &mut self.window_ids;
+        ids.input_values = colliding.is_empty() && self.int_input.is_some();
+        ids.output_values = colliding.is_empty() && self.int_output.is_some();
+        ids.key_rows.clear();
+        if ids.input_values || ids.output_values {
+            ids.key_rows.resize(keys.len(), None);
+            for (column, found) in matches.iter().chain(&out_matches).enumerate() {
+                for (key, rows) in found { ids.key_rows[*key].get_or_insert((column, rows.start)); }
+            }
+        }
+
         // The seeds are the novel batches' RAW (key, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely.
         window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
@@ -499,13 +702,18 @@ where
         // equal values share an id, so an exactly cancelling pair vanishes here, and its time
         // survives in `window.seeds` above. Input ids name rows for this window only.
         self.input.refs.clear();
-        let projected = (self.project_values && self.reads.value != Demand::All).then_some(&self.input.columns[..]);
-        present(&in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
+        let projected = projects.then_some(&self.input.columns[..]);
+        let naming = if ids.input_values { Naming::Ints } else { Naming::Rows(&mut self.input.refs) };
+        present(&in_chunks, keys, &matches, colliding, projected, naming, &mut window.input);
         // The output history, same keys. Output ids name rows for the whole retire, and the rows
         // that hold their keys are at the same positions of the output chunks' key columns.
-        let fresh = self.output.refs.len();
-        present(&out_chunks, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
-        self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
+        if ids.output_values {
+            present(&out_chunks, keys, &out_matches, colliding, None, Naming::Ints, &mut window.output);
+        } else {
+            let fresh = self.output.refs.len();
+            present(&out_chunks, keys, &out_matches, colliding, None, Naming::Rows(&mut self.output.refs), &mut window.output);
+            self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
+        }
 
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
     }
@@ -520,6 +728,12 @@ where
         // A colliding identifier's bracket holds several real keys' values. It is split into one
         // bracket per real key, each reduced on its own, and its rows are matched against output
         // by key as well as value. Its input ids ascend by real key, so each key's are contiguous.
+        //
+        // Where output ids are the values themselves, equal values are equal ids, and the
+        // correction is a consolidation.
+        if self.window_ids.output_values {
+            return self.value_corrections(keys, in_ends, input, out_ends, output);
+        }
         let split = keys.iter().any(|key| self.retire.colliding.binary_search(key).is_ok());
         let (mut sub_ends, mut sub_input, mut bracket_ends) = (Vec::new(), Vec::new(), Vec::new());
         if split {
@@ -541,7 +755,8 @@ where
         }
         let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
         // The desired rows, and each one's diff where it is not one copy.
-        let (desired, desired_diffs, desired_ends) = self.reduce_lambda(in_ends, input);
+        let key_rows = self.bracket_rows(keys, in_ends, input);
+        let (desired, desired_diffs, desired_ends) = self.reduce_lambda(in_ends, input, &key_rows);
         let fresh = self.output.columns.len();
         let prior_refs = self.output.refs.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
@@ -601,8 +816,7 @@ where
             let (lo, hi) = (if bs == 0 { 0 } else { desired_ends[bs - 1] }, desired_ends[be - 1]);
             let rows = (oe - os) + (hi - lo);
             if !checked && !resolved && hi - lo > 16 && hi - lo > 2 * (usize::BITS - rows.leading_zeros()) as usize {
-                let first = if bs == 0 { 0 } else { in_ends[bs - 1] };
-                let (kc, kr) = self.input.refs[input[first].0 as usize];
+                let (kc, kr) = key_rows[bs].expect("a bracket with desired rows has input");
                 // (column, row, desired, position): of equal values, existing rows come first,
                 // each side in its own order, so a run's first item is the search's answer.
                 order.clear();
@@ -644,8 +858,7 @@ where
                     let (ds, de) = (if s == 0 { 0 } else { desired_ends[s - 1] }, desired_ends[s]);
                     if ds == de { continue; }
                     // A desired row's key: that of the input it was reduced from, which is non-empty.
-                    let first = if s == 0 { 0 } else { in_ends[s - 1] };
-                    let (kc, kr) = self.input.refs[input[first].0 as usize];
+                    let (kc, kr) = key_rows[s].expect("a bracket with desired rows has input");
                     for row in ds..de {
                         let diff = desired_diffs[row];
                         let equal = |&(id, _): &(u64, Diff)| {
@@ -689,21 +902,42 @@ where
     }
 
     fn emit(&mut self, records: &[((i64, u64), T, Diff)]) {
-        // An output id names its key's row, as two keys may share an identifier.
         let (key_rows, ids, times, diffs) = &mut self.rows;
-        for ((_, id), time, diff) in records {
-            key_rows.push(self.output_keys[*id as usize]);
-            ids.push(*id);
-            times.push(time);
-            diffs.push(*diff);
+        let start = ids.len();
+        if self.window_ids.output_values {
+            // An output id is the value, and the window holds a row of each key; records ascend
+            // by key, so the window's keys are walked once.
+            let window = &self.retire.keys[self.retire.window.clone()];
+            let mut at = 0;
+            for ((key, id), time, diff) in records {
+                if window.get(at) != Some(key) { at = window.binary_search(key).expect("an emitted key is in its window"); }
+                key_rows.push(self.window_ids.key_rows[at].expect("an emitted key has a row holding it"));
+                ids.push(*id);
+                times.push(time);
+                diffs.push(*diff);
+            }
+            match self.value_rows.last_mut() {
+                Some(rows) if rows.end == start => rows.end = ids.len(),
+                _ if ids.len() > start => self.value_rows.push(start..ids.len()),
+                _ => {}
+            }
+        } else {
+            // An output id names its key's row, as two keys may share an identifier.
+            for ((_, id), time, diff) in records {
+                key_rows.push(self.output_keys[*id as usize]);
+                ids.push(*id);
+                times.push(time);
+                diffs.push(*diff);
+            }
         }
     }
 
     fn finish(&mut self) -> Option<CBatch<T>> {
         let (key_rows, ids, times, diffs) = std::mem::take(&mut self.rows);
+        let value_rows = std::mem::take(&mut self.value_rows);
         if times.is_empty() { return None; }
         let keys = gather_refs(&self.key_columns, key_rows.into_iter());
-        Some(Rc::new(columns_to_batch(keys, self.output.gather(&ids), times, diffs)))
+        Some(Rc::new(columns_to_batch(keys, self.output_values(&ids, &value_rows), times, diffs)))
     }
 }
 
@@ -807,7 +1041,7 @@ mod tests {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
                 let (mut refs, mut bridge) = (Vec::new(), Vec::new());
-                present(&chunks, &keys, &search(&chunks, &keys), &[], None, &mut refs, &mut bridge);
+                present(&chunks, &keys, &search(&chunks, &keys), &[], None, Naming::Rows(&mut refs), &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
@@ -817,6 +1051,46 @@ mod tests {
                     actual.insert((*key, value, time.clone()), *diff);
                 }
                 assert_eq!(actual, netted(&chunks, &keys.iter().copied().collect()));
+            }
+        }
+    }
+
+    /// Integers named by themselves: `present` gives what the chunks hold, sorted and consolidated,
+    /// with each value's own id, so a key's ids ascend in signed order, across key shapes, a
+    /// one-field product, a pair projected to a field held as bytes, chunkings, ties, and
+    /// cancellations.
+    #[test]
+    fn present_names_integers_by_themselves() {
+        const SIGNED: [i64; 3] = [i64::MIN, -1, 256];
+        let rows = random_rows(0x9E37_79B9_7F4A_7C15, 300, 6);
+        // Each shape, and whether values are compared at their first field.
+        let val_shapes: [(fn(&[(u64, u64)]) -> CValue, bool); 3] = [
+            (|v| CValue::i64(v.iter().map(|v| SIGNED[v.0 as usize]).collect()), false),
+            (|v| CValue::Prod(vec![CValue::int(v.iter().map(|v| v.1 as i64))]), false),
+            (|v| CValue::Prod(vec![CValue::int(v.iter().map(|v| v.0 as i64)), CValue::int(v.iter().map(|v| v.1 as i64))]), true),
+        ];
+        let first = Demand::Prod(vec![Demand::All, Demand::None]);
+        for (key_shape, (val_shape, projected)) in KEY_SHAPES.iter().flat_map(|k| val_shapes.iter().map(move |v| (*k, *v))) {
+            let mut keys = key_ids(&key_shape(&[0, 2, 3, 5, 9]));
+            keys.sort();
+            for size in [1, 7, rows.len()] {
+                let owned = chunks(&rows, size, key_shape, val_shape);
+                let chunks: Vec<_> = owned.iter().collect();
+                let columns: Vec<CValue> = if projected { chunks.iter().map(|chunk| first.project(chunk.vals().clone()).unwrap()).collect() } else { Vec::new() };
+                let mut bridge = Vec::new();
+                present(&chunks, &keys, &search(&chunks, &keys), &[], projected.then_some(&columns[..]), Naming::Ints, &mut bridge);
+                assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
+                assert!(bridge.windows(2).all(|w| w[0].0.0 != w[1].0.0 || id_int(w[0].0.1) <= id_int(w[1].0.1)), "ids ascend in signed order");
+                let values = rows_of(&int_column(0, bridge.iter().map(|r| r.0.1)));
+                let actual: BTreeMap<_, _> = bridge.iter().zip(values).map(|(((key, _), time, diff), value)| ((*key, value, time.clone()), *diff)).collect();
+                // What the chunks hold, netted at the compared values.
+                let mut expected = BTreeMap::new();
+                for ((key, value, time), diff) in netted(&chunks, &keys.iter().copied().collect()) {
+                    let value = if projected { value[..1].to_vec() } else { value };
+                    *expected.entry((key, value, time)).or_insert(0) += diff;
+                }
+                expected.retain(|_, diff| *diff != 0);
+                assert_eq!(actual, expected);
             }
         }
     }
@@ -926,9 +1200,14 @@ mod tests {
                     let counts: Vec<usize> = held.iter().filter(|(key, _)| within(**key)).map(|(_, count)| *count).collect();
                     assert!(counts.iter().rev().skip(1).sum::<usize>() < window_size, "a window stops once it holds the budget");
                     assert!(from == KeyPosition::End || counts.iter().sum::<usize>() >= window_size, "a window holds the budget");
-                    for (bridge, pool, into) in [(&window.input, &backend.input, &mut inputs), (&window.output, &backend.output, &mut outputs)] {
-                        let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
-                        for (((key, _), time, diff), value) in bridge.iter().zip(values) {
+                    // The values the window's ids name, whether rows or the values themselves.
+                    let input_values = backend.input_values(window.input.iter().map(|r| r.0.1));
+                    let output_ids: Vec<u64> = window.output.iter().map(|r| r.0.1).collect();
+                    let all = 0..output_ids.len();
+                    let named = if backend.window_ids.output_values { std::slice::from_ref(&all) } else { &[] };
+                    let output_values = backend.output_values(&output_ids, named);
+                    for (bridge, values, into) in [(&window.input, input_values, &mut inputs), (&window.output, output_values, &mut outputs)] {
+                        for (((key, _), time, diff), value) in bridge.iter().zip(rows_of(&values)) {
                             assert!(within(*key));
                             assert!(into.insert((*key, value, time.clone()), *diff).is_none());
                         }
@@ -1010,6 +1289,109 @@ mod tests {
             assert!(!expected.is_empty());
             for window_size in [1, 5, usize::MAX] {
                 assert_eq!(run(true, window_size), expected, "{reducer:?}, window_size={window_size}");
+            }
+        }
+    }
+
+    /// Integer values named by themselves reduce as values named by rows do. Over two retires of
+    /// signed values with ties and cancellations, bare, in a one-field product, or as the field a
+    /// weighted sum reads of a pair (whose projection is the integer), each reducer gives what it
+    /// gives under forged identifiers that all collide, where every window names
+    /// rows: with integer keys, hashed keys, and forged identifiers of which only one collides,
+    /// so that some windows name values and others rows, at every window size.
+    #[test]
+    fn integer_values_reduce_as_rows_do() {
+        use timely::progress::{Antichain, Timestamp};
+        use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
+        use differential_dataflow::operators::reduce::ReduceTactic;
+        use crate::runtime::feed::print;
+        use crate::parse::Reducer as Sugar;
+
+        /// How keys `(a, 7a)` are identified.
+        #[derive(Clone, Copy, Debug)]
+        enum Ident { Int, Hash, OneCollides, AllCollide }
+        let key_column = |ident: Ident, keys: &[u64]| -> CValue {
+            let pair = CValue::Prod(vec![ints(keys.to_vec()), ints(keys.iter().map(|k| k * 7).collect())]);
+            match ident {
+                Ident::Int => ints(keys.to_vec()),
+                Ident::Hash => present_key(pair),
+                Ident::OneCollides => CValue::Prod(vec![ints(keys.iter().map(|&k| if k < 2 { 0 } else { k }).collect()), pair]),
+                Ident::AllCollide => CValue::Prod(vec![ints(keys.iter().map(|k| k % 2).collect()), pair]),
+            }
+        };
+        // Signed values at the edges of the sign flip and of byte storage, with ties.
+        const VALUES: [i64; 8] = [i64::MIN, -300, -1, 0, 1, 255, 256, i64::MAX];
+        // Each value with a second field, which a pair's projection drops: values equal in their
+        // first field may differ in it, and merge only when projected.
+        let signed = |seed, count| -> Vec<(u64, (i64, i64), Time, Diff)> {
+            random_rows(seed, count, 6).into_iter().map(|(k, (a, b), t, d)| (k, (VALUES[(a * 3 + b) as usize % 8], a as i64 - 1), t, d)).collect()
+        };
+        let stamp = |outer| crate::server::host_time(outer);
+        let later = |t: &Time| Time::new(std::iter::once(t.first().copied().unwrap_or(0) + 2).chain(t.iter().skip(1).copied()).collect());
+        // The first retire's input, at outer times 0 and 1. The second's, from 2 on: new rows,
+        // rows of the first negated, and a batch cancelling some new rows exactly.
+        let early: Vec<_> = signed(0x51ED_270B_2A4F_3C11, 200).into_iter().filter(|r| r.2.first().copied().unwrap_or(0) < 2).collect();
+        let mut late: Vec<_> = signed(0x0BAD_5EED, 120).into_iter().map(|(k, v, t, d)| (k, v, later(&t), d)).collect();
+        late.extend(early.iter().step_by(7).map(|(k, v, t, d)| (*k, *v, later(t), -d)));
+        let cancel: Vec<_> = late.iter().step_by(3).map(|(k, v, t, d)| (*k, *v, t.clone(), -d)).collect();
+
+        /// How the values are held.
+        #[derive(Clone, Copy, Debug)]
+        enum Values { Bare, Wrapped, Pair }
+        for values in [Values::Bare, Values::Wrapped, Values::Pair] {
+            // Bare and wrapped: each value, and a constant for each, with its diff, so that equal
+            // outputs consolidate. A pair: the weighted sum of first fields, which reads only them.
+            let body = match values {
+                Values::Bare => "(vals map ((v, d) -> (v, d)), vals map ((_, d) -> (7, d))) append",
+                Values::Wrapped => "(vals map ((v, d) -> (v, d)), vals map ((_, d) -> ((7), d))) append",
+                Values::Pair => "let n = vals map (((v, _), d) -> (v, d) mul) fold_add in (n, (n, 1)) enlist filter",
+            };
+            let lambda = crate::ir::Lambda::new(format!("let (_, vals) = input in {body}"), &corgi::Scope::default());
+            let (vshape, column): (Shape, fn(&[(i64, i64)]) -> CValue) = match values {
+                Values::Bare => (Shape::Int, |vs| CValue::i64(vs.iter().map(|v| v.0).collect())),
+                Values::Wrapped => (Shape::Prod(vec![Shape::Int]), |vs| CValue::Prod(vec![CValue::i64(vs.iter().map(|v| v.0).collect())])),
+                Values::Pair => (Shape::Prod(vec![Shape::Int, Shape::Int]), |vs| CValue::Prod(vec![CValue::i64(vs.iter().map(|v| v.0).collect()), CValue::int(vs.iter().map(|v| v.1))])),
+            };
+            // The sum compares its pairs' projections, single integers, so they name themselves.
+            if let Values::Pair = values {
+                let backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(lambda.clone()), None, (Shape::Int, vshape.clone()));
+                assert!(backend.projects() && backend.int_input == Some(1) && backend.int_output == Some(0));
+            }
+            let sugars = [Sugar::Count, Sugar::Distinct, Sugar::Min, Sugar::Collect].map(|sugar| (Reducer::Expr(sugar.lambda()), sugar.limit()));
+            for (reducer, limit) in sugars.into_iter().chain([(Reducer::Expr(lambda), None)]) {
+                let run = |ident: Ident, window_size: usize| {
+                    let batch = |rows: &[(u64, (i64, i64), Time, Diff)]| -> CBatch<Time> {
+                        let keys = key_column(ident, &rows.iter().map(|r| r.0).collect::<Vec<_>>());
+                        let chunk = CorgiChunk::from_columns(keys, column(&rows.iter().map(|r| r.1).collect::<Vec<_>>()), rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
+                        Rc::new(ChunkBatch::new(vec![chunk]))
+                    };
+                    let kshape = if let Ident::Int = ident { Shape::Int } else { Shape::Prod(vec![Shape::Int, Shape::Int]) };
+                    let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), limit, (kshape, vshape.clone()), window_size));
+                    let held = Antichain::from_elem(Time::minimum());
+                    let (first, _) = tactic.retire(Vec::new(), Vec::new(), vec![batch(&early)], &held, &Antichain::from_elem(stamp(2)), &held);
+                    let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();
+                    let (second, _) = tactic.retire(vec![batch(&early)], first.clone(), vec![batch(&late), batch(&cancel)], &Antichain::from_elem(stamp(2)), &Antichain::new(), &held);
+                    // Output by `a`, the value as printed, and time.
+                    let mut netted = BTreeMap::new();
+                    for out in first.iter().chain(second.and_then(|span| span.inner).as_ref()) {
+                        for chunk in out.chunks.iter() {
+                            let keys = recover_key(chunk.keys());
+                            let a = match &keys { CValue::Prod(fields) => fields[0].as_i64("a").unwrap().into_owned(), leaf => leaf.as_i64("a").unwrap().into_owned() };
+                            for (i, (key, diff)) in a.iter().zip(chunk.diffs()).enumerate() {
+                                *netted.entry((*key, print(chunk.vals(), i), chunk.times().get(i))).or_insert(0) += diff;
+                            }
+                        }
+                    }
+                    netted.retain(|_, diff| *diff != 0);
+                    netted
+                };
+                let expected = run(Ident::AllCollide, usize::MAX);
+                assert!(!expected.is_empty());
+                for ident in [Ident::Int, Ident::Hash, Ident::OneCollides, Ident::AllCollide] {
+                    for window_size in [1, 5, usize::MAX] {
+                        assert_eq!(run(ident, window_size), expected, "{reducer:?}, {ident:?}, {values:?}, window_size={window_size}");
+                    }
+                }
             }
         }
     }
