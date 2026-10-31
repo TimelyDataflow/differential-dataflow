@@ -411,9 +411,16 @@ impl<B: Batch> Spine<B> {
             // If `batch` and the most recently inserted batch are both empty, we can just fuse them.
             // We can also replace a structurally empty batch with this empty batch, preserving the
             // apparent record count but now with non-trivial lower and upper bounds.
+            //
+            // We also fuse an empty batch into a single batch of at most one update. Such a batch
+            // sits at layer zero, where the empty batch would otherwise be inserted, starting a
+            // merge that completes into layer one, from which `tidy_layers` moves it back down.
+            // An idle trace would repeat this on every empty batch, and each in-progress merge
+            // prompts the exertion logic to request more work. The eager merge here costs at
+            // most one update, which is what the normal insertion would spend anyway.
             if batch.as_ref().unwrap().len() == 0 {
                 if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
-                    if self.merging[position].is_single() && self.merging[position].len() == 0 {
+                    if self.merging[position].is_single() && self.merging[position].len() <= 1 {
                         self.insert_at(batch.take(), position);
                         let merged = self.complete_at(position);
                         self.merging[position] = MergeState::Single(merged);
