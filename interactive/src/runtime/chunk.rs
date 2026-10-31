@@ -414,9 +414,10 @@ where
 /// Sort parallel columns by `(key, val, time)` and consolidate exact `(key, val, time)` triples
 /// (summing diffs, dropping zeros). Returns a sorted+consolidated `(keys, vals, times, diffs)`.
 ///
-/// Multi-record: one columnar `sort_blocks` (discrimination sort) orders by `(key, val)` and
-/// identifies equal runs. Only the small per-run *time* tiebreak is a Rust sort (time is not a
-/// corgi type). Gather the payload once, after consolidation, from the surviving source rows.
+/// One columnar `sort_blocks` (discrimination sort) orders by `(key, val, time)`, the times joining
+/// as trailing fields ([`time_words`]), and numbers the runs of equal rows. Consolidation is then
+/// one pass that sums each run's diffs, with no comparisons. The payload is gathered once, after
+/// consolidation, from the surviving source rows.
 fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
 where
     T: ColTime,
@@ -426,39 +427,74 @@ where
     if n == 0 {
         return (keys, vals, times, diffs);
     }
-    let kv = CValue::Prod(vec![keys, vals]);
-    // Order the payload; retain time/diff source coordinates until final consolidation.
-    let (perm, labels) = sort_blocks(&[], &kv);
-    // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
-    let (mut time_rows, mut od) = (Vec::new(), Vec::new());
-    let mut run = Vec::new();
-    let mut i = 0;
-    while i < n {
-        let mut j = i + 1;
-        while j < n && labels[j] == labels[i] {
+    let mut fields = vec![keys, vals];
+    fields.extend(time_words(&times));
+    let sortable = CValue::Prod(fields);
+    // Order the rows; retain time/diff source coordinates until final consolidation.
+    let (perm, labels) = sort_blocks(&[], &sortable);
+    let mut fields = sortable.into_prod("corgi chunk ingest").unwrap();
+    fields.truncate(2);
+    let kv = CValue::Prod(fields);
+    // Each run of equal labels is one `(key, val, time)`: sum its diffs, keep it if nonzero. The
+    // labels number the runs densely, so the last one bounds the survivors.
+    let runs = labels.last().map_or(0, |&l| l as usize + 1);
+    let (mut rows, mut od) = (Vec::with_capacity(runs), Vec::with_capacity(runs));
+    let mut q = 0;
+    while q < n {
+        let (rep, label) = (perm[q], labels[q]);
+        let mut d = diffs[rep].clone();
+        q += 1;
+        while q < n && labels[q] == label {
+            d.plus_equals(&diffs[perm[q]]);
+            q += 1;
+        }
+        if !d.is_zero() {
+            rows.push(rep);
+            od.push(d);
+        }
+    }
+    drop((perm, labels));
+    // The diffs become the chunk's: do not let cancellation leave them holding room for every run.
+    if od.len() * 2 < od.capacity() { od.shrink_to_fit(); }
+    let (keys, vals) = split_kv(gather(&kv, &rows));
+    (keys, vals, times.gather(&rows), od)
+}
+
+/// The times as corgi columns that sort as the times do, for [`sort_consolidate`] to sort by.
+///
+/// Times compare lexicographically by lane, each lane an unsigned integer. A lane that is constant
+/// throughout decides nothing and is left out; the others are taken as offsets from their least
+/// value, and consecutive lanes are packed into one `u64` wherever their spreads fit together, the
+/// earlier lane in the higher bits. Corgi orders an integer column as `i64`s, so each word is offset
+/// by `2^63`, under which the two orders agree. Within one flush DDIR's times differ little, so they
+/// are usually one word: one more level for the sort to refine the rows still tied, not one per lane.
+fn time_words<T>(times: &ColTimes<T>) -> Vec<CValue> {
+    let lanes = times.raw_lanes();
+    let spans: Vec<(u64, u32)> = lanes.iter().map(|lane| {
+        let (least, most) = lane.iter().fold((u64::MAX, 0), |(l, m), &x| (l.min(x), m.max(x)));
+        (least, 64 - most.saturating_sub(least).leading_zeros())
+    }).collect();
+    let mut words = Vec::new();
+    let mut j = 0;
+    while j < lanes.len() {
+        let (least, bits) = spans[j];
+        j += 1;
+        if bits == 0 {
+            continue;
+        }
+        let mut word: Vec<u64> = lanes[j - 1].iter().map(|&x| x - least).collect();
+        let mut used = bits;
+        while j < lanes.len() && used + spans[j].1 <= 64 {
+            let (least, bits) = spans[j];
+            if bits > 0 {
+                for (w, &x) in word.iter_mut().zip(&lanes[j]) { *w = (*w << bits) | (x - least); }
+                used += bits;
+            }
             j += 1;
         }
-        run.clear();
-        run.extend_from_slice(&perm[i..j]);
-        run.sort_by(|&a, &b| times.cmp(a, b));
-        let mut k = 0;
-        while k < run.len() {
-            let rep = run[k];
-            let mut d = diffs[rep].clone();
-            k += 1;
-            while k < run.len() && times.cmp(run[k], rep) == Ordering::Equal {
-                d.plus_equals(&diffs[run[k]]);
-                k += 1;
-            }
-            if !d.is_zero() {
-                time_rows.push(rep);
-                od.push(d);
-            }
-        }
-        i = j;
+        words.push(CValue::i64(word.into_iter().map(|w| (w ^ (1 << 63)) as i64).collect()));
     }
-    let (keys, vals) = split_kv(gather(&kv, &time_rows));
-    (keys, vals, times.gather(&time_rows), od)
+    words
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -670,18 +706,22 @@ pub(super) fn colliding_keys(
     colliding
 }
 
-/// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
+/// Concatenate column blocks into one column, copying each block a range at a time.
+///
+/// Each block goes to corgi's multi-source `gather_lanes` as a list of one row that holds the
+/// whole block, so the gather picks one row per block rather than one per row, and corgi copies
+/// each block's elements as one range at every level it can (leaves, products, lists, references
+/// into one arena); a sum falls back to row positions, as a gather of rows would. The result's
+/// one list holds the concatenation.
 pub(crate) fn concat_blocks(blocks: &[CValue]) -> CValue {
     if blocks.len() == 1 {
         return blocks[0].clone();
     }
-    let srcs: Vec<Option<&CValue>> = blocks.iter().map(Some).collect();
-    let total: usize = blocks.iter().map(CValue::len).sum();
-    let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
-    for (ti, b) in blocks.iter().enumerate() {
-        for o in 0..b.len() { tags.push(ti); offs.push(o); }
-    }
-    gather_lanes(&srcs, &tags, &offs)
+    let lists: Vec<CValue> = blocks.iter().map(|b| CValue::List(corgi::Bounds::Stride(b.len(), 1), Box::new(b.clone()))).collect();
+    let srcs: Vec<Option<&CValue>> = lists.iter().map(Some).collect();
+    let picks: Vec<usize> = (0..blocks.len()).collect();
+    let (_, column) = gather_lanes(&srcs, &picks, &vec![0; blocks.len()]).into_list("concat_blocks").unwrap();
+    column
 }
 
 impl<T, R> CorgiChunker<T, R>
@@ -816,6 +856,28 @@ mod test {
                     assert_eq!(result.diffs()[i], diff);
                 }
             }
+        }
+    }
+
+    /// The words `time_words` builds order rows exactly as their times do, whatever the lanes
+    /// hold: a constant lane, values either side of `2^63`, spreads too wide to share one word.
+    #[test]
+    fn time_words_order_rows_as_their_times() {
+        let mut seed = 7;
+        let n = 512;
+        let picks = [0, 1, 5, (1 << 63) - 1, 1 << 63, u64::MAX];
+        let lanes: Vec<Vec<u64>> = vec![
+            vec![9; n],
+            (0..n).map(|_| xorshift(&mut seed) % 4).collect(),
+            (0..n).map(|_| picks[xorshift(&mut seed) as usize % picks.len()]).collect(),
+            (0..n).map(|_| xorshift(&mut seed) % 3).collect(),
+        ];
+        let times = ColTimes::<crate::ir::Time>::from_raw_lanes(lanes, n);
+        let (order, labels) = sort_blocks(&[], &CValue::Prod(time_words(&times)));
+        for k in 1..n {
+            let (a, b) = (order[k - 1], order[k]);
+            assert_ne!(times.cmp(a, b), Ordering::Greater);
+            assert_eq!(times.cmp(a, b) == Ordering::Equal, labels[k - 1] == labels[k]);
         }
     }
 
