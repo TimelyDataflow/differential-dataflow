@@ -4,7 +4,7 @@
 //! their data times evaluated lane by lane over the presented times.
 //!
 //! The arranged side is staged as the join backend stages its sides: one key's rows across
-//! chunks are merged by value, equal values share one token (the value itself for integer
+//! chunks are merged by projected value, equal projections share one token (the value itself for read integer
 //! values under integer keys, else the coordinate of its first occurrence), and the records are
 //! consolidated. Identifiers that hold more than one real key are recorded, and only pairs under
 //! those have their real keys compared.
@@ -17,13 +17,13 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dogs3::operators::half_join::proxy::{data_time, HalfJoinInstance, HalfJoinMatches, HalfJoinStream, Lifted, ProxyHalfJoinBackend};
 use differential_dataflow::trace::chunk::Chunk;
 
-use corgi::arrange::{equal_idx, gather_lanes};
+use corgi::arrange::{compare_at, equal_idx, gather_lanes};
 use corgi::{shape_of_value, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::chunk::{colliding_keys, ident, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::runtime::col_times::{ColTimes, Lanes};
 use crate::runtime::container::CorgiContainer;
-use crate::runtime::join::{demanded, leaf_valued, primitive_values, stage_collision, Probe, Reads, RunRef, SideScratch, COORD_BITS};
+use crate::runtime::join::{demanded, primitive_values, stage_collision, Probe, Reads, RunRef, SideProj, SideScratch, COORD_BITS};
 use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda, Time};
 
@@ -44,6 +44,8 @@ pub(crate) struct CorgiHalfJoinBackend {
     graph: Graph<NumOp>,
     /// What the graph reads of the key, the update's value, and the arranged value.
     reads: Reads,
+    /// Whether the stream value loses fields, and can coalesce previously distinct rows.
+    project_stream: bool,
     /// Identifiers in the current block that cover more than one real key, ascending. `advance`
     /// writes this and the immediately following `cross` reads it; only matches under these
     /// identifiers need a real-key comparison.
@@ -60,7 +62,10 @@ impl CorgiHalfJoinBackend {
         let input = Shape::Prod(vec![k, v0, v1]);
         let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
             .unwrap_or_else(|e| panic!("half_join: narrowing a compiled projection at {input}: {e}"));
-        CorgiHalfJoinBackend { width, graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), colliding: Vec::new() }
+        let reads = Reads::new(narrowed.input, &input);
+        let Shape::Prod(parts) = &input else { unreachable!() };
+        let project_stream = reads.columns[1].projected_shape(&parts[1]).expect("the stream value's demand") != parts[1];
+        CorgiHalfJoinBackend { width, graph: narrowed.graph, reads, project_stream, colliding: Vec::new() }
     }
 }
 
@@ -154,29 +159,56 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
             let ids = ident(run.keys());
             rows.extend((starts[r]..ends[r]).map(|u| (ids[u], r as u32, u as u32)));
         }
-        rows.sort_unstable();
         let lanes: Vec<Vec<Cow<'_, [i64]>>> = runs.iter().map(|run| data_lanes(run, self.width)).collect();
-        for &(id, r, u) in &rows {
+        let mut push = |(id, r, u): (i64, u32, u32), diff| {
+            if diff == 0 { return; }
             let (r, u) = (r as usize, u as usize);
             let lifted = Lifted {
                 time: runs[r].times().get(u),
                 data: Time::from_coordinates(lanes[r].iter().map(|lane| lane[u] as u64)),
             };
-            stream.push(((id, ((r as u64) << COORD_BITS) | u as u64), lifted, runs[r].diffs()[u]));
+            stream.push(((id, ((r as u64) << COORD_BITS) | u as u64), lifted, diff));
+        };
+        if self.project_stream {
+            // The released runs are only in identifier order. Sort on the projected value,
+            // retaining both times and the real key: only rows that agree on all can cancel.
+            // A representative coordinate still names the original columns for `cross`.
+            let vals = demanded(&self.reads.columns[1], runs.iter().map(|r| &run_fields(r)[0]));
+            let hashed = key_is_hashed(runs[0].keys());
+            let cmp = |&(id0, r0, u0): &(i64, u32, u32), &(id1, r1, u1): &(i64, u32, u32)| {
+                let (r0, u0, r1, u1) = (r0 as usize, u0 as usize, r1 as usize, u1 as usize);
+                id0.cmp(&id1)
+                    .then_with(|| if hashed { compare_at(runs[r0].keys(), u0, runs[r1].keys(), u1) } else { std::cmp::Ordering::Equal })
+                    .then_with(|| if vals.is_empty() { std::cmp::Ordering::Equal } else { compare_at(&vals[r0], u0, &vals[r1], u1) })
+                    .then_with(|| runs[r0].times().cmp_cross(u0, runs[r1].times(), u1))
+                    .then_with(|| lanes[r0].iter().map(|l| l[u0]).cmp(lanes[r1].iter().map(|l| l[u1])))
+            };
+            rows.sort_unstable_by(cmp);
+            for group in rows.chunk_by(|a, b| cmp(a, b).is_eq()) {
+                let diff = group.iter().map(|&(_, r, u)| runs[r as usize].diffs()[u as usize]).sum();
+                push(group[0], diff);
+            }
+        } else {
+            rows.sort_unstable();
+            for &row in &rows { push(row, runs[row.1 as usize].diffs()[row.2 as usize]); }
         }
+        if stream.is_empty() { return; }
 
         // The arranged rows of the block's identifiers: one batched probe of each chunk that
         // can hold any of them.
-        let mut needles: Vec<i64> = rows.iter().map(|row| row.0).collect();
+        // Needles come from the consolidated stream, so identifiers whose rows all cancelled
+        // are neither probed nor staged. The stream is in identifier order.
+        let mut needles: Vec<i64> = stream.iter().map(|((id, _), _, _)| *id).collect();
         needles.dedup();
         let (first, last) = (needles[0], needles[needles.len() - 1]);
         let chunks = arranged_chunks(&instance.batches);
         // An empty arrangement meets nothing; the stream rows are presented and skipped.
         if chunks.is_empty() { return; }
-        let leaf_vals = leaf_valued(&chunks);
+        // Values equal on the read fields share a token before matching.
+        let proj = SideProj::new(&chunks, &self.reads.columns[2]);
         let probes: Vec<Probe<'_, Time>> = chunks.iter().enumerate()
             .filter(|(_, c)| { let ids = ident(c.keys()); ids[0] <= last && ids[ids.len() - 1] >= first })
-            .map(|(cid, c)| Probe::new(c, cid, &needles, leaf_vals))
+            .map(|(cid, c)| Probe::new(c, cid, &needles, &proj))
             .collect();
         let matched: Vec<bool> = (0..needles.len()).map(|n| probes.iter().any(|p| p.lo[n] < p.hi[n])).collect();
 
@@ -190,8 +222,10 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
                 .chain(probes.iter().map(|p| recover_key_ref(p.chunk.keys()))).collect();
             let mut cursor = 0usize;
             let released = rows.iter().filter_map(|&(id, r, u)| {
-                while needles[cursor] < id { cursor += 1; }
-                matched[cursor].then_some((cursor, r as usize, u as usize, u as usize + 1))
+                while cursor < needles.len() && needles[cursor] < id { cursor += 1; }
+                // A row whose identifier cancelled entirely is not a needle.
+                (cursor < needles.len() && needles[cursor] == id && matched[cursor])
+                    .then_some((cursor, r as usize, u as usize, u as usize + 1))
             });
             let offset = runs.len();
             let probed = probes.iter().enumerate().flat_map(|(pi, p)| {
@@ -365,6 +399,29 @@ mod tests {
     /// A tactic over the backend at these shapes.
     fn tactic(strict: bool, shapes: [Shape; 3]) -> ProxyHalfJoinTactic<NativeBatch, Run, CorgiHalfJoinBackend> {
         ProxyHalfJoinTactic::new(CorgiHalfJoinBackend::new(&pairing(), 2, shapes), strict)
+    }
+
+    /// Projection cancels unread churn, but neither of a lifted update's times may be merged.
+    #[test]
+    fn projected_churn_keeps_both_stream_times() {
+        for change_data in [false, true] {
+            let arranged = Rc::new(columns_to_batch(
+                present_key(ints(&[1, 1])), CValue::Prod(vec![ints(&[8, 8]), ints(&[20, 21])]),
+                [t(0, 0), t(0, 0)].into_iter().collect(), vec![1, -1],
+            ));
+            let run = Run::new(ints(&[1; 4]), CValue::Prod(vec![
+                CValue::Prod(vec![ints(&[7; 4]), ints(&[10, 11, 12, 13])]),
+                lifted(&[(3, 0), (3, 0), (4, 0), if change_data { (5, 0) } else { (4, 0) }]),
+            ]), [t(2, 0), t(2, 0), t(2, 0), if change_data { t(2, 0) } else { t(3, 0) }].into_iter().collect(), vec![1, -1, 1, -1]);
+            let pair = Shape::Prod(vec![Shape::Int, Shape::Int]);
+            let lambda = Lambda::new("let (k, (a, _), (b, _)) = input in (k, (a, b))".into(), &corgi::Scope::default());
+            let mut backend = CorgiHalfJoinBackend::new(&lambda, 2, [Shape::Int, pair.clone(), pair]);
+            let instance = HalfJoinInstance { stream: vec![run], batches: vec![arranged] };
+            let (mut stream, mut arranged) = (Vec::new(), Vec::new());
+            backend.advance(&instance, &mut KeyPosition::Start, &mut stream, &mut arranged);
+            assert_eq!(stream.len(), 2);
+            assert!(arranged.is_empty());
+        }
     }
 
     /// An update meets the arranged rows before it in the total order on times, strictly or not:
@@ -588,7 +645,7 @@ mod tests {
                 let lambda = Lambda::new(format!("let (k, v0, v1) = input in let (a, b, c, d) = v0 in let (e, f, g, h) = v1 in {body}"), &corgi::Scope::default());
                 let narrowed = CorgiHalfJoinBackend::new(&lambda, 2, shapes.clone());
                 let original = CorgiHalfJoinBackend {
-                    width: 2, graph: compile_projection(&lambda, &shapes).unwrap(),
+                    width: 2, project_stream: false, graph: compile_projection(&lambda, &shapes).unwrap(),
                     reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), colliding: Vec::new(),
                 };
                 let rows = |backend: CorgiHalfJoinBackend| {
