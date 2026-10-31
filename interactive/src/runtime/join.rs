@@ -15,16 +15,17 @@
 //!     compare the recorded real-key coordinates and discard unequal pairs.
 //!
 //! *   Values are compared after projection to the fields the join reads. Unread values share
-//!     one token per real key. With primitive keys, a read primitive **value token** is the value itself (including
-//!     singleton-product wrappers). Equal values consolidate without choosing a representative,
-//!     and matched columns are reconstructed from IDs. Other values use a *canonical coordinate*:
-//!     `(chunk << 48) | row` of the value's first occurrence among its side's chunks. Coordinates redeem against the instance
-//!     alone (no backend state, no reliance on call adjacency), and value columns are never
-//!     copied into the presentation — they are gathered once, straight from chunk storage
-//!     into the projection input, and only for rows that matched. Assigning *equal projected* values
-//!     (found by the per-key merge across chunks) the *same* canonical coordinate is what
-//!     lets bridge consolidation cancel cross-batch churn: tokens are the unit of
-//!     cancellation, and location-distinct tokens for equal data would silently opt out.
+//!     one token per real key. With primitive keys, a read primitive **value token** is the
+//!     value itself (including singleton-product wrappers). Equal values consolidate without
+//!     choosing a representative, and matched columns are reconstructed from IDs. Other values
+//!     use a *canonical coordinate*: `(chunk << 48) | row` of the value's first occurrence among
+//!     its side's chunks. Coordinates redeem against the instance alone (no backend state, no
+//!     reliance on call adjacency), and value columns are never copied into the presentation —
+//!     they are gathered once, straight from chunk storage into the projection input, and only
+//!     for rows that matched. Assigning *equal projected* values (found by the per-key merge
+//!     across chunks) the *same* canonical coordinate is what lets bridge consolidation cancel
+//!     cross-batch churn: tokens are the unit of cancellation, and location-distinct tokens for
+//!     equal data would silently opt out.
 //!
 //! Times are advanced by `instance.lower` on presentation (consolidate on load), and a key
 //! whose side nets to zero after consolidation is suppressed entirely (the harness requires
@@ -460,11 +461,13 @@ pub(super) struct SideScratch<T> {
     tds: Vec<(T, Diff)>,
     /// Cross-chunk value-merge heads, reused across keys.
     heads: Vec<(usize, usize)>,
+    /// Row indices sorted by projected value, reused across keys.
+    idx: Vec<(u32, u32)>,
 }
 
 impl<T: ColTime> SideScratch<T> {
     pub(super) fn new() -> Self {
-        SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new() }
+        SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new(), idx: Vec::new() }
     }
 
     fn push(&mut self, coord: u64, time: T, diff: Diff) {
@@ -498,7 +501,9 @@ impl<T: ColTime> SideScratch<T> {
             // The stored order does not group equal projected values: sort the key's rows by
             // projected value, then consolidate each value's times. The canonical coordinate
             // is the least contributing (chunk, row).
-            let mut idx: Vec<(u32, u32)> = Vec::new();
+            // Move the scratch out while `push` borrows `self`, then return its capacity.
+            let mut idx = std::mem::take(&mut self.idx);
+            idx.clear();
             for (i, run) in runs.iter().enumerate() { idx.extend((run.s..run.e).map(|row| (i as u32, row as u32))); }
             idx.sort_unstable_by(|a, b| runs[a.0 as usize].val_cmp(a.1 as usize, &runs[b.0 as usize], b.1 as usize));
             let mut start = 0;
@@ -519,6 +524,7 @@ impl<T: ColTime> SideScratch<T> {
                 self.tds = tds;
                 start = end;
             }
+            self.idx = idx;
             self.entries.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
             self.entries.retain(|(_, _, d)| *d != 0);
             return;

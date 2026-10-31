@@ -196,7 +196,9 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
 
         // The arranged rows of the block's identifiers: one batched probe of each chunk that
         // can hold any of them.
-        let mut needles: Vec<i64> = rows.iter().map(|row| row.0).collect();
+        // Needles come from the consolidated stream, so identifiers whose rows all cancelled
+        // are neither probed nor staged. The stream is in identifier order.
+        let mut needles: Vec<i64> = stream.iter().map(|((id, _), _, _)| *id).collect();
         needles.dedup();
         let (first, last) = (needles[0], needles[needles.len() - 1]);
         let chunks = arranged_chunks(&instance.batches);
@@ -220,8 +222,10 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
                 .chain(probes.iter().map(|p| recover_key_ref(p.chunk.keys()))).collect();
             let mut cursor = 0usize;
             let released = rows.iter().filter_map(|&(id, r, u)| {
-                while needles[cursor] < id { cursor += 1; }
-                matched[cursor].then_some((cursor, r as usize, u as usize, u as usize + 1))
+                while cursor < needles.len() && needles[cursor] < id { cursor += 1; }
+                // A row whose identifier cancelled entirely is not a needle.
+                (cursor < needles.len() && needles[cursor] == id && matched[cursor])
+                    .then_some((cursor, r as usize, u as usize, u as usize + 1))
             });
             let offset = runs.len();
             let probed = probes.iter().enumerate().flat_map(|(pi, p)| {

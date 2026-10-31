@@ -89,9 +89,9 @@ pub(crate) fn projection(compiled: &corgi::Compiled) -> Option<Demand> {
     // emit nothing for an empty list, or coalescing would change key presence.
     let empty = Value::List(Bounds::offsets(vec![0]), Box::new(Value::empty(&Shape::Prod(vec![val.clone(), Shape::Int]))));
     let argument = Value::Prod(vec![zero_row(key)?, empty]);
-    let empty_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        corgi::eval_graph(graph, argument).into_list("empty reduce").ok().map(|(bounds, _)| bounds.to_vec())
-    })).ok()??;
+    // The argument has the compiled input's shape and corgi's ops are total on data, so this
+    // evaluation cannot fail; a panic here would be a corgi bug, and should not be hidden.
+    let empty_result = corgi::eval_graph(graph, argument).into_list("empty reduce").ok().map(|(bounds, _)| bounds.to_vec())?;
     if empty_result != [0] { return None; }
 
     let analysis = corgi::analyze_demand(graph, input, &Demand::All).ok()?;
