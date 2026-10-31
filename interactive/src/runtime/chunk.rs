@@ -136,19 +136,17 @@ where
         }
     }
 
-    /// Concatenate a run of (globally-sorted) chunks into one combined `(kv, times, diffs)`.
+    /// Concatenate a run of (globally-sorted) chunks into one combined `(kv, times, diffs)`, the
+    /// key/val columns a range at a time ([`concat_blocks`]).
     fn concat(chunks: &[Self]) -> (CValue, ColTimes<T>, Vec<R>) {
         let kvs: Vec<CValue> = chunks.iter().map(Self::kv).collect();
-        let srcs: Vec<Option<&CValue>> = kvs.iter().map(Some).collect();
         let total: usize = chunks.iter().map(Self::len_).sum();
-        let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
         let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(total));
-        for (ti, ch) in chunks.iter().enumerate() {
-            for o in 0..ch.len_() { tags.push(ti); offs.push(o); }
+        for ch in chunks {
             times.push_range(ch.times(), 0, ch.len_());
             diffs.extend_from_slice(ch.diffs());
         }
-        let kv = if total == 0 { CValue::Unit(0) } else { gather_lanes(&srcs, &tags, &offs) };
+        let kv = if total == 0 { CValue::Unit(0) } else { concat_blocks(&kvs) };
         (kv, times, diffs)
     }
 
