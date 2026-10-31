@@ -16,6 +16,8 @@
 //! - `diag.records`: `((worker, op), ())`, the updates the operator's arrangement holds, from
 //!   DD's batch, merge and drop events. Retracted, if anything is left, when the operator shuts
 //!   down.
+//! - `diag.bytes`: `((worker, op), ())`, the heap bytes those updates occupy (their chunks'
+//!   buffers, by capacity), from the same events, and retracted the same way.
 //!
 //! Strings (program, statement and operator names) are lists of their bytes. An operator outside
 //! any installed program (the server's own control dataflow, a peek) belongs to `(server)`, and
@@ -36,7 +38,7 @@ use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The diagnostics sources, by the name a program imports.
-pub(crate) const SOURCES: [&str; 4] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records"];
+pub(crate) const SOURCES: [&str; 5] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records", "diag.bytes"];
 
 /// Whether `name` is a diagnostics source.
 pub(crate) fn is_source(name: &str) -> bool {
@@ -52,7 +54,7 @@ pub(crate) fn shape(name: &str) -> Option<(Shape, Shape)> {
     let worker_op = Shape::Prod(vec![Shape::Int, Shape::Int]);
     match name {
         "diag.operator" => Some((worker_op, Shape::Prod(vec![text(), text(), text(), Shape::List(Box::new(Shape::Int))]))),
-        "diag.time" | "diag.records" => Some((worker_op, Shape::Unit)),
+        "diag.time" | "diag.records" | "diag.bytes" => Some((worker_op, Shape::Unit)),
         "diag.time_retired" => Some((Shape::Prod(vec![Shape::Int, text(), text(), text()]), Shape::Unit)),
         _ => None,
     }
@@ -74,6 +76,8 @@ struct Op {
     time: i64,
     /// Updates its arrangement holds: what `diag.records` holds for it.
     records: i64,
+    /// Heap bytes those updates occupy: what `diag.bytes` holds for it.
+    bytes: i64,
 }
 
 /// One worker's diagnostics: events not yet processed, the live operators, and the changes not
@@ -97,9 +101,9 @@ pub struct Diagnostics {
     retired: HashMap<(String, String, String), i64>,
     /// Changes since the last feed, per source.
     pending: Pending,
-    /// How often a dropped operator still held records when it shut down, which DD's drop
-    /// events should have retracted.
-    pub unbalanced_records: usize,
+    /// How often a dropped operator still held records or bytes when it shut down, which DD's
+    /// drop events should have retracted.
+    pub unbalanced: usize,
 }
 
 #[derive(Default)]
@@ -111,6 +115,7 @@ struct Pending {
     time: HashMap<usize, i64>,
     retired: HashMap<(String, String, String), i64>,
     records: HashMap<usize, i64>,
+    bytes: HashMap<usize, i64>,
 }
 
 /// Register this worker's loggers, which feed a fresh [`Diagnostics`]. Call before the worker
@@ -180,7 +185,7 @@ impl Diagnostics {
                 TimelyEvent::Operates(e) => {
                     let program = e.addr.first().and_then(|d| self.dataflows.get(d)).cloned().unwrap_or_else(|| "(server)".to_string());
                     created.push(e.id);
-                    self.ops.insert(e.id, Op { program, statement: String::new(), name: e.name, addr: e.addr, time: 0, records: 0 });
+                    self.ops.insert(e.id, Op { program, statement: String::new(), name: e.name, addr: e.addr, time: 0, records: 0, bytes: 0 });
                 }
                 TimelyEvent::Schedule(e) => match e.start_stop {
                     StartStop::Start => { self.starts.insert(e.id, time); }
@@ -223,19 +228,28 @@ impl Diagnostics {
             }
         }
         for event in std::mem::take(&mut self.differential) {
-            let (op, diff) = match event {
-                DifferentialEvent::Batch(e) => (e.operator, e.length as i64),
-                DifferentialEvent::Merge(e) => match e.complete {
-                    Some(complete) => (e.operator, complete as i64 - (e.length1 + e.length2) as i64),
-                    None => continue,
+            let (op, records, bytes) = match event {
+                DifferentialEvent::Batch(e) => (e.operator, e.length as i64, e.bytes as i64),
+                DifferentialEvent::Merge(e) => match (e.complete, e.complete_bytes) {
+                    (Some(length), Some(bytes)) => (
+                        e.operator,
+                        length as i64 - (e.length1 + e.length2) as i64,
+                        bytes as i64 - (e.bytes1 + e.bytes2) as i64,
+                    ),
+                    _ => continue,
                 },
-                DifferentialEvent::Drop(e) => (e.operator, -(e.length as i64)),
+                DifferentialEvent::Drop(e) => (e.operator, -(e.length as i64), -(e.bytes as i64)),
                 _ => continue,
             };
-            if diff == 0 { continue; }
             if let Some(entry) = self.ops.get_mut(&op) {
-                entry.records += diff;
-                *self.pending.records.entry(op).or_default() += diff;
+                if records != 0 {
+                    entry.records += records;
+                    *self.pending.records.entry(op).or_default() += records;
+                }
+                if bytes != 0 {
+                    entry.bytes += bytes;
+                    *self.pending.bytes.entry(op).or_default() += bytes;
+                }
             }
         }
         for &id in &created {
@@ -259,9 +273,10 @@ impl Diagnostics {
                 *self.retired.entry(key.clone()).or_default() += op.time;
                 *self.pending.retired.entry(key).or_default() += op.time;
             }
-            if op.records != 0 {
-                self.unbalanced_records += 1;
+            if op.records != 0 || op.bytes != 0 {
+                self.unbalanced += 1;
                 *self.pending.records.entry(id).or_default() -= op.records;
+                *self.pending.bytes.entry(id).or_default() -= op.bytes;
             }
             self.pending.operator.push((id, -1));
             self.pending.gone.insert(id, (op.program, op.statement, op.name, op.addr));
@@ -289,6 +304,7 @@ impl Diagnostics {
             }
             "diag.time" => keyed_rows(worker, std::mem::take(&mut self.pending.time)),
             "diag.records" => keyed_rows(worker, std::mem::take(&mut self.pending.records)),
+            "diag.bytes" => keyed_rows(worker, std::mem::take(&mut self.pending.bytes)),
             "diag.time_retired" => retired_rows(worker, std::mem::take(&mut self.pending.retired)),
             _ => None,
         }
@@ -303,6 +319,7 @@ impl Diagnostics {
                 .collect()),
             "diag.time" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.time)).collect()),
             "diag.records" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.records)).collect()),
+            "diag.bytes" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.bytes)).collect()),
             "diag.time_retired" => retired_rows(worker, self.retired.clone()),
             _ => None,
         }

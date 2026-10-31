@@ -331,6 +331,21 @@ where U::Time: 'static {
         }
     }
 
+    /// A resident trie's columns, by length, as columnar does not show capacity. A paged chunk
+    /// counts nothing: what stays resident is its first and last update, and a fetched copy is
+    /// a cache that may come and go while the chunk lives.
+    fn heap_bytes(&self) -> usize {
+        fn bytes<'a>(column: impl columnar::AsBytes<'a>) -> usize {
+            column.as_bytes().map(|(_, slice)| slice.len()).sum()
+        }
+        match self {
+            ColChunk::Resident(rc) => {
+                bytes(rc.keys.borrow()) + bytes(rc.vals.borrow()) + bytes(rc.times.borrow()) + bytes(rc.diffs.borrow())
+            }
+            ColChunk::Paged(_) => 0,
+        }
+    }
+
     /// Trie-native binary merge of the two deques' front chunks through their
     /// shared horizon, via [`trie_merger::merge_pair`]: it merges one input fully
     /// and a prefix of the other (the survey/`write_layer` bulk range-copy),

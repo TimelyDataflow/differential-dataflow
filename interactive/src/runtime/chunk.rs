@@ -165,6 +165,12 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
+    /// The key and value columns' buffers (see [`column_bytes`]), the time lanes' and the diffs'.
+    fn heap_bytes(&self) -> usize {
+        column_bytes(&self.0.keys) + column_bytes(&self.0.vals)
+            + self.0.times.heap_bytes() + self.0.diffs.capacity() * std::mem::size_of::<R>()
+    }
+
     /// Merge of the two front chunks through their shared horizon, FULLY consolidating equal
     /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
     /// contract). Batched: corgi's `survey_groups` reports the interleaving of the two `(key, val)`
@@ -408,6 +414,35 @@ where
             },
             |chunk| chunk,
         );
+    }
+}
+
+/// The bytes a corgi column's buffers hold. Row partitions and sum offsets count their capacity.
+/// A leaf counts its stored length, as corgi shows no capacity and builds leaves at their size:
+/// its codec writes a leaf as three header words and the stored bytes, padded to a word.
+///
+/// Nothing is counted twice within a column, and chunks do not share buffers: `gather` copies.
+/// The exception would be a reference column, whose arena every gather of it shares, and which
+/// counts its arena whole; DDIR types cannot hold references, so arrangements have none.
+fn column_bytes(col: &CValue) -> usize {
+    use corgi::{Bounds, Tags};
+    let usizes = |xs: &std::sync::Arc<Vec<usize>>| xs.capacity() * std::mem::size_of::<usize>();
+    match col {
+        CValue::Prim(_) => corgi::bytes::length_in_bytes(col) - 24,
+        CValue::Prod(fields) => fields.iter().map(column_bytes).sum(),
+        CValue::Sum(tags, lanes) => {
+            let tags = match tags {
+                Tags::Const(..) => 0,
+                Tags::Column(tags, offsets) => column_bytes(&CValue::Prim(tags.clone())) + usizes(offsets),
+            };
+            tags + lanes.iter().map(column_bytes).sum::<usize>()
+        }
+        CValue::List(bounds, values) => {
+            let bounds = match bounds { Bounds::Offsets(ends) => usizes(ends), Bounds::Stride(..) => 0 };
+            bounds + column_bytes(values)
+        }
+        CValue::Unit(_) => 0,
+        CValue::Ref(arena, rows) => usizes(rows) + column_bytes(arena),
     }
 }
 

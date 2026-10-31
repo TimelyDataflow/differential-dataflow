@@ -49,6 +49,17 @@ fn view(server: &mut Server, worker: &mut timely::worker::Worker, name: &str) ->
     }).collect()
 }
 
+/// A view of `(updates, bytes)` pairs: each key, decoded, and its pair.
+fn sizes(server: &mut Server, worker: &mut timely::worker::Worker, name: &str) -> BTreeMap<String, (i64, i64)> {
+    let rows = server.snapshot(worker, name).expect("a published view").rows();
+    rows.into_iter().map(|(key, val, diff)| {
+        assert_eq!(diff, 1, "a joined count row");
+        let pair = val.strip_prefix("tuple(").and_then(|v| v.strip_suffix(')')).expect("a pair");
+        let (n, b) = pair.split_once(',').expect("two counts");
+        (decode(&key), (n.parse().expect("a count"), b.parse().expect("a count")))
+    }).collect()
+}
+
 #[test]
 fn views_see_programs_and_state_stays_bounded() {
     timely::execute_directly(move |worker| {
@@ -68,6 +79,12 @@ fn views_see_programs_and_state_stays_bounded() {
         assert!(records.iter().any(|(k, &n)| k.contains("\"p\"") && n > 0), "{records:#?}");
         let operators = view(&mut server, worker, "diag.operators_by_program");
         assert!(operators.get("\"p\"").is_some_and(|&n| n > 0), "{operators:#?}");
+        // Each arrangement's updates take bytes: at least a diff, a time and a key column apiece.
+        let arrangements = sizes(&mut server, worker, "diag.arrangements");
+        assert!(arrangements.iter().any(|(k, &(n, b))| k.contains("\"p\"") && n > 0 && b >= 24 * n), "{arrangements:#?}");
+        let by_program = sizes(&mut server, worker, "diag.arrangements_by_program");
+        let summed = arrangements.iter().filter(|(k, _)| k.contains("\"p\"")).fold((0, 0), |(n, b), (_, s)| (n + s.0, b + s.1));
+        assert_eq!(by_program.get("\"p\""), Some(&summed), "{by_program:#?}");
 
         // A program installed and dropped every epoch: its time still adds up, and nothing the
         // diagnostics hold grows with the number of installs.
@@ -91,6 +108,6 @@ fn views_see_programs_and_state_stays_bounded() {
         assert_eq!(held[0].0, held[1].0, "live operators after 10 and 30 cycles: {held:?}");
         assert_eq!(held[0].1, held[1].1, "retired triples after 10 and 30 cycles: {held:?}");
         assert!(held[1].2 <= held[0].2 + held[0].2 / 4 + 64, "the diagnostics program's records stay flat: {held:?}");
-        assert_eq!(diagnostics.borrow().unbalanced_records, 0, "DD's drop events retract every record");
+        assert_eq!(diagnostics.borrow().unbalanced, 0, "DD's drop events retract every record and byte");
     });
 }

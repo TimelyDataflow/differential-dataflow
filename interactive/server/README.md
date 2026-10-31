@@ -12,7 +12,8 @@ defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
 becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
 the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
 `peek diag.time_by_statement` reads time by program statement like any other
-trace. `DDIR_WORKERS` selects the number of worker
+trace, and `peek diag.arrangements` reads each arrangement's updates and the heap
+bytes they occupy. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
 (default `all,-projection`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
 `collapse-parent-arranges`, `hoist-invariant`, `compose-maps`,
