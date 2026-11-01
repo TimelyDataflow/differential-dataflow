@@ -332,7 +332,7 @@ impl Server {
         self.traces.insert(name.to_string(), trace);
         let input = ServerInput::new(handle, shape.clone(), 1);
         self.shapes.insert(name.to_string(), shape);
-        self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), probe: probe.clone(), since: self.import_as_of() });
+        self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), inputs: vec![0], imports: Vec::new(), probe: probe.clone(), since: self.import_as_of() });
         (input, dataflow_id, probe)
     }
 }

@@ -59,7 +59,7 @@ impl Server {
     /// source exactly once and the exchange places each row on its key's owner.
     /// Each row enters with its multiplicity times `diff`.
     ///
-    /// A trace is read as its consolidated contents before the current epoch,
+    /// A width-one trace is read as its consolidated contents at its latest closed point,
     /// each worker reading its own share of the arrangement directly, with no
     /// dataflow and no exchange (the input's own exchange routes the rows).
     /// `feed bank 0 from retire diff=-1` is the maintenance idiom: a program
@@ -162,7 +162,7 @@ impl Server {
     }
 
     /// [`Server::load`] from published trace `source`: this worker's share of its contents
-    /// before the current epoch, scaled by `diff`, into its own handle for `prog`'s `input`.
+    /// at its latest closed point, scaled by `diff`, into its own handle for `prog`'s `input`.
     fn load_trace(&mut self, prog: &str, input: usize, source: &str, diff: Diff) -> Result<u64, String> {
         let name = canonical_source_name(source);
         let declared = &self.programs[&canonical_source_name(prog)].inputs[&input].shape;
@@ -216,7 +216,7 @@ impl Server {
             return Err(format!("program {:?} has no input {}", prog, input));
         }
         if time.len() > installed.root_width || !installed.inputs[&input].time().less_equal(time) {
-            return Err(format!("cannot feed at {time:?}: input {prog:?}/{input} has width {} and frontier {:?}", installed.root_width, installed.inputs[&input].time()));
+            return Err(format!("cannot feed at {}: input {prog:?}/{input} has width {} and frontier {}", format_point(time, installed.root_width), installed.root_width, format_point(installed.inputs[&input].time(), installed.root_width)));
         }
         Ok(())
     }

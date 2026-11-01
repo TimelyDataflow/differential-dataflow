@@ -29,6 +29,23 @@ fn feed_validates_before_staging_one_epoch() {
             server.snapshot(worker, "rows").unwrap().rows(),
             vec![(tup(&[1]), tup(&[10]), 1), (tup(&[2]), tup(&[20]), 1),]
         );
+
+        // Per-input advances close new contents without moving the program clock.
+        use interactive::server::host_time;
+        server.feed("world", 0, "3 val=30", None).unwrap();
+        server.advance_input("world", 0, &host_time(3)).unwrap();
+        assert_eq!(server.now("world").unwrap(), &host_time(2));
+        let rows = server.snapshot(worker, "rows").unwrap().rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows, server.snapshot_as_of(worker, "rows", &host_time(2)).unwrap().rows());
+        assert_eq!(server.peek(worker, "rows", Some("tuple(3)")).unwrap().rows(), vec![(tup(&[3]), tup(&[30]), 1)]);
+
+        // Bulk advances still read the point immediately before the program clock.
+        server.feed("world", 0, "4 val=40", None).unwrap();
+        server.advance_to(worker, "world", &host_time(4)).unwrap();
+        let rows = server.snapshot(worker, "rows").unwrap().rows();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows, server.snapshot_as_of(worker, "rows", &host_time(3)).unwrap().rows());
     });
 }
 

@@ -128,6 +128,7 @@ impl Server {
             })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
+        let mut dependencies: HashMap<_, _> = export_names.iter().cloned().zip(export_dependencies(&prog.root)).collect();
 
         let mut output_probes = HashMap::new();
         let root = &prog.root;
@@ -207,7 +208,16 @@ impl Server {
             self.shapes.insert(export_name, shape);
         }
         for (export_name, trace, tap) in published {
-            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });
+            let mut inputs = Vec::new();
+            let mut imports = Vec::new();
+            for index in dependencies.remove(&export_name).unwrap() {
+                match &root.imports[index].from {
+                    st::Source::Input(input) => inputs.push(*input),
+                    st::Source::Trace(trace) => imports.push(canonical_source_name(trace)),
+                    st::Source::Parent(_) => unreachable!("root import from a parent scope"),
+                }
+            }
+            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), inputs, imports, probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });
             if let Some(tap) = tap { self.taps.insert(export_name.clone(), tap); }
             self.traces.insert(export_name, trace);
         }
@@ -272,4 +282,39 @@ impl Server {
             .collect();
         Ok((shapes, exports))
     }
+}
+
+/// For each export, the import slots reachable backwards through the rendered scope.
+/// Summarize children first, then follow operators, child edges, and feedback bindings.
+/// Visiting each reference once per export closes cycles without including unrelated loops.
+fn export_dependencies(scope: &st::Scope) -> Vec<Vec<usize>> {
+    let children: Vec<_> = scope.items.iter().map(|item| match item {
+        st::Item::Sub(child) => export_dependencies(child),
+        st::Item::Op(_) => Vec::new(),
+    }).collect();
+    scope.exports.iter().map(|export| {
+        let mut pending = vec![export.value.clone()];
+        let mut seen = std::collections::HashSet::new();
+        let mut imports = Vec::new();
+        while let Some(reference) = pending.pop() {
+            if !seen.insert(reference.clone()) { continue; }
+            match reference {
+                st::Ref::Import(index) => imports.push(index),
+                st::Ref::Local(index) => {
+                    let st::Item::Op(node) = &scope.items[index] else { unreachable!("local reference to a scope") };
+                    pending.extend(node.refs().cloned());
+                }
+                st::Ref::Var(var) => pending.extend(scope.binds.iter().filter(|b| b.var == var).map(|b| b.value.clone())),
+                st::Ref::ChildExport(index, export) => {
+                    let st::Item::Sub(child) = &scope.items[index] else { unreachable!("child export of an operator") };
+                    for &import in &children[index][export] {
+                        let st::Source::Parent(reference) = &child.imports[import].from else { unreachable!("child import without a parent") };
+                        pending.push(reference.clone());
+                    }
+                }
+            }
+        }
+        imports.sort_unstable();
+        imports
+    }).collect()
 }
