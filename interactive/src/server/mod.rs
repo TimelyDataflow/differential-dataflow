@@ -92,6 +92,7 @@ mod progress;
 pub use self::evaluate::evaluate;
 pub use self::sources::gen_field_seeded;
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
+use self::time::{format_point, format_frontier};
 use self::bind::Binding;
 use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
 pub use self::sources::generated_shape;
@@ -149,6 +150,12 @@ fn fmt_shape((k, v): &RowShape) -> String {
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
+    /// Install with explicit point clocks and manual progress/retention.
+    InstallManual { name: String, program: st::Program, width: usize, as_of: HostTime },
+    /// A batch at one explicit point, partitioned across workers before replay.
+    FeedAt { prog: String, input: usize, columns: Updates, time: HostTime },
+    /// Compare and advance a singleton input frontier, without waiting.
+    AdvanceWrite { prog: String, input: usize, lower: HostTime, upper: HostTime },
     /// Update positional `input` of `prog` with one row, read into columns, at
     /// `time` (default the current epoch when `None`).
     Feed {
@@ -209,6 +216,8 @@ struct Installed {
     dataflow_id: usize,
     /// Number of root time coordinates declared by this program.
     root_width: usize,
+    /// Excluded from the compatibility tick and its automatic retention.
+    manual: bool,
     /// Default point used by program-wide advances.
     now: HostTime,
     /// Whether this is a user program, a generated source, or the clock — see
@@ -227,6 +236,9 @@ struct Output {
     width: usize,
     /// Installed program that publishes this trace.
     owner: String,
+    /// Root inputs and imported traces whose data can reach this export.
+    inputs: Vec<usize>,
+    imports: Vec<String>,
     /// This worker's observed frontier of the export arrangement.
     probe: ProbeHandle<HostTime>,
     /// Earliest readable point, advanced by logical compaction.
@@ -241,6 +253,8 @@ pub struct ProgramInfo {
     pub imports: Vec<String>,
     pub exports: Vec<String>,
     pub origin: &'static str,
+    pub width: usize,
+    pub manual: bool,
 }
 
 /// A binding's captured changes: the containers of its source trace, whose times `tick`
@@ -302,10 +316,10 @@ impl Server {
         self.epoch
     }
 
-    /// The time a program installed now, or a binding, snapshot or tail started now, reads the
-    /// published traces it imports as of: the epoch before the current one, as a program time.
+    /// The compatibility import floor for a program installed now, or a binding or tail
+    /// started now: the epoch before the current one, as a program time.
     ///
-    /// [`Server::tick`] compacts every published trace to it, so their accumulations are correct
+    /// [`Server::tick`] compacts every width-one trace to it, so their accumulations are correct
     /// from it on; before it a trace's batches can hold counts no time had (a retraction advanced
     /// to it beside the insertion it retracts), on which an iterative scope need not converge.
     /// Every import advances the times it reads to it, as DD's `import_frontier` reads a trace.
@@ -369,6 +383,8 @@ impl Server {
                 inputs.sort();
                 ProgramInfo {
                     name: name.clone(),
+                    width: installed.root_width,
+                    manual: installed.manual,
                     inputs,
                     imports: installed.imports.clone(),
                     exports: installed.exports.clone(),
@@ -473,7 +489,7 @@ impl Server {
         // Diagnostics of everything since the last tick enter at the epoch being closed.
         self.process_diagnostics(worker);
         self.feed_diagnostics(cur);
-        for installed in self.programs.values_mut().filter(|p| p.root_width == 1) {
+        for installed in self.programs.values_mut().filter(|p| !p.manual) {
             // The clock's single row advances by one each tick (worker 0 owns
             // it): retract the current epoch, add the next — an O(1) change.
             if w0 && installed.origin == Origin::Clock {
@@ -508,7 +524,7 @@ impl Server {
         // waited on too, so each buffer holds every change through the epoch
         // just closed before it is drained below.
         let epoch = self.epoch;
-        while self.outputs.values().filter(|o| o.width == 1).any(|o| !progress::caught_up(&o.probe, &host_time(epoch)))
+        while self.outputs.values().filter(|o| !self.programs[&o.owner].manual).any(|o| !progress::caught_up(&o.probe, &host_time(epoch)))
             || self.bindings.iter().any(|b| b.probe.less_than(&host_time(epoch)))
         {
             // Remote data or progress wakes idle workers; do not busy-poll.
@@ -551,7 +567,7 @@ impl Server {
         // `epoch`, sliding it out of peek's window and leaving peek with only the
         // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
         // tick only runs at epoch >= 1.)
-        let names: Vec<_> = self.outputs.iter().filter(|(_, o)| o.width == 1).map(|(n, _)| n.clone()).collect();
+        let names: Vec<_> = self.outputs.iter().filter(|(_, o)| !self.programs[&o.owner].manual).map(|(n, _)| n.clone()).collect();
         for name in names {
             let since = self.outputs[&name].since.join(&self.import_as_of());
             self.compact(&name, &since).expect("monotone legacy compaction");
