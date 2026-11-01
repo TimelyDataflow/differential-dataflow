@@ -142,6 +142,10 @@ impl Printer {
         let mut expressions: Vec<String> = Vec::new();
         let mut depths = Vec::new();
         let mut remaining = uses.clone();
+        // A tuple read only by a fused `GatherRange` keeps its fields' spellings for that node,
+        // which prints the `range` and `gather` the fusion stands for.
+        let gather_range_args: Vec<bool> = (0..nodes.len()).map(|i| uses[i] == 1 && matches!(nodes[i], NodeRef::Tuple(fields) if fields.len() == 2)
+            && nodes.iter().any(|n| matches!(n, NodeRef::Op(NumOp::Core(Op::GatherRange), j) if *j == i))).collect();
         let mut bindings = String::new();
         let mut next = 0;
         for (index, node) in nodes.iter().enumerate() {
@@ -165,6 +169,20 @@ impl Printer {
                             if self.constant(zero, 0).ok().as_deref() == Some("0"))) => {
                         let NodeRef::Tuple(fields) = &nodes[*i] else { unreachable!() };
                         format!("{} head", expressions[fields[1]])
+                    }
+                    // Corgi's optimizer fuses a `range` read only by a `gather` into `GatherRange`.
+                    // Print the two words it stands for.
+                    NodeRef::Op(NumOp::Core(Op::GatherRange), i) if gather_range_args[*i] => {
+                        let NodeRef::Tuple(fields) = &nodes[*i] else { unreachable!() };
+                        format!("({} range, {}) gather", expressions[fields[0]], expressions[fields[1]])
+                    }
+                    NodeRef::Op(NumOp::Core(Op::GatherRange), i) => {
+                        let arg = if paths[*i].is_some() { expressions[*i].clone() } else {
+                            let name = format!("v{next}"); next += 1;
+                            bindings += &format!("let {name} = {} in ", expressions[*i]);
+                            name
+                        };
+                        format!("({arg}.0 range, {arg}.1) gather")
                     }
                     NodeRef::Op(op, i) => self.op(op, &expressions[*i], &shapes[*i])?,
                 }
@@ -195,6 +213,12 @@ impl Printer {
                     if remaining[i] == 0 { expressions[i] = String::new(); }
                 };
                 match node {
+                    NodeRef::Tuple(_) if gather_range_args[index] => {},
+                    NodeRef::Op(NumOp::Core(Op::GatherRange), i) if gather_range_args[*i] => {
+                        let NodeRef::Tuple(fields) = &nodes[*i] else { unreachable!() };
+                        for &f in fields.iter() { release(f); }
+                        release(*i);
+                    }
                     NodeRef::Tuple(fields) => for &i in *fields { release(i); },
                     NodeRef::Op(NumOp::Core(Op::MapSum(_)), _) | NodeRef::Input => {},
                     NodeRef::Op(_, i) => release(*i),
@@ -248,6 +272,7 @@ impl Printer {
                 Op::Unweave => "unweave".into(), Op::Gather => "gather".into(), Op::Range => "range".into(),
                 Op::Iota => "iota".into(), Op::Filter => "filter".into(), Op::Hash => "hash".into(),
                 Op::Select => "select".into(), Op::Append => "append".into(), Op::Len => "len".into(), Op::Cut => "cut".into(),
+                Op::GatherRange => return Err("a fused range and gather is printed by its node".into()),
             },
             NumOp::Arith(a) => match a {
                 ArithOp::Bin(b) => bin(*b).into(),
