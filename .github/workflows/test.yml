@@ -99,6 +99,10 @@ jobs:
         run: |
           DIFFTEST_SEED=40000000 DIFFTEST_CASES=500 DIFFTEST_ORACLES=split,bind,reinstall \
             cargo test --release -p interactive --test difftest -- --ignored --nocapture
+      - name: Multitemporal difftest sweep
+        run: |
+          DIFFTEST_SEED=0 DIFFTEST_CASES=100 DIFFTEST_ORACLES=multitemporal DIFFTEST_MT_WORKERS=2 \
+            cargo test --release -p interactive --test difftest -- --ignored --nocapture
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
       # report is skipped (it prints, it does not assert).
