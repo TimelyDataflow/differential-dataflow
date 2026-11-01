@@ -95,9 +95,6 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Semig
 
     fn len(&self) -> usize { self.0.len() }
 
-    /// The vector's buffer. Heap that keys, values, times or diffs own themselves is not seen.
-    fn heap_bytes(&self) -> usize { self.0.capacity() * std::mem::size_of::<((K, V), T, R)>() }
-
     /// A two-pointer binary merge of the two deques' loaded content, up to their shared
     /// horizon — the lesser of the two last `(key, val, time)`s. Consolidates equal
     /// triples and bulk-copies disjoint runs as slices, walking chunk boundaries with

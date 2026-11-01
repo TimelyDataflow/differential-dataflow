@@ -72,14 +72,6 @@ pub trait Chunk: Sized + Clone {
     /// The number of updates in the chunk.
     fn len(&self) -> usize;
 
-    /// The heap bytes the chunk holds: its buffers, by capacity where the implementor can see it.
-    ///
-    /// A metadata operation, as cheap as [`len`](Chunk::len): a read per buffer, not a pass over
-    /// the updates. Batches report the sum over their chunks, and the spine logs it as they
-    /// arrive and leave, so it must not change while the chunk lives. A chunk paged out holds
-    /// only what stays resident.
-    fn heap_bytes(&self) -> usize;
-
     /// Merge the fronts of two input deques through their shared horizon.
     ///
     /// Both deques are non-empty (the caller guarantees it). The two queues are both
@@ -217,7 +209,6 @@ where
     type Time = C::Time;
     type Merger = ChunkBatchMerger<C>;
     fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
-    fn heap_bytes(&self) -> usize { self.chunks.iter().map(C::heap_bytes).sum() }
 }
 
 /// A merge-batcher [`Merger`](crate::batcher::merge::Merger)

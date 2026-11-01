@@ -116,9 +116,9 @@ impl<T> ColTimes<T> {
     /// The number of lanes.
     pub(crate) fn width(&self) -> usize { self.lanes.len() }
 
-    /// The bytes the lanes' buffers hold, by capacity.
-    pub(crate) fn heap_bytes(&self) -> usize {
-        self.lanes.iter().map(|lane| lane.capacity() * std::mem::size_of::<u64>()).sum()
+    /// The bytes of the lanes, by length.
+    pub(crate) fn bytes(&self) -> usize {
+        self.lanes.iter().map(|lane| lane.len() * std::mem::size_of::<u64>()).sum()
     }
 
     /// Widen to at least `width` lanes and reserve room for `additional` more rows in each.

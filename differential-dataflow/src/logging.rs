@@ -26,8 +26,7 @@ where
 /// The spine reports batches through `BatchEvent`, `MergeEvent`, and `DropEvent`, which balance:
 /// a consumer that adds one batch per `BatchEvent`, and removes one per `MergeEvent` with `complete`
 /// set and per `DropEvent`, counts the batches the trace holds. Batches without updates are counted,
-/// and report a length of zero. Their lengths and bytes balance the same way, counting the updates
-/// the trace holds and the heap bytes those occupy.
+/// and report a length of zero.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Columnar)]
 pub enum DifferentialEvent {
     /// Batch creation.
@@ -53,8 +52,6 @@ pub struct BatchEvent {
     pub operator: usize,
     /// Number of updates in the batch.
     pub length: usize,
-    /// Heap bytes the batch holds (see [`SpineBatch::heap_bytes`](crate::trace::implementations::spine_fueled::SpineBatch::heap_bytes)).
-    pub bytes: usize,
 }
 
 impl From<BatchEvent> for DifferentialEvent { fn from(e: BatchEvent) -> Self { DifferentialEvent::Batch(e) } }
@@ -86,8 +83,6 @@ pub struct DropEvent {
     pub operator: usize,
     /// Number of updates in the batch.
     pub length: usize,
-    /// Heap bytes the batch held.
-    pub bytes: usize,
 }
 
 impl From<DropEvent> for DifferentialEvent { fn from(e: DropEvent) -> Self { DifferentialEvent::Drop(e) } }
@@ -105,14 +100,8 @@ pub struct MergeEvent {
     pub length1: usize,
     /// Length of second trace.
     pub length2: usize,
-    /// Heap bytes of the first batch.
-    pub bytes1: usize,
-    /// Heap bytes of the second batch.
-    pub bytes2: usize,
     /// None implies a start; otherwise the number of updates in the merged batch.
     pub complete: Option<usize>,
-    /// None implies a start; otherwise the heap bytes of the merged batch.
-    pub complete_bytes: Option<usize>,
 }
 
 impl From<MergeEvent> for DifferentialEvent { fn from(e: MergeEvent) -> Self { DifferentialEvent::Merge(e) } }

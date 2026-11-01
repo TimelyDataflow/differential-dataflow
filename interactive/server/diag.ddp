@@ -24,8 +24,10 @@ export "diag.time_by_program" = timed | map(((program, _), ()) -> (program, ()))
 -- Updates the arrangements hold, by where they are.
 export "diag.records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
 
--- Each arrangement, summed over workers: (program, statement, name, address) -> (updates, heap
--- bytes), and the same by program.
+-- What each arrangement's chunks hold, summed over workers: (program, statement, name, address)
+-- -> (updates, bytes), and the same by program. Chunks counted in no live operator's account are
+-- the row of program "(unattributed)". An account holds updates exactly when it holds bytes, so
+-- joining the two counts drops no row.
 let held_records = records | join(described, (_, (), at) -> (at, ()));
 let held_bytes = bytes | join(described, (_, (), at) -> (at, ()));
 let arrangement_records = held_records | count;
@@ -35,5 +37,6 @@ let program_records = held_records | map(((program, _, _, _), ()) -> (program, (
 let program_bytes = held_bytes | map(((program, _, _, _), ()) -> (program, ())) | count;
 export "diag.arrangements_by_program" = program_records | join(program_bytes, (program, n, b) -> (program, (n, b)));
 
--- Live operators per program.
-export "diag.operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;
+-- Live operators per program, leaving out the unattributed accounts, which are not operators.
+export "diag.operators_by_program" = placed | filter((_, (program, _)) -> (program, "(unattributed)") ne)
+                                            | map((_, (program, _)) -> (program, ())) | count;

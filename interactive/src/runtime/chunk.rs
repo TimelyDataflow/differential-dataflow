@@ -31,6 +31,7 @@ use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use corgi::arrange::{equal_idx, gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
+use crate::runtime::account::{self, Account, Ticket};
 use crate::runtime::col_times::{ColTime, ColTimes};
 
 use std::cmp::Ordering;
@@ -63,6 +64,16 @@ struct Inner<T, R> {
     times: ColTimes<T>,
     /// Per-update diffs.
     diffs: Vec<R>,
+    /// Counts the contents in the account they were made under, while they live (see
+    /// [`account`](crate::runtime::account)). Moving the columns out drops it.
+    ticket: Ticket,
+}
+
+/// A copy of the contents, counted again in the same account.
+impl<T, R: Clone> Clone for Inner<T, R> {
+    fn clone(&self) -> Self {
+        Inner { keys: self.keys.clone(), vals: self.vals.clone(), times: self.times.clone(), diffs: self.diffs.clone(), ticket: self.ticket.clone() }
+    }
 }
 
 /// A sorted, consolidated run of `((key, val), time, diff)` with corgi-columnar key/val, shared via `Rc`.
@@ -74,7 +85,7 @@ impl<T, R> Clone for CorgiChunk<T, R> {
 
 impl<T, R> Default for CorgiChunk<T, R> {
     fn default() -> Self {
-        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new() }))
+        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new(), ticket: Ticket::none() }))
     }
 }
 
@@ -87,9 +98,15 @@ fn split_kv(kv: CValue) -> (CValue, CValue) {
 }
 
 impl<T, R> CorgiChunk<T, R> {
+    /// Every chunk's contents are made here, and counted in the current account.
     fn from_parts(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
-        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs }))
+        let ticket = Ticket::new(times.len(), || {
+            column_bytes(&keys) + column_bytes(&vals) + times.bytes() + diffs.len() * std::mem::size_of::<R>()
+        });
+        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs, ticket }))
     }
+    /// The account this chunk is counted in: chunks made from it are made under it.
+    fn account(&self) -> Option<&Account> { self.0.ticket.account() }
     /// The `(key, val)` sort payload as one corgi `Prod` column (cheap `Arc` bumps).
     fn kv(&self) -> CValue { CValue::Prod(vec![self.0.keys.clone(), self.0.vals.clone()]) }
     fn from_kv(kv: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
@@ -165,12 +182,6 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
-    /// The key and value columns' buffers (see [`column_bytes`]), the time lanes' and the diffs'.
-    fn heap_bytes(&self) -> usize {
-        column_bytes(&self.0.keys) + column_bytes(&self.0.vals)
-            + self.0.times.heap_bytes() + self.0.diffs.capacity() * std::mem::size_of::<R>()
-    }
-
     /// Merge of the two front chunks through their shared horizon, FULLY consolidating equal
     /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
     /// contract). Batched: corgi's `survey_groups` reports the interleaving of the two `(key, val)`
@@ -178,9 +189,11 @@ where
     /// sides, so rows only one side holds are copied by range, and only the classes both sides
     /// hold — where consolidation can happen — are merged row by row, on their times, which corgi
     /// does not own. The shape is walked once per level per chunk, never once per row.
+    /// Everything it makes is counted in the inputs' account.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
+        let _account = account::enter(c1.account().or(c2.account()));
         let (kv1, kv2) = (c1.kv(), c2.kv());
         let (n1, n2) = (c1.len_(), c2.len_());
         let (t1, d1) = (c1.times(), c1.diffs());
@@ -276,6 +289,7 @@ where
     ) {
         // Move whole chunks; only a split needs to gather its two payload pieces.
         let Some(chunk) = input.pop_front() else { return };
+        let _account = account::enter(chunk.account());
         let times = chunk.times();
         if times.is_empty() { return; }
         let beyond = times.beyond(frontier);
@@ -320,6 +334,7 @@ where
         // Concatenate the pushed-back carry with the newly-arrived chunks, then advance/consolidate
         // each *complete* `(key, val)` group; withhold the last group as the carry unless `done`.
         if input.is_empty() { return; }
+        let _account = account::enter(input.front().and_then(Self::account));
         let (ckv, mut ctimes, cdiffs) = if input.len() == 1 {
             // Merge output normally arrives uniquely owned. Move its columns
             // into advancement instead of copying the whole chunk first.
@@ -392,6 +407,7 @@ where
     /// Maximal packing via the harness [`pack`]: coalesce by concatenating columns (`gather_lanes`),
     /// split with `gather`, seal as a no-op (corgi chunks are never paged here).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
+        let _account = account::enter(input.front().and_then(Self::account));
         pack(
             input,
             done,
@@ -417,16 +433,16 @@ where
     }
 }
 
-/// The bytes a corgi column's buffers hold. Row partitions and sum offsets count their capacity.
-/// A leaf counts its stored length, as corgi shows no capacity and builds leaves at their size:
-/// its codec writes a leaf as three header words and the stored bytes, padded to a word.
+/// The bytes of a corgi column, by length. Row partitions and sum offsets count a word per entry,
+/// and a leaf its stored length: corgi's codec writes a leaf as three header words and the stored
+/// bytes, padded to a word.
 ///
 /// Nothing is counted twice within a column, and chunks do not share buffers: `gather` copies.
 /// The exception would be a reference column, whose arena every gather of it shares, and which
 /// counts its arena whole; DDIR types cannot hold references, so arrangements have none.
 fn column_bytes(col: &CValue) -> usize {
     use corgi::{Bounds, Tags};
-    let usizes = |xs: &std::sync::Arc<Vec<usize>>| xs.capacity() * std::mem::size_of::<usize>();
+    let usizes = |xs: &std::sync::Arc<Vec<usize>>| xs.len() * std::mem::size_of::<usize>();
     match col {
         CValue::Prim(_) => corgi::bytes::length_in_bytes(col) - 24,
         CValue::Prod(fields) => fields.iter().map(column_bytes).sum(),

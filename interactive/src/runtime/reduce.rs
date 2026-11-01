@@ -40,6 +40,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
 use corgi::{Bounds, Demand, Graph, NumOp, Shape, Value as CValue};
 
+use crate::runtime::account::{self, Account};
 use crate::runtime::col_times::{ColTime, ColTimes};
 use crate::runtime::search::matching_ranges;
 use crate::runtime::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
@@ -155,6 +156,8 @@ pub(crate) struct CorgiReduceBackend<T> {
     window_size: usize,
     /// The retire in progress.
     retire: Retire,
+    /// The reduce operator's account, which its output chunks are made under.
+    account: Option<Account>,
 }
 
 /// A retire's keys and where its input chunks hold them, found once by its first window.
@@ -203,7 +206,10 @@ impl Retire {
 impl<T> CorgiReduceBackend<T> {
     /// A backend for input of `shape`, covering the key space in windows of `1 << 12` input
     /// records.
-    pub(crate) fn new(reducer: Reducer, limit: Option<usize>, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, limit, shape, 1 << 12) }
+    /// The output chunks are made under `account`, the reduce operator's.
+    pub(crate) fn new(reducer: Reducer, limit: Option<usize>, shape: (Shape, Shape), account: Option<Account>) -> Self {
+        Self { account, ..Self::with_window(reducer, limit, shape, 1 << 12) }
+    }
 
     /// A backend with an explicit window budget, in presented input records. A `Reducer::Expr`
     /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
@@ -227,6 +233,7 @@ impl<T> CorgiReduceBackend<T> {
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             window_size: window_size.max(1),
             retire: Retire::default(),
+            account: None,
         }
     }
 }
@@ -687,6 +694,7 @@ where
         let (key_rows, ids, times, diffs) = std::mem::take(&mut self.rows);
         if times.is_empty() { return None; }
         let keys = gather_refs(&self.key_columns, key_rows.into_iter());
+        let _account = account::enter(self.account.as_ref());
         Some(Rc::new(columns_to_batch(keys, self.output.gather(&ids), times, diffs)))
     }
 }
@@ -787,7 +795,7 @@ mod tests {
     /// one value count together, and a new value gets a new id naming its row.
     #[test]
     fn corrections_net_by_value() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int), None);
         backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
@@ -805,7 +813,7 @@ mod tests {
     /// A changed wave's column stays alive when a later unchanged wave reuses its id.
     #[test]
     fn corrections_retain_only_named_output_columns() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int));
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Expr(crate::parse::Reducer::Count.lambda()), None, (Shape::Int, Shape::Int), None);
         backend.input.refs = vec![(0, 0)];
         backend.input.columns = vec![ints(vec![0])];
         backend.key_columns = vec![ints(vec![10])];

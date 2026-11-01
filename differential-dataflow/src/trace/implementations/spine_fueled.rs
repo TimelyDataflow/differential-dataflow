@@ -82,8 +82,7 @@ use ::timely::order::PartialOrder;
 ///
 /// These are opinions of this spine, not properties of batches in general: a batch must
 /// support progressive (fuel-limited) merging through a [`Merger`], and must report its
-/// size, which drives the spine's geometric layering and its logging. It may also report
-/// the heap bytes it holds, which the spine logs next to its size.
+/// size, which drives the spine's geometric layering and its logging.
 pub trait SpineBatch : Sized {
     /// The timestamp type of the batch's updates.
     type Time: Timestamp + Lattice;
@@ -99,14 +98,6 @@ pub trait SpineBatch : Sized {
     /// empty batch costs an extra merge rather than behaving differently from the absent
     /// case.
     fn len(&self) -> usize;
-
-    /// The heap bytes the batch holds: the buffers its updates occupy.
-    ///
-    /// The spine logs this next to [`len`](Self::len) as batches arrive, merge, and drop,
-    /// so that a consumer can maintain a trace's bytes as it maintains its updates. That
-    /// balances only if the answer does not change while the batch lives. The spine asks
-    /// only when it has a logger. A batch that does not measure itself reports zero.
-    fn heap_bytes(&self) -> usize { 0 }
 }
 
 /// Represents a merge in progress.
@@ -136,7 +127,6 @@ impl<B: SpineBatch> SpineBatch for Rc<B> {
     type Time = B::Time;
     type Merger = RcMerger<B>;
     fn len(&self) -> usize { (**self).len() }
-    fn heap_bytes(&self) -> usize { (**self).heap_bytes() }
 }
 
 /// Wrapper type for merging reference counted batches.
@@ -156,11 +146,6 @@ impl<B: SpineBatch> Merger<Rc<B>> for RcMerger<B> {
 /// and does.
 fn span_len<B: SpineBatch>(span: &Span<B::Time, B>) -> usize {
     span.inner.as_ref().map(|b| b.len()).unwrap_or(0)
-}
-
-/// The heap bytes of a span: its batch's, or zero when it carries none.
-fn span_bytes<B: SpineBatch>(span: &Span<B::Time, B>) -> usize {
-    span.inner.as_ref().map(|b| b.heap_bytes()).unwrap_or(0)
 }
 
 /// An append-only collection of update tuples.
@@ -356,8 +341,7 @@ impl<B: SpineBatch+Clone+'static> Trace for Spine<B> {
         // Log the introduction of a batch.
         self.logger.as_ref().map(|l| l.log(crate::logging::BatchEvent {
             operator: self.operator.global_id,
-            length: span_len(&span),
-            bytes: span_bytes(&span),
+            length: span_len(&span)
         }));
 
         assert!(span.lower() != span.upper());
@@ -396,26 +380,22 @@ impl<B: SpineBatch> Spine<B> {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch),
-                            bytes: span_bytes(&batch),
                         });
                     },
                     MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch1),
-                            bytes: span_bytes(&batch1),
                         });
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch2),
-                            bytes: span_bytes(&batch2),
                         });
                     },
                     MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch),
-                            bytes: span_bytes(&batch),
                         });
                     }
                     _ => { },
@@ -425,7 +405,6 @@ impl<B: SpineBatch> Spine<B> {
                 logger.log(crate::logging::DropEvent {
                     operator: self.operator.global_id,
                     length: span_len(&batch),
-                    bytes: span_bytes(&batch),
                 });
             }
         }
@@ -700,10 +679,7 @@ impl<B: SpineBatch> Spine<B> {
                         scale: index,
                         length1: old.as_ref().map(span_len).unwrap_or(0),
                         length2: batch.as_ref().map(span_len).unwrap_or(0),
-                        bytes1: old.as_ref().map(span_bytes).unwrap_or(0),
-                        bytes2: batch.as_ref().map(span_bytes).unwrap_or(0),
                         complete: None,
-                        complete_bytes: None,
                     }
                 ));
                 // Two present spans merge without work when at least one carries no batch. Such a
@@ -716,10 +692,7 @@ impl<B: SpineBatch> Spine<B> {
                                 scale: index,
                                 length1: span_len(old),
                                 length2: span_len(batch),
-                                bytes1: span_bytes(old),
-                                bytes2: span_bytes(batch),
                                 complete: Some(span_len(old) + span_len(batch)),
-                                complete_bytes: Some(span_bytes(old) + span_bytes(batch)),
                             }
                         ));
                     }
@@ -744,10 +717,7 @@ impl<B: SpineBatch> Spine<B> {
                         scale: index,
                         length1: span_len(&input1),
                         length2: span_len(&input2),
-                        bytes1: span_bytes(&input1),
-                        bytes2: span_bytes(&input2),
                         complete: Some(span_len(&merged)),
-                        complete_bytes: Some(span_bytes(&merged)),
                     }
                 ));
             }

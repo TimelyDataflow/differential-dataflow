@@ -79,12 +79,13 @@ fn views_see_programs_and_state_stays_bounded() {
         assert!(records.iter().any(|(k, &n)| k.contains("\"p\"") && n > 0), "{records:#?}");
         let operators = view(&mut server, worker, "diag.operators_by_program");
         assert!(operators.get("\"p\"").is_some_and(|&n| n > 0), "{operators:#?}");
-        // Each arrangement's updates take bytes: at least a diff, a time and a key column apiece.
+        // Each arrangement's updates take bytes: at least an identifier and a diff apiece, eight
+        // bytes each (times at the origin take no lanes).
         let arrangements = sizes(&mut server, worker, "diag.arrangements");
-        assert!(arrangements.iter().any(|(k, &(n, b))| k.contains("\"p\"") && n > 0 && b >= 24 * n), "{arrangements:#?}");
-        let by_program = sizes(&mut server, worker, "diag.arrangements_by_program");
+        assert!(arrangements.iter().any(|(k, &(n, b))| k.contains("\"p\"") && n > 0 && b >= 16 * n), "{arrangements:#?}");
+        let program_sizes = sizes(&mut server, worker, "diag.arrangements_by_program");
         let summed = arrangements.iter().filter(|(k, _)| k.contains("\"p\"")).fold((0, 0), |(n, b), (_, s)| (n + s.0, b + s.1));
-        assert_eq!(by_program.get("\"p\""), Some(&summed), "{by_program:#?}");
+        assert_eq!(program_sizes.get("\"p\""), Some(&summed), "{program_sizes:#?}");
 
         // A program installed and dropped every epoch: its time still adds up, and nothing the
         // diagnostics hold grows with the number of installs.
@@ -97,7 +98,7 @@ fn views_see_programs_and_state_stays_bounded() {
             server.tick(worker);
             if round == 9 || round == 29 {
                 let (ops, triples) = diagnostics.borrow().size();
-                let diag_records = diagnostics.borrow().records_by_program().get("diag").copied().unwrap_or(0);
+                let diag_records = diagnostics.borrow().held_by_program().get("diag").map_or(0, |&(updates, _)| updates);
                 held.push((ops, triples, diag_records));
             }
         }
@@ -108,6 +109,10 @@ fn views_see_programs_and_state_stays_bounded() {
         assert_eq!(held[0].0, held[1].0, "live operators after 10 and 30 cycles: {held:?}");
         assert_eq!(held[0].1, held[1].1, "retired triples after 10 and 30 cycles: {held:?}");
         assert!(held[1].2 <= held[0].2 + held[0].2 / 4 + 64, "the diagnostics program's records stay flat: {held:?}");
-        assert_eq!(diagnostics.borrow().unbalanced, 0, "DD's drop events retract every record and byte");
+        // Nothing is left in q's accounts, nor in the unattributed one.
+        let left = diagnostics.borrow().held_by_program();
+        assert!(!left.contains_key("q") && !left.contains_key("(unattributed)"), "{left:?}");
+        let viewed = sizes(&mut server, worker, "diag.arrangements_by_program");
+        assert!(!viewed.contains_key("\"q\"") && !viewed.contains_key("\"(unattributed)\""), "{viewed:#?}");
     });
 }
