@@ -2,8 +2,6 @@
 //! joined with `lower` lane by lane, and consolidated by sorting positions, so that no owned time
 //! is built per staged row. The half join keeps the row staging of [`SideScratch`].
 
-use timely::progress::frontier::AntichainRef;
-
 use super::*;
 use differential_dataflow::operators::int_proxy::join::JoinBridge;
 use crate::runtime::col_times::ColTimes;
@@ -89,9 +87,11 @@ impl<T: ColTime> LaneScratch<T> {
             let mut start = run.s;
             while start < run.e {
                 let end = run.val_run_end(start);
-                self.range(run, start, end, coord_hi | start as u64);
+                self.tokens.resize(self.tokens.len() + (end - start), coord_hi | start as u64);
                 start = end;
             }
+            self.times.push_range(run.chunk.times(), run.s, run.e);
+            self.diffs.extend_from_slice(&run.chunk.diffs()[run.s..run.e]);
         } else {
             // Cross-chunk merge by value content: heads are (run index, row); each step takes the
             // least value among heads and copies every chunk's sub-run of it. The canonical
@@ -107,26 +107,26 @@ impl<T: ColTime> LaneScratch<T> {
                     }
                 }
                 let (ri_min, row_min) = heads[min];
-                let coord = heads.iter()
-                    .filter(|&&(ri, row)| runs[ri].val_eq(row, &runs[ri_min], row_min))
-                    .map(|&(ri, row)| ((runs[ri].cid as u64) << COORD_BITS) | row as u64)
-                    .min().unwrap();
+                let first = self.tokens.len();
+                let mut coord = u64::MAX;
                 let mut h = 0usize;
                 while h < heads.len() {
                     let (ri, row) = heads[h];
                     let run = &runs[ri];
                     if run.val_eq(row, &runs[ri_min], row_min) {
                         let end = run.val_run_end(row);
-                        self.range(run, row, end, coord);
+                        coord = coord.min(((run.cid as u64) << COORD_BITS) | row as u64);
+                        self.range(run, row, end, 0);
                         if end < run.e { heads[h] = (ri, end); h += 1; } else { heads.swap_remove(h); }
                     } else {
                         h += 1;
                     }
                 }
+                self.tokens[first..].fill(coord);
             }
             self.heads = heads;
         }
-        self.times.advance_by(AntichainRef::new(std::slice::from_ref(lower)), self.times.len());
+        self.times.join_assign(lower);
         self.consolidate();
     }
 
@@ -134,6 +134,7 @@ impl<T: ColTime> LaneScratch<T> {
     /// with no zero need nothing; rows in order need no sort.
     fn consolidate(&mut self) {
         let n = self.tokens.len();
+        if n == 1 && self.diffs[0] != 0 { return; }
         let mut order = std::mem::take(&mut self.order);
         let kept = {
             let (tokens, times) = (&self.tokens, &self.times);

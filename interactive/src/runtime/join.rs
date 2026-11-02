@@ -258,28 +258,39 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 }
                 &kept
             };
-            // The rows' tokens, for the primitive reconstructions and the coordinate gathers.
+            let rows: usize = blocks.iter().map(|(r0, r1)| r0.len() * r1.len()).sum();
+            if rows == 0 { continue; }
+            // The rows' tokens, only those the reconstructions and coordinate gathers read.
+            let need_tokens = *dk != Demand::None && primitive_keys;
+            let need_ids0 = *d0 != Demand::None && primitive0;
+            let need_ids1 = *d1 != Demand::None && primitive1;
+            let need_coords0 = !primitive0 && (*d0 != Demand::None || (*dk != Demand::None && !primitive_keys));
+            let need_coords1 = !primitive1 && *d1 != Demand::None;
             tokens.clear(); ids0.clear(); ids1.clear();
             tag0.clear(); off0.clear(); tag1.clear(); off1.clear();
+            if need_tokens { tokens.reserve(rows); }
+            if need_ids0 { ids0.reserve(rows); }
+            if need_ids1 { ids1.reserve(rows); }
+            if need_coords0 { tag0.reserve(rows); off0.reserve(rows); }
+            if need_coords1 { tag1.reserve(rows); off1.reserve(rows); }
             for (r0, r1) in blocks {
+                let width = r1.len();
                 for i in r0.clone() {
-                    let (k, c0) = (bridge0.keys[i], bridge0.vals[i]);
-                    for j in r1.clone() {
-                        let c1 = bridge1.vals[j];
-                        tokens.push(k);
-                        if primitive0 { ids0.push(c0 as i64); } else {
-                            tag0.push((c0 >> COORD_BITS) as usize);
-                            off0.push((c0 & mask) as usize);
-                        }
-                        if primitive1 { ids1.push(c1 as i64); } else {
-                            tag1.push((c1 >> COORD_BITS) as usize);
-                            off1.push((c1 & mask) as usize);
-                        }
+                    let c0 = bridge0.vals[i];
+                    if need_tokens { tokens.resize(tokens.len() + width, bridge0.keys[i]); }
+                    if need_ids0 { ids0.resize(ids0.len() + width, c0 as i64); }
+                    if need_coords0 {
+                        tag0.resize(tag0.len() + width, (c0 >> COORD_BITS) as usize);
+                        off0.resize(off0.len() + width, (c0 & mask) as usize);
+                    }
+                    let vals1 = &bridge1.vals[r1.clone()];
+                    if need_ids1 { ids1.extend(vals1.iter().map(|&c1| c1 as i64)); }
+                    if need_coords1 {
+                        tag1.extend(vals1.iter().map(|&c1| (c1 >> COORD_BITS) as usize));
+                        off1.extend(vals1.iter().map(|&c1| (c1 & mask) as usize));
                     }
                 }
             }
-            let rows = tokens.len();
-            if rows == 0 { continue; }
             // Gather only the declared key borrowed above: the arrangement's leading
             // identifier is not part of the projection input. A downstream arrange derives
             // the identifier for the projected key.
@@ -302,7 +313,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             // The rows' times and diffs, by the blocks' rule, straight into the output's columns.
             let mut times = ColTimes::new();
             times.extend_cross_join(&bridge0.times, &bridge1.times, blocks);
-            let mut diffs = Vec::with_capacity(rows);
+            let mut diffs = Vec::new();
             extend_cross_product(&mut diffs, &bridge0.diffs, &bridge1.diffs, blocks);
             output.push(CorgiContainer { keys: nk, vals: nv, times, diffs });
         }

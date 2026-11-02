@@ -227,6 +227,14 @@ impl<T> ColTimes<T> {
         }
     }
 
+    /// Join every row with `t`: a max per coordinate with `t`'s.
+    pub(crate) fn join_assign(&mut self, t: &T) where T: Lanes {
+        for (j, x) in t.coordinates().enumerate() {
+            self.widen(j + 1);
+            if x != 0 { for v in &mut self.lanes[j] { *v = (*v).max(x); } }
+        }
+    }
+
     /// For each row, whether some element of `frontier` is less than or equal to it.
     pub(crate) fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> where T: Lanes {
         let mut beyond = vec![false; self.len];
@@ -333,7 +341,6 @@ impl<T: Lanes> differential_dataflow::operators::int_proxy::TimeColumn<T> for Co
         let rows: usize = blocks.iter().map(|(r0, r1)| r0.len() * r1.len()).sum();
         self.widen(a.lanes.len().max(b.lanes.len()));
         for (j, lane) in self.lanes.iter_mut().enumerate() {
-            lane.reserve(rows);
             match (a.lanes.get(j), b.lanes.get(j)) {
                 (Some(x), Some(y)) => for (r0, r1) in blocks {
                     for i in r0.clone() { let xi = x[i]; lane.extend(y[r1.clone()].iter().map(|&yj| xi.max(yj))); }
@@ -348,6 +355,8 @@ impl<T: Lanes> differential_dataflow::operators::int_proxy::TimeColumn<T> for Co
             }
         }
         self.len += rows;
+        // A column is as wide as its widest row: drop coordinates no row of these blocks carries.
+        while self.lanes.last().is_some_and(|lane| lane.iter().all(|&x| x == 0)) { self.lanes.pop(); }
     }
     fn owned_get(&self, i: usize) -> T { self.get(i) }
     fn owned_push(&mut self, t: &T) { self.push(t) }
