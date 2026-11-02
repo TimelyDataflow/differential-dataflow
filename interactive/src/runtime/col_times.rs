@@ -325,6 +325,34 @@ impl<'a, T: Lanes> FromIterator<&'a T> for ColTimes<T> {
     }
 }
 
+/// The proxy join's time column: blocks of matches join lane by lane, a max per coordinate.
+impl<T: Lanes> differential_dataflow::operators::int_proxy::TimeColumn<T> for ColTimes<T> {
+    fn len(&self) -> usize { ColTimes::len(self) }
+    fn clear(&mut self) { ColTimes::clear(self) }
+    fn extend_cross_join(&mut self, a: &Self, b: &Self, blocks: &[(std::ops::Range<usize>, std::ops::Range<usize>)]) {
+        let rows: usize = blocks.iter().map(|(r0, r1)| r0.len() * r1.len()).sum();
+        self.widen(a.lanes.len().max(b.lanes.len()));
+        for (j, lane) in self.lanes.iter_mut().enumerate() {
+            lane.reserve(rows);
+            match (a.lanes.get(j), b.lanes.get(j)) {
+                (Some(x), Some(y)) => for (r0, r1) in blocks {
+                    for i in r0.clone() { let xi = x[i]; lane.extend(y[r1.clone()].iter().map(|&yj| xi.max(yj))); }
+                },
+                (Some(x), None) => for (r0, r1) in blocks {
+                    for i in r0.clone() { lane.resize(lane.len() + r1.len(), x[i]); }
+                },
+                (None, Some(y)) => for (r0, r1) in blocks {
+                    for _ in r0.clone() { lane.extend_from_slice(&y[r1.clone()]); }
+                },
+                (None, None) => lane.resize(lane.len() + rows, 0),
+            }
+        }
+        self.len += rows;
+    }
+    fn owned_get(&self, i: usize) -> T { self.get(i) }
+    fn owned_push(&mut self, t: &T) { self.push(t) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
