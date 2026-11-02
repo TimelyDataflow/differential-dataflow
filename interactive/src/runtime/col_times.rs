@@ -146,6 +146,27 @@ impl<T> ColTimes<T> {
         self.len += e - s;
     }
 
+    /// Append rows `[s, e)` of `other` joined with `t`: a slice copy per lane where `t`'s
+    /// coordinate is zero, a max with it otherwise.
+    pub(crate) fn push_range_joined(&mut self, other: &ColTimes<T>, s: usize, e: usize, t: &[u64]) {
+        if e <= s { return; }
+        self.widen(other.lanes.len().max(t.len()));
+        for (j, lane) in self.lanes.iter_mut().enumerate() {
+            match (other.lanes.get(j), t.get(j).copied().unwrap_or(0)) {
+                (Some(src), 0) => lane.extend_from_slice(&src[s..e]),
+                (Some(src), m) => lane.extend(src[s..e].iter().map(|&x| x.max(m))),
+                (None, m) => lane.resize(lane.len() + (e - s), m),
+            }
+        }
+        self.len += e - s;
+    }
+
+    /// Keep the first `len` rows.
+    pub(crate) fn truncate_rows(&mut self, len: usize) {
+        for lane in &mut self.lanes { lane.truncate(len); }
+        self.len = self.len.min(len);
+    }
+
     /// A new column of the selected rows, in selection order.
     pub(crate) fn gather(&self, rows: &[usize]) -> Self {
         let lanes = self.lanes.iter().map(|lane| rows.iter().map(|&i| lane[i]).collect()).collect();
@@ -224,14 +245,6 @@ impl<T> ColTimes<T> {
         for (lane, &m) in self.lanes.iter_mut().zip(&meet) {
             if m == 0 { continue; }
             for x in &mut lane[..end] { *x = (*x).max(m); }
-        }
-    }
-
-    /// Join every row with `t`: a max per coordinate with `t`'s.
-    pub(crate) fn join_assign(&mut self, t: &T) where T: Lanes {
-        for (j, x) in t.coordinates().enumerate() {
-            self.widen(j + 1);
-            if x != 0 { for v in &mut self.lanes[j] { *v = (*v).max(x); } }
         }
     }
 

@@ -51,7 +51,7 @@ use crate::lambda::compile_projection;
 use crate::ir::{Diff, Lambda};
 
 mod lanes;
-use lanes::{LaneBridge, LaneScratch};
+use lanes::{LaneBridge, Staging};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
@@ -934,7 +934,7 @@ fn leaf_probe<'a, T: ColTime>(
     } else { Vec::new() };
 
     // Walk the keys in order, staging both sides and emitting the survivors.
-    let (mut sd, mut sp) = (LaneScratch::new(), LaneScratch::new());
+    let mut staging = Staging::new(lower);
     let mut drun_at = 0usize;
     let mut refs: Vec<RunRef<T>> = Vec::new();
     for (j, &k) in keyset.iter().enumerate() {
@@ -954,15 +954,7 @@ fn leaf_probe<'a, T: ColTime>(
             colliding.push(k);
         }
         let (drefs, prefs) = refs.split_at(dref_count);
-        if collision {
-            let (staged_d, staged_p) = (lanes::stage_collision(drefs, lower), lanes::stage_collision(prefs, lower));
-            if !staged_d.is_empty() && !staged_p.is_empty() {
-                staged_d.emit(k, bridge_d);
-                staged_p.emit(k, bridge_p);
-            }
-            continue;
-        }
-        lanes::stage_pair(k, (drefs, prefs), lower, (&mut sd, &mut sp), (bridge_d, bridge_p));
+        lanes::stage_pair(k, (drefs, prefs), &mut staging, (bridge_d, bridge_p), collision);
     }
     // The block ran to the horizon; resume there (`None` = the driver is exhausted, and
     // with it the intersection).
@@ -1012,23 +1004,15 @@ fn leaf_merge<'a, T: ColTime>(
         refs1[range.clone()].iter().map(move |&(vi, s, e)| (j, offset + vi, s, e))
     });
     let collisions = colliding_keys(matched.len(), &columns, runs0.chain(runs1));
-    let (mut s0, mut s1) = (LaneScratch::new(), LaneScratch::new());
+    let mut staging = Staging::new(lower);
     let (mut r0, mut r1): (smallvec::SmallVec<[RunRef<T>; 4]>, smallvec::SmallVec<[RunRef<T>; 4]>) = (smallvec::SmallVec::new(), smallvec::SmallVec::new());
     for (j, (k, range0, range1)) in matched.into_iter().enumerate() {
         r0.clear();
         r0.extend(refs0[range0].iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)));
         r1.clear();
         r1.extend(refs1[range1].iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)));
-        if collisions[j] {
-            colliding.push(k);
-            let (staged0, staged1) = (lanes::stage_collision(&r0, lower), lanes::stage_collision(&r1, lower));
-            if !staged0.is_empty() && !staged1.is_empty() {
-                staged0.emit(k, bridge0);
-                staged1.emit(k, bridge1);
-            }
-            continue;
-        }
-        lanes::stage_pair(k, (&r0, &r1), lower, (&mut s0, &mut s1), (bridge0, bridge1));
+        if collisions[j] { colliding.push(k); }
+        lanes::stage_pair(k, (&r0, &r1), &mut staging, (bridge0, bridge1), collisions[j]);
     }
     *from = h;
 }
@@ -1043,7 +1027,7 @@ fn leaf_merge_primitive<'a, T: ColTime>(
     bridge0: &mut LaneBridge<T>,
     bridge1: &mut LaneBridge<T>,
 ) {
-    let (mut s0, mut s1) = (LaneScratch::new(), LaneScratch::new());
+    let mut staging = Staging::new(lower);
     let (mut refs0, mut refs1): (Vec<(usize, usize, usize)>, Vec<(usize, usize, usize)>) = (Vec::new(), Vec::new());
     loop {
         let k = views0.iter().chain(&views1).filter_map(LeafView::cur_key).min();
@@ -1058,7 +1042,7 @@ fn leaf_merge_primitive<'a, T: ColTime>(
         if refs0.is_empty() || refs1.is_empty() { continue; }
         let r0: smallvec::SmallVec<[RunRef<T>; 4]> = refs0.iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
         let r1: smallvec::SmallVec<[RunRef<T>; 4]> = refs1.iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
-        lanes::stage_pair(k, (&r0, &r1), lower, (&mut s0, &mut s1), (bridge0, bridge1));
+        lanes::stage_pair(k, (&r0, &r1), &mut staging, (bridge0, bridge1), false);
     }
 }
 
@@ -1358,11 +1342,7 @@ mod tests {
 
     /// The lane staging of `runs`, as `(token, time, diff)` rows.
     fn lane_staged(runs: &[RunRef<'_, crate::ir::Time>], lower: &crate::ir::Time) -> Vec<(u64, crate::ir::Time, Diff)> {
-        let mut scratch = LaneScratch::new();
-        scratch.stage_runs(runs, lower);
-        let mut bridge = LaneBridge::default();
-        scratch.emit(0, &mut bridge);
-        (0..bridge.len()).map(|i| (bridge.vals[i], bridge.times.get(i), bridge.diffs[i])).collect()
+        lanes::staged(runs, lower)
     }
 
     /// The whole tactic against a direct cross product: keys whose sides both reach the replay

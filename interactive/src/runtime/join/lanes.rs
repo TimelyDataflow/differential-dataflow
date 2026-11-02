@@ -1,6 +1,8 @@
-//! The join's staging on lanes: each side's rows of a key are copied from the chunks by ranges,
-//! joined with `lower` lane by lane, and consolidated by sorting positions, so that no owned time
-//! is built per staged row. The half join keeps the row staging of [`SideScratch`].
+//! The join's staging on lanes: each side's rows of a key are copied from the chunks by ranges
+//! straight into the bridge, joined with `lower` as they are copied, so that no owned time is built
+//! per staged row. Each side of a key is then consolidated in place, sorting a row record of its
+//! token and first two time coordinates when the rows are out of order, and a key with an empty
+//! side is truncated off both bridges. The half join keeps the row staging of [`SideScratch`].
 
 use super::*;
 use differential_dataflow::operators::int_proxy::join::JoinBridge;
@@ -9,58 +11,96 @@ use crate::runtime::col_times::ColTimes;
 /// The join's bridge, as DDIR fills it: `i64` group tokens, `u64` value tokens, times as lanes.
 pub(super) type LaneBridge<T> = JoinBridge<ColTimes<T>, Diff, i64>;
 
-/// Per-key staging for one side: consolidated `(token, time, diff)` columns, built in scratch so a
-/// side that nets to zero suppresses the key before anything reaches the bridges.
-pub(super) struct LaneScratch<T> {
-    tokens: Vec<u64>,
-    times: ColTimes<T>,
-    diffs: Vec<Diff>,
-    /// Row positions in `(token, time)` order, reused across keys.
-    order: Vec<usize>,
-    /// Cross-chunk value-merge heads, reused across keys.
-    heads: Vec<(usize, usize)>,
-    /// Row indices sorted by projected value, reused across keys.
-    idx: Vec<(u32, u32)>,
+/// Truncate `bridge` to its first `len` rows.
+fn truncate<T>(bridge: &mut LaneBridge<T>, len: usize) {
+    bridge.keys.truncate(len);
+    bridge.vals.truncate(len);
+    bridge.times.truncate_rows(len);
+    bridge.diffs.truncate(len);
 }
 
-impl<T: ColTime> LaneScratch<T> {
-    pub(super) fn new() -> Self {
-        LaneScratch { tokens: Vec::new(), times: ColTimes::new(), diffs: Vec::new(), order: Vec::new(), heads: Vec::new(), idx: Vec::new() }
+/// A staged row as a sort record: its token, its first two time coordinates, and its position.
+type Record = (u64, u64, u64, usize);
+
+/// Scratch for staging keys, reused across them.
+pub(super) struct Staging {
+    /// Cross-chunk value-merge heads.
+    heads: Vec<(usize, usize)>,
+    /// Row indices sorted by projected value.
+    idx: Vec<(u32, u32)>,
+    /// One key side's rows as records, to consolidate.
+    records: Vec<Record>,
+    /// The unit's lower bound, as coordinates.
+    lower: smallvec::SmallVec<[u64; 4]>,
+}
+
+impl Staging {
+    pub(super) fn new<T: ColTime>(lower: &T) -> Self {
+        Staging { heads: Vec::new(), idx: Vec::new(), records: Vec::new(), lower: lower.coordinates().collect() }
     }
 
-    pub(super) fn is_empty(&self) -> bool { self.tokens.is_empty() }
-
-    fn clear(&mut self) {
-        self.tokens.clear();
-        self.times.clear();
-        self.diffs.clear();
+    /// Sort the rows from `start` on by `(token, time)`, sum equal rows and drop zeros, in place.
+    /// Rows already in order with no zero need nothing; rows in order need no sort. Returns whether
+    /// any row remains.
+    fn settle<T: ColTime>(&mut self, bridge: &mut LaneBridge<T>, start: usize) -> bool {
+        let n = bridge.len();
+        let (kept, diffs) = {
+            let times = &bridge.times;
+            let lanes = times.raw_lanes();
+            let wide = lanes.len() > 2;
+            let lane = |j: usize, i: usize| lanes.get(j).map_or(0, |l| l[i]);
+            // Times beyond two coordinates break ties by comparing lanes.
+            let cmp = |a: &Record, b: &Record| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2))
+                .then_with(|| if wide { times.cmp(a.3, b.3) } else { Ordering::Equal });
+            let vals = &bridge.vals;
+            let in_order = (start + 1..n).all(|i| vals[i - 1].cmp(&vals[i]).then_with(|| times.cmp(i - 1, i)).is_lt());
+            if in_order && bridge.diffs[start..].iter().all(|d| *d != 0) { return n > start; }
+            let records = &mut self.records;
+            records.clear();
+            records.extend((start..n).map(|i| (vals[i], lane(0, i), lane(1, i), i)));
+            if !in_order { records.sort_unstable_by(cmp); }
+            let (mut kept, mut diffs) = (Vec::with_capacity(n - start), Vec::with_capacity(n - start));
+            for group in records.chunk_by(|a, b| cmp(a, b).is_eq()) {
+                let diff: Diff = group.iter().map(|r| bridge.diffs[r.3]).sum();
+                if diff != 0 { kept.push(group[0].3); diffs.push(diff); }
+            }
+            (kept, diffs)
+        };
+        // Rewrite the key side's rows as their consolidation.
+        let k = bridge.keys[start];
+        let vals: Vec<u64> = kept.iter().map(|&i| bridge.vals[i]).collect();
+        let times = bridge.times.gather(&kept);
+        truncate(bridge, start);
+        bridge.keys.resize(start + kept.len(), k);
+        bridge.vals.extend(vals);
+        bridge.times.push_range(&times, 0, times.len());
+        bridge.diffs.extend(diffs);
+        !kept.is_empty()
     }
 
-    /// Rows `[s, e)` of `run`, under one token.
-    fn range(&mut self, run: &RunRef<'_, T>, s: usize, e: usize, token: u64) {
-        self.tokens.resize(self.tokens.len() + (e - s), token);
-        self.times.push_range(run.chunk.times(), s, e);
-        self.diffs.extend_from_slice(&run.chunk.diffs()[s..e]);
-    }
-
-    /// Stage one key's records from `runs` (its equal-key row ranges, one per chunk holding it),
-    /// with the tokens [`SideScratch::stage_runs`] mints: primitive values identify themselves;
-    /// other values share their least occurrence's coordinate across chunks. Times are joined with
-    /// `lower`, consolidated, zeros dropped. Rows end sorted by `(token, time)`.
-    pub(super) fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
-        self.clear();
+    /// Append one key's records from `runs` (its equal-key row ranges, one per chunk holding it) to
+    /// `bridge` under group token `k`, with the tokens [`SideScratch::stage_runs`] mints: primitive
+    /// values identify themselves; other values share their least occurrence's coordinate across
+    /// chunks. Times are joined with `lower` as they are copied.
+    fn append_runs<T: ColTime>(&mut self, bridge: &mut LaneBridge<T>, runs: &[RunRef<'_, T>], k: i64) {
         let Some(first) = runs.first() else { return };
+        let lower = &self.lower[..];
+        let range = |bridge: &mut LaneBridge<T>, run: &RunRef<'_, T>, s: usize, e: usize, token: u64| {
+            bridge.vals.resize(bridge.vals.len() + (e - s), token);
+            bridge.times.push_range_joined(run.chunk.times(), s, e, lower);
+            bridge.diffs.extend_from_slice(&run.chunk.diffs()[s..e]);
+        };
         if primitive_values(first.chunk) {
             for run in runs {
                 // An unread primitive value is one token (`cross` never reads it back).
                 if run.kind == ProjKind::Collapse {
-                    self.range(run, run.s, run.e, 0);
+                    range(bridge, run, run.s, run.e, 0);
                     continue;
                 }
                 let ids = int_lane(run.chunk.vals()).unwrap();
-                self.tokens.extend(ids[run.s..run.e].iter().map(|&v| v as u64));
-                self.times.push_range(run.chunk.times(), run.s, run.e);
-                self.diffs.extend_from_slice(&run.chunk.diffs()[run.s..run.e]);
+                bridge.vals.extend(ids[run.s..run.e].iter().map(|&v| v as u64));
+                bridge.times.push_range_joined(run.chunk.times(), run.s, run.e, lower);
+                bridge.diffs.extend_from_slice(&run.chunk.diffs()[run.s..run.e]);
             }
         } else if first.kind == ProjKind::Ungrouped && (runs.len() != 1 || first.e - first.s > 1) {
             // The stored order does not group equal projected values: sort the key's rows by
@@ -76,7 +116,7 @@ impl<T: ColTime> LaneScratch<T> {
                 while end < idx.len() && runs[idx[end].0 as usize].val_eq(idx[end].1 as usize, &runs[ri], row) { end += 1; }
                 let coord = idx[start..end].iter().map(|&(i, r)| ((runs[i as usize].cid as u64) << COORD_BITS) | r as u64).min().unwrap();
                 for &(i, r) in &idx[start..end] {
-                    self.range(&runs[i as usize], r as usize, r as usize + 1, coord);
+                    range(bridge, &runs[i as usize], r as usize, r as usize + 1, coord);
                 }
                 start = end;
             }
@@ -87,11 +127,11 @@ impl<T: ColTime> LaneScratch<T> {
             let mut start = run.s;
             while start < run.e {
                 let end = run.val_run_end(start);
-                self.tokens.resize(self.tokens.len() + (end - start), coord_hi | start as u64);
+                bridge.vals.resize(bridge.vals.len() + (end - start), coord_hi | start as u64);
                 start = end;
             }
-            self.times.push_range(run.chunk.times(), run.s, run.e);
-            self.diffs.extend_from_slice(&run.chunk.diffs()[run.s..run.e]);
+            bridge.times.push_range_joined(run.chunk.times(), run.s, run.e, lower);
+            bridge.diffs.extend_from_slice(&run.chunk.diffs()[run.s..run.e]);
         } else {
             // Cross-chunk merge by value content: heads are (run index, row); each step takes the
             // least value among heads and copies every chunk's sub-run of it. The canonical
@@ -107,7 +147,7 @@ impl<T: ColTime> LaneScratch<T> {
                     }
                 }
                 let (ri_min, row_min) = heads[min];
-                let first = self.tokens.len();
+                let first = bridge.vals.len();
                 let mut coord = u64::MAX;
                 let mut h = 0usize;
                 while h < heads.len() {
@@ -116,124 +156,92 @@ impl<T: ColTime> LaneScratch<T> {
                     if run.val_eq(row, &runs[ri_min], row_min) {
                         let end = run.val_run_end(row);
                         coord = coord.min(((run.cid as u64) << COORD_BITS) | row as u64);
-                        self.range(run, row, end, 0);
+                        range(bridge, run, row, end, 0);
                         if end < run.e { heads[h] = (ri, end); h += 1; } else { heads.swap_remove(h); }
                     } else {
                         h += 1;
                     }
                 }
-                self.tokens[first..].fill(coord);
+                bridge.vals[first..].fill(coord);
             }
             self.heads = heads;
         }
-        self.times.join_assign(lower);
-        self.consolidate();
+        bridge.keys.resize(bridge.vals.len(), k);
     }
 
-    /// Sort the rows by `(token, time)`, sum equal rows and drop zeros. Rows already in order
-    /// with no zero need nothing; rows in order need no sort.
-    fn consolidate(&mut self) {
-        let n = self.tokens.len();
-        if n == 1 && self.diffs[0] != 0 { return; }
-        let mut order = std::mem::take(&mut self.order);
-        let kept = {
-            let (tokens, times) = (&self.tokens, &self.times);
-            let cmp = |a: usize, b: usize| tokens[a].cmp(&tokens[b]).then_with(|| times.cmp(a, b));
-            if self.diffs.iter().all(|d| *d != 0) && (1..n).all(|i| cmp(i - 1, i).is_lt()) {
-                self.order = order;
-                return;
+    /// Append a colliding identifier, as [`super::stage_collision`] does on rows: each real key is
+    /// appended on its own, so equal values from different real keys never share a token (their
+    /// coordinates differ), and all keep the identifier as their group token; `cross` discards
+    /// unequal-key pairs afterward.
+    fn append_collision<T: ColTime>(&mut self, bridge: &mut LaneBridge<T>, runs: &[RunRef<'_, T>], k: i64) {
+        let mut positions: Vec<usize> = runs.iter().map(|run| run.s).collect();
+        loop {
+            let Some(min) = positions
+                .iter()
+                .enumerate()
+                .filter(|(index, position)| **position < runs[*index].e)
+                .min_by(|(ai, ap), (bi, bp)| {
+                    compare_at(runs[*ai].chunk.keys(), **ap, runs[*bi].chunk.keys(), **bp)
+                })
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let (reference, row) = (runs[min].chunk.keys(), positions[min]);
+            let mut equal_runs = Vec::new();
+            for (index, run) in runs.iter().enumerate() {
+                let start = positions[index];
+                if start == run.e
+                    || compare_at(run.chunk.keys(), start, reference, row) != Ordering::Equal
+                {
+                    continue;
+                }
+                let end = start
+                    + (start..run.e)
+                        .position(|candidate| {
+                            compare_at(run.chunk.keys(), candidate, reference, row) != Ordering::Equal
+                        })
+                        .unwrap_or(run.e - start);
+                equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals: run.vals, pcol: run.pcol, kind: run.kind });
+                positions[index] = end;
             }
-            order.clear();
-            order.extend(0..n);
-            if (1..n).any(|i| cmp(i - 1, i).is_gt()) { order.sort_unstable_by(|&a, &b| cmp(a, b)); }
-            let mut kept = Vec::with_capacity(n);
-            let mut diffs = Vec::with_capacity(n);
-            for group in order.chunk_by(|&a, &b| cmp(a, b).is_eq()) {
-                let diff: Diff = group.iter().map(|&i| self.diffs[i]).sum();
-                if diff != 0 { kept.push(group[0]); diffs.push(diff); }
-            }
-            self.diffs = diffs;
-            kept
-        };
-        self.tokens = kept.iter().map(|&i| self.tokens[i]).collect();
-        self.times = self.times.gather(&kept);
-        self.order = order;
-    }
-
-    /// Append `other`'s rows.
-    fn append(&mut self, other: &Self) {
-        self.tokens.extend_from_slice(&other.tokens);
-        self.times.push_range(&other.times, 0, other.times.len());
-        self.diffs.extend_from_slice(&other.diffs);
-    }
-
-    /// Append the staged rows to `bridge` under group token `k`.
-    pub(super) fn emit(&self, k: i64, bridge: &mut LaneBridge<T>) {
-        let n = self.tokens.len();
-        bridge.keys.resize(bridge.keys.len() + n, k);
-        bridge.vals.extend_from_slice(&self.tokens);
-        bridge.times.push_range(&self.times, 0, n);
-        bridge.diffs.extend_from_slice(&self.diffs);
+            self.append_runs(bridge, &equal_runs, k);
+        }
     }
 }
 
-/// Stage a non-colliding key, emitting it only when both sides survive consolidation.
+/// Stage one key on both sides, straight into the bridges, consolidating each side in place, and
+/// truncate it away again if either side nets to zero. A colliding key appends each real key apart.
 pub(super) fn stage_pair<T: ColTime>(
     token: i64,
     runs: (&[RunRef<'_, T>], &[RunRef<'_, T>]),
-    lower: &T,
-    scratch: (&mut LaneScratch<T>, &mut LaneScratch<T>),
+    staging: &mut Staging,
     bridges: (&mut LaneBridge<T>, &mut LaneBridge<T>),
+    collision: bool,
 ) {
-    scratch.0.stage_runs(runs.0, lower);
-    scratch.1.stage_runs(runs.1, lower);
-    if !scratch.0.is_empty() && !scratch.1.is_empty() {
-        scratch.0.emit(token, bridges.0);
-        scratch.1.emit(token, bridges.1);
+    let (s0, s1) = (bridges.0.len(), bridges.1.len());
+    if collision {
+        staging.append_collision(bridges.0, runs.0, token);
+        staging.append_collision(bridges.1, runs.1, token);
+    } else {
+        staging.append_runs(bridges.0, runs.0, token);
+        staging.append_runs(bridges.1, runs.1, token);
+    }
+    // A side's rows run from where it began, so each settles apart.
+    let a = staging.settle(bridges.0, s0);
+    let b = staging.settle(bridges.1, s1);
+    if !(a && b) {
+        truncate(bridges.0, s0);
+        truncate(bridges.1, s1);
     }
 }
 
-/// Stage a colliding identifier, as [`super::stage_collision`] does on rows: each real key is
-/// staged on its own, so equal values from different real keys never consolidate together, and
-/// all keep the identifier as their token; `cross` discards unequal-key pairs afterward.
-pub(super) fn stage_collision<T: ColTime>(runs: &[RunRef<'_, T>], lower: &T) -> LaneScratch<T> {
-    let mut positions: Vec<usize> = runs.iter().map(|run| run.s).collect();
-    let mut scratch = LaneScratch::new();
-    let mut staged = LaneScratch::new();
-    loop {
-        let Some(min) = positions
-            .iter()
-            .enumerate()
-            .filter(|(index, position)| **position < runs[*index].e)
-            .min_by(|(ai, ap), (bi, bp)| {
-                compare_at(runs[*ai].chunk.keys(), **ap, runs[*bi].chunk.keys(), **bp)
-            })
-            .map(|(index, _)| index)
-        else {
-            break;
-        };
-        let (reference, row) = (runs[min].chunk.keys(), positions[min]);
-        let mut equal_runs = Vec::new();
-        for (index, run) in runs.iter().enumerate() {
-            let start = positions[index];
-            if start == run.e
-                || compare_at(run.chunk.keys(), start, reference, row) != Ordering::Equal
-            {
-                continue;
-            }
-            let end = start
-                + (start..run.e)
-                    .position(|candidate| {
-                        compare_at(run.chunk.keys(), candidate, reference, row) != Ordering::Equal
-                    })
-                    .unwrap_or(run.e - start);
-            equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals: run.vals, pcol: run.pcol, kind: run.kind });
-            positions[index] = end;
-        }
-        scratch.stage_runs(&equal_runs, lower);
-        staged.append(&scratch);
-    }
-    // Coordinates differ between real keys, so this only orders the rows by `(token, time)`.
-    staged.consolidate();
-    staged
+#[cfg(test)]
+/// The lane staging of `runs` alone, as `(token, time, diff)` rows.
+pub(super) fn staged<T: ColTime>(runs: &[RunRef<'_, T>], lower: &T) -> Vec<(u64, T, Diff)> {
+    let mut bridge = LaneBridge::default();
+    let mut staging = Staging::new(lower);
+    staging.append_runs(&mut bridge, runs, 0);
+    staging.settle(&mut bridge, 0);
+    (0..bridge.len()).map(|i| (bridge.vals[i], bridge.times.get(i), bridge.diffs[i])).collect()
 }
