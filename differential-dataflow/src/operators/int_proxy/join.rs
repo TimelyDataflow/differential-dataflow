@@ -258,8 +258,13 @@ where
         while i < n0 && j < n1 {
             let ki = self.p0.keys[i];
             debug_assert!(ki == self.p1.keys[j], "advance must report common keys");
-            let e0 = i + self.p0.keys[i..n0].partition_point(|k| *k == ki);
-            let e1 = j + self.p1.keys[j..n1].partition_point(|k| *k == ki);
+            // Scan each side's run of the key, rather than search the rest of the block: runs of
+            // `r0` and `r1` rows make `r0 * r1 >= r0 + r1 - 1` matches, so the scan costs at most a
+            // comparison per match, plus one, and a key of one row costs one comparison.
+            let mut e0 = i + 1;
+            while e0 < n0 && self.p0.keys[e0] == ki { e0 += 1; }
+            let mut e1 = j + 1;
+            while e1 < n1 && self.p1.keys[e1] == ki { e1 += 1; }
             join_key(ki, (&mut self.p0, i..e0), (&mut self.p1, j..e1), (&mut self.h0, &mut self.h1), &mut self.blocks);
             i = e0;
             j = e1;
