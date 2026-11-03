@@ -382,27 +382,28 @@ pub(crate) fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
     corgi::shape_of(lambda.graph()?, &Shape::Prod(shapes.to_vec()))
 }
 
-/// A slot's graph over rows of `shapes`, and the shape it gives. Typechecked once here, so an `Ok`
-/// kernel runs on every batch of these shapes.
-fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
+/// A slot's graph over rows of `shapes`, compiled at them, and the shape it gives. Typechecked once
+/// here, so an `Ok` kernel runs on every batch of these shapes.
+fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(corgi::Compiled, Shape)> {
     let output = slot_shape(lambda, shapes)?;
     // Typed compilation removes proven patterns before normalizing the executable graph.
     let compiled = corgi::compile(lambda.graph()?.as_ref().clone(), &Shape::Prod(shapes.to_vec()))?;
-    Ok((compiled.graph().clone(), output))
+    Ok((compiled, output))
 }
 
 /// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is
 /// not list-shaped is the type error: the backend explodes the column structurally.
 pub(crate) fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(list, &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::List(_)) => Ok(k),
+        (k, Shape::List(_)) => Ok(k.graph().clone()),
         (_, other) => Err(format!("flatmap over a non-list: {other}")),
     }
 }
 
 /// Compile a `reduce` lambda over `(key, vals)`, `vals` a list of `(val, diff)` (`vshape` the
-/// values') → a corgi `List` column of `(val, diff)`, one list per key.
-pub(crate) fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+/// values') → a corgi `List` column of `(val, diff)`, one list per key. The result is compiled at
+/// that input, so the backend narrows it without compiling it again.
+pub(crate) fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<corgi::Compiled> {
     let list = Shape::List(Box::new(Shape::Prod(vec![vshape.clone(), Shape::Int])));
     match slot_graph(lambda, &[kshape.clone(), list])? {
         (g, Shape::List(e)) if matches!(&*e, Shape::Prod(fs) if fs.len() == 2 && fs[1] == Shape::Int) => Ok(g),
@@ -419,7 +420,7 @@ pub(crate) fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Sh
         if let Shape::Prod(fs) = &**elem {
             let time = Shape::Prod(vec![Shape::Int; width]);
             if fs.len() == 3 && matches!(&fs[0], Shape::Prod(kv) if kv.len() == 2) && fs[1] == time && fs[2] == Shape::Int {
-                return Ok(g);
+                return Ok(g.graph().clone());
             }
         }
     }
@@ -430,14 +431,15 @@ pub(crate) fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Sh
 /// `Int`; any other shape is a type error.
 pub(crate) fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(cond, &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::Int) => Ok(k),
+        (k, Shape::Int) => Ok(k.graph().clone()),
         (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
     }
 }
 
 /// Compile a projection over `rows`, the shapes of `(key, val)` or `(key, val0, val1)`: input
-/// `Prod(rows)`, output `Prod([newkey, newval])`.
-pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> {
+/// `Prod(rows)`, output `Prod([newkey, newval])`. The result is compiled at that input, so the
+/// join backends narrow it without compiling it again.
+pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<corgi::Compiled> {
     match slot_graph(lambda, rows)? {
         (g, Shape::Prod(fs)) if fs.len() == 2 => Ok(g),
         (_, other) => Err(format!("a projection gives (key, val), not {other}")),
