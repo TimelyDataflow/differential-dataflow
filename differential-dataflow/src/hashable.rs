@@ -14,7 +14,7 @@
 //! data types can use a generic hash function, where as more specialized types such as uniformly
 //! distributed integers can perhaps do something simpler (like report their own value).
 
-use std::hash::Hasher;
+use std::hash::{BuildHasher, Hasher};
 
 /// Types with a `hashed` method, producing an unsigned output of some type.
 ///
@@ -25,13 +25,17 @@ pub trait Hashable {
     /// The type of the output value.
     type Output: Into<u64>+Copy+Ord;
     /// A well-distributed integer derived from the data.
+    ///
+    /// The blanket `Hash` implementation is deterministic for a fixed build and target.
+    /// Its hash values are not a persistent format and may change with dependencies.
     fn hashed(&self) -> Self::Output;
 }
 
 impl<T: ::std::hash::Hash> Hashable for T {
     type Output = u64;
     fn hashed(&self) -> u64 {
-        let mut h: ::fnv::FnvHasher = Default::default();
+        // Exchanges must use the same seed in every process.
+        let mut h = foldhash::quality::FixedState::with_seed(0).build_hasher();
         self.hash(&mut h);
         h.finish()
     }
