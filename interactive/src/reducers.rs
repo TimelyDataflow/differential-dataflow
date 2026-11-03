@@ -174,15 +174,15 @@ mod tests {
         assert_eq!(readable.graph().unwrap(), mechanical.graph().unwrap());
         let parsed = Lambda::new(readable.src.clone(), &corgi::Scope::default());
         let val = Shape::Prod(vec![Shape::Int, Shape::Int]);
-        assert_eq!(crate::lambda::compile_reduce(&readable, &Shape::Int, &val).unwrap(),
-            crate::lambda::compile_reduce(&parsed, &Shape::Int, &val).unwrap());
+        assert_eq!(crate::lambda::compile_reduce(&readable, &Shape::Int, &val).unwrap().graph(),
+            crate::lambda::compile_reduce(&parsed, &Shape::Int, &val).unwrap().graph());
         // The known input type also proves authored nested pattern checks.
         let base = Lambda::new("let ((k, _), vals) = input in (vals head.0, 1) enlist".into(), &corgi::Scope::default());
         let Reducer::Expr(kept) = Reducer::Expr(base).project(&projection, &Shape::Prod(vec![Shape::Int, Shape::Int]), &Shape::Prod(vec![Shape::Int, Shape::Int]));
         assert!(!kept.src.contains("_call0"), "{}", kept.src);
         let parsed = Lambda::new(kept.src.clone(), &corgi::Scope::default());
-        assert_eq!(crate::lambda::compile_reduce(&kept, &val, &val).unwrap(),
-            crate::lambda::compile_reduce(&parsed, &val, &val).unwrap());
+        assert_eq!(crate::lambda::compile_reduce(&kept, &val, &val).unwrap().graph(),
+            crate::lambda::compile_reduce(&parsed, &val, &val).unwrap().graph());
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
             let reparsed = Lambda::new(lambda.src.clone(), &corgi::Scope::default());
             let running = crate::lambda::compile_reduce(&lambda, &Shape::Int, &shape).unwrap();
             let printed = crate::lambda::compile_reduce(&reparsed, &Shape::Int, &shape).unwrap();
-            assert_eq!(running, printed, "{sugar:?}: {}", lambda.src);
+            assert_eq!(running.graph(), printed.graph(), "{sugar:?}: {}", lambda.src);
             // The spelling emitted by ddir-plan is already valid DDP. Replanning it
             // must not add a mask to the output that was narrowed in the expression.
             let text = format!("export \"out\" = input 0 : (int, (int, int)) | reduce(input -> {});", lambda.src);
@@ -207,7 +207,7 @@ mod tests {
             assert_eq!(crate::passes::projection::pushdown(&mut program, &|_| None).unwrap(), 0);
         }
         // Nonempty input with zero total count emits nothing; a negative total is retained.
-        let lambda = crate::lambda::compile_reduce(&Sugar::Count.lambda(), &Shape::Int, &Shape::Int).unwrap();
+        let lambda = crate::lambda::compile_reduce(&Sugar::Count.lambda(), &Shape::Int, &Shape::Int).unwrap().graph().clone();
         let input = Value::Prod(vec![Value::i64(vec![1, 2]), Value::List(Bounds::offsets(vec![2, 3]), Box::new(Value::Prod(vec![
             Value::i64(vec![10, 20, 30]), Value::i64(vec![1, -1, -2]),
         ])))]);

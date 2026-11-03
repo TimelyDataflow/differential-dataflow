@@ -57,10 +57,10 @@ impl CorgiHalfJoinBackend {
     /// type error is a panic with corgi's message: install type-checked the program, so it is not
     /// reached.
     pub(crate) fn new(projection: &Lambda, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
-        let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
+        let compiled = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("half_join: type error at shapes ({k}, {v0}, {v1}): {e}"));
         let input = Shape::Prod(vec![k, v0, v1]);
-        let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+        let narrowed = corgi::narrow(compiled, &Demand::All)
             .unwrap_or_else(|e| panic!("half_join: narrowing a compiled projection at {input}: {e}"));
         let reads = Reads::new(narrowed.input, &input);
         let Shape::Prod(parts) = &input else { unreachable!() };
@@ -645,7 +645,7 @@ mod tests {
                 let lambda = Lambda::new(format!("let (k, v0, v1) = input in let (a, b, c, d) = v0 in let (e, f, g, h) = v1 in {body}"), &corgi::Scope::default());
                 let narrowed = CorgiHalfJoinBackend::new(&lambda, 2, shapes.clone());
                 let original = CorgiHalfJoinBackend {
-                    width: 2, project_stream: false, graph: compile_projection(&lambda, &shapes).unwrap(),
+                    width: 2, project_stream: false, graph: compile_projection(&lambda, &shapes).unwrap().graph().clone(),
                     reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), colliding: Vec::new(),
                 };
                 let rows = |backend: CorgiHalfJoinBackend| {

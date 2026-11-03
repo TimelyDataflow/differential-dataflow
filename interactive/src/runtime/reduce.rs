@@ -213,12 +213,10 @@ impl<T> CorgiReduceBackend<T> {
     /// type check keeps from being reached.
     pub(crate) fn with_window(reducer: Reducer, limit: Option<usize>, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
         let Reducer::Expr(lambda) = reducer;
-        let graph = compile_reduce(&lambda, &kshape, &vshape)
+        let compiled = compile_reduce(&lambda, &kshape, &vshape)
             .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
         // The graph rebuilt to read only what it reads, and the demand saying what that is.
         let input = Shape::Prod(vec![kshape, Shape::List(Box::new(Shape::Prod(vec![vshape, Shape::Int])))]);
-        let compiled = corgi::compile(graph, &input)
-            .unwrap_or_else(|e| panic!("reduce: compiling at {input}: {e}"));
         // A limit observes whole-value order and entry boundaries. Demand alone does not prove
         // that merging those entries is valid; the sum analysis also checks disappearing groups.
         let project_values = limit.is_none() && crate::passes::reduce_demand::projection(&compiled).is_some();

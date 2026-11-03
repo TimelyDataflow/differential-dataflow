@@ -63,7 +63,7 @@ impl Plan {
     fn new(op: &LinearOp, kshape: Shape, vshape: Shape, level: Level) -> Plan {
         let (k, v) = (&kshape, &vshape);
         let (what, graph) = match op {
-            LinearOp::Project(p) => ("map", Some(compile_projection(p, &[kshape.clone(), vshape.clone()]))),
+            LinearOp::Project(p) => ("map", Some(compile_projection(p, &[kshape.clone(), vshape.clone()]).map(|c| c.graph().clone()))),
             LinearOp::Filter(cond) => ("filter", Some(compile_predicate(cond, k, v))),
             LinearOp::FlatMap(list) => ("flatmap", Some(compile_flatmap(list, k, v))),
             LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level.width()))),

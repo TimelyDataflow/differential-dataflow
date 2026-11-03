@@ -98,10 +98,10 @@ impl<T: ColTime> CorgiJoinBackend<T> {
     /// The projection over inputs of the key's and both values' shapes. A type error is a panic
     /// with corgi's message: install type-checked the program, so it is not reached.
     pub(crate) fn new(projection: &Lambda, [k, v0, v1]: [Shape; 3]) -> Self {
-        let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
+        let compiled = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("join projection: type error at shapes ({k}, {v0}, {v1}): {e}"));
         let input = Shape::Prod(vec![k, v0, v1]);
-        let narrowed = corgi::compile(g, &input).and_then(|compiled| corgi::narrow(compiled, &Demand::All))
+        let narrowed = corgi::narrow(compiled, &Demand::All)
             .unwrap_or_else(|e| panic!("join projection: narrowing a compiled graph at {input}: {e}"));
         CorgiJoinBackend { colliding: Vec::new(), graph: narrowed.graph, reads: Reads::new(narrowed.input, &input), _t: PhantomData }
     }
@@ -1097,7 +1097,7 @@ mod tests {
                 let lambda = Lambda::new(format!("let (k, (a, b, c, d), v) = input in {body}"), &corgi::Scope::default());
                 let mut narrowed = CorgiJoinBackend::new(&lambda, shapes.clone());
                 let mut original = CorgiJoinBackend {
-                    colliding: Vec::new(), graph: compile_projection(&lambda, &shapes).unwrap(),
+                    colliding: Vec::new(), graph: compile_projection(&lambda, &shapes).unwrap().graph().clone(),
                     reads: Reads::new(Demand::All, &Shape::Prod(shapes.to_vec())), _t: PhantomData,
                 };
                 let run = |backend: &mut CorgiJoinBackend<u64>| {
