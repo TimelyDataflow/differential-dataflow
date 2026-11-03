@@ -207,7 +207,7 @@ impl ProxyHalfJoinBackend<Time, NativeBatch, Run> for CorgiHalfJoinBackend {
         // Values equal on the read fields share a token before matching.
         let proj = SideProj::new(&chunks, &self.reads.columns[2]);
         let probes: Vec<Probe<'_, Time>> = chunks.iter().enumerate()
-            .filter(|(_, c)| { let ids = ident(c.keys()); ids[0] <= last && ids[ids.len() - 1] >= first })
+            .filter(|(_, c)| c.may_hold(first, last))
             .map(|(cid, c)| Probe::new(c, cid, &needles, &proj))
             .collect();
         let matched: Vec<bool> = (0..needles.len()).map(|n| probes.iter().any(|p| p.lo[n] < p.hi[n])).collect();
