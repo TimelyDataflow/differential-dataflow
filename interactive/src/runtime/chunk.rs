@@ -148,6 +148,18 @@ impl<T, R> CorgiChunk<T, R> {
             _ => ident(&self.0.keys).partition_point(|&x| x < id),
         }
     }
+
+    /// An in-core chunk holding every row whose identifier is among `needles` (sorted, distinct
+    /// identifiers), and possibly other rows.
+    ///
+    /// A reader that touches a few rows of a large chunk asks for those rows this way, then
+    /// searches within what it gets as it would within the chunk, so the other rows are safe.
+    /// A chunk of independently decompressed pages would bring in only the pages the needles can
+    /// be in; while chunks are uncompressed and in memory, this is the chunk itself.
+    pub(crate) fn restrict(&self, needles: &[i64]) -> Self {
+        debug_assert!(needles.windows(2).all(|w| w[0] < w[1]), "restrict: needles are sorted and distinct");
+        self.clone()
+    }
 }
 
 impl<T, R> CorgiChunk<T, R>

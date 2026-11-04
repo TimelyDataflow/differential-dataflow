@@ -156,14 +156,24 @@ pub(crate) struct CorgiReduceBackend<T> {
     /// Input records per window, bounding what the presentations cost at once.
     window_size: usize,
     /// The retire in progress.
-    retire: Retire,
+    retire: Retire<T>,
 }
 
-/// A retire's keys and where its input chunks hold them, found once by its first window.
-#[derive(Default)]
-struct Retire {
+/// A retire's keys, the chunks it reads, and where its input chunks hold the keys, found once by
+/// its first window.
+///
+/// Every position into a chunk, in the matches, the pools and the key columns, is into these
+/// chunk lists, which no later window rebuilds.
+struct Retire<T> {
     /// The retire's keys, ascending.
     keys: Vec<i64>,
+    /// The input chunks, prior then novel: the prior ones restricted to `keys`, the novel ones,
+    /// which define the keys, as they are.
+    in_chunks: Vec<CorgiChunk<T, Diff>>,
+    /// How many of `in_chunks` are prior.
+    prior: usize,
+    /// The output chunks, restricted to `keys`.
+    out_chunks: Vec<CorgiChunk<T, Diff>>,
     /// The input records each key holds, novel and prior.
     held: Vec<usize>,
     /// Where the input chunks, prior then novel, hold the keys.
@@ -174,7 +184,13 @@ struct Retire {
     colliding: Vec<i64>,
 }
 
-impl Retire {
+impl<T> Default for Retire<T> {
+    fn default() -> Self {
+        Retire { keys: Vec::new(), in_chunks: Vec::new(), prior: 0, out_chunks: Vec::new(), held: Vec::new(), input: Vec::new(), window: 0..0, colliding: Vec::new() }
+    }
+}
+
+impl<T> Retire<T> {
     /// Advance to the next window: the next keys, until they hold `budget` input records. A key is
     /// never split, so a window holds at least one. Returns `false` once there are no keys left.
     fn advance(&mut self, budget: usize) -> bool {
@@ -244,7 +260,7 @@ impl<T> CorgiReduceBackend<T> {
 /// Both the keys and stored identifier lane are sorted. A chunk's bounds skip the keys it cannot
 /// hold ([`CorgiChunk::find`]), and [`matching_ranges`](crate::runtime::search::matching_ranges) chooses between merging the rest with the
 /// lane and searching them in lockstep.
-fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches {
+fn search<T: ColTime>(chunks: &[CorgiChunk<T, Diff>], keys: &[i64]) -> Matches {
     let mut scratch = Vec::new();
     chunks.iter().map(|chunk| {
         let mut found = Vec::new();
@@ -262,7 +278,7 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches 
 /// first split by real key, so that an id names one real key's value, and the row it is recorded
 /// at holds that key.
 fn present<T: ColTime + Ord>(
-    chunks: &[&CorgiChunk<T, Diff>],
+    chunks: &[CorgiChunk<T, Diff>],
     keys: &[i64],
     matches: &Matches,
     colliding: &[bool],
@@ -316,7 +332,7 @@ fn present<T: ColTime + Ord>(
 /// Takes rows labelled by key index, ascending, and returns them reordered so the new labels
 /// ascend, with each new label's key index. Rows of other keys keep one label per key.
 fn split_real_keys<T: ColTime>(
-    chunks: &[&CorgiChunk<T, Diff>],
+    chunks: &[CorgiChunk<T, Diff>],
     colliding: &[bool],
     labels: Vec<u64>,
     rows: Vec<(usize, usize)>,
@@ -442,25 +458,26 @@ where
         if *from == KeyPosition::End {
             return;
         }
-        let novel_chunks = chunks_of(instance.input_batches);
-        let mut in_chunks = chunks_of(instance.source_batches);
-        let prior = in_chunks.len();
-        in_chunks.extend(novel_chunks.iter().copied());
-        let out_chunks = chunks_of(instance.output_batches);
-
         // The first window finds the retire's keys, where the input holds them, and the columns
-        // that the retire's ids will name rows of.
+        // that the retire's ids will name rows of. The prior input and the output are restricted
+        // to the keys once, here, so a chunk of pages need bring in only those the keys can be in,
+        // and every window reads these same chunks.
         if *from == KeyPosition::Start {
+            let novel_chunks = chunks_of(instance.input_batches);
             let keys = retire_keys(&novel_chunks, changed);
+            let mut in_chunks: Vec<_> = chunks_of(instance.source_batches).into_iter().map(|chunk| chunk.restrict(&keys)).collect();
+            let prior = in_chunks.len();
+            in_chunks.extend(novel_chunks.into_iter().cloned());
+            let out_chunks: Vec<_> = chunks_of(instance.output_batches).into_iter().map(|chunk| chunk.restrict(&keys)).collect();
             let input = search(&in_chunks, &keys);
             let mut held = vec![0; keys.len()];
             for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
-            self.retire = Retire { keys, held, input, window: 0..0, colliding: Vec::new() };
             let value = &self.reads.value;
             self.input.columns = in_chunks.iter().map(|chunk| value.project(chunk.vals().clone()).expect("a chunk's values have the reduce's value shape")).collect();
             self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
             self.output_keys.clear();
             self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
+            self.retire = Retire { keys, in_chunks, prior, out_chunks, held, input, window: 0..0, colliding: Vec::new() };
         }
 
         // Windows are bounded, as their presentations are all live at once.
@@ -470,11 +487,12 @@ where
             return;
         }
         let matches = retire.input_matches();
+        let (in_chunks, out_chunks, prior) = (&retire.in_chunks, &retire.out_chunks, retire.prior);
         let keys = &retire.keys[retire.window.clone()];
-        let out_matches = search(&out_chunks, keys);
+        let out_matches = search(out_chunks, keys);
         // The identifiers that hold several real keys, across input and output alike.
-        let colliding = if in_chunks.iter().chain(&out_chunks).any(|chunk| key_is_hashed(chunk.keys())) {
-            let columns: Vec<_> = in_chunks.iter().chain(&out_chunks).map(|chunk| recover_key_ref(chunk.keys())).collect();
+        let colliding = if in_chunks.iter().chain(out_chunks).any(|chunk| key_is_hashed(chunk.keys())) {
+            let columns: Vec<_> = in_chunks.iter().chain(out_chunks).map(|chunk| recover_key_ref(chunk.keys())).collect();
             let runs = matches.iter().chain(&out_matches).enumerate().flat_map(|(column, found)| {
                 found.iter().map(move |(key, rows)| (*key, column, rows.start, rows.end))
             });
@@ -499,11 +517,11 @@ where
         // survives in `window.seeds` above. Input ids name rows for this window only.
         self.input.refs.clear();
         let projected = (self.project_values && self.reads.value != Demand::All).then_some(&self.input.columns[..]);
-        present(&in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
+        present(in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
         // The output history, same keys. Output ids name rows for the whole retire, and the rows
         // that hold their keys are at the same positions of the output chunks' key columns.
         let fresh = self.output.refs.len();
-        present(&out_chunks, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
+        present(out_chunks, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
         self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
 
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
@@ -700,9 +718,14 @@ where
 
     fn finish(&mut self) -> Option<CBatch<T>> {
         let (key_rows, ids, times, diffs) = std::mem::take(&mut self.rows);
+        // Nothing the retire read or built outlives it: its chunks, and the pools' columns.
+        self.retire = Retire::default();
+        self.input = Pool::default();
+        self.output_keys = Vec::new();
+        let (output, key_columns) = (std::mem::take(&mut self.output), std::mem::take(&mut self.key_columns));
         if times.is_empty() { return None; }
-        let keys = gather_refs(&self.key_columns, key_rows.into_iter());
-        Some(Rc::new(columns_to_batch(keys, self.output.gather(&ids), times, diffs)))
+        let keys = gather_refs(&key_columns, key_rows.into_iter());
+        Some(Rc::new(columns_to_batch(keys, output.gather(&ids), times, diffs)))
     }
 }
 
@@ -806,7 +829,7 @@ mod tests {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
                 let (mut refs, mut bridge) = (Vec::new(), Vec::new());
-                present(&chunks, &keys, &search(&chunks, &keys), &[], None, &mut refs, &mut bridge);
+                present(&owned, &keys, &search(&owned, &keys), &[], None, &mut refs, &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
@@ -884,7 +907,8 @@ mod tests {
     }
 
     /// Windows partition a retire: at any budget each window stops once it holds the budget, and
-    /// together they present what one window would, which is what the chunks hold.
+    /// together they present what one window would, which is what the chunks hold. `finish` then
+    /// keeps none of the retire's chunks or columns.
     #[test]
     fn windows_partition_a_retire() {
         use timely::progress::{Antichain, Timestamp};
@@ -936,6 +960,9 @@ mod tests {
                         assert!(within(*key) && seeds.insert((*key, time.clone())));
                     }
                 }
+                assert!(backend.finish().is_none());
+                assert!(backend.retire.in_chunks.is_empty() && backend.retire.out_chunks.is_empty(), "finish keeps no chunks");
+                assert!(backend.input.columns.is_empty() && backend.output.columns.is_empty() && backend.key_columns.is_empty(), "finish keeps no columns");
                 (inputs, seeds, outputs)
             };
             let support: BTreeSet<_> = chunks_of(&input).iter()
