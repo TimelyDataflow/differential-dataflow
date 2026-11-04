@@ -32,7 +32,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::batcher::Batcher;
+use differential_dataflow::batcher::{Batcher, Extract};
 use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
@@ -488,12 +488,15 @@ pub mod cursors {
     }
 
     impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<Vec<(D, T, R)>> for BlobList<D, T, R> {
-        type Time = T;
-        type Output = Vec<Vec<(D, T, R)>>;
-
         fn insert(&mut self, container: &mut Vec<(D, T, R)>) {
             self.stage.extend(container.drain(..).map(|(d,t,r)| (t,d,r)));
         }
+    }
+
+    impl<D: Ord, T: Timestamp, R: Semigroup> Extract for BlobList<D, T, R> {
+        type Time = T;
+        type Output = Vec<Vec<(D, T, R)>>;
+
         fn extract<'a>(&'a mut self, frontier: AntichainRef<'_, T>) -> (Option<Vec<Vec<(D, T, R)>>>, AntichainRef<'a, T>) {
             // Handle any staged updates first.
             consolidate_updates(&mut self.stage);

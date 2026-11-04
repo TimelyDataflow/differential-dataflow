@@ -18,7 +18,7 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::batcher::Batcher;
+use crate::batcher::{Batcher, Extract};
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 ///
@@ -42,15 +42,22 @@ where
     Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut C>,
     S: Sealer<M::Chunk>,
 {
-    type Time = M::Time;
-    type Output = S::Output;
-
     fn insert(&mut self, container: &mut C) {
         self.chunker.push_into(container);
         while let Some(chunk) = self.chunker.extract().map(std::mem::take) {
             self.ladder.insert_chain(vec![chunk]);
         }
     }
+}
+
+impl<Chu, M, S> Extract for MergeBatcher<Chu, M, S>
+where
+    M: Extractor<Time: Timestamp>,
+    Chu: ContainerBuilder<Container = M::Chunk>,
+    S: Sealer<M::Chunk>,
+{
+    type Time = M::Time;
+    type Output = S::Output;
 
     // Extraction means finding those updates with times not greater or equal to any time in
     // `upper`. All updates must have time greater or equal to the previously used `upper`, by
@@ -480,7 +487,7 @@ pub mod vec {
 #[cfg(test)]
 mod test {
     use timely::progress::frontier::Antichain;
-    use crate::batcher::Batcher;
+    use crate::batcher::Extract;
     use super::{MergeBatcher, Sealer};
     use super::vec::VecMerger;
     use crate::batcher::merge::chunker::ContainerChunker;
@@ -508,7 +515,7 @@ mod test {
         let mut b = Bt::new(None, 0);
         b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, 1i64), ((200u64, ()), 7u64, 1i64)]]);
         b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, -1i64)]]);
-        let (_, retained) = Batcher::<In>::extract(&mut b, Antichain::from_elem(3).borrow());
+        let (_, retained) = Extract::extract(&mut b, Antichain::from_elem(3).borrow());
         let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![7u64],
             "frontier held a capability at t=5, which consolidates to zero (got {got:?})");
@@ -520,7 +527,7 @@ mod test {
         let mut b = Bt::new(None, 0);
         b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, 1i64)]]);
         b.ladder.chain_push(vec![vec![((200u64, ()), 7u64, 1i64)]]);
-        let (_, retained) = Batcher::<In>::extract(&mut b, Antichain::from_elem(3).borrow());
+        let (_, retained) = Extract::extract(&mut b, Antichain::from_elem(3).borrow());
         let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![5u64]);
     }

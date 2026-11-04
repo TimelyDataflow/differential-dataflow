@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
-use differential_dataflow::batcher::Batcher;
+use differential_dataflow::batcher::{Batcher, Extract};
 use differential_dataflow::batcher::merge::{MergeLadder, Merger};
 
 use corgi::arrange::{gather, gather_lanes, sort_blocks, survey_groups, GroupRun};
@@ -228,14 +228,15 @@ impl HalfJoinBatcher {
 }
 
 impl Batcher<CC> for HalfJoinBatcher {
-    type Time = Time;
-    type Output = Vec<Run>;
-
     fn insert(&mut self, container: &mut CC) {
         if !container.times.is_empty() {
             self.stage.push(std::mem::take(container));
         }
     }
+}
+impl Extract for HalfJoinBatcher {
+    type Time = Time;
+    type Output = Vec<Run>;
 
     fn extract<'a>(&'a mut self, frontier: AntichainRef<'_, Time>) -> (Option<Vec<Run>>, AntichainRef<'a, Time>) {
         let width = self.width;
