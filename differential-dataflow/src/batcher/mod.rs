@@ -13,17 +13,21 @@ pub mod merge;
 ///
 /// The implementor determines the meaning of extraction by a frontier; it is not required to be by
 /// antichain partial order.
-pub trait Batcher<C0> {
-    /// The timestamps by which updates are carved out.
-    type Time;
-    /// The batches released by extraction.
-    type Output;
-
+pub trait Batcher<C0> : Extract {
     /// Takes the updates in `container`, leaving it in an undefined state.
     ///
     /// The implementor decides whether to claim the container's allocation or to drain it and
     /// leave the allocation with the caller, who is free to reuse the container either way.
     fn insert(&mut self, container: &mut C0);
+}
+
+/// Supertrait for `Batcher` that ensures a consistent time and output across `C0` implementations.
+pub trait Extract {
+    /// The timestamps by which updates are carved out.
+    type Time;
+    /// The batches released by extraction.
+    type Output;
+
     /// Extracts the updates `upper` unblocks as a batch, and lower bounds the times of those retained.
     ///
     /// What `upper` unblocks is the implementor's to decide. It can be based on the antichain up
