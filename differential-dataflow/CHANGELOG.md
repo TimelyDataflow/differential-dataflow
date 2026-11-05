@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.1...differential-dataflow-v0.26.0) - 2026-11-05
 
+This release targets timely 0.32 and reshapes several public traits.
+The experimental surface from 0.25.0 changes shape again, as expected.
+
+### Changed
+
+- Depends on timely 0.32 from crates.io, replacing the git revision.
+- `Arrange` is removed, and its methods are inherent methods instead. ([#843](https://github.com/TimelyDataflow/differential-dataflow/pull/843))
+- `Batcher<C0>` is now a subtrait of `Extract`, and `Builder` requires `Default` in place of `Sized`. ([#844](https://github.com/TimelyDataflow/differential-dataflow/pull/844), [#846](https://github.com/TimelyDataflow/differential-dataflow/pull/846))
+- `PointStamp` takes its inline capacity as a const parameter `N`, defaulting to 1. ([#1051](https://github.com/TimelyDataflow/differential-dataflow/pull/1051))
+- `JoinTactic` takes the time, both batch types, and the output container as parameters, in the order `<T, B0, B1, C>`.
+- The blanket `Hashable` implementation uses fixed-seed foldhash. Hash-derived values such as `identifiers()` change once. ([#1066](https://github.com/TimelyDataflow/differential-dataflow/pull/1066))
+
 ### Other
 
 - Target timely 0.32 from crates.io, and fix rustdoc link errors ([#1075](https://github.com/TimelyDataflow/differential-dataflow/pull/1075))
