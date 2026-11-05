@@ -1,0 +1,34 @@
+--- lowered
++++ optimized
+@@ -29,17 +29,15 @@
+ let friends_idx2 = friends_join2 | arrange;
+ let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
+-let posts_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq);
+-let posts = posts_filter | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
+-let replies_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq);
+-let replies = replies_filter | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
++let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
++let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
++let replies_idx = replies | arrange;
+ thread: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var thread;
+     let below_map = thread | map(((mid, root), ()) -> (mid, root));
+     let below_idx = below_map | arrange;
+-    let replies_idx = ::replies | arrange;
+-    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
++    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
+     let thread_rows = ::posts + below;
+     let thread_idx = thread_rows | arrange;
+     let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+@@ -61,8 +59,7 @@
+ let ldbc_forum_idx = ldbc_forum_map | arrange;
+ let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
+ let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
+-let ldbc_knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
+-let ldbc_knows_by_src_idx = ldbc_knows_by_src_map | arrange;
++let ldbc_knows_by_src_idx = either_map | arrange;
+ let ldbc_member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
+ let ldbc_member_by_forum_idx = ldbc_member_by_forum_map | arrange;
+ let ldbc_member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));

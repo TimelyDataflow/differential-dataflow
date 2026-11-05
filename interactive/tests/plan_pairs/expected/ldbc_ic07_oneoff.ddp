@@ -1,0 +1,40 @@
+-- Time lanes: epoch.
+-- Trace imports use provider arrangements; history advances to G = (0, []).
+let request = input 0 : ((int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = import "ldbc.message.by_creator" : (int, int);
+let likes = import "ldbc.likes.by_message" : (int, (int, int));
+let pals = import "ldbc.friend.pair" : ((int, int), ());
+let latest_map = request | map(((rid, who), ()) -> (who, rid));
+let latest_idx = latest_map | arrange;
+let wrote_idx = wrote | arrange;
+let latest_join = latest_idx | join(wrote_idx, (who, rid, m) -> (m, (rid, who)));
+let latest_idx2 = latest_join | arrange;
+let likes_idx = likes | arrange;
+let latest_join2 = latest_idx2 | join(likes_idx, (m, (rid, who), (liker, when)) -> ((rid, who, liker), (when neg, m)));
+let latest_idx3 = latest_join2 | arrange;
+let latest = latest_idx3 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+let rows_map = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg)));
+let rows_idx = rows_map | arrange;
+let message_idx = message | arrange;
+let rows = rows_idx | join(message_idx, (m, (rid, who, liker, when), (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((who, liker), (rid, liker, when, m, ((text len, 0) gt, text, image) select, (when, created) sub)));
+let rows_idx2 = rows | arrange;
+let pals_idx = pals | arrange;
+let known = rows_idx2 | join(pals_idx, arg -> let _call0 = let input = arg in let (pair, row, ()) = input in (pair, row) in (((), ()), (_call0.1.0, _call0.1.1, _call0.1.2, _call0.1.3, _call0.1.4, _call0.1.5)));
+let marked_map = known | map((_, row) -> (row, 0));
+let marked_map2 = rows | map(arg -> let _call0 = let input = arg in input in (((), ()), (_call0.1.0, _call0.1.1, _call0.1.2, _call0.1.3, _call0.1.4, _call0.1.5)));
+let marked_neg = known | negate;
+let marked_rows = marked_map2 + marked_neg;
+let marked_map3 = marked_rows | map((_, row) -> (row, 1));
+let marked = marked_map + marked_map3;
+let ranked_map = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker, (rid, when, m, body, age, fresh)));
+let ranked_idx = ranked_map | arrange;
+let person_idx = person | arrange;
+let ranked_join = ranked_idx | join(person_idx, (liker, (rid, when, m, body, age, fresh), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((when neg, liker), (first, last, m, body, (age, 60000) div, fresh))));
+let ranked_idx2 = ranked_join | arrange;
+let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) -> ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
+let answer_idx = answer | arrange;
+-- Renderer: publish the existing arrangement.
+export "ic7x1.answer" = answer_idx;

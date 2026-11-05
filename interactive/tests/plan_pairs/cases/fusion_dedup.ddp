@@ -1,0 +1,8 @@
+-- Fusion runs before dedup. The two identical prefixes are then hidden
+-- inside different linear chains; they could have been shared.
+let rows = input 0 : (int, int);
+let left = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
+let right = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 10) lt);
+-- Identical complete chains do merge. Concat must keep both occurrences.
+let same = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
+export "out" = left + right + same;

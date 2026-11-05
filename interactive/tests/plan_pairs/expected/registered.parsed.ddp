@@ -1,0 +1,1 @@
+export "out" = input 0 : (int, ()) | map((k, ()) -> (k call plan_pair_identity, ()));

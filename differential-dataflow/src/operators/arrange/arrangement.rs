@@ -24,17 +24,18 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
-use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::operators::Capability;
+use timely::container::PushInto;
+use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::progress::Stamp;
 
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchTimeGat, BatchVal, BatchValOwn};
+use crate::logging::Logger;
+use crate::batcher::Batcher;
+use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
-use trace::wrappers::enter::{TraceEnter, BatchEnter,};
-use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
-use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
+use trace::wrappers::enter::{TraceEnter, enter_span};
 
 use super::TraceAgent;
 
@@ -48,7 +49,10 @@ pub struct Arranged<'scope, Tr: TraceReader> {
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>,
+    ///
+    /// Unchecked assumption: each update in a batch has a time greater or equal to some time in the
+    /// stamp of the message carrying it. In particular, a message with an empty stamp carries no updates.
+    pub stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
 }
@@ -76,7 +80,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         TInner: Refines<Tr::Time>+Lattice,
     {
         Arranged {
-            stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
+            stream: self.stream.enter(child).map(enter_span),
             trace: TraceEnter::make_from(self.trace),
         }
     }
@@ -92,26 +96,6 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         }
     }
 
-    /// Brings an arranged collection into a nested scope.
-    ///
-    /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
-    /// have all been extended with an additional coordinate with the default value. The resulting collection does
-    /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'inner, TInner, F, P>(self, child: Scope<'inner, TInner>, logic: F, prior: P) -> Arranged<'inner, TraceEnterAt<Tr, TInner, F, P>>
-    where
-        Tr::Batch: Navigable,
-        TInner: Refines<Tr::Time>+Lattice+'static,
-        F: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, BatchTimeGat<'_, Tr>)->TInner+Clone+'static,
-        P: FnMut(&TInner)->Tr::Time+Clone+'static,
-    {
-        let logic1 = logic.clone();
-        let logic2 = logic.clone();
-        Arranged {
-            trace: TraceEnterAt::make_from(self.trace, logic1, prior),
-            stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic2.clone())),
-        }
-    }
-
     /// Extracts a collection of any container from the stream of batches.
     ///
     /// This method is like `self.stream.flat_map`, except that it produces containers
@@ -119,7 +103,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn as_container<I, L>(self, mut logic: L) -> crate::Collection<'scope, Tr::Time, I::Item>
     where
         I: IntoIterator<Item: Container>,
-        L: FnMut(Tr::Batch) -> I+'static,
+        L: FnMut(SpanOf<Tr>) -> I+'static,
     {
         self.stream.unary(Pipeline, "AsContainer", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -136,7 +120,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, BatchDiff<Tr>>
@@ -150,7 +134,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     ///
@@ -189,7 +173,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
+    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
     where
         Tr::Batch: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
@@ -200,7 +184,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
                 for wrapper in data.iter() {
-                    let batch = &wrapper;
+                    let Some(batch) = wrapper.inner.as_ref() else { continue };
                     let mut cursor = batch.cursor();
                     while let Some(key) = cursor.get_key(batch) {
                         while let Some(val) = cursor.get_val(batch) {
@@ -251,6 +235,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
             self,
             other,
+            "Join",
             move |k, v1, v2, t, d1, d2, c| {
                 for datum in result(k, v1, v2, t, d1, d2) {
                     c.push_into(datum);
@@ -273,7 +258,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -294,7 +279,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -317,45 +302,21 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     }
 }
 
-/// A type that can be arranged as if a collection of updates.
-pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
-    /// Arranges updates into a shared trace.
-    ///
-    /// The batcher's output container must equal the stream container `C`; the default
-    /// chunker only consolidates same-type containers. For chunker setups that convert
-    /// between container types (e.g. columnar layouts), call [`arrange_core`] directly.
-    fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=T> + 'static,
-    {
-        self.arrange_named::<Ba, Bu, Tr>("Arrange")
-    }
-
-    /// Arranges updates into a shared trace, with a supplied name.
-    ///
-    /// See [`Arrange::arrange`] for constraints on the batcher's output container.
-    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=T> + 'static,
-    ;
-}
-
 /// Arranges a stream of updates by a key, configured with a name and a parallelization contract.
 ///
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, C>, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+pub fn arrange_core<'scope, P, C, Ba, Tr>(
+    stream: Stream<'scope, Tr::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+) -> Arranged<'scope, TraceAgent<Tr>>
 where
     C: Container + Clone + 'static,
     P: ParallelizationContract<Tr::Time, C>,
-    Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
-    Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -375,7 +336,7 @@ where
 
     let mut reader: Option<TraceAgent<Tr>> = None;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let reader_ref = &mut reader;
     let scope = stream.scope();
 
@@ -385,7 +346,7 @@ where
         let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Ba::new(logger.clone(), info.global_id);
+        let mut batcher = batcher(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
@@ -404,8 +365,6 @@ where
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
-        let mut chunker = Chu::default();
-
         move |(input, frontier), output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
@@ -413,17 +372,14 @@ where
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-                capabilities.insert(cap.retain(0));
-                chunker.push_into(data);
-                while let Some(chunk) = chunker.extract() {
-                    batcher.push_into(std::mem::take(chunk));
+                for capability in cap.retain_stamp(0).iter() {
+                    capabilities.insert(capability.clone());
                 }
+                batcher.insert(data);
             });
 
-            // The frontier may have advanced by multiple elements, which is an issue because
-            // timely dataflow currently only allows one capability per message. This means we
-            // must pretend to process the frontier advances one element at a time, batching
-            // and sending smaller bites than we might have otherwise done.
+            // The frontier may have advanced by multiple elements. We extract one batch for the
+            // whole advance, and send it stamped with every held capability it retires.
 
             // Assert that the frontier never regresses.
             assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &frontier.frontier()));
@@ -432,19 +388,11 @@ where
             // frontier isn't equal to the previous. It is only in this case that we have any
             // data processing to do.
             if prev_frontier.borrow() != frontier.frontier() {
-                // Flush any data the chunker is still accumulating into the batcher before we
-                // seal. The batcher only sees chunks the chunker has emitted; without this drain
-                // a partial final chunk would never reach the batcher.
-                while let Some(chunk) = chunker.finish() {
-                    batcher.push_into(std::mem::take(chunk));
-                }
-
                 // There are two cases to handle with some care:
                 //
                 // 1. If any held capabilities are not in advance of the new input frontier,
                 //    we must carve out updates now in advance of the new input frontier and
-                //    transmit them as batches, which requires appropriate *single* capabilities;
-                //    Until timely dataflow supports multiple capabilities on messages, at least.
+                //    transmit them as a batch, stamped with the capabilities they retire.
                 //
                 // 2. If there are no held capabilities in advance of the new input frontier,
                 //    then there are no updates not in advance of the new input frontier and
@@ -454,42 +402,42 @@ where
                 // If there is at least one capability not in advance of the input frontier ...
                 if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
 
-                    let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+                    // The capabilities to retire: those not in advance of the input frontier.
+                    // Each update extracted below is greater or equal to one of them, as updates
+                    // supported only by the remaining capabilities are in advance of the input
+                    // frontier and remain in the batcher.
+                    let retired = capabilities
+                        .elements()
+                        .iter()
+                        .filter(|c| !frontier.less_equal(c.time()))
+                        .cloned()
+                        .collect::<CapabilitySet<_>>();
 
-                    // For each capability not in advance of the input frontier ...
-                    for (index, capability) in capabilities.elements().iter().enumerate() {
+                    // Extract all updates not in advance of the input frontier, as one batch.
+                    // The batch spans the interval from the previously reported frontier to the
+                    // current one, which is exactly the interval the batcher carves out.
+                    let description = Description::new(
+                        prev_frontier.clone(),
+                        frontier.frontier().to_owned(),
+                        Antichain::from_elem(Tr::Time::minimum()),
+                    );
+                    let (extracted, retained) = batcher.extract(frontier.frontier());
 
-                        if !frontier.less_equal(capability.time()) {
+                    let batch = trace::Span::new(description, extracted.map(Into::into));
 
-                            // Assemble the upper bound on times we can commit with this capabilities.
-                            // We must respect the input frontier, and *subsequent* capabilities, as
-                            // we are pretending to retire the capability changes one by one.
-                            upper.clear();
-                            for time in frontier.frontier().iter() {
-                                upper.insert(time.clone());
-                            }
-                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
-                                upper.insert(other_capability.time().clone());
-                            }
+                    let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
+                    writer.insert(batch.clone(), stamp);
 
-                            // Extract updates not in advance of `upper`.
-                            let (mut chain, description) = batcher.seal(upper.clone());
-                            let batch = Bu::seal(&mut chain, description);
+                    // send the batch to downstream consumers, empty or not.
+                    output.session(&retired).give(batch);
 
-                            writer.insert(batch.clone(), Some(capability.time().clone()));
-
-                            // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(batch);
-                        }
-                    }
-
-                    // Having extracted and sent batches between each capability and the input frontier,
-                    // we should downgrade all capabilities to match the batcher's lower update frontier.
+                    // Having extracted and sent the batch of updates not in advance of the input
+                    // frontier, we downgrade all capabilities to match the batcher's lower update
+                    // frontier.
                     // This may involve discarding capabilities, which is fine as any new updates arrive
                     // in messages with new capabilities.
-
                     let mut new_capabilities = Antichain::new();
-                    for time in batcher.frontier().iter() {
+                    for time in retained.iter() {
                         if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
                             new_capabilities.insert(capability.delayed(time));
                         }
@@ -497,14 +445,12 @@ where
                             panic!("failed to find capability");
                         }
                     }
-
                     capabilities = new_capabilities;
                 }
                 else {
-                    // Announce progress updates, even without data. We seal the batcher to
-                    // advance its lower bound and frontier, but discard the readied updates
-                    // rather than building a batch we would immediately drop.
-                    let _ = batcher.seal(frontier.frontier().to_owned());
+                    // Announce progress updates, even without data. No held capability precedes
+                    // the input frontier, so no update does either, and the batcher has nothing
+                    // to extract.
                     writer.seal(frontier.frontier().to_owned());
                 }
 

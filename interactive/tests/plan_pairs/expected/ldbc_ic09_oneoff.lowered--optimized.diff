@@ -1,0 +1,40 @@
+--- lowered
++++ optimized
+@@ -15,12 +15,10 @@
+ let friend_idx = friend | arrange;
+ let hop1 = hop1_idx2 | join(friend_idx, (_, req, (f, _)) -> (f, req));
+ let hop1_idx3 = hop1 | arrange;
+-let friend_idx2 = friend | arrange;
+-let hop2 = hop1_idx3 | join(friend_idx2, (_, req, (g, _)) -> (g, req));
++let hop2 = hop1_idx3 | join(friend_idx, (_, req, (g, _)) -> (g, req));
+ let friends_rows = hop1 + hop2;
+-let friends_filter = friends_rows | filter((node, (_, who, _)) -> (node, who) ne);
+-let friends_map = friends_filter | map((node, (rid, _, max)) -> ((node, rid, max), ()));
+-let friends_idx = friends_map | arrange;
++let friends_rows2 = friends_rows | filter((node, (_, who, _)) -> (node, who) ne) | map((node, (rid, _, max)) -> ((node, rid, max), ()));
++let friends_idx = friends_rows2 | arrange;
+ let friends_reduce = friends_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let friends = friends_reduce | map(((node, rid, max), ()) -> (node, (rid, max)));
+ let friends_idx2 = friends | arrange;
+@@ -34,9 +32,8 @@
+ let slow_idx = slow_filter | arrange;
+ let by_author_idx = by_author | arrange;
+ let slow_join = slow_idx | join(by_author_idx, (f, (rid, max, _), (neg, id)) -> ((rid, f), ((neg, id), max)));
+-let slow_filter2 = slow_join | filter((_, ((neg, _), max)) -> (neg neg, max) lt);
+-let slow_map = slow_filter2 | map((key, (order, _)) -> (key, order));
+-let slow_idx2 = slow_map | arrange;
++let slow_rows = slow_join | filter((_, ((neg, _), max)) -> (neg neg, max) lt) | map((key, (order, _)) -> (key, order));
++let slow_idx2 = slow_rows | arrange;
+ let slow_reduce = slow_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+ let slow = slow_reduce | map(((rid, f), (_, order)) -> (rid, (order, f)));
+ let top_rows = fast + slow;
+@@ -47,8 +44,7 @@
+ let message_idx = message | arrange;
+ let answer_join = answer_idx | join(message_idx, (id, (rid, rank, created, f), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
+ let answer_idx2 = answer_join | arrange;
+-let person_idx2 = person | arrange;
+-let answer = answer_idx2 | join(person_idx2, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
++let answer = answer_idx2 | join(person_idx, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
+ let answer_idx3 = answer | arrange;
+ -- Renderer: publish the existing arrangement.
+ export "ic9x1.answer" = answer_idx3;

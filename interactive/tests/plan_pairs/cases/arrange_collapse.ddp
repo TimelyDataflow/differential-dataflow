@@ -1,0 +1,4 @@
+-- Repeated arrangements, including one after a reducer.
+let rows = input 0 : (int, ());
+let arranged = rows | arrange | arrange;
+export "counts" = arranged | count | arrange;

@@ -1,0 +1,3 @@
+-- Every continuation reaches a strict half join, so imported history at G dies.
+let rows = import "rows" : (int, int);
+export "out" = rows | lift | half_join(rows, 1, (k, v, _) -> (k, v));

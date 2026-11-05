@@ -1,0 +1,3 @@
+-- IS4. A message's creation date and content (or image file).
+-- Parameters: $mid. Rows come back in rank order; the runner numbers them 0, 1, 2, ...
+SELECT created, CASE WHEN length(content)>0 THEN content ELSE image END FROM (SELECT * FROM message WHERE id=$mid) r  ORDER BY id

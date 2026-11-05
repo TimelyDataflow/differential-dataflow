@@ -1,0 +1,27 @@
+-- The server's diagnostics views, over the `diag.*` sources it feeds from its own logging at
+-- each tick (see `interactive/src/diag.rs`). Installed as program `diag` when the server starts
+-- with DDIR_DIAGNOSTICS=1; drop it, or install another, like any program. Names are lists of
+-- their bytes. Every view leaves out the diagnostics program itself (program "diag").
+
+let operator = import "diag.operator" : ((int, int), (List(int), List(int), List(int), List(int)));
+let time     = import "diag.time" : ((int, int), ());
+let retired  = import "diag.time_retired" : ((int, List(int), List(int), List(int)), ());
+let records  = import "diag.records" : ((int, int), ());
+
+-- (worker, op) -> (program, statement), for the operators of every other program.
+let placed = operator | filter((_, (program, _, _, _)) -> (program, "diag") ne)
+                      | map((key, (program, statement, _, _)) -> (key, (program, statement)));
+
+-- Nanoseconds scheduled: by live operators where they are, plus by operators that have shut down.
+let timed = time | join(placed, (_, (), place) -> (place, ()))
+          + (retired | filter(((_, program, _, _), ()) -> (program, "diag") ne)
+                     | map(((_, program, statement, _), ()) -> ((program, statement), ())));
+
+export "diag.time_by_statement" = timed | count;
+export "diag.time_by_program" = timed | map(((program, _), ()) -> (program, ())) | count;
+
+-- Updates the arrangements hold, by where they are.
+export "diag.records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
+
+-- Live operators per program.
+export "diag.operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;

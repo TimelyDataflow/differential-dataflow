@@ -1,0 +1,12 @@
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals    = import "ldbc.friend.pair" : ((int, int), ());
+let answered = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
+                       | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who))
+                       | join(message, (_, who, (_, _, to, _, _, _, _, _, _, _, _, _, _)) -> (who, to))
+                       | filter((who, to) -> (who, to) ne);
+let talks    = (answered | map((a, b) -> ((a, b), ()))) + (answered | map((a, b) -> ((b, a), ())));
+let weighted = talks | count
+                     | join(pals, (pair, n, ()) -> (pair, n))
+                     | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
+                           ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
+export "ic14.s.weighted" = weighted | arrange;

@@ -1,80 +1,54 @@
-pub mod parse;
+//! DDIR: an interpreted intermediate representation for differential dataflow.
+//!
+//! The modules below are this crate's whole public surface, grouped by layer. Outside tests, a
+//! module uses only its own layer and the ones above it. The comment on each module says what
+//! escapes it, meaning what the server, the tests and the examples use. Everything else is
+//! `pub(crate)` or private. `unreachable_pub` flags a `pub` item that cannot escape; it does not
+//! flag one that escapes but that nothing outside uses, so check for those by hand.
+
+#![warn(unreachable_pub)]
+
+// The IR's vocabulary, and the expression language its slots are written in.
+// `Lambda`, `LinearOp`, `Reducer`, `Diff`.
 pub mod ir;
-pub mod lower;
+// `Lambda`, and the registry of host functions: `Function`, `register`, `lookup`.
+pub mod lambda;
+// Crate-only: canonical reducer definitions and value projection composition.
+mod reducers;
+// The scope tree: `Program`, `Scope`, `Item`, `Node`, `Ref`, `Source` and their parts. Plain data,
+// so every field is public.
 pub mod scope_ir;
-pub mod backend;
+
+// The language: text to a typed scope tree.
+// `pipe::parse`, the `.ddp` parser, and the statements it returns (`Stmt`, `Expr`).
+pub mod parse;
+// `lower_tree`: parsed statements to a scope tree.
+pub mod lower;
+// `infer` and every collection's shape (`CollShape`, `ScopeShapes`, `Problems`).
+pub mod shapes;
+
+// Scope-tree rewriting: one module, with `passes::run` as the preparation entry point.
+// `optimize` runs just the optimizer; `projection` also exposes the demand analysis.
+pub mod passes;
+// Explanation construction: `explain`, `explain_with`, `Options`, `clone_identity`.
 pub mod explain;
+
+// `report`: read-only planning stages, and their diagnostic printer.
+pub mod plan;
+
+// The runtime: rendering a scope tree onto differential dataflow.
+// Only the statement labels escape (`LabelEvent`, `LabelEventBuilder`), for a logger to read;
+// the `Backend` trait and `render_tree` are the crate's own.
+pub mod backend;
+// The columnar runtime. Only its data formats escape: `container`'s `Updates` and
+// `CorgiContainer`, `chunk::CorgiChunk`, their time columns (`col_times::ColTimes`),
+// `feed::FeedDecoder`, `frame`'s encoders and decoders, and `exchange::GatherPact`.
+pub mod runtime;
+
+// The host: installing, feeding and reading programs.
+// `register`: the server's own diagnostics as `diag.*` collections, kept in a `Diagnostics`.
+pub mod diag;
+// `Server`, `evaluate`, `generated_shape`, and the host's time and container types.
 pub mod server;
-// `folded` (the flat `[i64]` per-coordinate time-filter algebra) is retired:
-// the Value reverse model implements `time_le`/`strip` directly over the nested
-// chain tuple, so explain no longer needs it.
 
-use std::collections::BTreeSet;
-
-use parse::{Stmt, Expr};
-
-/// Survey a program's external sources: the count of positional inputs (one
-/// more than the largest `input N` index, zero if none appear) and the set of
-/// names referenced by `import "name"`. Two kinds because `import` does not yet
-/// subsume `input` — see `ir::Node::Import`; this returns one number when that
-/// cutover happens.
-pub fn survey_sources(stmts: &[Stmt]) -> (usize, BTreeSet<String>) {
-    let mut positional = 0usize;
-    let mut imports = BTreeSet::new();
-    walk_stmts(stmts, &mut positional, &mut imports);
-    (positional, imports)
-}
-
-fn walk_stmts(stmts: &[Stmt], positional: &mut usize, imports: &mut BTreeSet<String>) {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let(_, expr) | Stmt::Var(_, expr) | Stmt::Export(_, expr) => walk_expr(expr, positional, imports),
-            Stmt::Scope(_, body) => walk_stmts(body, positional, imports),
-        }
-    }
-}
-
-fn walk_expr(expr: &Expr, positional: &mut usize, imports: &mut BTreeSet<String>) {
-    match expr {
-        Expr::Input(n) => { *positional = (*positional).max(n + 1); },
-        Expr::Import(name) => { imports.insert(name.clone()); },
-        Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
-            | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::Filter(e, _)
-            | Expr::FlatMap(e, _)
-            | Expr::Reduce(e, _) | Expr::Inspect(e, _) => walk_expr(e, positional, imports),
-        Expr::Join(l, r, _) => { walk_expr(l, positional, imports); walk_expr(r, positional, imports); },
-        Expr::Concat(es) => { for e in es { walk_expr(e, positional, imports); } },
-        Expr::Name(_) | Expr::Qualified(_, _) => {},
-    }
-}
-
-/// Load a program source file.
-pub fn load_program(path: &str) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e))
-}
-
-/// Deterministic hash: maps an index to a pseudorandom u64 (splitmix64).
-pub fn hash_u64(index: u64) -> u64 {
-    let mut x = index.wrapping_mul(0x9e3779b97f4a7c15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
-    x ^ (x >> 31)
-}
-
-/// Generate one row: a key `Tuple` of `arity` hash-derived `Int`s (each of
-/// magnitude < nodes) and an empty-tuple value.
-pub fn gen_row(edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
-    gen_row_seeded(0, edge_index, nodes, arity)
-}
-
-/// As [`gen_row`], but mixes a `seed` so distinct seeds give distinct graphs.
-/// `seed == 0` reproduces [`gen_row`] exactly.
-pub fn gen_row_seeded(seed: u64, edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
-    let mut fields = Vec::with_capacity(arity);
-    let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
-    for col in 0..arity {
-        let h = hash_u64(base.wrapping_add(col as u64));
-        fields.push(ir::Value::Int((h % nodes) as i64));
-    }
-    (ir::Value::Tuple(fields), ir::Value::unit())
-}
+mod level;

@@ -1,0 +1,26 @@
+--- lowered
++++ optimized
+@@ -1,8 +1,6 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
+-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let friend = import "ldbc.friend" : (int, (int, int));
+ let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));
+ let by_author_idx = by_author | arrange;
+ let latest_reduce = by_author_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+@@ -10,12 +8,10 @@
+ let newest_map = by_author | map((author, (neg, _)) -> (author, neg));
+ let newest_idx = newest_map | arrange;
+ let newest = newest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let by_author_idx2 = by_author | arrange;
+ let latest_idx = latest | arrange;
+-let newest_idx2 = newest | arrange;
+ -- Renderer: publish the existing arrangement.
+-export "ic2.s.by_author" = by_author_idx2;
++export "ic2.s.by_author" = by_author_idx;
+ -- Renderer: publish the existing arrangement.
+ export "ic2.s.latest" = latest_idx;
+ -- Renderer: publish the existing arrangement.
+-export "ic2.s.newest" = newest_idx2;
++export "ic2.s.newest" = newest;

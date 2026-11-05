@@ -1,0 +1,13 @@
+-- IS3. A person's friends, with when each friendship was made, newest first.
+
+let request = input 0 : ((int, int), ());                    -- (rid, person)
+let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend  = import "ldbc.friend" : (int, (int, int));      -- (person, (friend, since))
+
+let ranked = request | map(((rid, who), ()) -> (who, rid))
+                     | join(friend, (_, rid, (f, since)) -> (f, (rid, since)))
+                     | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))))
+                     | collect | flatmap((_, entries) -> entries);
+let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
+
+export "is3.answer" = answer | arrange;

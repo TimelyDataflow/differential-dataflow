@@ -1,0 +1,7 @@
+let request = input 0 : ((int, int), ());
+let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let forum = import "ldbc.forum" : (int, (List(int), int, int));
+let root_of = import "ldbc.message.root" : (int, int);
+let answer = request | map(((rid, m), ()) -> (m, rid)) | join(root_of, (_, rid, root) -> (root, rid)) | join(message, (_, rid, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, rid)) | join(forum, (f, rid, (title, _, moderator)) -> (moderator, (rid, f, title))) | join(person, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (f, title, moderator, first, last)));
+export "is6.answer" = answer | arrange;

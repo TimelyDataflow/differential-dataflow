@@ -182,15 +182,15 @@ fn connected_components<'s>(
         let f_prop = labels.clone().join_core(forward, |_k,l,d| Some((*d,*l)));
         let r_prop = labels.join_core(reverse, |_k,l,d| Some((*d,*l)));
 
-        use timely::dataflow::operators::vec::{Map, Delay};
+        use timely::dataflow::operators::vec::Map;
         use timely::dataflow::operators::Concat;
 
+        // Records carry their advanced times; the downstream reduce acts on those, not on capabilities.
         let result =
         nodes
             .inner
             .map_in_place(|dtr| (dtr.1).inner = 256 * ((((::std::mem::size_of::<Node>() * 8) as u32) - (dtr.0).1.leading_zeros())))
             .concat(inner_collection.filter(|_| false).inner)
-            .delay(|dtr,_| dtr.1.clone())
             .as_collection()
             .concat(f_prop)
             .concat(r_prop)

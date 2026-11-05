@@ -1,0 +1,9 @@
+--- parsed
++++ lowered
+@@ -1 +1,5 @@
+-export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
++-- Time lanes: epoch.
++let input0 = input 0 : ((int, int), ());
++let edges_map = input0 | map(((src, dst), ()) -> ((src), (dst)));
++-- Renderer: build an export arrangement.
++export "edges" = edges_map;

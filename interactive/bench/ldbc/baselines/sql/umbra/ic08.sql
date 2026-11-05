@@ -1,0 +1,3 @@
+-- IC8. The 20 most recent replies to a person's messages.
+-- Parameters: $pid. Rows come back in rank order; the runner numbers them 0, 1, 2, ...
+SELECT creator, first, last, created, id, content FROM (SELECT r.creator, p.first, p.last, r.created, r.id, r.content FROM replies r JOIN person p ON r.creator=p.id WHERE r.parent_creator=$pid) r ORDER BY created DESC, id LIMIT 20

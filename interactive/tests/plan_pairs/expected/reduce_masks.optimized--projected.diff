@@ -1,0 +1,41 @@
+--- optimized
++++ projected
+@@ -4,28 +4,25 @@
+ let rows_idx = rows | arrange;
+ let counted = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+ let values_idx = values | arrange;
+-let custom = values_idx | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
++let custom = values_idx | reduce((_, a) -> a map ((a, b) -> (((), a.1), (b, 2) mul)));
+ let out_map = counted | map(((a, _), n) -> (a, n));
+-let minimum_reduce = values_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-let minimum_map = minimum_reduce | map((k, (_, v)) -> (k, ((), v)));
++let minimum_reduce = values_idx | reduce(limit 1, (_, a) -> (((), a head.0.1), 1) enlist);
+ let unique_map = values | map((k, v) -> ((k, v), ()));
+ let unique_idx = unique_map | arrange;
+ let unique_reduce = unique_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let unique_map2 = unique_reduce | map(((a, (_, b)), _) -> (a, ((), b)));
+-let counted_reduce = values_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-let counted_map = counted_reduce | map((k, _) -> (k, ()));
+-let collected_reduce = values_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+-let collected_map = collected_reduce | map((k, _) -> (k, ()));
++let counted_reduce = values_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((_, a) -> ((), a)));
++let collected_reduce = values_idx | reduce(_ -> ((), 1) enlist);
+ let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
+ -- Renderer: build an export arrangement.
+ export "out" = out_map;
+--- Renderer: build an export arrangement.
+-export "minimum" = minimum_map;
++-- Renderer: publish the existing arrangement.
++export "minimum" = minimum_reduce;
+ -- Renderer: build an export arrangement.
+ export "unique" = unique_map2;
+--- Renderer: build an export arrangement.
+-export "counted" = counted_map;
+--- Renderer: build an export arrangement.
+-export "collected" = collected_map;
++-- Renderer: publish the existing arrangement.
++export "counted" = counted_reduce;
++-- Renderer: publish the existing arrangement.
++export "collected" = collected_reduce;
+ -- Renderer: build an export arrangement.
+ export "custom" = custom_map;

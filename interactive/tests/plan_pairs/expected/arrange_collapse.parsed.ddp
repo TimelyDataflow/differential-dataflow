@@ -1,0 +1,3 @@
+let rows = input 0 : (int, ());
+let arranged = rows | arrange | arrange;
+export "counts" = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | arrange;

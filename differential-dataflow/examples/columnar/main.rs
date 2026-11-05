@@ -98,7 +98,7 @@ mod reachability {
     use differential_dataflow::operators::arrange::arrangement::arrange_core;
     use differential_dataflow::operators::join::join_traces;
 
-    use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as ValBuilder, Chunker as ValChunker, Spine as ValSpine};
+    use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as ValBuilder, Spine as ValSpine};
     use differential_dataflow::columnar::collection::{Builder as ValColBuilder, Pact as ValPact, RecordedUpdates, as_recorded_updates};
 
     type Node = u32;
@@ -128,24 +128,21 @@ mod reachability {
             let reach_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
 
             let edges_arr = arrange_core::<_, _,
-                ValChunker<(Node, Node, IterTime, Diff)>,
-                ValBatcher<Node, Node, IterTime, Diff>,
-                ValBuilder<Node, Node, IterTime, Diff>,
+                _,
                 ValSpine<Node, Node, IterTime, Diff>,
-            >(edges_inner.inner, edges_pact, "Edges");
+            >(edges_inner.inner, edges_pact, "Edges", ValBatcher::new);
 
             let reach_arr = arrange_core::<_, _,
-                ValChunker<(Node, (), IterTime, Diff)>,
-                ValBatcher<Node, (), IterTime, Diff>,
-                ValBuilder<Node, (), IterTime, Diff>,
+                _,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(reach.inner, reach_pact, "Reach");
+            >(reach.inner, reach_pact, "Reach", ValBatcher::new);
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
                 join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
+                    "Join",
                     |_src, dst, (), time, d1, d2, session| {
                         use differential_dataflow::difference::Multiply;
                         let dst: Node = *dst;
@@ -160,11 +157,9 @@ mod reachability {
             // Arrange for reduce.
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let combined_arr = arrange_core::<_, _,
-                ValChunker<(Node, (), IterTime, Diff)>,
-                ValBatcher<Node, (), IterTime, Diff>,
-                ValBuilder<Node, (), IterTime, Diff>,
+                _,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(combined.inner, combined_pact, "Combined");
+            >(combined.inner, combined_pact, "Combined", ValBatcher::new);
 
             // reduce_abelian on the columnar arrangement.
             let result = combined_arr.reduce_abelian::<_,

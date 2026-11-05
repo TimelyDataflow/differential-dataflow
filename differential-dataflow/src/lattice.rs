@@ -151,7 +151,8 @@ pub trait Lattice : PartialOrder {
 use timely::order::Product;
 
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
-    #[inline]
+    // Expose the coordinate joins' short/equal-length paths to timestamp callers.
+    #[inline(always)]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.join(&other.outer),

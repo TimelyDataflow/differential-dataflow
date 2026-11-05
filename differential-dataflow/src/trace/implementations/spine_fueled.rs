@@ -2,22 +2,22 @@
 //!
 //! The `Spine` is a general-purpose trace implementation based on collection and merging
 //! immutable batches of updates. It is generic with respect to the batch type, and can be
-//! instantiated for any implementor of `trace::Batch`.
+//! instantiated for any implementor of [`SpineBatch`].
 //!
 //! ## Design
 //!
 //! This spine is represented as a list of layers, where each element in the list is either
 //!
 //!   1. MergeState::Vacant  empty
-//!   2. MergeState::Single  a single batch
-//!   3. MergeState::Double  a pair of batches
+//!   2. MergeState::Single  a single span
+//!   3. MergeState::Double  a pair of spans
 //!
-//! Each "batch" has the option to be `None`, indicating a non-batch that nonetheless acts
+//! Each "span" has the option to be `None`, indicating a non-span that nonetheless acts
 //! as a number of updates proportionate to the level at which it exists (for bookkeeping).
 //!
-//! Each of the batches at layer i contains at most 2^i elements. The sequence of batches
-//! should have the upper bound of one match the lower bound of the next. Batches may be
-//! logically empty, with matching upper and lower bounds, as a bookkeeping mechanism.
+//! Each of the spans at layer i contains at most 2^i elements. The sequence of spans
+//! should have the upper bound of one match the lower bound of the next. Spans may carry
+//! no updates, with matching upper and lower bounds, as a bookkeeping mechanism.
 //!
 //! Each batch at layer i is treated as if it contains exactly 2^i elements, even though it
 //! may actually contain fewer elements. This allows us to decouple the physical representation
@@ -68,26 +68,98 @@
 //! should still extract fuel from new updates even though they have completed, at least until they
 //! have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
 
+use std::rc::Rc;
 
+use crate::lattice::Lattice;
 use crate::logging::Logger;
-use crate::trace::{Batch, ExertionLogic, Merger, Trace, TraceReader};
+use crate::trace::{Span, Description, ExertionLogic, Trace, TraceReader};
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
-use ::timely::progress::{Antichain, frontier::AntichainRef};
+use ::timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 use ::timely::order::PartialOrder;
+
+/// The requirements this spine imposes on the batches its spans carry.
+///
+/// These are opinions of this spine, not properties of batches in general: a batch must
+/// support progressive (fuel-limited) merging through a [`Merger`], and must report its
+/// size, which drives the spine's geometric layering and its logging.
+pub trait SpineBatch : Sized {
+    /// The timestamp type of the batch's updates.
+    type Time: Timestamp + Lattice;
+
+    /// A type used to progressively merge batches.
+    type Merger: Merger<Self>;
+
+    /// The number of updates in the batch.
+    ///
+    /// A span with nothing in it is meant to carry no batch at all rather than an empty one,
+    /// so this should be positive. The spine does not rely on that: it asks this method
+    /// rather than asking whether a span carries a batch, so a producer that hands it an
+    /// empty batch costs an extra merge rather than behaving differently from the absent
+    /// case.
+    fn len(&self) -> usize;
+}
+
+/// Represents a merge in progress.
+///
+/// Constructing a merger begins the merge of two consecutive batches. Exercising it
+/// eventually produces the same result that merging them outright would, but
+/// does so in a measured fashion, which avoids latency spikes when a large merge needs
+/// to happen.
+pub trait Merger<Output: SpineBatch> {
+    /// Creates a new merger to merge the supplied batches, optionally compacting
+    /// up to the supplied frontier.
+    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::Time>) -> Self;
+    /// Perform some amount of work, decrementing `fuel`.
+    ///
+    /// If `fuel` is non-zero after the call, the merging is complete and
+    /// one should call `done` to extract the merged results.
+    fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut isize);
+    /// Extracts merged results, absent if the merge cancelled to nothing.
+    ///
+    /// This method should only be called after `work` has been called and
+    /// has not brought `fuel` to zero. Otherwise, the merge is still in
+    /// progress.
+    fn done(self) -> Option<Output>;
+}
+
+impl<B: SpineBatch> SpineBatch for Rc<B> {
+    type Time = B::Time;
+    type Merger = RcMerger<B>;
+    fn len(&self) -> usize { (**self).len() }
+}
+
+/// Wrapper type for merging reference counted batches.
+pub struct RcMerger<B: SpineBatch> { merger: B::Merger }
+
+impl<B: SpineBatch> Merger<Rc<B>> for RcMerger<B> {
+    fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::Merger::new(source1, source2, compaction_frontier) } }
+    fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
+    fn done(self) -> Option<Rc<B>> { self.merger.done().map(Rc::new) }
+}
+
+/// The number of updates in a span: its batch's length, or zero when it carries none.
+///
+/// This is how the spine asks whether a span has updates. `Span::has_updates` answers the
+/// weaker question of whether a batch is *present*, which agrees with this only for
+/// producers that report absence when they built nothing; the spine can measure instead,
+/// and does.
+fn span_len<B: SpineBatch>(span: &Span<B::Time, B>) -> usize {
+    span.inner.as_ref().map(|b| b.len()).unwrap_or(0)
+}
 
 /// An append-only collection of update tuples.
 ///
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<B: Batch> {
+pub struct Spine<B: SpineBatch> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     logical_frontier: Antichain<B::Time>,   // Times after which the trace must accumulate correctly.
     physical_frontier: Antichain<B::Time>,  // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<B>>,            // Several possibly shared collections of updates.
-    pending: Vec<B>,                        // Batches at times in advance of `frontier`.
+    pending: Vec<Span<B::Time, B>>,        // Spans at times in advance of `frontier`.
     upper: Antichain<B::Time>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
@@ -97,12 +169,12 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
-impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
+impl<B: SpineBatch+Clone+'static> TraceReader for Spine<B> {
 
     type Time = B::Time;
     type Batch = B;
 
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+    fn spans_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Span<Self::Time, B>>> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
@@ -126,7 +198,6 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
         // Check that `upper` is greater or equal to `self.physical_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        // assert!(upper.iter().all(|t1| self.physical_frontier.iter().any(|t2| t2.less_equal(t1))));
         assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &upper));
 
         let mut storage = Vec::new();
@@ -135,16 +206,16 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
             match merge_state {
                 MergeState::Double(variant) => {
                     match variant {
-                        MergeVariant::InProgress(batch1, batch2, _) => {
-                            if !batch1.is_empty() {
+                        MergeVariant::InProgress(batch1, batch2, _, _) => {
+                            if span_len(batch1) > 0 {
                                 storage.push(batch1.clone());
                             }
-                            if !batch2.is_empty() {
+                            if span_len(batch2) > 0 {
                                 storage.push(batch2.clone());
                             }
                         },
                         MergeVariant::Complete(Some((batch, _))) => {
-                            if !batch.is_empty() {
+                            if span_len(batch) > 0 {
                                 storage.push(batch.clone());
                             }
                         }
@@ -152,7 +223,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
                     }
                 },
                 MergeState::Single(Some(batch)) => {
-                    if !batch.is_empty() {
+                    if span_len(batch) > 0 {
                         storage.push(batch.clone());
                     }
                 },
@@ -163,7 +234,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
         for batch in self.pending.iter() {
 
-            if !batch.is_empty() {
+            if span_len(batch) > 0 {
 
                 // For a non-empty `batch`, it is a catastrophic error if `upper`
                 // requires some-but-not-all of the updates in the batch. We can
@@ -177,7 +248,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
                 let include_upper = PartialOrder::less_equal(&batch.upper().borrow(), &upper);
 
                 if include_lower != include_upper && upper != batch.lower().borrow() {
-                    panic!("`cursor_through`: `upper` straddles batch");
+                    panic!("`spans_through`: `upper` straddles batch");
                 }
 
                 // include pending batches
@@ -208,10 +279,10 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, B::Time> { self.physical_frontier.borrow() }
 
     #[inline]
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+    fn map_spans<F: FnMut(&Span<Self::Time, B>)>(&self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => { f(batch1); f(batch2); },
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => { f(batch1); f(batch2); },
                 MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => { f(batch) },
                 MergeState::Single(Some(batch)) => { f(batch) },
                 _ => { },
@@ -223,9 +294,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
     }
 }
 
-// A trace implementation for any key type that can be borrowed from or converted into `Key`.
-// TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<B: Batch+Clone+'static> Trace for Spine<B> {
+impl<B: SpineBatch+Clone+'static> Trace for Spine<B> {
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<crate::logging::Logger>,
@@ -264,45 +333,45 @@ impl<B: Batch+Clone+'static> Trace for Spine<B> {
         self.exert_logic = Some(logic);
     }
 
-    // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
-    // merging the batch. This means it is a good time to perform amortized work proportional
-    // to the size of batch.
-    fn insert(&mut self, batch: Self::Batch) {
+    // Ideally, this method acts as insertion of `span`, even if we are not yet able to begin
+    // merging its batch. This means it is a good time to perform amortized work proportional
+    // to the size of that batch.
+    fn insert(&mut self, span: Span<Self::Time, B>) {
 
         // Log the introduction of a batch.
         self.logger.as_ref().map(|l| l.log(crate::logging::BatchEvent {
             operator: self.operator.global_id,
-            length: batch.len()
+            length: span_len(&span)
         }));
 
-        assert!(batch.lower() != batch.upper());
-        assert_eq!(batch.lower(), &self.upper);
+        assert!(span.lower() != span.upper());
+        assert_eq!(span.lower(), &self.upper);
 
-        self.upper.clone_from(batch.upper());
+        self.upper.clone_from(span.upper());
 
-        // TODO: Consolidate or discard empty batches.
-        self.pending.push(batch);
+        // TODO: Consolidate or discard spans with no updates.
+        self.pending.push(span);
         self.consider_merges();
     }
 
     /// Completes the trace with a final empty batch.
     fn close(&mut self) {
         if !self.upper.borrow().is_empty() {
-            self.insert(B::empty(self.upper.clone(), Antichain::new()));
+            self.insert(Span::empty(self.upper.clone(), Antichain::new()));
         }
     }
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<B: Batch> Drop for Spine<B> {
+impl<B: SpineBatch> Drop for Spine<B> {
     fn drop(&mut self) {
         self.drop_batches();
     }
 }
 
 
-impl<B: Batch> Spine<B> {
-    /// Drops and logs batches. Used in `set_logical_compaction` and drop.
+impl<B: SpineBatch> Spine<B> {
+    /// Drops and logs batches. Used in drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
             for batch in self.merging.drain(..) {
@@ -310,23 +379,23 @@ impl<B: Batch> Spine<B> {
                     MergeState::Single(Some(batch)) => {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
-                            length: batch.len(),
+                            length: span_len(&batch),
                         });
                     },
-                    MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                    MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
-                            length: batch1.len(),
+                            length: span_len(&batch1),
                         });
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
-                            length: batch2.len(),
+                            length: span_len(&batch2),
                         });
                     },
                     MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
                         logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
-                            length: batch.len(),
+                            length: span_len(&batch),
                         });
                     }
                     _ => { },
@@ -335,14 +404,14 @@ impl<B: Batch> Spine<B> {
             for batch in self.pending.drain(..) {
                 logger.log(crate::logging::DropEvent {
                     operator: self.operator.global_id,
-                    length: batch.len(),
+                    length: span_len(&batch),
                 });
             }
         }
     }
 }
 
-impl<B: Batch> Spine<B> {
+impl<B: SpineBatch> Spine<B> {
     /// Determine the amount of effort we should exert in the absence of updates.
     ///
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.
@@ -402,7 +471,6 @@ impl<B: Batch> Spine<B> {
         // TODO: Consider merging pending batches before introducing them.
         // TODO: We could use a `VecDeque` here to draw from the front and append to the back.
         while !self.pending.is_empty() && PartialOrder::less_equal(self.pending[0].upper(), &self.physical_frontier)
-            //   self.physical_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // Batch can be taken in optimized insertion.
             // Otherwise it is inserted normally at the end of the method.
@@ -411,7 +479,7 @@ impl<B: Batch> Spine<B> {
             // If `batch` and the most recently inserted batch are both empty, we can just fuse them.
             // We can also replace a structurally empty batch with this empty batch, preserving the
             // apparent record count but now with non-trivial lower and upper bounds.
-            if batch.as_ref().unwrap().len() == 0 {
+            if span_len(batch.as_ref().unwrap()) == 0 {
                 if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
                     if self.merging[position].is_single() && self.merging[position].len() == 0 {
                         self.insert_at(batch.take(), position);
@@ -423,7 +491,7 @@ impl<B: Batch> Spine<B> {
 
             // Normal insertion for the batch.
             if let Some(batch) = batch {
-                let index = batch.len().next_power_of_two();
+                let index = span_len(&batch).next_power_of_two();
                 self.introduce_batch(Some(batch), index.trailing_zeros() as usize);
             }
         }
@@ -441,7 +509,7 @@ impl<B: Batch> Spine<B> {
     /// The level indication is often related to the size of the batch, but
     /// it can also be used to artificially fuel the computation by supplying
     /// empty batches at non-trivial indices, to move merges along.
-    pub fn introduce_batch(&mut self, batch: Option<B>, batch_index: usize) {
+    pub fn introduce_batch(&mut self, batch: Option<Span<B::Time, B>>, batch_index: usize) {
 
         // Step 0.  Determine an amount of fuel to use for the computation.
         //
@@ -592,7 +660,7 @@ impl<B: Batch> Spine<B> {
     ///
     /// This is a non-public internal method that can panic if we try and insert into a
     /// layer which already contains two batches (and is still in the process of merging).
-    fn insert_at(&mut self, batch: Option<B>, index: usize) {
+    fn insert_at(&mut self, batch: Option<Span<B::Time, B>>, index: usize) {
         // Ensure the spine is large enough.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -609,11 +677,26 @@ impl<B: Batch> Spine<B> {
                     crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
-                        length1: old.as_ref().map(|b| b.len()).unwrap_or(0),
-                        length2: batch.as_ref().map(|b| b.len()).unwrap_or(0),
+                        length1: old.as_ref().map(span_len).unwrap_or(0),
+                        length2: batch.as_ref().map(span_len).unwrap_or(0),
                         complete: None,
                     }
                 ));
+                // Two present spans merge without work when at least one carries no batch. Such a
+                // merge is complete at once, and `complete_at` will not log it, so we do so here.
+                if let (Some(old), Some(batch)) = (&old, &batch) {
+                    if old.inner.is_none() || batch.inner.is_none() {
+                        self.logger.as_ref().map(|l| l.log(
+                            crate::logging::MergeEvent {
+                                operator: self.operator.global_id,
+                                scale: index,
+                                length1: span_len(old),
+                                length2: span_len(batch),
+                                complete: Some(span_len(old) + span_len(batch)),
+                            }
+                        ));
+                    }
+                }
                 let compaction_frontier = self.logical_frontier.borrow();
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
@@ -624,7 +707,7 @@ impl<B: Batch> Spine<B> {
     }
 
     /// Completes and extracts what ever is at layer `index`.
-    fn complete_at(&mut self, index: usize) -> Option<B> {
+    fn complete_at(&mut self, index: usize) -> Option<Span<B::Time, B>> {
         if let Some((merged, inputs)) = self.merging[index].complete() {
             if let Some((input1, input2)) = inputs {
                 // Log the completion of a merge from existing parts.
@@ -632,9 +715,9 @@ impl<B: Batch> Spine<B> {
                     crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
-                        length1: input1.len(),
-                        length2: input2.len(),
-                        complete: Some(merged.len()),
+                        length1: span_len(&input1),
+                        length2: span_len(&input2),
+                        complete: Some(span_len(&merged)),
                     }
                 ));
             }
@@ -713,28 +796,33 @@ impl<B: Batch> Spine<B> {
 
 /// Describes the state of a layer.
 ///
-/// A layer can be empty, contain a single batch, or contain a pair of batches
-/// that are in the process of merging into a batch for the next layer.
-enum MergeState<B: Batch> {
+/// A layer can be empty, contain a single span, or contain a pair of spans
+/// that are in the process of merging into a span for the next layer.
+///
+/// Note the two distinct kinds of nothing here: `Single(None)` is a *structural*
+/// absence, a stand-in for virtual updates with no description at all, used for
+/// fuel bookkeeping; a present span carrying no batch is a *recorded* update-free
+/// interval of time, with a real description.
+enum MergeState<B: SpineBatch> {
     /// An empty layer, containing no updates.
     Vacant,
-    /// A layer containing a single batch.
+    /// A layer containing a single span.
     ///
-    /// The `None` variant is used to represent a structurally empty batch present
+    /// The `None` variant is used to represent a structurally empty layer present
     /// to ensure the progress of maintenance work.
-    Single(Option<B>),
-    /// A layer containing two batches, in the process of merging.
+    Single(Option<Span<B::Time, B>>),
+    /// A layer containing two spans, in the process of merging.
     Double(MergeVariant<B>),
 }
 
-impl<B: Batch<Time: Eq>> MergeState<B> {
+impl<B: SpineBatch> MergeState<B> {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
         match self {
-            MergeState::Single(Some(b)) => b.len(),
-            MergeState::Double(MergeVariant::InProgress(b1,b2,_)) => b1.len() + b2.len(),
-            MergeState::Double(MergeVariant::Complete(Some((b, _)))) => b.len(),
+            MergeState::Single(Some(b)) => span_len(b),
+            MergeState::Double(MergeVariant::InProgress(b1,b2,_,_)) => span_len(b1) + span_len(b2),
+            MergeState::Double(MergeVariant::Complete(Some((b, _)))) => span_len(b),
             _ => 0,
         }
     }
@@ -762,7 +850,7 @@ impl<B: Batch<Time: Eq>> MergeState<B> {
     /// with the `is_complete()` method.
     ///
     /// There is the additional option of input batches.
-    fn complete(&mut self) -> Option<(B, Option<(B, B)>)>  {
+    fn complete(&mut self) -> Option<(Span<B::Time, B>, Option<(Span<B::Time, B>, Span<B::Time, B>)>)>  {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
             MergeState::Single(batch) => batch.map(|b| (b, None)),
@@ -805,16 +893,28 @@ impl<B: Batch<Time: Eq>> MergeState<B> {
     /// batch to the upper frontier of the new batch.
     ///
     /// Either batch may be `None` which corresponds to a structurally
-    /// empty batch whose upper and lower froniers are equal. This
+    /// empty batch whose upper and lower frontiers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: AntichainRef<B::Time>) -> MergeState<B> {
+    fn begin_merge(batch1: Option<Span<B::Time, B>>, batch2: Option<Span<B::Time, B>>, compaction_frontier: AntichainRef<B::Time>) -> MergeState<B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2, compaction_frontier);
-                MergeVariant::InProgress(batch1, batch2, begin_merge)
+                let since = batch1.desc.since().join(batch2.desc.since()).join(&compaction_frontier.to_owned());
+                let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
+                match (&batch1.inner, &batch2.inner) {
+                    (Some(source1), Some(source2)) => {
+                        let merger = B::Merger::new(source1, source2, description.since().borrow());
+                        MergeVariant::InProgress(batch1, batch2, description, merger)
+                    }
+                    // With at most one side carrying updates there is nothing to merge, and the
+                    // surviving updates' times are not advanced by the compaction frontier.
+                    _ => {
+                        let inner = batch1.inner.or(batch2.inner);
+                        MergeVariant::Complete(Some((Span::new(description, inner), None)))
+                    }
+                }
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
             (Some(x), None) => MergeVariant::Complete(Some((x, None))),
@@ -825,20 +925,24 @@ impl<B: Batch<Time: Eq>> MergeState<B> {
     }
 }
 
-enum MergeVariant<B: Batch> {
+enum MergeVariant<B: SpineBatch> {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, <B as Batch>::Merger),
+    ///
+    /// Beyond the two source batches, this records the description their merge
+    /// will bear (their composed interval, with the compaction frontier as its
+    /// `since`) and the merger itself.
+    InProgress(Span<B::Time, B>, Span<B::Time, B>, Description<B::Time>, B::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
-    Complete(Option<(B, Option<(B, B)>)>),
+    Complete(Option<(Span<B::Time, B>, Option<(Span<B::Time, B>, Span<B::Time, B>)>)>),
 }
 
-impl<B: Batch> MergeVariant<B> {
+impl<B: SpineBatch> MergeVariant<B> {
 
     /// Completes and extracts the batch, unless structurally empty.
     ///
     /// The result is either `None`, for structurally empty batches,
     /// or a batch and optionally input batches from which it derived.
-    fn complete(mut self) -> Option<(B, Option<(B, B)>)> {
+    fn complete(mut self) -> Option<(Span<B::Time, B>, Option<(Span<B::Time, B>, Span<B::Time, B>)>)> {
         let mut fuel = isize::MAX;
         self.work(&mut fuel);
         if let MergeVariant::Complete(batch) = self { batch }
@@ -851,13 +955,14 @@ impl<B: Batch> MergeVariant<B> {
     /// This allows the caller to manage the released resources.
     fn work(&mut self, fuel: &mut isize) {
         let variant = std::mem::replace(self, MergeVariant::Complete(None));
-        if let MergeVariant::InProgress(b1,b2,mut merge) = variant {
-            merge.work(&b1,&b2,fuel);
+        if let MergeVariant::InProgress(b1, b2, description, mut merge) = variant {
+            merge.work(b1.inner.as_ref().unwrap(), b2.inner.as_ref().unwrap(), fuel);
             if *fuel > 0 {
-                *self = MergeVariant::Complete(Some((merge.done(), Some((b1,b2)))));
+                let inner = merge.done();
+                *self = MergeVariant::Complete(Some((Span::new(description, inner), Some((b1, b2)))));
             }
             else {
-                *self = MergeVariant::InProgress(b1,b2,merge);
+                *self = MergeVariant::InProgress(b1, b2, description, merge);
             }
         }
         else {

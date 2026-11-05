@@ -1,0 +1,13 @@
+--- lowered
++++ optimized
+@@ -1,8 +1,6 @@
+ -- Time lanes: epoch.
+ let rows = input 0 : (int, ());
+-let rows_idx = rows | arrange;
+-let arranged = rows_idx | arrange;
++let arranged = rows | arrange;
+ let counts_reduce = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-let counts_idx = counts_reduce | arrange;
+ -- Renderer: publish the existing arrangement.
+-export "counts" = counts_idx;
++export "counts" = counts_reduce;

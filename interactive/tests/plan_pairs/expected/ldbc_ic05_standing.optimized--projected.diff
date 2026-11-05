@@ -1,0 +1,17 @@
+--- optimized
++++ projected
+@@ -10,12 +10,10 @@
+ let first = first_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+ let lowest_map = member | map((who, (f, _)) -> (who, f));
+ let lowest_idx = lowest_map | arrange;
+-let lowest_reduce = lowest_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+-let lowest = lowest_reduce | map((who, (_, f)) -> (who, f));
+-let lowest_idx2 = lowest | arrange;
++let lowest = lowest_idx | reduce((_, a) -> let v0 = (a map ((_, a) -> (a, 0) gt), (0, a len) range) zip filter in let v1 = (((0, (v0 len, 40) min) range, v0) gather, a) gather in let v2 = (v1, v1 map ((_, a) -> (a, 40) min) scan_add) zip map ((a, b) -> let v0 = (a.1, 40) min in let v1 = (((40, (b, v0) sub) sub, 0) max, v0) min in ((v1, 0) gt, (a.0, v1))) filter in (v2, v2 map ((_, a) -> a) scan_add) zip map ((a, b) -> (a.0, ((b, a.1) sub, b) range) cap_list map ((a, b) -> ((b, a), 1))) flatten.1 map ((a, b) -> (a.1, b)));
+ -- Renderer: publish the existing arrangement.
+ export "ic5.s.posted" = posted;
+ -- Renderer: publish the existing arrangement.
+ export "ic5.s.first" = first;
+ -- Renderer: publish the existing arrangement.
+-export "ic5.s.lowest" = lowest_idx2;
++export "ic5.s.lowest" = lowest;

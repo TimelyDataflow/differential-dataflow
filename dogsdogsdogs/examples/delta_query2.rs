@@ -43,7 +43,7 @@ fn main() {
                     changes1,
                     forward2,
                     closure,
-                    |t1,t2| t1.lt(t2),  // This one ignores concurrent updates.
+                    true,   // This one ignores concurrent updates.
                     |key, val1, val2| (key.clone(), (val1.clone(), val2.clone())),
                 );
 
@@ -52,7 +52,7 @@ fn main() {
                     changes2,
                     forward1,
                     closure,
-                    |t1,t2| t1.le(t2),  // This one can "see" concurrent updates.
+                    false,  // This one can "see" concurrent updates.
                     |key, val1, val2| (key.clone(), (val2.clone(), val1.clone())),
                 );
 

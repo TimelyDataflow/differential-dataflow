@@ -1,0 +1,5 @@
+-- Time lanes: epoch.
+let input0 = input 0 : (int, ());
+let out_map = input0 | map((k, ()) -> (k call plan_pair_identity, ()));
+-- Renderer: build an export arrangement.
+export "out" = out_map;

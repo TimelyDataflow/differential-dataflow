@@ -1,0 +1,33 @@
+--- lowered
++++ optimized
+@@ -1,13 +1,9 @@
+ -- Time lanes: epoch.
+ -- Trace imports use provider arrangements; history advances to G = (0, []).
+-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let friend = import "ldbc.friend" : (int, (int, int));
+-let forum = import "ldbc.forum" : (int, (List(int), int, int));
+ let member = import "ldbc.member.by_person" : (int, (int, int));
+-let posted_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq);
+-let posted_map = posted_filter | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
+-let posted_idx = posted_map | arrange;
++let posted_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
++let posted_idx = posted_rows | arrange;
+ let posted = posted_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+ let first_map = member | map((who, (_, since)) -> (who, since));
+ let first_idx = first_map | arrange;
+@@ -16,12 +12,10 @@
+ let lowest_idx = lowest_map | arrange;
+ let lowest_reduce = lowest_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 40) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 40) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 40) min in let before = (end, count) sub in let keep = (((40, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+ let lowest = lowest_reduce | map((who, (_, f)) -> (who, f));
+-let posted_idx2 = posted | arrange;
+-let first_idx2 = first | arrange;
+ let lowest_idx2 = lowest | arrange;
+ -- Renderer: publish the existing arrangement.
+-export "ic5.s.posted" = posted_idx2;
++export "ic5.s.posted" = posted;
+ -- Renderer: publish the existing arrangement.
+-export "ic5.s.first" = first_idx2;
++export "ic5.s.first" = first;
+ -- Renderer: publish the existing arrangement.
+ export "ic5.s.lowest" = lowest_idx2;

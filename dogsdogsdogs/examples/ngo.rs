@@ -1,6 +1,5 @@
 use std::hash::Hash;
 use timely::dataflow::operators::*;
-use timely::dataflow::operators::vec::count::Accumulate;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
@@ -31,7 +30,7 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         worker.dataflow::<(),_,_>(|scope| {
-            triangles(VecCollection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
+            triangles(VecCollection::new(edges.to_stream(scope))).map(|_| ()).count().inspect(|x| println!("{:?}", x));
         });
 
     }).unwrap();

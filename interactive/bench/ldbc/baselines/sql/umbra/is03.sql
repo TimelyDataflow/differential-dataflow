@@ -1,0 +1,3 @@
+-- IS3. A person's friends, with the date each friendship was made, newest first.
+-- Parameters: $pid. Rows come back in rank order; the runner numbers them 0, 1, 2, ...
+SELECT dst, first, last, created FROM (SELECT e.dst, p.first, p.last, e.created FROM edges e JOIN person p ON e.dst=p.id WHERE e.src=$pid) r ORDER BY created DESC, dst

@@ -1,0 +1,2 @@
+let edges = import "random:nodes=8,edges=12";
+export "edge_count" = edges | map(_ -> ((), ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | map((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (n) in (k, _call0));

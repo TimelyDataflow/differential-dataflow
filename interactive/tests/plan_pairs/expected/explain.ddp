@@ -1,0 +1,61 @@
+-- Time lanes: epoch.
+let input0 = input 0 : (int, int);
+let query = input 1 : (int, (int, int));
+let rows_map2_map = input0 | map((_, a) -> ((a, (())), ()));
+let rows_map2_map_idx = rows_map2_map | arrange;
+let rows_map2_map_idx_reduce = rows_map2_map_idx | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+let rows_map2_map_idx_reduce_map = rows_map2_map_idx_reduce | map((k, v) -> (k.0, k.1));
+let input0_map = input0 | map((k, v) -> ((k, v), ()));
+let input0_map_idx = input0_map | arrange;
+let input0_map_idx_reduce = input0_map_idx | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+let input0_map_idx_reduce_map = input0_map_idx_reduce | map((k, v) -> (k.0, k.1));
+let input0_map_idx_reduce_map_map = input0_map_idx_reduce_map | map((k, v) -> (k, (v)));
+let input0_map_idx_reduce_map_map2 = input0_map_idx_reduce_map | map((k, v) -> ((k, v), ()));
+let input0_map_idx_reduce_map_map2_idx = input0_map_idx_reduce_map_map2 | arrange;
+let query_map = query | map((k, v) -> ((k, v), ()));
+let query_map_idx = query_map | arrange;
+let query_map_idx_reduce = query_map_idx | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+let query_map_idx_reduce_map_map = query_map_idx_reduce | map(((a, (_, b)), _) -> (a, ((), b)));
+let query_map_idx_reduce_map_map_idx = query_map_idx_reduce_map_map | arrange;
+explain: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var demand_set_0 : (int, int);
+    let demand_input0 = demand_set_0;
+    let item_map = demand_set_0 | map((k, v) -> ((k, v), ()));
+    let item_idx = item_map | arrange;
+    let item_join = ::input0_map_idx | join(item_idx, (k, v, r) -> (k, ()));
+    let item_map2 = item_join | map((k, v) -> (k.0, k.1));
+    let item_map3 = item_map2 | map((a, b) -> ((a, (b)), ()));
+    let item_idx2 = item_map3 | arrange;
+    let item_reduce = item_idx2 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+    let item_map4 = item_reduce | map((k, v) -> (k.0, k.1));
+    let item_map5 = item_map2 | map((_, a) -> ((a, (())), ()));
+    let item_idx3 = item_map5 | arrange;
+    let item_reduce2 = item_idx3 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+    let item_map6 = item_reduce2 | map((k, v) -> (k.0, k.1));
+    let item_rows = ::rows_map2_map_idx_reduce_map + item_map6;
+    let item_idx4 = item_rows | arrange;
+    let item_join2 = ::query_map_idx_reduce_map_map_idx | join(item_idx4, (k, v, r) -> (k, (r.0, v.1)));
+    let item_map7 = item_join2 | map((k, v) -> ((k, v), ()));
+    let item_idx5 = item_map7 | arrange;
+    let item_reduce3 = item_idx5 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+    let item_reduce4 = item_reduce3 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+    let item_rows2 = ::input0_map_idx_reduce_map_map + item_map4;
+    let item_map8 = item_rows2 | map((k, v) -> let _call0 = let input = (k, v) in let (k, v) = input in let _call0 = let input = (k, v.0) in let (src, dst) = input in (dst, ()) in _call0 in (_call0.0, (k, v.0)));
+    let item_map9 = item_reduce4 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k.0, k.1) in (_call0.0, ((), ())));
+    let item_idx6 = item_map9 | arrange;
+    let item_idx7 = item_map8 | arrange;
+    let item_join3 = item_idx6 | join(item_idx7, arg -> let _call0 = let input = arg in let (k, v, r) = input in (r.0, (r.1, v.1)) in (_call0.0, (_call0.1.0, ())));
+    let item_map10 = item_join3 | map((a, (b, _)) -> ((a, b), ()));
+    let item_idx8 = item_map10 | arrange;
+    let item_join4 = item_idx8 | join(::input0_map_idx_reduce_map_map2_idx, (k, v, r) -> (k, ()));
+    let item_map11 = item_join4 | map((k, v) -> (k.0, k.1));
+    let item_rows3 = demand_set_0 + item_map11;
+    let item_map12 = item_rows3 | map((k, v) -> ((k, v), ()));
+    let item_idx9 = item_map12 | arrange;
+    let item_reduce5 = item_idx9 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
+    let item_map13 = item_reduce5 | map((k, v) -> (k.0, k.1));
+    set demand_set_0 = item_map13;
+}
+-- Renderer: build an export arrangement.
+export "demand:input0" = explain::demand_input0;

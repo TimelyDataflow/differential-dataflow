@@ -1,0 +1,312 @@
+{
+ "bi1": [
+  {
+   "end": 1276248106000
+  },
+  {
+   "end": 1267156281000
+  },
+  {
+   "end": 1279692410000
+  }
+ ],
+ "bi2": [
+  {
+   "date": 1275955200000,
+   "classname": "ChristianBishop"
+  },
+  {
+   "date": 1275955200000,
+   "classname": "ChristianBishop"
+  },
+  {
+   "date": 1276214400000,
+   "classname": "OfficeHolder"
+  }
+ ],
+ "bi3": [
+  {
+   "classname": "President",
+   "countryname": "India"
+  },
+  {
+   "classname": "Song",
+   "countryname": "China"
+  },
+  {
+   "classname": "Saint",
+   "countryname": "India"
+  }
+ ],
+ "bi4": [
+  {
+   "date": 1265932800000
+  },
+  {
+   "date": 1262822400000
+  },
+  {
+   "date": 1263081600000
+  }
+ ],
+ "bi5": [
+  {
+   "tagname": "Sikh_Empire"
+  },
+  {
+   "tagname": "Italo_Calvino"
+  },
+  {
+   "tagname": "Hot_n_Cold"
+  }
+ ],
+ "bi6": [
+  {
+   "tagname": "Bob_Geldof"
+  },
+  {
+   "tagname": "Crimean_Khanate"
+  },
+  {
+   "tagname": "All_You_Need_Is_Love"
+  }
+ ],
+ "bi7": [
+  {
+   "tagname": "Slovenia"
+  },
+  {
+   "tagname": "Bulgaria"
+  },
+  {
+   "tagname": "Elvis_Presley"
+  }
+ ],
+ "bi8": [
+  {
+   "tagname": "Abbas_I_of_Persia",
+   "start": 1276473600000,
+   "end": 1277683200000
+  },
+  {
+   "tagname": "1962\u20131966",
+   "start": 1276473600000,
+   "end": 1277683200000
+  },
+  {
+   "tagname": "Edgar_Allan_Poe",
+   "start": 1277078400000,
+   "end": 1278201600000
+  }
+ ],
+ "bi9": [
+  {
+   "start": 1346284800000,
+   "end": 1355097600000
+  },
+  {
+   "start": 1346371200000,
+   "end": 1354492800000
+  },
+  {
+   "start": 1346371200000,
+   "end": 1353628800000
+  }
+ ],
+ "bi10": [
+  {
+   "pid": 6597069770479,
+   "countryname": "Italy",
+   "classname": "Thing",
+   "minimum": 3,
+   "maximum": 4
+  },
+  {
+   "pid": 926,
+   "countryname": "Slovenia",
+   "classname": "ComicsCharacter",
+   "minimum": 3,
+   "maximum": 4
+  },
+  {
+   "pid": 15393162790150,
+   "countryname": "Italy",
+   "classname": "BaseballPlayer",
+   "minimum": 3,
+   "maximum": 4
+  }
+ ],
+ "bi11": [
+  {
+   "countryname": "India",
+   "start": 1349308800000,
+   "end": 1358294400000
+  },
+  {
+   "countryname": "China",
+   "start": 1349136000000,
+   "end": 1357084800000
+  },
+  {
+   "countryname": "China",
+   "start": 1349481600000,
+   "end": 1357430400000
+  }
+ ],
+ "bi12": [
+  {
+   "start": 1338854400000,
+   "length": 115,
+   "language": [
+    "es",
+    "ta",
+    "pt"
+   ],
+   "enabled": 1
+  },
+  {
+   "start": 1338854400000,
+   "length": 115,
+   "language": [
+    "zh",
+    "ru",
+    "fr"
+   ],
+   "enabled": 1
+  },
+  {
+   "start": 1338854400000,
+   "length": 115,
+   "language": [
+    "ru",
+    "de",
+    "pt"
+   ],
+   "enabled": 1
+  }
+ ],
+ "bi13": [
+  {
+   "countryname": "India",
+   "end": 1352419200000
+  },
+  {
+   "countryname": "India",
+   "end": 1351900800000
+  },
+  {
+   "countryname": "China",
+   "end": 1351123200000
+  }
+ ],
+ "bi14": [
+  {
+   "country1": "Philippines",
+   "country2": "Taiwan"
+  },
+  {
+   "country1": "Azerbaijan",
+   "country2": "South_Korea"
+  },
+  {
+   "country1": "India",
+   "country2": "Chile"
+  }
+ ],
+ "bi15": [
+  {
+   "p1": 8796093031630,
+   "p2": 17592186049041,
+   "start": 1351987200000,
+   "end": 1352332800000
+  },
+  {
+   "p1": 30786325585720,
+   "p2": 13194139538394,
+   "start": 1271721600000,
+   "end": 1273622400000
+  },
+  {
+   "p1": 4398046515788,
+   "p2": 13194139536645,
+   "start": 1351987200000,
+   "end": 1352505600000
+  }
+ ],
+ "bi16": [
+  {
+   "taga": "Diosdado_Macapagal",
+   "datea": 1349568000000,
+   "tagb": "Thailand",
+   "dateb": 1355443200000,
+   "maxknows": 5
+  },
+  {
+   "taga": "Jeff_Kennett",
+   "datea": 1356307200000,
+   "tagb": "Ralph_Bakshi",
+   "dateb": 1273622400000,
+   "maxknows": 6
+  },
+  {
+   "taga": "Diosdado_Macapagal",
+   "datea": 1349654400000,
+   "tagb": "Thailand",
+   "dateb": 1355443200000,
+   "maxknows": 6
+  }
+ ],
+ "bi17": [
+  {
+   "tagname": "Cosmic_Egg",
+   "delta": 12
+  },
+  {
+   "tagname": "MantaRay",
+   "delta": 13
+  },
+  {
+   "tagname": "The_Archives_Vol._1_1963\u20131972",
+   "delta": 10
+  }
+ ],
+ "bi18": [
+  {
+   "tagname": "Fyodor_Dostoyevsky"
+  },
+  {
+   "tagname": "J._R._R._Tolkien"
+  },
+  {
+   "tagname": "Johann_Sebastian_Bach"
+  }
+ ],
+ "bi19": [
+  {
+   "city1": 655,
+   "city2": 1138
+  },
+  {
+   "city1": 129,
+   "city2": 265
+  },
+  {
+   "city1": 1080,
+   "city2": 1106
+  }
+ ],
+ "bi20": [
+  {
+   "company": "Balkh_Airlines",
+   "p2": 10995116285979
+  },
+  {
+   "company": "National_Airlines_(5M)",
+   "p2": 13194139540317
+  },
+  {
+   "company": "T'way_Airlines",
+   "p2": 4398046512698
+  }
+ ]
+}

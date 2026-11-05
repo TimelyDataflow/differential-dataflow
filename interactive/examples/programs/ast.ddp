@@ -1,0 +1,37 @@
+-- AST-style compute: the wide per-row bookend. Build a list with arithmetic, explode it,
+-- tag each element as a variant, fold the payload, match it back out, and reduce. No joins
+-- and no recursion -- this is a compute program, where the columnar backend's scalar logic
+-- is the whole cost and the differential machinery is not.
+--
+-- It exercises, in one program, a list built from computed values (one `append` of
+-- enlisted columns), columnar `flatmap`, `match` over a `select`-chosen constructor, and `fold`.
+--
+-- Inputs may be any integers: corgi orders integers by their signed values, as DDIR does.
+
+type Dir = Fwd int | Bwd int;
+
+let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+
+-- eight derived values per row
+let lists = rows
+    | map((a, b) -> (a,
+          ( a enlist, b enlist, (a, b) add enlist, (a, b) mul enlist
+          , ((a, b) sub, 32768) add enlist, (b, b) mul enlist
+          , (a, a) mul enlist, (a, (b, b) mul) add enlist
+          ) append));
+
+-- one row per element, carrying its position
+let exploded = lists | flatmap((_, l) -> l);
+
+-- bucket by (position, magnitude); payload folds a four-element list, wrapped in a variant
+-- and matched straight back out (the tag is the point, not the payload).
+let tagged = exploded
+    | map((a, (pos, x)) ->
+           let sum = (0, (a enlist, x enlist, (a, x) mul enlist, (x, x) mul enlist) append) fold ((acc, y) -> (acc, y) add) in
+           ( (pos, (8, ((x, 500000) lt, 0, 1) select) mul) add
+           , ((x, 250000) lt, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s))
+           ));
+
+let buckets = tagged | min;
+
+export "result" = buckets | arrange;

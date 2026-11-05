@@ -17,9 +17,9 @@
 //! A [`ColChunk`] is either [`Resident`](ColChunk::Resident) (the trie in memory)
 //! or [`Paged`](ColChunk::Paged) (resident bounds + a byte handle). [`Chunk::settle`]
 //! is the spill point: it pages committed chunks out via
-//! [`spill`](self::spill) when a worker has installed a spiller. Reads
+//! [`spill`] when a worker has installed a spiller. Reads
 //! fetch a paged chunk's trie back, caching it in a [`OnceCell`] so repeated
-//! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](Chunk::bounds)
+//! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](crate::trace::chunk::NavigableChunk::bounds)
 //! read the resident metadata and never fetch.
 //!
 //! [`Chunk::advance`] is trie-native: it melds its input in place and rewrites
@@ -42,7 +42,7 @@ use crate::consolidation::Consolidate;
 use crate::lattice::Lattice;
 use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
 use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
@@ -59,7 +59,7 @@ use crate::trace::chunk::Chunk;
 const TARGET: usize = 8192;
 
 /// Resident bounds for a paged chunk: the first and last `(key, val, time)` as
-/// single-element columnar containers (so [`Chunk::bounds`] returns refs without
+/// single-element columnar containers (so [`crate::trace::chunk::NavigableChunk::bounds`] returns refs without
 /// fetching), plus the record count.
 pub struct ChunkMeta<U: ColumnarUpdate> {
     fk: ContainerOf<U::Key>, fv: ContainerOf<U::Val>, ft: ContainerOf<U::Time>,
@@ -196,13 +196,6 @@ pub struct ColChunkCursor<U: ColumnarUpdate> {
     phantom: PhantomData<U>,
 }
 
-impl<U: ColumnarUpdate> WithLayout for ColChunk<U> {
-    type Layout = ColumnarLayout<U>;
-}
-impl<U: ColumnarUpdate> WithLayout for ColChunkCursor<U> {
-    type Layout = ColumnarLayout<U>;
-}
-
 impl<U: ColumnarUpdate> Cursor for ColChunkCursor<U> {
     type Storage = ColChunk<U>;
 
@@ -327,7 +320,7 @@ where U::Time: 'static {
 
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
 where U::Time: 'static {
-    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type Time = U::Time;
 
     const TARGET: usize = TARGET;
 
@@ -389,7 +382,7 @@ where U::Time: 'static {
     /// withheld trailing `(key, val)` group (the `carry`) — it never pulls the whole
     /// chain into core. Cross-chunk consolidation happens *only* where a `(key, val)`
     /// straddles a boundary: the (un-advanced) carry is melded onto the next chunk's
-    /// head, a sorted-chain meld that just stitches that one group. [`advance_trie`]
+    /// head, a sorted-chain meld that just stitches that one group. `advance_trie`
     /// then advances and consolidates the time runs *within* each chunk (keys / vals /
     /// diffs stay columnar refs, no global re-sort). Grading the emitted chunks is
     /// left to [`Chunk::settle`].
@@ -443,17 +436,18 @@ where U::Time: 'static {
     }
 
     /// Maximal packing via the harness [`pack`](crate::trace::chunk::pack): coalesce by melding
-    /// the next trie onto the carry (adjacent chunks of a sorted, consolidated
+    /// each trie of the run onto the first (adjacent chunks of a sorted, consolidated
     /// chain, so meld's "strictly greater first triple" precondition holds), split
-    /// with [`trie_merger::split_at`], and seal through [`seal_chunk`] (the spill
+    /// with [`trie_merger::split_at`], and seal through `seal_chunk` (the spill
     /// point — pages a committed chunk when a spiller is installed).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         crate::trace::chunk::pack(
             input, done, out,
-            |acc, next| {
-                let mut build = UpdatesBuilder::new_from(into_trie(std::mem::take(acc)));
-                build.meld(&into_trie(next));
-                *acc = ColChunk::Resident(Rc::new(build.done()));
+            |run| {
+                let mut run = run.into_iter();
+                let mut build = UpdatesBuilder::new_from(into_trie(run.next().unwrap()));
+                for next in run { build.meld(&into_trie(next)); }
+                ColChunk::Resident(Rc::new(build.done()))
             },
             |chunk, n| {
                 let (first, rest) = trie_merger::split_at(into_trie(chunk), n);
@@ -546,6 +540,7 @@ fn advance_trie<U: ColumnarUpdate>(
 
 #[cfg(test)]
 mod test {
+    use timely::progress::Antichain;
     use std::collections::VecDeque;
     use columnar::Push;
     use super::{ColChunk, Chunk};
@@ -647,18 +642,14 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         let chunks = vec![
             chunk(vec![(0, 0, 0, 1), (1, 0, 0, 1), (1, 1, 0, 1)]),
             chunk(vec![(1, 1, 1, 1), (1, 2, 0, 1)]),
             chunk(vec![(2, 0, 0, 1)]),
         ];
-        let desc = Description::new(
-            Antichain::from_elem(0u64), Antichain::from_elem(2u64), Antichain::from_elem(0u64));
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -678,11 +669,10 @@ mod test {
     // resumable merge -> advance -> settle pipeline end to end.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::{Description, Merger};
+        use crate::trace::implementations::spine_fueled::Merger;
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
-        use timely::progress::Antichain;
 
         let mut seed = 0x9E3779B97F4A7C15u64;
         let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -699,9 +689,7 @@ mod test {
         }
         fn batch(updates: &[Upd], sz: usize) -> ChunkBatch<ColChunk<Upd>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| chunk(c.to_vec())).collect();
-            let desc = Description::new(
-                Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
-            ChunkBatch::new(chunks, desc)
+            ChunkBatch::new(chunks)
         }
         fn read(b: &ChunkBatch<ColChunk<Upd>>) -> Vec<Upd> {
             let mut out = Vec::new();
@@ -736,13 +724,16 @@ mod test {
             }
             let result = merger.done();
 
-            assert!(is_graded(&result.chunks), "ungraded result: {:?}",
-                result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
-            let got = read(&result);
+            let chunks: &[ColChunk<Upd>] = result.as_ref().map_or(&[], |b| &b.chunks[..]);
+            assert!(is_graded(chunks), "ungraded result: {:?}",
+                chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            let got = result.as_ref().map_or_else(Vec::new, read);
             let mut want: Vec<((u64, u64), u64, i64)> =
                 u1.iter().chain(u2.iter()).map(|&(k, v, t, d)| ((k, v), t.max(f), d)).collect();
             consolidate_updates(&mut want);
             let want: Vec<Upd> = want.into_iter().map(|((k, v), t, d)| (k, v, t, d)).collect();
+            // A merge that cancels to nothing reports an absent updates.
+            assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
             assert_eq!(got, want, "fuel-driven merge mismatch\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
         }
     }
@@ -797,7 +788,6 @@ mod test {
     // the right advanced-and-consolidated result.
     #[test]
     fn advance_single_key_spanning_pushes() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(100u64);
         let n = 50u64;
         let mut q = VecDeque::new();
@@ -814,7 +804,6 @@ mod test {
     // withholding the (possibly-growing) last group as the carry when not `done`.
     #[test]
     fn advance_emits_complete_groups_eagerly() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(5u64);
         // Group (0,0) is complete within this chunk; group (1,0) might still grow.
         let mut q = VecDeque::from([chunk(vec![(0, 0, 0, 1), (0, 0, 1, 1), (1, 0, 0, 1)])]);
@@ -832,7 +821,6 @@ mod test {
     // group boundaries.
     #[test]
     fn advance_resumable_matches_oneshot() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(3u64);
         // Groups span chunk boundaries and carry several times each.
         let input = || vec![
@@ -864,7 +852,6 @@ mod test {
     // boundaries, exercising the meld / withhold / split path.
     #[test]
     fn advance_matches_row_reference() {
-        use timely::progress::Antichain;
         use crate::consolidation::consolidate_updates;
 
         let mut seed = 0x2545F4914F6CDD1Du64;

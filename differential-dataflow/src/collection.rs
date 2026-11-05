@@ -20,6 +20,10 @@ use crate::difference::Abelian;
 /// The containers purport to reperesent changes to a collection, and they must implement various traits
 /// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions
 /// on the containers, and streams of containers, are left to the container implementor to describe.
+///
+/// Unchecked assumption: each update in a container has a time greater or equal to some time in the
+/// container's stamp. In particular, a container with an empty stamp holds no updates. Differential
+/// operators rely on this to retire updates as frontiers advance, and may behave unexpectedly if it fails.
 #[derive(Clone)]
 pub struct Collection<'scope, T: Timestamp, C: 'static> {
     /// The underlying timely dataflow stream.
@@ -27,8 +31,8 @@ pub struct Collection<'scope, T: Timestamp, C: 'static> {
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
     ///
-    /// The timestamp in the data is required to always be at least the timestamp _of_ the data, in
-    /// the timely-dataflow sense. If this invariant is not upheld, differential operators may behave
+    /// Each update's time is required to be greater or equal to some time in its container's stamp,
+    /// as documented on [Collection]. If this invariant is not upheld, differential operators may behave
     /// unexpectedly.
     pub inner: Stream<'scope, T, C>,
 }
@@ -128,15 +132,15 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///     scope.new_collection_from(1 .. 10).1
     ///          .map_in_place(|x| *x *= 2)
     ///          .filter(|x| x % 2 == 1)
-    ///          .inspect_container(|event| println!("event: {:?}", event));
+    ///          .inspect_core(|event| println!("event: {:?}", event));
     /// });
     /// ```
-    pub fn inspect_container<F>(self, func: F) -> Self
+    pub fn inspect_core<F>(self, func: F) -> Self
     where
-        F: FnMut(Result<(&T, &C), &[T]>)+'static,
+        F: FnMut(Result<(&timely::progress::Stamp<T>, &C), &[T]>)+'static,
     {
         self.inner
-            .inspect_container(func)
+            .inspect_core(func)
             .as_collection()
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
@@ -235,9 +239,6 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///
     /// # Examples
     /// ```
-    /// use timely::dataflow::Scope;
-    /// use timely::dataflow::operators::{ToStream, Concat, Inspect, vec::BranchWhen};
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// timely::example(|scope| {
@@ -562,17 +563,25 @@ pub mod vec {
         /// ordered, they should have the same order or compare equal once `func` is applied to them (this
         /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
         /// to all of the data timestamps).
-        pub fn delay<F>(self, func: F) -> Collection<'scope, T, D, R>
+        pub fn delay<F>(self, mut func: F) -> Collection<'scope, T, D, R>
         where
-            T: Hash,
-            F: FnMut(&T) -> T + Clone + 'static,
+            F: FnMut(&T) -> T + 'static,
         {
-            let mut func1 = func.clone();
-            let mut func2 = func.clone();
-
+            use timely::dataflow::channels::pact::Pipeline;
+            use timely::dataflow::operators::CapabilitySet;
             self.inner
-                .delay_batch(move |x| func1(x))
-                .map_in_place(move |x| x.1 = func2(&x.1))
+                .unary(Pipeline, "Delay", move |_, _| move |input, output| {
+                    input.for_each_stamp(|time, data| {
+                        // Each element of the stamp is delayed by `func`, and each update's time likewise;
+                        // by monotonicity the delayed capabilities still cover the delayed updates.
+                        let caps: CapabilitySet<T> = time.stamp().iter().map(|t| time.delayed(&func(t), output.output_index())).collect();
+                        let mut session = output.session(&caps);
+                        for data in data {
+                            for (_, t, _) in data.iter_mut() { *t = func(t); }
+                            session.give_container(data);
+                        }
+                    });
+                })
                 .as_collection()
         }
 
@@ -609,8 +618,8 @@ pub mod vec {
         }
         /// Applies a supplied function to each batch of updates.
         ///
-        /// This method is analogous to `inspect`, but operates on batches and reveals the timestamp of the
-        /// timely dataflow capability associated with the batch of updates. The observed batching depends
+        /// This method is analogous to `inspect`, but operates on batches and reveals the stamp under which
+        /// the batch of updates travels: the timestamps of the timely dataflow capabilities associated with it. The observed batching depends
         /// on how the system executes, and may vary run to run.
         ///
         /// # Examples
@@ -627,10 +636,10 @@ pub mod vec {
         /// ```
         pub fn inspect_batch<F>(self, mut func: F) -> Collection<'scope, T, D, R>
         where
-            F: FnMut(&T, &[(D, T, R)])+'static,
+            F: FnMut(&timely::progress::Stamp<T>, &[(D, T, R)])+'static,
         {
             self.inner
-                .inspect_batch(move |time, data| func(time, data))
+                .inspect_core(move |event| if let Ok((stamp, data)) = event { func(stamp, data) })
                 .as_collection()
         }
 
@@ -785,7 +794,7 @@ pub mod vec {
         where
             T2: Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Time = T2::Time, Diff: Abelian>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = T2::Batch> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Batch>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
@@ -805,7 +814,7 @@ pub mod vec {
             V: Clone+'static,
             T2: Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V, Time = T2::Time>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = T2::Batch> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Batch>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,BatchDiff<T2>)>, &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -957,23 +966,21 @@ pub mod vec {
         /// });
         /// ```
         pub fn consolidate(self) -> Self {
-            use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
-            self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
+            use crate::trace::implementations::{KeyBatcher, KeySpine};
+            self.consolidate_named::<_, KeySpine<_,_,_>,_>("Consolidate", KeyBatcher::new, |key,&()| key.clone())
         }
 
         /// As `consolidate` but with the ability to name the operator, specify the trace type,
         /// and provide the function `reify` to produce owned keys and values..
-        pub fn consolidate_named<Ba, Bu, Tr, F>(self, name: &str, reify: F) -> Self
+        pub fn consolidate_named<Ba, Tr, F>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba, reify: F) -> Self
         where
-            Ba: crate::trace::Batcher<Output=Vec<((D, ()), T, R)>, Time=T> + 'static,
+            Ba: crate::batcher::Batcher<Vec<((D, ()), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
-            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output=Tr::Batch>,
             F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
         {
-            use crate::operators::arrange::arrangement::Arrange;
             self.map(|k| (k, ()))
-                .arrange_named::<Ba, Bu, Tr>(name)
+                .arrange_named::<Ba, Tr>(name, batcher)
                 .as_collection(reify)
         }
 
@@ -1021,44 +1028,39 @@ pub mod vec {
         }
     }
 
-    use crate::trace::implementations::{ValSpine, ValBatcher, ValBuilder};
-    use crate::trace::implementations::{KeySpine, KeyBatcher, KeyBuilder};
-    use crate::trace::implementations::ContainerChunker;
-    use crate::operators::arrange::Arrange;
-
-    impl<'scope, T, K, V, R> Arrange<'scope, T, Vec<((K, V), T, R)>> for Collection<'scope, T, (K, V), R>
+    use crate::trace::implementations::{ValSpine, ValBatcher};
+    use crate::trace::implementations::{KeySpine, KeyBatcher};
+    impl<'scope, T, K, V, R> Collection<'scope, T, (K, V), R>
     where
         T: Timestamp + Lattice,
         K: crate::ExchangeData + Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
     {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+        /// Arranges updates into a shared trace, exchanged by a hash of the key.
+        ///
+        /// The batcher must accept the stream container; the default chunker only consolidates
+        /// same-type containers. For chunker setups that convert between container types (e.g.
+        /// columnar layouts), call [`arrange_core`](crate::operators::arrange::arrangement::arrange_core)
+        /// directly.
+        pub fn arrange<Ba, Tr>(self, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
-            Ba: crate::trace::Batcher<Output=Vec<((K, V), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, V), T, R)>, Output = Tr::Batch>,
+            Ba: crate::batcher::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
+            Tr: crate::trace::Trace<Time=T> + 'static,
+        {
+            self.arrange_named::<Ba, Tr>("Arrange", batcher)
+        }
+
+        /// As [`Collection::arrange`] but with the ability to name the operator.
+        pub fn arrange_named<Ba, Tr>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
+        where
+            Ba: crate::batcher::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, ContainerChunker<Vec<((K, V), T, R)>>, Ba, Bu, _>(self.inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, name, batcher)
         }
     }
-
-    impl<'scope, T, K: crate::ExchangeData+Hashable, R: crate::ExchangeData+Semigroup> Arrange<'scope, T, Vec<((K, ()), T, R)>> for Collection<'scope, T, K, R>
-    where
-        T: Timestamp + Lattice + Ord,
-    {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
-        where
-            Ba: crate::trace::Batcher<Output=Vec<((K, ()), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, ()), T, R)>, Output = Tr::Batch>,
-            Tr: crate::trace::Trace<Time=T> + 'static,
-        {
-            let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, ContainerChunker<Vec<((K, ()), T, R)>>, Ba, Bu, _>(self.map(|k| (k, ())).inner, exchange, name)
-        }
-    }
-
 
     impl<'scope, T, K: crate::ExchangeData+Hashable, V: crate::ExchangeData, R: crate::ExchangeData+Semigroup> Collection<'scope, T, (K,V), R>
     where
@@ -1075,7 +1077,7 @@ pub mod vec {
 
         /// As `arrange_by_key` but with the ability to name the arrangement.
         pub fn arrange_by_key_named(self, name: &str) -> Arranged<'scope, TraceAgent<ValSpine<K, V, T, R>>> {
-            self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
+            self.arrange_named::<_,_>(name, ValBatcher::new)
         }
     }
 
@@ -1095,7 +1097,7 @@ pub mod vec {
         /// As `arrange_by_self` but with the ability to name the arrangement.
         pub fn arrange_by_self_named(self, name: &str) -> Arranged<'scope, TraceAgent<KeySpine<K, T, R>>> {
             self.map(|k| (k, ()))
-                .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
+                .arrange_named::<_,_>(name, KeyBatcher::new)
         }
     }
 
@@ -1108,7 +1110,7 @@ pub mod vec {
     {
         /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and yields pairs `(key, (val1, val2))`.
         ///
-        /// The [`join_map`](Join::join_map) method may be more convenient for non-trivial processing pipelines.
+        /// The [`join_map`](Collection::join_map) method may be more convenient for non-trivial processing pipelines.
         ///
         /// # Examples
         ///

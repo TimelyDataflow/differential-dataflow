@@ -1,0 +1,24 @@
+-- AoC 2023 day 6: product over races of #{hold t : t*(time-t) > dist}.
+-- No sqrt/div in DDIR: enumerate hold times by fixpoint instead of the
+-- SQL's closed-form quadratic (which the slt itself computes two ways,
+-- disagreeing by float drift; enumeration is exact).
+-- input 0: (time, distance)
+
+let races = input 0 : ((int, int), ()) | map(((t, d), ()) -> (t, d));
+
+cands: {
+    let step = c | filter(((t, h), ()) -> ((h, 1) add, t) lt) | map(((t, h), ()) -> ((t, (h, 1) add), ()));
+    set c = (races | map((t, _) -> ((t, 1), ()))) + step | distinct;
+}
+
+let wins = cands::c
+    | map(((t, h), ()) -> (t, h))
+    | join(races, (t, h, d) -> ((t, h, d), ()))
+    | filter(((t, h, d), ()) -> ((h, (t, h) sub) mul, d) gt)
+    | map(((t, _, _), ()) -> (t, ())) | count;
+-- (time, n_wins)
+
+export "result" = wins
+    | map((_, n) -> ((), n)) | collect
+    | map((_, ns) -> ((), ((1, ns) fold ((acc, n) -> (acc, n) mul))))
+    | arrange | inspect(part1);

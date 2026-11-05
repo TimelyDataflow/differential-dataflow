@@ -1,0 +1,6 @@
+type Node = Leaf int | Pair (int, int);
+-- Time lanes: epoch.
+let input0 = input 0 : (Node, ());
+let out_inspect = input0 | inspect(echo);
+-- Renderer: build an export arrangement.
+export "out" = out_inspect;

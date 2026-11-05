@@ -5,13 +5,10 @@
 //!
 //! # Why a tree
 //!
-//! A scope boundary is a real semantic barrier: an operator cannot be hoisted
-//! across it, and an arrangement cannot be shared across it freely. The flat
-//! IR encodes boundaries *positionally* (`Scope`/`EndScope` markers in a node
-//! list), so every consumer that cares reconstructs them by analysis — and
-//! that reconstruction is where the explanation rewrite's level errors lived.
-//! Here the boundary is structural: a `Scope` owns its items, and nothing
-//! crosses except through an explicit import or export.
+//! A scope boundary is a real semantic barrier: rewrites must account for its
+//! imports, exports, and feedback. An arrangement of an unchanged parent import
+//! can be shared through an explicit import of the arranged parent binding.
+//! A `Scope` owns its items, and nothing crosses except through an explicit edge.
 //!
 //! The guiding principle throughout: make explicit anything a consumer would
 //! otherwise have to analyze the IR to recover. Feedback variables are a
@@ -38,16 +35,15 @@
 //! imports targeting the same definition are the same entity, so facts
 //! learned at a definition propagate to every importer along its edges.
 
-use crate::ir::LinearOp;
-use crate::parse::{Projection, Reducer};
+use crate::ir::{Lambda, LinearOp, Reducer};
 
-pub type ItemId = usize; // index into `Scope::items`
-pub type ImportId = usize; // index into `Scope::imports`
-pub type VarId = usize; // index into `Scope::vars`
+type ItemId = usize; // index into `Scope::items`
+type ImportId = usize; // index into `Scope::imports`
+type VarId = usize; // index into `Scope::vars`
 
 /// A reference, resolved *within its own scope*. Nothing here can name an item
 /// in another scope's interior — cross-scope flow goes through imports/exports.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Ref {
     /// An earlier `Op` item in this scope.
     Local(ItemId),
@@ -61,7 +57,7 @@ pub enum Ref {
 
 /// Where an import's value comes from. Inner scopes import from the parent; the
 /// root imports the program's external sources — unifying `Input`/`Import`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
@@ -71,11 +67,18 @@ pub enum Source {
     Trace(String),
 }
 
+/// The shape of a collection's rows: its key's and its value's.
+pub type RowShape = (corgi::Shape, corgi::Shape);
+
 /// A value brought into a scope — `enter_region` (+ `enter_dynamic` if iterating).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Import {
     pub name: String,
     pub from: Source,
+    /// Optional external encoding contract; unlike derived intermediate shapes,
+    /// this can describe empty lists and sum lanes absent from the input rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RowShape>,
 }
 
 /// A value surrendered up — `leave_region` (+ `leave_dynamic` if iterating).
@@ -83,19 +86,24 @@ pub struct Import {
 pub struct Export {
     pub name: String,
     pub value: Ref,
+    /// A declared shape, checked against the shape inferred for `value` (see `shapes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RowShape>,
 }
 
 /// A feedback variable, identified by its index in `Scope::vars`. Carries its
-/// source name (readability, cross-scope name visibility). Its shape is *not*
-/// stored — the shape pass derives every node/var shape when a consumer needs
-/// it, so storing it here would cache a derivable (and currently unknown) value.
+/// source name (readability, cross-scope name visibility). Its shape may be
+/// declared; otherwise `shapes` infers it from what is bound to it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Var {
     pub name: String,
+    /// A declared shape, checked against the shape of what is bound to it (see `shapes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RowShape>,
 }
 
 /// Closes a feedback loop: `var <- value`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Bind {
     pub var: VarId,
     pub value: Ref,
@@ -103,14 +111,47 @@ pub struct Bind {
 
 /// A pure operator. Sources (`Input`/`Import`) are imports; structure
 /// (`Scope`/`Variable`/`Leave`/`Bind`) is the scope itself — neither is a node.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Linear { input: Ref, ops: Vec<LinearOp> },
     Concat(Vec<Ref>),
     Arrange(Ref),
-    Join { left: Ref, right: Ref, projection: Projection },
-    Reduce { input: Ref, reducer: Reducer },
+    /// `projection` is a lambda over `(key, left val, right val)` giving `(key', val')`.
+    Join { left: Ref, right: Ref, projection: Lambda },
+    /// Each update of `stream`, `(key, (val, time))` with `time` a time as data (as `lift` writes
+    /// it), meets the rows of `arrangement` at its key whose times are less than the update's own
+    /// in the total order on times, or less or equal unless `strict`. Each pair gives
+    /// `(key', (val', time ∨ t2))`: `projection` over `(key, val, arranged val)`, and the update's
+    /// data time joined with the arranged row's. The output keeps the update's own time, and its
+    /// diff is the product of the two. The arrangement's changes produce no output.
+    HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
+    /// `reducer`'s lambda over each key and its values. With `limit = Some(k)` it is handed only
+    /// the key's first `k` values of non-zero net, in value order, whatever their sums.
+    Reduce { input: Ref, reducer: Reducer, limit: Option<usize> },
     Inspect { input: Ref, label: String },
+}
+
+impl Node {
+    pub(crate) fn refs(&self) -> impl Iterator<Item = &Ref> {
+        let (first, second, rest): (_, _, &[_]) = match self {
+            Self::Linear { input, .. } | Self::Arrange(input)
+            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => (Some(input), None, &[]),
+            Self::Join { left, right, .. } => (Some(left), Some(right), &[]),
+            Self::HalfJoin { stream, arrangement, .. } => (Some(stream), Some(arrangement), &[]),
+            Self::Concat(refs) => (None, None, refs),
+        };
+        first.into_iter().chain(second).chain(rest)
+    }
+
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            Self::Linear { input, .. } | Self::Arrange(input)
+            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => f(input),
+            Self::Join { left, right, .. } => { f(left); f(right); }
+            Self::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); }
+            Self::Concat(refs) => for r in refs { f(r); },
+        }
+    }
 }
 
 /// An item in a scope's body: a pure operator or a nested child scope. The
@@ -122,8 +163,47 @@ pub enum Item {
     Sub(Scope),
 }
 
-/// A scope owns its IR. It iterates iff it has `vars` (no `kind` field yet; see
-/// the design doc). Children are owned, inline in `items`.
+/// Structural identity, excluding diagnostic names and labels. Export positions and
+/// declared shapes matter; an Inspect's label remains part of its operator.
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) enum ItemKey<'a> {
+    Op(&'a Node),
+    Sub {
+        imports: Vec<(&'a Source, &'a Option<RowShape>)>,
+        vars: Vec<&'a Option<RowShape>>,
+        items: Vec<ItemKey<'a>>,
+        binds: &'a [Bind],
+        exports: Vec<(&'a Ref, &'a Option<RowShape>)>,
+    },
+}
+
+impl Item {
+    pub(crate) fn key(&self) -> ItemKey<'_> {
+        match self {
+            Item::Op(node) => ItemKey::Op(node),
+            Item::Sub(s) => ItemKey::Sub {
+                imports: s.imports.iter().map(|i| (&i.from, &i.shape)).collect(),
+                vars: s.vars.iter().map(|v| &v.shape).collect(),
+                items: s.items.iter().map(Item::key).collect(),
+                binds: &s.binds,
+                exports: s.exports.iter().map(|e| (&e.value, &e.shape)).collect(),
+            },
+        }
+    }
+
+    /// References read by this item, in the scope that owns it.
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            Item::Op(node) => node.for_each_ref(&mut f),
+            Item::Sub(child) => for imp in child.imports.iter_mut() {
+                if let Source::Parent(r) = &mut imp.from { f(r); }
+            },
+        }
+    }
+}
+
+/// A scope owns its IR. It iterates iff it has `vars`. Children are owned,
+/// inline in `items`.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
     /// The source name of the `{ .. }` block ("root" for the program root).
@@ -132,6 +212,14 @@ pub struct Scope {
     pub imports: Vec<Import>,
     pub vars: Vec<Var>,
     pub items: Vec<Item>,
+    /// For each item, the name of the statement it was lowered from: the `let`, `set`, or
+    /// `export` whose expression built it, or a child scope's name. Diagnostics only. Empty
+    /// for a scope built without them; a reader uses it only when it has one entry per item.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Source bindings for printing. These are not dataflow uses: fusion may erase a binding.
+    #[serde(skip)]
+    pub names: Vec<(String, Ref)>,
     pub binds: Vec<Bind>,
     pub exports: Vec<Export>,
 }
@@ -144,11 +232,6 @@ pub struct Program {
 }
 
 impl Program {
-    /// Optimize every scope in place. See `Scope::optimize`.
-    pub fn optimize(&mut self) {
-        self.root.optimize();
-    }
-
     /// Print the tree as indented structural text (readability, not
     /// parseability): imports and vars first, items in order (`Sub`s nest),
     /// then binds and exports.
@@ -166,167 +249,26 @@ impl Program {
 }
 
 impl Scope {
-    /// Optimize this scope (and, recursively, its children) in place, iterating
-    /// three rewrites to a fixed point:
-    ///
-    /// - collapse an `Arrange` whose input is already an arrangement
-    ///   (an `Arrange` or a `Reduce`);
-    /// - fuse a `Linear` into its `Linear` input when it is that input's only
-    ///   consumer;
-    /// - deduplicate structurally identical operators.
-    ///
-    /// All three are *within-scope*: a scope boundary is a semantic barrier,
-    /// so nothing merges or moves across one. (The flat IR's dedup was
-    /// position-blind and could merge across boundaries — sound only because
-    /// the dynamic model has no structural nesting; here the structure makes
-    /// the restriction automatic.)
-    pub fn optimize(&mut self) {
-        for item in self.items.iter_mut() {
-            if let Item::Sub(child) = item { child.optimize(); }
+    /// Apply a dependency-preserving item order, including names and child edges.
+    pub(crate) fn reorder(&mut self, order: &[usize]) {
+        let mut remap = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() { remap[old] = new; }
+        let items = std::mem::take(&mut self.items);
+        let mut items: Vec<_> = items.into_iter().map(Some).collect();
+        self.items = order.iter().map(|&i| items[i].take().unwrap()).collect();
+        if self.labels.len() == order.len() {
+            self.labels = order.iter().map(|&i| self.labels[i].clone()).collect();
         }
-        let mut dead: Vec<bool> = vec![false; self.items.len()];
-        loop {
-            let changed = self.collapse_arranges(&mut dead)
-                | self.fuse_linear(&mut dead)
-                | self.dedup(&mut dead);
-            if !changed { break; }
-        }
-        self.compact(&dead);
+        self.for_each_ref(|r| if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = remap[*i]; });
     }
 
     /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
     /// import edges, binds, and exports.
-    fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
-        for item in self.items.iter_mut() {
-            match item {
-                Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
-                    Node::Join { left, right, .. } => { f(left); f(right); },
-                    Node::Concat(refs) => for r in refs { f(r); },
-                },
-                Item::Sub(child) => for imp in child.imports.iter_mut() {
-                    if let Source::Parent(r) = &mut imp.from { f(r); }
-                },
-            }
-        }
+    pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        for item in self.items.iter_mut() { item.for_each_ref(&mut f); }
         for b in self.binds.iter_mut() { f(&mut b.value); }
         for e in self.exports.iter_mut() { f(&mut e.value); }
-    }
-
-    /// Count, for each item, the references to it (`Local` or `ChildExport`)
-    /// from LIVE holders only. Dead items keep their (stale, already-redirected-
-    /// around) input refs until `compact`, and counting those would make a
-    /// single-consumer item look shared — blocking fusion after its consumer
-    /// chain has partially fused (e.g. the middle of a three-op linear chain
-    /// dies into its consumer, and its stale input ref still counts against
-    /// the head, so the chain never finishes fusing).
-    fn use_counts(&self, dead: &[bool]) -> Vec<usize> {
-        let mut counts = vec![0usize; self.items.len()];
-        let mut tally = |r: &Ref| match r {
-            Ref::Local(i) | Ref::ChildExport(i, _) => counts[*i] += 1,
-            Ref::Import(_) | Ref::Var(_) => {},
-        };
-        for (i, item) in self.items.iter().enumerate() {
-            if dead[i] { continue; }
-            match item {
-                Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
-                    Node::Join { left, right, .. } => { tally(left); tally(right); },
-                    Node::Concat(refs) => for r in refs { tally(r); },
-                },
-                Item::Sub(child) => for imp in &child.imports {
-                    if let Source::Parent(r) = &imp.from { tally(r); }
-                },
-            }
-        }
-        for b in &self.binds { tally(&b.value); }
-        for e in &self.exports { tally(&e.value); }
-        counts
-    }
-
-    /// Redirect every `Ref::Local(from)` to `to`, and mark `from` dead.
-    fn redirect(&mut self, from: usize, to: Ref, dead: &mut [bool]) {
-        self.for_each_ref(|r| if matches!(r, Ref::Local(i) if *i == from) { *r = to.clone(); });
-        dead[from] = true;
-    }
-
-    /// `Arrange` of an arrangement (an `Arrange` or `Reduce` item) is redundant.
-    fn collapse_arranges(&mut self, dead: &mut [bool]) -> bool {
-        let mut changed = false;
-        for i in 0..self.items.len() {
-            if dead[i] { continue; }
-            let Item::Op(Node::Arrange(Ref::Local(j))) = &self.items[i] else { continue };
-            let j = *j;
-            if !dead[j] && matches!(&self.items[j], Item::Op(Node::Arrange(_) | Node::Reduce { .. })) {
-                self.redirect(i, Ref::Local(j), dead);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    /// Fuse a `Linear` into its `Linear` input when it is the only consumer.
-    fn fuse_linear(&mut self, dead: &mut [bool]) -> bool {
-        let counts = self.use_counts(dead);
-        let mut changed = false;
-        for i in 0..self.items.len() {
-            if dead[i] { continue; }
-            let Item::Op(Node::Linear { input: Ref::Local(j), .. }) = &self.items[i] else { continue };
-            let j = *j;
-            if dead[j] || counts[j] != 1 { continue; }
-            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = self.items[j].clone() else { continue };
-            let Item::Op(Node::Linear { ops, .. }) = &mut self.items[i] else { unreachable!() };
-            let mut fused = inner_ops;
-            fused.append(ops);
-            self.items[i] = Item::Op(Node::Linear { input: inner_input, ops: fused });
-            dead[j] = true;
-            changed = true;
-        }
-        changed
-    }
-
-    /// Deduplicate structurally identical operators (the later one redirects to
-    /// the earlier, so references keep pointing backward).
-    fn dedup(&mut self, dead: &mut [bool]) -> bool {
-        use std::collections::HashMap;
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        let mut redirects: Vec<(usize, usize)> = Vec::new();
-        for i in 0..self.items.len() {
-            if dead[i] { continue; }
-            let Item::Op(node) = &self.items[i] else { continue };
-            let key = format!("{:?}", node);
-            match seen.get(&key) {
-                Some(&first) => redirects.push((i, first)),
-                None => { seen.insert(key, i); },
-            }
-        }
-        let changed = !redirects.is_empty();
-        for (i, first) in redirects {
-            self.redirect(i, Ref::Local(first), dead);
-        }
-        changed
-    }
-
-    /// Drop dead items and remap every item-indexed `Ref` to the compacted
-    /// positions. Dead items have no remaining references (their uses were
-    /// redirected when they were marked).
-    fn compact(&mut self, dead: &[bool]) {
-        let mut remap = vec![usize::MAX; self.items.len()];
-        let mut next = 0;
-        for (i, &d) in dead.iter().enumerate() {
-            if !d { remap[i] = next; next += 1; }
-        }
-        let mut keep = dead.iter().map(|d| !d);
-        self.items.retain(|_| keep.next().unwrap());
-        self.for_each_ref(|r| match r {
-            Ref::Local(i) | Ref::ChildExport(i, _) => {
-                assert!(remap[*i] != usize::MAX, "compact: a reference points at a dead item");
-                *i = remap[*i];
-            },
-            Ref::Import(_) | Ref::Var(_) => {},
-        });
+        for (_, r) in &mut self.names { f(r); }
     }
 }
 
@@ -373,15 +315,17 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Linear { input, ops } => {
                         let ops: Vec<&str> = ops.iter().map(|op| match op {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
-                            LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
+                            LinearOp::Negate => "negate",
                             LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
+                            LinearOp::Lift => "lift", LinearOp::JoinFunction(_) => "join_function",
                         }).collect();
                         format!("{} | {}", fmt_ref(input), ops.join(" | "))
                     }
                     Node::Concat(refs) => refs.iter().map(fmt_ref).collect::<Vec<_>>().join(" + "),
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
-                    Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
+                    Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
+                    Node::Reduce { input, reducer, limit } => format!("{} | {:?} limit={limit:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };
                 println!("{}n{} = {};", pad2, i, desc);
@@ -403,38 +347,39 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::Term;
 
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the
     // shape can represent a real scoped, iterative program.
     #[test]
     fn expresses_a_scoped_iterative_program() {
-        let noproj = Projection { key: Term::Tuple(vec![]), val: Term::Tuple(vec![]) };
+        let noproj = Lambda::new("let _ = input in ((), ())".into(), &corgi::Scope::default());
         let inner = Scope {
             name: "reach".into(),
             imports: vec![
-                Import { name: "edges".into(), from: Source::Parent(Ref::Import(0)) },
-                Import { name: "roots".into(), from: Source::Parent(Ref::Import(1)) },
+                Import { name: "edges".into(), from: Source::Parent(Ref::Import(0)), shape: None },
+                Import { name: "roots".into(), from: Source::Parent(Ref::Import(1)), shape: None },
             ],
-            vars: vec![Var { name: "reach".into() }],
+            vars: vec![Var { name: "reach".into(), shape: None }],
             items: vec![
                 // proposals = reach JOIN edges  — references Var + Import
                 Item::Op(Node::Join { left: Ref::Var(0), right: Ref::Import(0), projection: noproj.clone() }),
                 // body = roots + proposals       — references Import + Local
                 Item::Op(Node::Concat(vec![Ref::Import(1), Ref::Local(0)])),
             ],
+            labels: vec![],
+            names: vec![],
             binds: vec![Bind { var: 0, value: Ref::Local(1) }], // reach <- body
-            exports: vec![Export { name: "reach".into(), value: Ref::Var(0) }],
+            exports: vec![Export { name: "reach".into(), value: Ref::Var(0), shape: None }],
         };
         let root = Scope {
             name: "root".into(),
             imports: vec![
-                Import { name: "in0".into(), from: Source::Input(0) },
-                Import { name: "in1".into(), from: Source::Input(1) },
+                Import { name: "in0".into(), from: Source::Input(0), shape: None },
+                Import { name: "in1".into(), from: Source::Input(1), shape: None },
             ],
             items: vec![Item::Sub(inner)], // item 0 = the reach sub-scope
-            exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0) }],
+            exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0), shape: None }],
             ..Scope::default()
         };
         let prog = Program { root };

@@ -1,0 +1,34 @@
+let request = input 0 : ((int, int, int), ());
+let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend" : (int, (int, int));
+let forum   = import "ldbc.forum" : (int, (List(int), int, int));
+let member  = import "ldbc.member.by_person" : (int, (int, int));
+let posted = import "ic5.s.posted" : ((int, int), int);
+let first = import "ic5.s.first" : (int, int);
+let lowest = import "ic5.s.lowest" : (int, int);
+let hop1   = request | map(((rid, who, date), ()) -> (who, (rid, who, date)))
+                     | join(person, (who, req, _) -> (who, req))
+                     | join(friend, (_, req, (f, _)) -> (f, req));
+let hop2   = hop1 | join(friend, (_, req, (g, _)) -> (g, req));
+let circle = (hop1 + hop2) | filter((node, (_, who, _)) -> (node, who) ne)
+                           | map((node, (rid, _, date)) -> ((node, rid, date), ())) | distinct
+                           | map(((node, rid, date), ()) -> (node, (rid, date)));
+let after  = circle | join(member, (node, (rid, date), (f, since)) -> ((node, f), (rid, date, since)))
+                    | filter((_, (_, date, since)) -> (since, date) gt)
+                    | map((key, (rid, _, _)) -> (key, rid));
+let busy   = after | join(posted, ((_, f), rid, n) -> ((rid, f), n))
+                   | join_function((key, n) -> ((key, ()), (0), n) enlist) | count;
+let timed  = circle | join(first, (node, (rid, date), since) -> (node, (rid, date, since)));
+let fast   = timed | filter((_, (_, date, since)) -> (since, date) gt)
+                   | join(lowest, (_, (rid, _, _), f) -> ((rid, f), ()));
+let slow   = timed | filter((_, (_, date, since)) -> (since, date) le)
+                   | map((node, (rid, _, _)) -> ((node, rid), ()))
+                   | join(after | map(((node, f), rid) -> ((node, rid), f)), ((_, rid), (), f) -> ((rid, f), ()));
+let idle   = (fast + slow) | distinct;
+let quiet  = (idle - (idle | join(busy, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0));
+let ranked = (busy + quiet) | map(((rid, f), n) -> (f, (rid, n)))
+                            | join(forum, (f, (rid, n), (title, _, _)) -> (rid, ((n neg, f), title)))
+                            | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, ((neg, _), title))) -> ((rid, rank), (title, neg neg)));
+export "ic5.answer" = answer | arrange;

@@ -1,0 +1,2 @@
+type Node = Leaf int | Pair (int, int);
+export "out" = input 0 : (Node, ()) | inspect(echo);

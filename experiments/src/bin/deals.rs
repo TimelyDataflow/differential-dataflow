@@ -4,10 +4,9 @@ use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatcher, KeyBuilder, ValBatcher, ValBuilder};
+use differential_dataflow::trace::implementations::{ValSpine, ValBatcher};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
@@ -40,7 +39,7 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             // each edge should exist in both directions.
-            let graph = graph.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
+            let graph = graph.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
             match program.as_str() {
                 "tc"    => tc(graph.clone()).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
@@ -94,10 +93,10 @@ fn tc<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
             let result =
             inner_collection
                 .map(|(x,y)| (y,x))
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges.clone(), |_y,&x,&z| Some((x, z)))
                 .concat(edges.as_collection(|&k,&v| (k,v)))
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange_by_self()
                 .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 
@@ -122,12 +121,12 @@ fn sg<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
 
             let result =
             inner_collection
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges.clone(), |_,&x,&z| Some((x, z)))
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges, |_,&x,&z| Some((x, z)))
                 .concat(peers)
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange_by_self()
                 .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 

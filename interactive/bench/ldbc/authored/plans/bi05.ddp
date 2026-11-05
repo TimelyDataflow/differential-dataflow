@@ -1,0 +1,39 @@
+-- BI5. Most active posters on a topic: for each author of a message with the tag,
+-- score = messages + 2 * replies to them + 10 * likes on them; top 100. Everything is
+-- looked up from the request: the tag's messages, their authors, replies and likes.
+
+let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let tag_id   = import "ldbc.tag.by_name"       : (List(int), int);        -- (name, id)
+let tagged   = import "ldbc.mtag.by_tag"       : (int, int);              -- (tag, message)
+let replies  = import "ldbc.message.by_parent" : (int, int);              -- (message, reply)
+let liked_by = import "ldbc.likes.by_message"  : (int, (int, int));       -- (message, (person, created))
+
+-- The request's tagged messages and their authors: (message, (rid, author)).
+-- Tag names are unique and (message, tag) pairs are a set, so each message appears once.
+let written  = request | map(((rid, name), ()) -> (name, rid))
+                       | join(tag_id, (_, rid, tag) -> (tag, rid))
+                       | join(tagged, (_, rid, m) -> (m, rid))
+                       | join(message, (m, rid, (_, _, author, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, author)));
+
+-- Count each author's tagged messages (kind 0), replies to them (1) and likes on them (2).
+let as_message = written | map((_, (rid, author)) -> ((rid, author, 0), ()));
+let as_like    = written | join(liked_by, (_, (rid, author), _) -> ((rid, author, 2), ()));
+let as_reply   = written | join(replies, (_, (rid, author), _) -> ((rid, author, 1), ()));
+let tally      = (as_message + as_reply + as_like) | count;
+
+-- Pivot the (at most three) counts per author into (messages, replies, likes).
+let totals     = tally | map(((rid, author, kind), n) -> ((rid, author), (kind, n))) | collect
+                 | map((key, parts) -> (key, ((0, 0, 0), parts) fold (((m, r, l), (kind, n)) ->
+                       (((kind, 0) eq, n, m) select, ((kind, 1) eq, n, r) select, ((kind, 2) eq, n, l) select))));
+
+-- Rank by score (descending), then author.
+let scored = totals | map(((rid, author), (m, r, l)) -> (rid, (author, r, l, m, ((m, (r, 2) mul) add, (l, 10) mul) add)));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked = scored | map((rid, (author, r, l, m, score)) -> (rid, (score neg, author, r, l, m)))
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, (neg_score, author, r, l, m))) -> ((rid, rank), (author, r, l, m, neg_score neg)));
+
+export "bi5.answer" = answer | arrange;

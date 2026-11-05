@@ -1,0 +1,11 @@
+--- lowered
++++ optimized
+@@ -1,7 +1,6 @@
+ type Entry = Empty | Number int | Pair (int, int);
+ -- Time lanes: epoch.
+ let rows = input 0 : (int, Entry);
+-let values = rows | map((k, v) -> (k, v match (Empty (_ -> 0), Number (n -> n), Pair ((a, b) -> (a, b) add))));
+-let out_map = values | map((k, n) -> (k, n inject Entry::Number));
++let out_map = rows | map((a, b) -> enum S0 = V0 () | V1 int | V2 (int, int) in (a, b match (0 (_ -> 0), 1 (a -> a), 2 ((a, b) -> (a, b) add)) inject S0::V1));
+ -- Renderer: build an export arrangement.
+ export "out" = out_map;

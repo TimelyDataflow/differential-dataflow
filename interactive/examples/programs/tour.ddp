@@ -1,0 +1,51 @@
+-- A tour of the DDIR surface: the constructs, composed. Doubles as the grammar's
+-- worked example and, in the gate, as the integration check — the per-feature
+-- fixtures under tests/programs/ pin individual lowerings and their fallback
+-- routing; this program pins that the constructs work TOGETHER.
+
+type Dir = Fwd int | Bwd int;
+
+let edges = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
+
+-- Scalars: arithmetic, (signed) compares, unaries, `hash`, `select`.
+let scored = edges
+    | map((a, b) -> (a, ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, ((a) hash shr_b64 1, 97) rem)))
+    | filter((_, (_, n, _, _)) -> ((n, -99) eq, 0) eq);
+
+-- Floats: explicit `to_float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.
+let floated = edges
+    | map((a, b) -> (a, ((2786.0, 10.0) div, (b to_float, (1.0, 4.0) div) call fpow) mul))
+    | map((k, f) -> (k, (f, f call fint, (f call fsqrt, 18.0) call fgt)));
+
+-- Sums: tagged intro, `match` with binder + captured var (`cap_sum`), and a tag test.
+let tagged = edges
+    | map((a, b) -> (a, ((a, b) lt, b inject Fwd, b inject Bwd) select))
+    | map((a, s) -> (a, ((a, s) cap_sum match (Fwd ((a, x) -> (x, a) add), Bwd (_ -> -1)), s match (Fwd (_ -> 0), Bwd (_ -> 1)))));
+
+-- Lists: intro (`enlist`, `append`), `fold`, `len`; `flatmap`/`collect` round trip.
+let folded = edges
+    | map((a, b) -> (a, (a enlist, b enlist, 7 enlist) append))
+    | map((k, l) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
+let nested = edges | flatmap((a, b) -> (b enlist, a enlist) append) | collect;
+
+-- Reducers.
+let counted = edges | count;
+let least   = edges | min;
+let uniq    = edges | map((a, _) -> (a, ())) | distinct;
+
+-- Iteration: reach, with concat (+) and distinct.
+reach: {
+    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+    set reach = roots + proposals | distinct;
+}
+
+export "scored" = scored | arrange | inspect(total);
+export "floats" = floated | arrange | inspect(total);
+export "sums"   = tagged | arrange | inspect(total);
+export "folded" = folded | arrange | inspect(total);
+export "nested" = nested | arrange | inspect(nest);
+export "counts" = counted | arrange | inspect(total);
+export "least"  = least | arrange | inspect(total);
+export "uniq"   = uniq | arrange | inspect(total);
+export "reach"  = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);

@@ -96,6 +96,7 @@ pub mod hashable;
 pub mod operators;
 pub mod algorithms;
 pub mod lattice;
+pub mod batcher;
 pub mod trace;
 pub mod input;
 pub mod difference;

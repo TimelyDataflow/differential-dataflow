@@ -1,0 +1,11 @@
+--- optimized
++++ projected
+@@ -34,7 +34,7 @@
+ let slow_join = slow_idx | join(by_author_idx, (f, (rid, max, _), (neg, id)) -> ((rid, f), ((neg, id), max)));
+ let slow_rows = slow_join | filter((_, ((neg, _), max)) -> (neg neg, max) lt) | map((key, (order, _)) -> (key, order));
+ let slow_idx2 = slow_rows | arrange;
+-let slow_reduce = slow_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
++let slow_reduce = slow_idx2 | reduce((_, a) -> let v0 = (a map ((_, a) -> (a, 0) gt), (0, a len) range) zip filter in let v1 = (((0, (v0 len, 20) min) range, v0) gather, a) gather in let v2 = (v1, v1 map ((_, a) -> (a, 20) min) scan_add) zip map ((a, b) -> let v0 = (a.1, 20) min in let v1 = (((20, (b, v0) sub) sub, 0) max, v0) min in ((v1, 0) gt, (a.0, v1))) filter in (v2, v2 map ((_, a) -> a) scan_add) zip map ((a, b) -> (a.0, ((b, a.1) sub, b) range) cap_list map ((a, b) -> ((b, a), 1))) flatten.1 map ((a, b) -> (((), a.1), b)));
+ let slow = slow_reduce | map(((rid, f), (_, order)) -> (rid, (order, f)));
+ let top_rows = fast + slow;
+ let top_idx = top_rows | arrange;

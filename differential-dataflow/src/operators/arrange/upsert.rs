@@ -138,11 +138,11 @@ where
         Val<'a> = &'a V,
         Diff=isize,
     >,
-    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = Tr::Batch>,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Batch>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let stream = {
 
         let reader = &mut reader;
@@ -180,7 +180,7 @@ where
 
                 // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain(0));
+                    if let Some(cap) = cap.retain_least(0) { capabilities.insert(cap); }
                     for (key, val, time) in data.drain(..) {
                         priority_queue.push(std::cmp::Reverse((time, key, val)))
                     }
@@ -231,8 +231,9 @@ where
 
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
-                                let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                let mut builder = Bu::new();
+                                let batches = reader_local.batches_through(Antichain::new().borrow()).unwrap();
+                                let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
+                                let mut builder = Bu::default();
                                 let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 
@@ -277,11 +278,11 @@ where
                                     builder.push(&mut updates);
                                 }
                                 let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(Tr::Time::minimum()));
-                                let batch = builder.done(description);
+                                let batch = crate::trace::Span::new(description, builder.done().map(Into::into));
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.
-                                writer.insert(batch.clone(), Some(capability.time().clone()));
+                                writer.insert(batch.clone(), timely::progress::Stamp::from_elem(capability.time().clone()));
                                 output.session(&capabilities.elements()[index]).give(batch);
                             }
                         }

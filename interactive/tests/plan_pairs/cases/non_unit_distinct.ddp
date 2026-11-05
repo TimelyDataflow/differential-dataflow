@@ -1,0 +1,2 @@
+-- Distinct reads an arrangement as rows, then arranges the whole record.
+export "out" = input 0 : (int, int) | distinct;

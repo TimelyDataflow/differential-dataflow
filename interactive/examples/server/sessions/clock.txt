@@ -1,7 +1,7 @@
 # The `clock` ticking source: a single row that advances by one each tick.
 # Watch the inspect output — each tick is an O(1) change (retract old, add new),
 # not a regeneration.
-install watch examples/server/programs/clock_watch.ddp
+load watch from examples/server/programs/clock_watch.ddp
 tick
 tick
 tick

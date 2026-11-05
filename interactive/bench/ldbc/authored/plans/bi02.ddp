@@ -1,0 +1,39 @@
+-- BI2. Tag evolution: tags of a class, with their messages in the 100 days from a date
+-- and in the 100 days after that; top 100 by the difference. Tagged messages are kept
+-- keyed by (class, day) for all requests, so a request reads only its 200 days.
+-- Building that table walks every tag through the tag-to-message index and looks up
+-- each message's date in the message arrangement.
+
+let request  = input 0 : ((int, int, List(int)), ());        -- (rid, date, class name)
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+    -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
+let tag      = import "ldbc.tag"           : (int, (List(int), int));        -- (id, (name, class))
+let tagged   = import "ldbc.mtag.by_tag"   : (int, int);                     -- (tag, message)
+let class_id = import "ldbc.tagclass.by_name" : (List(int), int);            -- (name, id)
+
+-- ((class, day), (tag name, created)) for every tagged message, and each class's days.
+let byday   = tag | join(tagged, (_, (name, cls), m) -> (m, (cls, name)))
+                  | join(message, (_, (cls, name), (_, created, _, _, _, _, _, _, _, _, _, _, day)) -> ((cls, day), (name, created)));
+let days    = byday | map(((cls, day), _) -> ((cls, day), ())) | distinct | map(((cls, day), ()) -> (cls, day));
+
+-- The request's class and its 200 window days (days with a message of the class).
+let wanted  = request | map(((rid, date, name), ()) -> (name, (rid, date)))
+                      | join(class_id, (_, (rid, date), cls) -> (cls, (rid, date)))
+                      | join(days, (cls, (rid, date), day) -> ((cls, day), (rid, date)))
+                      | filter(((_, day), (_, date)) -> ((day, ((date, 86400000) div, 86400000) mul) ge, (day, (date, 17280000000) add) lt) all);
+
+-- Count each tag's messages in the two halves.
+let halves  = wanted | join(byday, (_, (rid, date), (name, created)) -> ((rid, name), (created, date)))
+                     | filter((_, (created, date)) -> ((created, date) ge, (created, (date, 17280000000) add) lt) all)
+                     | map((key, (created, date)) -> (key, ((created, (date, 8640000000) add) lt, (1, 0), (0, 1)) select));
+let counts  = halves | map(((rid, name), (a, _)) -> ((rid, name, a), ())) | count
+                     | map(((rid, name, first), n) -> ((rid, name), (first, n))) | collect
+                     | map((key, parts) -> (key, ((0, 0), parts) fold (((a, b), (first, n)) -> (((first, 1) eq, n, a) select, ((first, 0) eq, n, b) select))));
+-- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
+-- at k), emitting (rank, value). Changes below the top k produce no output.
+let ranked  = counts | map(((rid, name), (a, b)) -> (rid, ((((a, b) sub, 0) lt, (b, a) sub, (a, b) sub) select, name, a, b)))
+                     | map((rid, (diff, name, a, b)) -> (rid, ((diff neg, name), (a, b, diff))))
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer  = ranked | map((rid, (rank, ((_, name), (a, b, diff)))) -> ((rid, rank), (name, a, b, diff)));
+
+export "bi2.answer" = answer | arrange;

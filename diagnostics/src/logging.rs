@@ -72,7 +72,7 @@ impl ClientInput {
     pub fn connect(&mut self, client_id: usize, elapsed: Duration) {
         let _ = self
             .sender
-            .send(Event::Messages(self.time, vec![(client_id, elapsed, 1)]));
+            .send(Event::Messages(timely::progress::Stamp::from_elem(self.time), vec![(client_id, elapsed, 1)]));
         self.advance(elapsed);
     }
 
@@ -80,7 +80,7 @@ impl ClientInput {
     pub fn disconnect(&mut self, client_id: usize, elapsed: Duration) {
         let _ = self
             .sender
-            .send(Event::Messages(self.time, vec![(client_id, elapsed, -1)]));
+            .send(Event::Messages(timely::progress::Stamp::from_elem(self.time), vec![(client_id, elapsed, -1)]));
         self.advance(elapsed);
     }
 
@@ -448,7 +448,7 @@ fn construct_timely<'scope>(
                 let mut chs = ch_act.session(&cap);
                 let mut els = el_act.session(&cap);
                 let mut msgs = msg_act.session(&cap);
-                let ts = *cap.time();
+                let Some(&ts) = cap.least() else { return };
 
                 for (event_time, event) in data.drain(..) {
                     match event {
@@ -587,7 +587,7 @@ fn construct_differential<'scope>(
                 let mut b_sz = bs_act.session(&cap);
                 let mut b_cap = bc_act.session(&cap);
                 let mut b_alloc = ba_act.session(&cap);
-                let ts = *cap.time();
+                let Some(&ts) = cap.least() else { return };
 
                 for (_event_time, event) in data.drain(..) {
                     match event {

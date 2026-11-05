@@ -14,7 +14,6 @@
 //! copying them.
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use timely::Accountable;
@@ -25,9 +24,6 @@ use timely::progress::frontier::AntichainRef;
 use crate::consolidation::Consolidate;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::Navigable;
-use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, Vector, WithLayout};
 
 use super::Chunk;
 
@@ -36,6 +32,11 @@ const TARGET: usize = 8192;
 
 /// A sorted, consolidated run of `((key, val), time, diff)`, shared via `Rc`.
 pub struct VecChunk<K, V, T, R>(Rc<Vec<((K, V), T, R)>>);
+
+impl<K, V, T, R> VecChunk<K, V, T, R> {
+    /// The chunk's records as a sorted, consolidated slice.
+    pub fn as_slice(&self) -> &[((K, V), T, R)] { &self.0 }
+}
 
 impl<K, V, T, R> Clone for VecChunk<K, V, T, R> {
     fn clone(&self) -> Self { VecChunk(Rc::clone(&self.0)) }
@@ -48,7 +49,7 @@ impl<K, V, T, R> Default for VecChunk<K, V, T, R> {
 pub type ChunkSpine<K, V, T, R> = super::ChunkSpine<VecChunk<K, V, T, R>>;
 /// Merge batcher over `VecChunk`s; a `ContainerChunker<VecChunk>` at the
 /// `arrange_core` callsite forms the chunks it merges (via the container traits below).
-pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<VecChunk<K, V, T, R>>;
+pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<crate::batcher::merge::chunker::ContainerChunker<VecChunk<K, V, T, R>>, VecChunk<K, V, T, R>>;
 /// Batch builder.
 pub type ChunkBuilder<K, V, T, R> = super::ChunkBuilder<VecChunk<K, V, T, R>>;
 
@@ -81,136 +82,14 @@ where K: Clone+'static, V: Clone+'static, T: Clone+'static, R: Clone+'static {
     fn push_into(&mut self, item: ((K, V), T, R)) { Rc::make_mut(&mut self.0).push(item); }
 }
 
-/// First index `>= start` at which `pred` turns false, by galloping (exponential)
-/// search. `pred` must hold for a prefix then not — i.e. `|u| u < target`.
-/// O(log distance), so O(1) for short hops and logarithmic for long ones.
-fn gallop<U>(s: &[U], start: usize, pred: impl Fn(&U) -> bool) -> usize {
-    let mut pos = start;
-    if pos < s.len() && pred(&s[pos]) {
-        let mut step = 1;
-        while pos + step < s.len() && pred(&s[pos + step]) { pos += step; step <<= 1; }
-        step >>= 1;
-        while step > 0 {
-            if pos + step < s.len() && pred(&s[pos + step]) { pos += step; }
-            step >>= 1;
-        }
-        pos += 1;
-    }
-    pos
-}
-
-/// A cursor over a [`VecChunk`], tracking the current key and `(key, val)`
-/// group starts as indices into the flat vector.
-pub struct VecChunkCursor<K, V, T, R> {
-    key_pos: usize,
-    val_pos: usize,
-    phantom: PhantomData<(K, V, T, R)>,
-}
-
-impl<K, V, T, R> WithLayout for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Layout = Vector<((K, V), T, R)>;
-}
-
-impl<K, V, T, R> WithLayout for VecChunkCursor<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Layout = Vector<((K, V), T, R)>;
-}
-
-impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Storage = VecChunk<K, V, T, R>;
-
-    type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
-    type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
-    type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
-    type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
-    type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
-    type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
-    type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
-    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
-    type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
-    type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
-    type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
-
-    fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
-    fn val_valid(&self, s: &Self::Storage) -> bool {
-        self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
-    }
-    fn key<'a>(&self, s: &'a Self::Storage) -> &'a K { &s.0[self.key_pos].0.0 }
-    fn val<'a>(&self, s: &'a Self::Storage) -> &'a V { &s.0[self.val_pos].0.1 }
-    fn get_key<'a>(&self, s: &'a Self::Storage) -> Option<&'a K> {
-        if self.key_valid(s) { Some(self.key(s)) } else { None }
-    }
-    fn get_val<'a>(&self, s: &'a Self::Storage) -> Option<&'a V> {
-        if self.val_valid(s) { Some(self.val(s)) } else { None }
-    }
-    fn map_times<L: FnMut(&T, &R)>(&mut self, s: &Self::Storage, mut logic: L) {
-        if !self.val_valid(s) { return; }
-        let kv = &s.0[self.val_pos].0;
-        let mut i = self.val_pos;
-        while i < s.0.len() && &s.0[i].0 == kv {
-            logic(&s.0[i].1, &s.0[i].2);
-            i += 1;
-        }
-    }
-    fn step_key(&mut self, s: &Self::Storage) {
-        // Linear: stepping is a short hop to the next group; an inlined scan
-        // beats a gallop call for the common small-group case.
-        if self.key_pos >= s.0.len() { return; }
-        let key = s.0[self.key_pos].0.0.clone();
-        let mut i = self.key_pos;
-        while i < s.0.len() && s.0[i].0.0 == key { i += 1; }
-        self.key_pos = i;
-        self.val_pos = i;
-    }
-    fn seek_key(&mut self, s: &Self::Storage, key: &K) {
-        // Logarithmic: O(log distance), independent of chunk size.
-        self.key_pos = gallop(&s.0, self.key_pos, |u| &u.0.0 < key);
-        self.val_pos = self.key_pos;
-    }
-    fn step_val(&mut self, s: &Self::Storage) {
-        if !self.val_valid(s) { return; }
-        let kv = s.0[self.val_pos].0.clone();
-        let mut i = self.val_pos;
-        while i < s.0.len() && s.0[i].0 == kv { i += 1; }
-        self.val_pos = i;
-    }
-    fn seek_val(&mut self, s: &Self::Storage, val: &V) {
-        if !self.key_valid(s) { return; }
-        let key = s.0[self.key_pos].0.0.clone();
-        self.val_pos = gallop(&s.0, self.val_pos, |u| (&u.0.0, &u.0.1) < (&key, val));
-    }
-    fn rewind_keys(&mut self, _s: &Self::Storage) { self.key_pos = 0; self.val_pos = 0; }
-    fn rewind_vals(&mut self, _s: &Self::Storage) { self.val_pos = self.key_pos; }
-}
-
 /// Take the `Vec` out of a chunk, copying only if the `Rc` is shared.
 fn take<K: Clone, V: Clone, T: Clone, R: Clone>(chunk: VecChunk<K, V, T, R>) -> Vec<((K, V), T, R)> {
     Rc::try_unwrap(chunk.0).unwrap_or_else(|rc| (*rc).clone())
 }
 
-impl<K, V, T, R> Navigable for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Cursor = VecChunkCursor<K, V, T, R>;
-
-    fn cursor(&self) -> Self::Cursor {
-        VecChunkCursor { key_pos: 0, val_pos: 0, phantom: PhantomData }
-    }
-}
-
-impl<K, V, T, R> super::NavigableChunk for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
-        let s = &self.0[..];
-        let (f, l) = (&s[0], &s[s.len() - 1]);
-        ((&f.0.0, &f.0.1, &f.1), (&l.0.0, &l.0.1, &l.1))
-    }
-}
-
 impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Semigroup+'static {
+    type Time = T;
 
     const TARGET: usize = TARGET;
 
@@ -372,21 +251,151 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
     }
 
     /// Maximal packing via the harness [`pack`](super::pack): coalesce by
-    /// extending the inner `Vec` in place (`make_mut` is free while the carry's
-    /// `Rc` is unique, so packing a run of small chunks stays linear), split with
-    /// `split_off`, and seal as a no-op (`Vec` chunks are never paged).
+    /// concatenating the run's `Vec`s, split with `split_off`, and seal as a
+    /// no-op (`Vec` chunks are never paged).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         super::pack(
             input, done, out,
-            |acc, next| Rc::make_mut(&mut acc.0).extend(take(next)),
+            |run| VecChunk(Rc::new(run.into_iter().flat_map(take).collect())),
             |chunk, n| { let mut rows = take(chunk); let rest = rows.split_off(n); (VecChunk(Rc::new(rows)), VecChunk(Rc::new(rest))) },
             |chunk| chunk,
         );
     }
 }
 
+/// First index `>= start` at which `pred` turns false, by galloping (exponential)
+/// search. `pred` must hold for a prefix then not — i.e. `|u| u < target`.
+/// O(log distance), so O(1) for short hops and logarithmic for long ones.
+fn gallop<U>(s: &[U], start: usize, pred: impl Fn(&U) -> bool) -> usize {
+    let mut pos = start;
+    if pos < s.len() && pred(&s[pos]) {
+        let mut step = 1;
+        while pos + step < s.len() && pred(&s[pos + step]) { pos += step; step <<= 1; }
+        step >>= 1;
+        while step > 0 {
+            if pos + step < s.len() && pred(&s[pos + step]) { pos += step; }
+            step >>= 1;
+        }
+        pos += 1;
+    }
+    pos
+}
+
+/// Implementations specific to the `Cursor` trait.
+pub mod cursor {
+
+    use std::marker::PhantomData;
+
+    use timely::progress::Timestamp;
+
+    use crate::difference::Semigroup;
+    use crate::lattice::Lattice;
+    use crate::trace::Navigable;
+    use crate::trace::cursor::Cursor;
+    use crate::trace::implementations::{BatchContainer, Layout, Vector};
+
+    use crate::trace::chunk::vec::VecChunk;
+
+    use super::gallop;
+
+    /// A cursor over a [`VecChunk`], tracking the current key and `(key, val)`
+    /// group starts as indices into the flat vector.
+    pub struct VecChunkCursor<K, V, T, R> {
+        key_pos: usize,
+        val_pos: usize,
+        phantom: PhantomData<(K, V, T, R)>,
+    }
+
+    impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        type Storage = VecChunk<K, V, T, R>;
+
+        type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
+        type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
+        type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
+        type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
+        type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+        type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
+        type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
+
+        fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
+        fn val_valid(&self, s: &Self::Storage) -> bool {
+            self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
+        }
+        fn key<'a>(&self, s: &'a Self::Storage) -> &'a K { &s.0[self.key_pos].0.0 }
+        fn val<'a>(&self, s: &'a Self::Storage) -> &'a V { &s.0[self.val_pos].0.1 }
+        fn get_key<'a>(&self, s: &'a Self::Storage) -> Option<&'a K> {
+            if self.key_valid(s) { Some(self.key(s)) } else { None }
+        }
+        fn get_val<'a>(&self, s: &'a Self::Storage) -> Option<&'a V> {
+            if self.val_valid(s) { Some(self.val(s)) } else { None }
+        }
+        fn map_times<L: FnMut(&T, &R)>(&mut self, s: &Self::Storage, mut logic: L) {
+            if !self.val_valid(s) { return; }
+            let kv = &s.0[self.val_pos].0;
+            let mut i = self.val_pos;
+            while i < s.0.len() && &s.0[i].0 == kv {
+                logic(&s.0[i].1, &s.0[i].2);
+                i += 1;
+            }
+        }
+        fn step_key(&mut self, s: &Self::Storage) {
+            // Linear: stepping is a short hop to the next group; an inlined scan
+            // beats a gallop call for the common small-group case.
+            if self.key_pos >= s.0.len() { return; }
+            let key = s.0[self.key_pos].0.0.clone();
+            let mut i = self.key_pos;
+            while i < s.0.len() && s.0[i].0.0 == key { i += 1; }
+            self.key_pos = i;
+            self.val_pos = i;
+        }
+        fn seek_key(&mut self, s: &Self::Storage, key: &K) {
+            // Logarithmic: O(log distance), independent of chunk size.
+            self.key_pos = gallop(&s.0, self.key_pos, |u| &u.0.0 < key);
+            self.val_pos = self.key_pos;
+        }
+        fn step_val(&mut self, s: &Self::Storage) {
+            if !self.val_valid(s) { return; }
+            let kv = s.0[self.val_pos].0.clone();
+            let mut i = self.val_pos;
+            while i < s.0.len() && s.0[i].0 == kv { i += 1; }
+            self.val_pos = i;
+        }
+        fn seek_val(&mut self, s: &Self::Storage, val: &V) {
+            if !self.key_valid(s) { return; }
+            let key = s.0[self.key_pos].0.0.clone();
+            self.val_pos = gallop(&s.0, self.val_pos, |u| (&u.0.0, &u.0.1) < (&key, val));
+        }
+        fn rewind_keys(&mut self, _s: &Self::Storage) { self.key_pos = 0; self.val_pos = 0; }
+        fn rewind_vals(&mut self, _s: &Self::Storage) { self.val_pos = self.key_pos; }
+    }
+
+    impl<K, V, T, R> Navigable for VecChunk<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        type Cursor = VecChunkCursor<K, V, T, R>;
+
+        fn cursor(&self) -> Self::Cursor {
+            VecChunkCursor { key_pos: 0, val_pos: 0, phantom: PhantomData }
+        }
+    }
+
+    impl<K, V, T, R> crate::trace::chunk::NavigableChunk for VecChunk<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
+            let s = &self.0[..];
+            let (f, l) = (&s[0], &s[s.len() - 1]);
+            ((&f.0.0, &f.0.1, &f.1), (&l.0.0, &l.0.1, &l.1))
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use timely::progress::Antichain;
     use std::collections::VecDeque;
     use super::{Chunk, VecChunk};
     use crate::trace::chunk::merge_chains;
@@ -408,7 +417,6 @@ mod test {
     fn extract_partitions_and_grades() {
         use super::TARGET;
         use crate::trace::chunk::{is_graded, settle_all};
-        use timely::progress::Antichain;
 
         // 4·TARGET updates spread over many input chunks; even times ship
         // (< frontier), odd times keep (>= frontier), so both sides straddle.
@@ -437,7 +445,6 @@ mod test {
     // pushing the (possibly-growing) last group back as the carry when not `done`.
     #[test]
     fn advance_emits_complete_groups_eagerly() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(5u64);
         // Group (0,0) is complete within this chunk; group (1,0) might still grow.
@@ -458,7 +465,6 @@ mod test {
     // at group boundaries.
     #[test]
     fn advance_resumable_matches_oneshot() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(3u64);
         // Groups span chunk boundaries and carry several times each.
@@ -492,7 +498,6 @@ mod test {
     // It must still produce the right advanced+consolidated result at the end.
     #[test]
     fn advance_single_key_spanning_pushes() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(100u64);
         let n = 50u64;
@@ -596,11 +601,10 @@ mod test {
     // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::{Description, Merger};
+        use crate::trace::implementations::spine_fueled::Merger;
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
-        use timely::progress::Antichain;
 
         let mut seed = 0x9E3779B97F4A7C15u64;
         let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -620,9 +624,7 @@ mod test {
         // Cut a consolidated set into a batch of small chunks, so groups straddle.
         fn batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> ChunkBatch<VecChunk<u64, u64, u64, i64>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| VecChunk(Rc::new(c.to_vec()))).collect();
-            let desc = Description::new(
-                Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
-            ChunkBatch::new(chunks, desc)
+            ChunkBatch::new(chunks)
         }
         // Flatten a batch through its straddle-aware cursor, then consolidate.
         fn read(b: &ChunkBatch<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
@@ -659,13 +661,16 @@ mod test {
             let result = merger.done();
 
             // The produced batch is graded (grade-at-yield, so also at done).
-            assert!(is_graded(&result.chunks), "ungraded result: {:?}",
-                result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            let chunks: &[VecChunk<u64, u64, u64, i64>] = result.as_ref().map_or(&[], |b| &b.chunks[..]);
+            assert!(is_graded(chunks), "ungraded result: {:?}",
+                chunks.iter().map(Chunk::len).collect::<Vec<_>>());
             // ...and its contents are the merged sources, advanced to `f`, consolidated.
-            let got = read(&result);
+            let got = result.as_ref().map_or_else(Vec::new, read);
             let mut want: Vec<_> = u1.iter().chain(u2.iter()).cloned().collect();
             for u in want.iter_mut() { u.1 = u.1.max(f); }
             consolidate_updates(&mut want);
+            // A merge that cancels to nothing reports an absent updates.
+            assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
             assert_eq!(got, want, "fuel-driven merge mismatch\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
         }
     }
@@ -708,21 +713,14 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         let chunks = vec![
             chunk(vec![((0, 0), 0, 1), ((1, 0), 0, 1), ((1, 1), 0, 1)]),
             chunk(vec![((1, 1), 1, 1), ((1, 2), 0, 1)]),
             chunk(vec![((2, 0), 0, 1)]),
         ];
-        let desc = Description::new(
-            Antichain::from_elem(0u64),
-            Antichain::from_elem(2u64),
-            Antichain::from_elem(0u64),
-        );
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -775,15 +773,11 @@ mod test {
     #[test]
     fn seek_key_hint_is_direction_independent() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         // One key per chunk (even keys 0, 2, .., 38) so seeks cross boundaries both ways.
         let chunks: Vec<_> = (0..20u64).map(|k| chunk(vec![((2 * k, 0u64), 0u64, 1i64)])).collect();
-        let desc = Description::new(
-            Antichain::from_elem(0u64), Antichain::from_elem(1u64), Antichain::from_elem(0u64));
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         // First key `>= tgt`: the next even at or above `tgt`, or absent past the last (38).
         let oracle = |tgt: u64| { let e = tgt + (tgt & 1); (e <= 38).then_some(e) };

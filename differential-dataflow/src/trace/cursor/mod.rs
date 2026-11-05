@@ -6,6 +6,7 @@
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 pub mod cursor_list;
+pub mod wrappers;
 
 pub use self::cursor_list::CursorList;
 
@@ -18,10 +19,8 @@ use crate::trace::implementations::containers::BatchContainer;
 ///
 /// This is the entry point for accessing batch data through cursors, and the place that opinions
 /// about keys and values are introduced (via the `Cursor` associated type). Cut-and-merge assembly
-/// is the trace's concern: [`TraceReader::batches_through`](crate::trace::TraceReader::batches_through)
-/// selects the batches and the defaulted
-/// [`TraceReader::cursor_through`](crate::trace::TraceReader::cursor_through) builds a [`CursorList`]
-/// over their per-batch cursors.
+/// is the trace's concern: [`TraceReader::spans_through`](crate::trace::TraceReader::spans_through)
+/// selects the batches, and [`cursor_list()`] merges their cursors.
 pub trait Navigable {
 
     /// The cursor type.
@@ -34,7 +33,7 @@ pub trait Navigable {
     fn cursor(&self) -> Self::Cursor;
 }
 
-/// The cursor type for a trace's batches.
+/// The cursor type for the updates in a trace's batches.
 pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Batch as Navigable>::Cursor;
 
 /// The borrowed key type of a trace's batch cursor.
@@ -50,15 +49,14 @@ pub type BatchDiff<Tr> = <BatchCursor<Tr> as Cursor>::Diff;
 /// The borrowed time type of a trace's batch cursor.
 pub type BatchTimeGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::TimeGat<'a>;
 
-/// Assembles a merged cursor over a sequence of batches.
+/// Assembles a merged cursor over several batches' updates.
 ///
-/// The batches become the cursor's storage and are returned alongside the cursor; they must be kept
-/// alive and handed to the cursor's navigation methods. This is the shared assembly behind
-/// `TraceReader::cursor_through` and the per-round input cursors in `reduce` / `count` / `threshold`.
-pub fn cursor_list<B: crate::trace::BatchReader + Navigable>(batches: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
-    let cursors = batches.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
-    let cursor = CursorList::new(cursors, &batches);
-    (cursor, batches)
+/// The updates become the cursor's storage and are returned alongside the cursor; they must be
+/// kept alive and handed to the cursor's navigation methods.
+pub fn cursor_list<B: Navigable>(updates: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
+    let cursors = updates.iter().map(|u| u.cursor()).collect::<Vec<_>>();
+    let cursor = CursorList::new(cursors, &updates);
+    (cursor, updates)
 }
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
@@ -138,28 +136,6 @@ pub trait Cursor {
     /// Rewinds the cursor to the first value for current key.
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
-    /// Loads `target` with all updates associated with the supplied `key`.
-    ///
-    /// First `target` is cleared, and then if we find `key` we populated it with each of its `(val, time, diff)` updates.
-    /// If `meet` is supplied, the time is joined with each `time` in the updates, to advance the times before consolidation.
-    fn populate_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>, meet: Option<&Self::Time>, target: &mut crate::operators::EditList<Self::Val<'a>, Self::Time, Self::Diff>) {
-        target.clear();
-        self.seek_key(storage, key);
-        if self.get_key(storage) == Some(key) {
-            self.rewind_vals(storage);
-            while let Some(val) = self.get_val(storage) {
-                self.map_times(storage, |time, diff| {
-                    use crate::lattice::Lattice;
-                    let mut time = Self::owned_time(time);
-                    if let Some(meet) = meet { time.join_assign(meet); }
-                    target.push(time, Self::owned_diff(diff))
-                });
-                target.seal(val);
-                self.step_val(storage);
-            }
-        }
-    }
-
     /// Rewinds the cursor and outputs its contents to a Vec
     fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where
@@ -182,4 +158,76 @@ pub trait Cursor {
         }
         out
     }
+}
+
+
+/// Blanket implementations for reference counted batches.
+pub mod rc_blanket_impls {
+
+    use std::rc::Rc;
+
+    use super::{Navigable, Cursor};
+
+    impl<B: Navigable> Navigable for Rc<B> {
+        /// The type used to enumerate the batch's contents.
+        type Cursor = RcBatchCursor<B::Cursor>;
+        /// Acquires a cursor to the batch's contents.
+        fn cursor(&self) -> Self::Cursor {
+            RcBatchCursor::new((**self).cursor())
+        }
+    }
+
+    /// Wrapper to provide cursor to nested scope.
+    pub struct RcBatchCursor<C> {
+        cursor: C,
+    }
+
+    impl<C> RcBatchCursor<C> {
+        fn new(cursor: C) -> Self {
+            RcBatchCursor {
+                cursor,
+            }
+        }
+    }
+
+    impl<C: Cursor> Cursor for RcBatchCursor<C> {
+
+        type Storage = Rc<C::Storage>;
+
+        type Key<'a> = C::Key<'a>;
+        type ValOwn = C::ValOwn;
+        type Val<'a> = C::Val<'a>;
+        type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
+        type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
+        type KeyContainer = C::KeyContainer;
+        type ValContainer = C::ValContainer;
+        type TimeContainer = C::TimeContainer;
+        type DiffContainer = C::DiffContainer;
+
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
+
+        #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
+        #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
+
+        #[inline]
+        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+            self.cursor.map_times(storage, logic)
+        }
+
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+    }
+
 }

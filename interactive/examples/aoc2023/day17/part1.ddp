@@ -1,0 +1,31 @@
+-- AoC 2023 day 17 part 1: min-cost crucible path; state (r,c,dr,dc,steps),
+-- straight while steps<3, turns reset steps. min-reducer fixpoint.
+-- input 0: (row, col, cost) 1-indexed
+
+let cells = input 0 : ((int, int, int), ()) | map(((r, c, w), ()) -> ((r, c), w));
+let seeds = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 1, 0, 0), 0)))
+          + (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0, 1, 0), 0)));
+
+dijk: {
+    let straight = mc | filter(((_, _, _, _, s), _) -> (s, 3) lt)
+        | map(((r, c, dr, dc, s), h) -> (((r, dr) add, (c, dc) add), (dr, dc, s, h)))
+        | join(cells, ((r, c), (dr, dc, s, h), w) -> ((r, c, dr, dc, (s, 1) add), (h, w) add));
+    let turna = mc
+        | map(((r, c, dr, dc, _), h) -> (((r, dc) add, (c, dr) add), (dc, dr, h)))
+        | join(cells, ((r, c), (dr, dc, h), w) -> ((r, c, dr, dc, 1), (h, w) add));
+    let turnb = mc
+        | map(((r, c, dr, dc, _), h) -> (((r, dc) sub, (c, dr) sub), ((0, dc) sub, (0, dr) sub, h)))
+        | join(cells, ((r, c), (dr, dc, h), w) -> ((r, c, dr, dc, 1), (h, w) add));
+    set mc = seeds + straight + turna + turnb | min;
+}
+
+let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let maxc = cells | map(((_, c), _) -> ((), (1000000, c) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let corner = maxr | join(maxc, (_, a, b) -> ((), (a, b)));
+
+export "result" = dijk::mc | map(((r, c, _, _, _), h) -> ((), (r, c, h)))
+    | join(corner, (_, (r, c, h), (mr, mc)) -> ((), ((r, mr) eq, (c, mc) eq, h)))
+    | filter((_, (a, b, _)) -> (a, b) all) | map((_, (_, _, h)) -> ((), h)) | min
+    | arrange | inspect(part1);

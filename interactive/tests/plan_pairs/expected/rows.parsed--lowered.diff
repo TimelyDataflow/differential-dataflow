@@ -1,0 +1,8 @@
+--- parsed
++++ lowered
+@@ -1 +1,4 @@
+-export "rows" = input 0 : (int, int);
++-- Time lanes: epoch.
++let input0 = input 0 : (int, int);
++-- Renderer: build an export arrangement.
++export "rows" = input0;

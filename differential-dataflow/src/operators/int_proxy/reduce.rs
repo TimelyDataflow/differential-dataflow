@@ -1,25 +1,22 @@
 //! The proxy reduce framework.
 //!
-//! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
-//! implementation of the interpretation of the integers.
+//! A conventional differential reduce against ordered, copyable proxies.
+//! The backend supplies their interpretation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use super::pending::Pending;
 
-use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{BatchReader, Description};
-use super::ProxyBridge;
-use crate::operators::reduce::ReduceTactic;
-
-use super::history::IdHistory;
-use crate::operators::common::{discover_times, tile_descriptions, DiscoverScratch, KeyView};
+use crate::trace::{Span, Description};
+use super::{KeyPosition, ProxyBridge};
+use crate::operators::reduce::{sort_dedup, ReduceTactic};
+use crate::operators::history::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
-pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+pub struct ReduceInstance<'a, T, B1, B2> {
     /// The accumulated input history.
     pub source_batches: &'a [B1],
     /// The freshly arrived input delta.
@@ -27,106 +24,165 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     /// The accumulated output history.
     pub output_batches: &'a [B2],
     /// The compaction frontier for loading (the retire's lower bound).
-    pub lower: AntichainRef<'a, B1::Time>,
+    pub lower: AntichainRef<'a, T>,
 }
 
-/// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes.
+/// One window of the key space: the presentations a bounded, key-contiguous snip needs.
 ///
-/// The window has the input (old and new) and output histories, restricted to the window's keys.
-pub struct ReduceWindow<T, RIn, ROut> {
-    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
-    pub keys: Vec<u64>,
-    /// Input presentation for `keys`, sorted & consolidated by `((key_hash, value_id), time)`.
-    pub input: ProxyBridge<T, RIn>,
-    /// Output-history presentation for `keys`, same ordering.
-    pub output: ProxyBridge<T, ROut>,
+/// Seeds travel as times; records travel netted. The novel data's two roles are carried by two
+/// different channels: its TIME SUPPORT seeds interesting times and rides `seeds`, raw; its
+/// RECORDS are mere accumulants and join partners, so they ride `input` merged with the prior
+/// history, where they may net against it and be advanced like anything else. Consolidation can
+/// only cancel equal-`((key, id), time)` pairs, and such a time is necessarily in `seeds`, so no
+/// interesting time is lost to netting — the invariant that once forced the runs apart.
+///
+/// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`].
+pub struct ReduceWindow<T, RIn, ROut, K = u64, VIn = u64, VOut = u64> {
+    /// The key's full input — novel and prior merged, netted — sorted & consolidated by `((key, value_id), time)`.
+    /// May be advanced to the compaction frontier.
+    pub input: ProxyBridge<T, RIn, K, VIn>,
+    /// The RAW novel time support: `(key, time)` pairs sorted by `(key, time)` and deduplicated.
+    /// Record these from the novel batches BEFORE any consolidation or advancement.
+    /// A netted-away record's time must still appear here.
+    pub seeds: Vec<(K, T)>,
+    /// Accumulated output preceding the retire's interval, same ordering as `input`.
+    pub output: ProxyBridge<T, ROut, K, VOut>,
+}
+
+impl<T, RIn, ROut, K, VIn, VOut> Default for ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
+    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
+}
+
+impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
+    /// Clear the presentations, keeping their allocations.
+    pub fn clear(&mut self) {
+        self.input.clear();
+        self.seeds.clear();
+        self.output.clear();
+    }
 }
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
-/// The protocol is currently (temporarily) for each round of invocation:
-/// `seed_times begin [ next_window reduce_correction* emit ]* finish`
-/// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
-pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+/// The protocol for each round of invocation is
+/// `begin [ next_window reduce_corrections* emit ]* finish`,
+/// where the window loop runs until `next_window` reports the key space exhausted.
+pub trait ProxyReduceBackend<T, B1, B2> {
+    /// Independent groups, with identities stable across retires.
+    type Key: Copy + Ord;
+    /// Input value proxies, valid throughout a window.
+    type VIn: Copy + Ord;
+    /// Output value proxies, including newly produced values, valid throughout a window.
+    type VOut: Copy + Ord;
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
     type ROut: Semigroup + 'static;
-
-    /// Hash keys and associated times in the instance's novel input batches.
-    ///
-    /// This is used (with held times) to seed the interesting times for each key.
-    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(u64, B1::Time)>;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
     /// It is the backend's job to prepare output batches for each of these descriptions.
     /// The computation proceeds in windows of keys, where only the backend maintains this
     /// work in progress, until `finish()` is called.
-    fn begin(&mut self, tiles: &[Description<B1::Time>]);
+    fn begin(&mut self, description: Description<T>);
 
-    /// Produce the next window, resticted to `changed[cursor..]`, and update `cursor` to track.
+    /// Present the next window of the key space, and advance `from` past it.
     ///
-    /// The size of the window is up to the backend, where the window should be large enough to
-    /// amortize the crossings between the harness and the backend. The proxy bridges for the
-    /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<B1::Time, Self::RIn, Self::ROut>>;
+    /// On entry `from` is `Start` or an inclusive `At(key)` lower bound on keys still to be covered.
+    /// The backend writes the window's exclusive upper bound as `At(key)`, or `End` when exhausted.
+    /// Each call must strictly advance `from`.
+    ///
+    /// The window must cover every key in `[from_before, from_after)` that carries a novel update or appears in `changed`.
+    /// For each key, present merged input (novel and prior together, netted), raw novel time support in `seeds`, and accumulated output.
+    /// A key must be reported entirely within the window that first mentions it: splitting one across windows drops the interaction between the halves.
+    /// `changed` is ascending; the harness reads no key outside the window's range, so a backend that keeps its own key order need not consult the whole space.
+    ///
+    /// `seeds` must be recorded from the novel batches before any consolidation or advancement:
+    /// a novel record that nets to zero against compacted history vanishes from `input`, but its
+    /// time must still seed — that cancellation is exactly the case that loses updates otherwise.
+    ///
+    /// The size of the window is up to the backend: large enough to amortize the crossings, small
+    /// enough that the presentations are affordable, as all are live at once.
+    fn next_window(
+        &mut self,
+        instance: &ReduceInstance<'_, T, B1, B2>,
+        changed: &[Self::Key],
+        from: &mut KeyPosition<Self::Key>,
+        window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
+    );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
     /// Multiple keys are provided concurrently, for each an accumulated input and tentative output.
     /// The backend should provide for each key the necessary output updates to bring the output in
     /// with its desires. The `usize` integers upper bound the range for the corresponding key.
+    /// Each input and output bracket is sorted and consolidated by its value proxy.
     fn reduce_corrections(
         &mut self,
-        keys: &[u64],
+        keys: &[Self::Key],
         in_ends: &[usize],
-        input: &[(u64, Self::RIn)],
+        input: &[(Self::VIn, Self::RIn)],
         out_ends: &[usize],
-        output: &[(u64, Self::ROut)],
-    ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
+        output: &[(Self::VOut, Self::ROut)],
+    ) -> (Vec<(Self::VOut, Self::ROut)>, Vec<usize>);
 
-    /// Commit to a collection of updates at a specific batch in progress.
-    ///
-    /// The `tile: usize` indexes the list of descriptions provided to `begin()`, and these updates
-    /// are aimed at that batch in progress.
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), B1::Time, Self::ROut)]);
+    /// Commit a collection of updates to the batch in progress.
+    fn emit(&mut self, records: &[((Self::Key, Self::VOut), T, Self::ROut)]);
 
-    /// Complete the session matching `begin`. The outputs correspond to the descriptions it was provided.
-    fn finish(&mut self) -> Vec<B2>;
+    /// Complete the session matching `begin`, yielding the batch it described,
+    /// or `None` when the span it described carries no updates.
+    fn finish(&mut self) -> Option<B2>;
 }
 
-/// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
-pub struct ProxyReduceTactic<T, Bk> {
+/// A proxy-space [`ReduceTactic`]: matches input and output records by `key`.
+pub struct ProxyReduceTactic<T, Bk, K = u64> {
     backend: Bk,
-    /// Pending interesting times beyond the upper frontier, keyed by key hash.
-    pending: BTreeMap<u64, Vec<T>>,
+    /// Maximum number of keys with live sweep state at once.
+    key_batch_size: usize,
+    /// Pending interesting times, shared across flat key ranges.
+    pending: Pending<T, K>,
 }
 
-impl<T, Bk> ProxyReduceTactic<T, Bk> {
+impl<T, Bk, K> ProxyReduceTactic<T, Bk, K> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyReduceTactic { backend, pending: BTreeMap::new() }
+        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: Pending::default() }
+    }
+
+    /// Limit simultaneous sweeps independently of the backend's presentation window.
+    ///
+    /// Complete proxy keys stay together, including all real keys sharing a proxy.
+    /// Sweep scratch is reused between groups within a retire. The bound does not
+    /// limit a single key's size, the presentation, or the output batch. Corrections
+    /// remain batched, and emission still happens once per backend window.
+    /// By default, all keys in the presentation can have live sweeps at once.
+    pub fn with_key_batch_size(mut self, key_batch_size: usize) -> Self {
+        assert!(key_batch_size > 0, "key batch size must be positive");
+        self.key_batch_size = key_batch_size;
+        self
     }
 }
 
-impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
+impl<T, B1, B2, Bk, K: Copy + Ord> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, Bk, K>
 where
-    B1: BatchReader,
-    B2: BatchReader<Time = B1::Time>,
-    Bk: ProxyReduceBackend<B1, B2>,
+    T: Timestamp + Lattice,
+    Bk: ProxyReduceBackend<T, B1, B2, Key = K>,
 {
     fn retire(
         &mut self,
         source_batches: Vec<B1>,
         output_batches: Vec<B2>,
         input_batches: Vec<B1>,
-        lower: &Antichain<B1::Time>,
-        upper: &Antichain<B1::Time>,
-        held: &Antichain<B1::Time>,
-    ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>) {
+        lower: &Antichain<T>,
+        upper: &Antichain<T>,
+        held: &Antichain<T>,
+    ) -> (Option<Span<T, B2>>, Antichain<T>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
-            return (Vec::new(), held.clone());
+            debug_assert!(
+                self.pending.frontier().iter().all(|time| held.less_equal(time)),
+                "held capabilities do not cover pending times",
+            );
+            return (None, held.clone());
         }
 
         let instance = ReduceInstance {
@@ -136,241 +192,552 @@ where
             lower: lower.borrow(),
         };
 
-        let seeds = self.backend.seed_times(&instance);
-        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by key_hash");
-        let mut changed: BTreeSet<u64> = seeds.iter().map(|(k, _)| *k).collect();
-        changed.extend(self.pending.keys().copied());
-        if changed.is_empty() {
-            self.pending.clear();
-            return (Vec::new(), Antichain::new());
+        // Split the carried interesting times against `upper`.
+        // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
+        // A time at or beyond it remains carried in `self.pending`.
+        // Activate time groups before visiting their keys. Due rows index a shared time table.
+        let due = self.pending.activate(upper.borrow());
+        // The keys the harness knows must be revisited. The backend adds those its novel batches
+        // touch, which it discovers while reading them; neither side scans the whole key space.
+        let mut changed: Vec<K> = due.rows.iter().map(|r| r.0).collect();
+        changed.dedup();
+        let mut deferred = Vec::new();
+        let mut due_pos = 0;
+
+        // Nothing due and nothing novel: no time in the interval can be interesting, so there is no
+        // work and no output. Return the frontier bounding the times still withheld — NOT an empty
+        // one. This is exactly where a due-only `changed` differs from the whole pending set: times
+        // beyond `upper` can remain when nothing is due, and releasing their capabilities would
+        // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
+        if changed.is_empty() && instance.input_batches.is_empty() {
+            return (None, self.pending.frontier());
         }
-        let changed: Vec<u64> = changed.into_iter().collect();
 
-        // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
-        // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
-        let held_elems: Vec<B1::Time> = held.elements().to_vec();
-        let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
-        self.backend.begin(&tile_descs);
+        // The single output batch spans the retired interval.
+        let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        self.backend.begin(description.clone());
 
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
+        // Start before every key; each window advances to an inclusive key bound or the end.
+        let mut from = KeyPosition::Start;
+        let mut window: ReduceWindow<T, Bk::RIn, Bk::ROut, K, Bk::VIn, Bk::VOut> = ReduceWindow::default();
 
-        let mut cursor = 0usize;
-        let mut ns = 0usize;
-
-        // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
-        // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
-        let mut discover_scratch: DiscoverScratch<B1::Time, Bk::RIn> = DiscoverScratch::new();
-        let mut states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
-        let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
-        let mut batch_keys: Vec<u64> = Vec::new();
+        // Retire-wide reusable scratch: cleared per group, window or wave, retaining capacity. Fresh
+        // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
+        // staging buffers are held across the whole retire rather than built where they are used.
+        let mut slots: Vec<KeySweep<T, Bk::RIn, Bk::ROut, K, Bk::VIn, Bk::VOut>> = Vec::new();
+        let mut live: Vec<usize> = Vec::new();
+        let mut deltas: Vec<((K, Bk::VOut), T, Bk::ROut)> = Vec::new();
+        let mut batch_keys: Vec<K> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
+        let mut in_all: Vec<(Bk::VIn, Bk::RIn)> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut active: Vec<(usize, B1::Time)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut moments_scratch: Vec<B1::Time> = Vec::new();
-        let mut pended_scratch: Vec<B1::Time> = Vec::new();
+        let mut out_all: Vec<(Bk::VOut, Bk::ROut)> = Vec::new();
+        let mut active: Vec<(usize, T)> = Vec::new();
+        let mut in_accum: Vec<(Bk::VIn, Bk::RIn)> = Vec::new();
+        let mut cur_out: Vec<(Bk::VOut, Bk::ROut)> = Vec::new();
 
-        while let Some(window) = self.backend.next_window(&instance, &changed, &mut cursor) {
-            let p_in = &window.input;
-            let p_out = &window.output;
+        while from != KeyPosition::End {
+            let before = from;
+            window.clear();
+            self.backend.next_window(&instance, &changed, &mut from, &mut window);
+            let p_in = &mut window.input;
+            let seeds = &window.seeds;
+            let p_out = &mut window.output;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
-
-            for deltas in tile_deltas.iter_mut() { deltas.clear(); }
-
-            // Phase 1 (determination): for every key in the window, discover its interesting times
-            // (times only — no accumulation) and stand up its per-moment replays. Peak state is
-            // O(window presentation), bounded by the window `next_window` already materialized.
-            // `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's
-            // `Vec`s and replays are allocated once and reused, so keys cost no per-key alloc/free.
-            // `n_states` is the live prefix this window; higher slots persist (retaining capacity).
-            let mut n_states = 0usize;
-            let (mut is, mut os) = (0usize, 0usize);
-            for &key in &window.keys {
-                while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
-                let i0 = is;
-                while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
-                let i1 = is;
-                while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
-                let o0 = os;
-                while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
-                let o1 = os;
-                while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
-                let n0 = ns;
-                while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
-                let n1 = ns;
-
-                moments_scratch.clear();
-                pended_scratch.clear();
+            debug_assert!(
+                seeds.windows(2).all(|w| w[0] < w[1]),
+                "next_window.seeds must be sorted by (key, time) and deduplicated",
+            );
+            // Without progress the window loop would never retire, so this guards liveness as well
+            // as contract; the range check catches a key reported outside the window that owns it,
+            // which would silently drop the interaction between its halves.
+            debug_assert!(
+                from > before,
+                "next_window must either advance `from` or report the key space exhausted",
+            );
+            debug_assert!(
                 {
-                    let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                    let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
-                    let out_times = (o0..o1).map(|o| p_out[o].1.clone());
-                    discover_times(
-                        KeyView { p_in: &p_in[..], i0, i1, pending },
-                        seed_times, out_times, upper,
-                        &mut discover_scratch,
-                        &mut moments_scratch, &mut pended_scratch,
-                    );
-                }
-                if !pended_scratch.is_empty() {
-                    new_pending.insert(key, std::mem::take(&mut pended_scratch));
-                }
-                if moments_scratch.is_empty() {
-                    continue;
+                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0));
+                    keys.all(|k| before <= KeyPosition::At(k) && KeyPosition::At(k) < from)
+                },
+                "next_window must report a key entirely within the window that first mentions it",
+            );
+
+            deltas.clear();
+
+            // The window's keys are the proxies its presentations mention: the least of the three
+            // heads, each iteration, until all three are drained. A `changed` key that appears in
+            // none of them has no records at all, so its reduction has nothing to read and nothing
+            // to retract — the time its due moment would raise reaches the evaluation gate with an
+            // empty input and an empty output, and produces nothing. Skipping it is exactly what
+            // visiting it would do. (`changed` is still the backend's instruction about which keys
+            // to present; it is just not a source of keys here.)
+            //
+            // Each key gets a `Sweep`, which discovers and evaluates in ONE ascending pass,
+            // suspending where the conventional reduce would call user logic. Slots are reused
+            // across bounded groups as well as windows. A backend can present a large
+            // window without allocating sweep state for every key simultaneously.
+            let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
+            while is < p_in.len() || ns < seeds.len() || os < p_out.len() {
+                let mut n_slots = 0usize;
+                live.clear();
+                // Mapped to keys before the min: the sources differ in shape.
+                while let Some(key) = [
+                    p_in.get(is).map(|record| record.0.0),
+                    seeds.get(ns).map(|seed| seed.0),
+                    p_out.get(os).map(|record| record.0.0),
+                ].into_iter().flatten().min() {
+                    let i0 = is;
+                    while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
+                    let i1 = is;
+                    let n0 = ns;
+                    while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
+                    let n1 = ns;
+                    let o0 = os;
+                    while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
+                    let o1 = os;
+
+                    if n_slots == slots.len() { slots.push(KeySweep::empty(key)); }
+                    let slot = &mut slots[n_slots];
+                    slot.key = key;
+                    slot.pended.clear();
+                    // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
+                    while due_pos < due.rows.len() && due.rows[due_pos].0 < key { due_pos += 1; }
+                    let start = due_pos;
+                    while due_pos < due.rows.len() && due.rows[due_pos].0 == key { due_pos += 1; }
+                    let owed = &due.rows[start..due_pos];
+                    let novel = &seeds[n0..n1];
+                    // One seed dominating every record has exactly one possible evaluation.
+                    let single = owed.first().map(|r| &due.times[r.1]).or_else(|| novel.first().map(|r| &r.1))
+                        .filter(|at| owed.len() <= 1 && novel.len() <= 1
+                            && novel.first().is_none_or(|r| &r.1 == *at)
+                            && p_in[i0..i1].iter().all(|r| r.1.less_equal(at))
+                            && p_out[o0..o1].iter().all(|r| r.1.less_equal(at)));
+                    slot.direct = single.map(|_| (i0..i1, o0..o1));
+                    slot.at = if let Some(at) = single {
+                        if upper.less_equal(at) { slot.pended.push(at.clone()); None }
+                        else { Some(at.clone()) }
+                    } else {
+                        slot.sweep.load(
+                            owed.iter().map(|&(_, row)| due.times[row].clone()),
+                            novel.iter().map(|r| r.1.clone()),
+                            p_in[i0..i1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                            p_out[o0..o1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                        );
+                        slot.sweep.next_crossing(upper, &mut slot.pended)
+                    };
+                    if slot.at.is_some() { live.push(n_slots); }
+                    else if !slot.pended.is_empty() {
+                        deferred.extend(slot.pended.drain(..).map(|time| (time, key)));
+                    }
+                    n_slots += 1;
+                    if n_slots == self.key_batch_size { break; }
                 }
 
-                // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
-                // than any before). `drain` moves the discovered moments in without copy or realloc.
-                if n_states == states.len() {
-                    states.push(KeyState::empty());
+                // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
+                // call, hand the corrections back, and step every live key on. A key retires when its
+                // sweep runs dry, at which point its pended times are carried forward.
+                while !live.is_empty() {
+                    batch_keys.clear();
+                    in_ends.clear();
+                    in_all.clear();
+                    out_ends.clear();
+                    out_all.clear();
+                    active.clear();
+
+                    for &si in live.iter() {
+                        let at = slots[si].at.clone().expect("live slots are suspended at a time");
+                        in_accum.clear();
+                        cur_out.clear();
+                        if let Some((ir, or)) = &slots[si].direct {
+                            in_accum.extend(p_in[ir.clone()].iter().map(|r| (r.0.1, r.2.clone())));
+                            cur_out.extend(p_out[or.clone()].iter().map(|r| (r.0.1, r.2.clone())));
+                            crate::consolidation::consolidate(&mut in_accum);
+                            crate::consolidation::consolidate(&mut cur_out);
+                        } else {
+                            slots[si].sweep.input_at(&at, &mut in_accum);
+                            slots[si].sweep.output_at(&at, &mut cur_out);
+                        }
+                        // An interesting time can still reach the gate with nothing to read; the
+                        // conventional reduce skips user logic there and so do we.
+                        if in_accum.is_empty() && cur_out.is_empty() { continue; }
+                        batch_keys.push(slots[si].key);
+                        in_all.append(&mut in_accum);
+                        in_ends.push(in_all.len());
+                        out_all.append(&mut cur_out);
+                        out_ends.push(out_all.len());
+                        active.push((si, at));
+                    }
+
+                    if !batch_keys.is_empty() {
+                        let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
+                        let mut cstart = 0usize;
+                        for (bi, (si, at)) in active.iter().enumerate() {
+                            let cend = corr_ends[bi];
+                            if cstart != cend {
+                                debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
+                                for (vid, d) in &corr[cstart..cend] {
+                                    deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
+                                }
+                                if slots[*si].direct.is_none() {
+                                    slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                                }
+                            }
+                            cstart = cend;
+                        }
+                    }
+
+                    // Step every live key past the time it was suspended at, and retire the spent ones.
+                    for &si in live.iter() {
+                        let slot = &mut slots[si];
+                        slot.at = if slot.direct.is_some() { None }
+                            else { slot.sweep.next_crossing(upper, &mut slot.pended) };
+                        if slot.at.is_none() && !slot.pended.is_empty() {
+                            deferred.extend(slot.pended.drain(..).map(|time| (time, slot.key)));
+                        }
+                    }
+                    live.retain(|&si| slots[si].at.is_some());
                 }
-                let st = &mut states[n_states];
-                st.key = key;
-                st.cursor = 0;
-                st.produced.clear();
-                st.moments.clear();
-                st.moments.append(&mut moments_scratch);
-                st.meets.clear();
-                st.meets.extend(st.moments.iter().cloned());
-                for i in (1..st.meets.len()).rev() {
-                    let m = st.meets[i].clone();
-                    st.meets[i - 1].meet_assign(&m);
-                }
-                st.in_replay.load_iter((i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())), st.meets.first());
-                st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
-                n_states += 1;
+                // Bound staging by the same key groups as the sweep scratch.
+                self.pending.insert(std::mem::take(&mut deferred));
             }
 
-            // Phase 2 (application): walk all keys' moments in ROUNDS. Each round assembles every
-            // active key's one-moment-deep input and current-output accumulations and crosses them in
-            // a SINGLE `reduce_corrections` — batching across keys (a key's own moments stay
-            // sequential, each seeing its earlier corrections via `produced`). This caps the backend
-            // call count at O(max moments over keys), not O(sum of moments), with peak materialization
-            // one moment deep per key. `produced` is meet-collapsed each round, exactly like the
-            // reference — bounded, not the O(times × values) delta history.
-            loop {
-                batch_keys.clear();
-                in_ends.clear();
-                in_all.clear();
-                out_ends.clear();
-                out_all.clear();
-                active.clear();
-                let mut advanced = false;
-                for (si, st) in states[..n_states].iter_mut().enumerate() {
-                    if st.cursor >= st.moments.len() {
-                        continue;
-                    }
-                    advanced = true;
-                    let j = st.cursor;
-                    st.cursor += 1;
-                    let t = st.moments[j].clone();
-                    st.in_replay.step_through(&t);
-                    st.out_replay.step_through(&t);
-                    st.in_replay.advance_buffer_by(&st.meets[j]);
-                    st.out_replay.advance_buffer_by(&st.meets[j]);
-                    for ((_, et), _) in st.produced.iter_mut() {
-                        *et = et.join(&st.meets[j]);
-                    }
-                    crate::consolidation::consolidate(&mut st.produced);
-
-                    in_accum.clear();
-                    for ((vid, et), d) in st.in_replay.buffer().iter() {
-                        if et.less_equal(&t) {
-                            in_accum.push((*vid, d.clone()));
-                        }
-                    }
-                    crate::consolidation::consolidate(&mut in_accum);
-                    cur_out.clear();
-                    for ((vid, et), d) in st.out_replay.buffer().iter().chain(st.produced.iter()) {
-                        if et.less_equal(&t) {
-                            cur_out.push((*vid, d.clone()));
-                        }
-                    }
-                    crate::consolidation::consolidate(&mut cur_out);
-
-                    if in_accum.is_empty() && cur_out.is_empty() {
-                        continue;
-                    }
-                    batch_keys.push(st.key);
-                    in_all.append(&mut in_accum);
-                    in_ends.push(in_all.len());
-                    out_all.append(&mut cur_out);
-                    out_ends.push(out_all.len());
-                    active.push((si, t));
-                }
-                // Terminate only when every key is EXHAUSTED — not merely when this round produced no
-                // crossing. A round can be empty because every key's current moment is empty-gated
-                // while keys still have later (non-empty) moments; breaking here would drop them.
-                if !advanced {
-                    break;
-                }
-                if batch_keys.is_empty() {
-                    continue;
-                }
-
-                let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
-                let mut cstart = 0usize;
-                for (bi, (si, t)) in active.iter().enumerate() {
-                    let cend = corr_ends[bi];
-                    if cstart != cend {
-                        let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
-                        for (vid, d) in &corr[cstart..cend] {
-                            states[*si].produced.push(((*vid, t.clone()), d.clone()));
-                            tile_deltas[idx].push(((states[*si].key, *vid), t.clone(), d.clone()));
-                        }
-                    }
-                    cstart = cend;
-                }
-            }
-
-            for (held_index, deltas) in tile_deltas.iter_mut().enumerate() {
-                if deltas.is_empty() {
-                    continue;
-                }
-                if let Some(tile) = tile_of[held_index] {
-                    crate::consolidation::consolidate_updates(deltas);
-                    self.backend.emit(tile, &deltas[..]);
-                }
+            if !deltas.is_empty() {
+                crate::consolidation::consolidate_updates(&mut deltas);
+                self.backend.emit(&deltas[..]);
             }
         }
 
-        self.pending = new_pending;
-        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
-        let mut frontier = Antichain::new();
-        for times in self.pending.values() {
-            for t in times {
-                frontier.insert_ref(t);
+        let produced = Some(Span::new(description, self.backend.finish()));
+        (produced, self.pending.frontier())
+    }
+}
+
+/// One key's slot in a window: its [`Sweep`], the time it is suspended at, and the times it has
+/// pended so far. Slots and their scratch capacity are reused across groups and windows
+/// within a retire, then dropped when the retire completes.
+struct KeySweep<T, RIn, ROut, K, VIn, VOut> {
+    key: K,
+    sweep: Sweep<T, RIn, ROut, VIn, VOut>,
+    direct: Option<(std::ops::Range<usize>, std::ops::Range<usize>)>,
+    /// Times at or beyond `upper` the sweep has reached; carried forward when the slot retires.
+    pended: Vec<T>,
+    /// The time the sweep last suspended at, or `None` once it is spent.
+    at: Option<T>,
+}
+
+impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, K, VIn: Copy + Ord, VOut: Copy + Ord> KeySweep<T, RIn, ROut, K, VIn, VOut> {
+    fn empty(key: K) -> Self {
+        KeySweep { key, sweep: Sweep::new(), direct: None, pended: Vec::new(), at: None }
+    }
+}
+
+/// Updates an optional meet by an optional time.
+fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
+    if let Some(time) = other {
+        match meet.as_mut() {
+            Some(m) => m.meet_assign(time),
+            None => *meet = Some(time.clone()),
+        }
+    }
+}
+
+/// A resumable, fused determination-and-evaluation sweep over one key's times.
+///
+/// A determination pass would enumerate a key's interesting times up front, and the caller would
+/// then walk them again to evaluate. The conventional reduce does not: it runs ONE ascending pass
+/// and evaluates as it discovers. It can, because discovery never looks backwards — every
+/// synthesized time is
+/// `next_time.join(t)` for some `t` NOT at or below `next_time`, so it is strictly greater, and new
+/// work only ever lands ahead of the sweep.
+///
+/// This is that pass, cut at the point where the conventional operator would call user logic. Each
+/// [`next_crossing`](Self::next_crossing) returns the next in-interval time that needs evaluating,
+/// with the buffers positioned to read the accumulations; the caller evaluates and hands the
+/// corrections back through [`commit`](Self::commit); the next call resumes. Many keys can be run
+/// to their next crossing and evaluated together, which is what a batched backend wants, without
+/// any of them enumerating their times first.
+///
+/// The schedule is `formal/Differential/RoundCoverage.lean`'s `round_coverage`: a time carrying an
+/// output change lies in the join-closure of `prior ∪ novel` AND is at or above some novel time.
+/// The novel times arrive as the SEED LIST (the harness's warned times merged with the window's raw
+/// novel time support); the records themselves travel merged with the prior history and carry no
+/// witness duty, which is what lets them net and advance. Coverage is invariant under that move:
+/// the witness clause reads only times, and consolidation cancels only equal-time pairs whose time
+/// the seed list retains.
+struct Sweep<T, RIn, ROut, VIn, VOut> {
+    /// The accumulated input (novel and prior, merged and netted) and output: join partners, and
+    /// the accumulations to evaluate over. Both may be advanced freely — witness duty lives in
+    /// `seeds`, not in any record.
+    input: ValueHistory<VIn, T, RIn>,
+    output: ValueHistory<VOut, T, ROut>,
+    /// The key's seed times — the harness's due (warned) times merged with the raw novel time
+    /// support — ascending and deduplicated, with their suffix meets; `seed_pos` consumes them.
+    /// These are the ONLY source of interest: the schedule is stated over them, so they are held
+    /// raw, never advanced.
+    seeds: Vec<T>,
+    seed_meets: Vec<T>,
+    seed_pos: usize,
+    /// Synthesized times not yet visited, sorted DESCENDING so `last()` is the least.
+    synth: Vec<T>,
+    /// The seed times reached so far, compacted by the running meet. They are the witnesses the
+    /// absorption test looks for, and the partners a close joins against; keeping them collapsed is
+    /// what stops a key with many reached times rescanning all of them.
+    reached: Vec<T>,
+    /// Scratch for one step's synthesized times.
+    temporary: Vec<T>,
+    /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
+    /// output accumulation.
+    produced: Vec<((VOut, T), ROut)>,
+    /// The meet of every time still to come.
+    meet: Option<T>,
+    /// Whether the last `next_crossing` returned a time whose step is not yet settled.
+    suspended: bool,
+}
+
+/// What one [`tick`](Sweep::tick) decided about the time it visited.
+enum Tick<T> {
+    /// No seed reaches this time; the sweep moved past it.
+    Passed,
+    /// Reached, but at or beyond `upper`: carried to a later round rather than evaluated.
+    Pended,
+    /// Reached and in the interval. The caller must evaluate here before the sweep goes on.
+    Crossing(T),
+    /// Every source is drained.
+    Done,
+}
+
+impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VIn: Copy + Ord, VOut: Copy + Ord> Sweep<T, RIn, ROut, VIn, VOut> {
+    /// An empty sweep, to be `load`ed and reused for successive keys.
+    fn new() -> Self {
+        Sweep {
+            input: ValueHistory::new(), output: ValueHistory::new(),
+            seeds: Vec::new(), seed_meets: Vec::new(), seed_pos: 0,
+            synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
+            produced: Vec::new(), meet: None, suspended: false,
+        }
+    }
+
+    /// Position the sweep at the start of one key.
+    ///
+    /// `owed` is the harness's due (warned) times and `novel_times` the window's raw novel time
+    /// support, both ascending; they merge into the seed list, which is held raw — the schedule is
+    /// stated over these times, so they are never advanced. The records in `input` are merged and
+    /// netted (novel and prior together): a cancelled record's time survives in the seed list, so
+    /// netting loses nothing, and every record is a mere partner/accumulant that the meet may
+    /// advance freely.
+    fn load(
+        &mut self,
+        owed: impl Iterator<Item = T>,
+        novel_times: impl Iterator<Item = T>,
+        input: impl Iterator<Item = (VIn, T, RIn)>,
+        output: impl Iterator<Item = (VOut, T, ROut)>,
+    ) {
+        // Merge the two ascending seed sources, deduplicated.
+        self.seeds.clear();
+        let mut owed = owed.peekable();
+        let mut novel = novel_times.peekable();
+        loop {
+            let take_owed = match (owed.peek(), novel.peek()) {
+                (Some(a), Some(b)) => a <= b,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            let time = if take_owed { owed.next() } else { novel.next() }.expect("peeked");
+            if self.seeds.last() != Some(&time) {
+                self.seeds.push(time);
             }
         }
-        (produced, frontier)
+        self.seed_meets.clear();
+        self.seed_meets.extend(self.seeds.iter().cloned());
+        for i in (1..self.seed_meets.len()).rev() {
+            let (init, tail) = self.seed_meets.split_at_mut(i);
+            init[i - 1].meet_assign(&tail[0]);
+        }
+        self.seed_pos = 0;
+        self.synth.clear();
+        self.reached.clear();
+        self.temporary.clear();
+        self.produced.clear();
+        self.suspended = false;
+
+        // The meet of every seed bounds every time the sweep will visit, so the record buffers can
+        // be advanced by it at load.
+        let mut meet: Option<T> = None;
+        update_meet(&mut meet, self.seed_meets.first());
+        self.input.load_iter(input, meet.as_ref());
+        self.output.load_iter(output, meet.as_ref());
+        self.meet = meet;
+    }
+
+    /// Advance to the next in-interval time that needs evaluating, or `None` once the key is spent.
+    ///
+    /// Times at or beyond `upper` that the schedule reaches are appended to `pended` for the caller
+    /// to carry into a later round.
+    fn next_crossing(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
+        loop {
+            // A crossing leaves its step half-finished, because `settle` must see the corrections
+            // the caller commits. Finishing it is the first thing the next call does.
+            if self.suspended {
+                self.suspended = false;
+                self.settle();
+            }
+            match self.tick(upper, pended) {
+                Tick::Done => return None,
+                Tick::Crossing(at) => {
+                    self.suspended = true;
+                    return Some(at);
+                }
+                Tick::Passed | Tick::Pended => {}
+            }
+        }
+    }
+
+    /// Visit one time: find it, decide whether it is reached, close it forward, and report.
+    fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
+        let Some(at) = self.frontier() else { return Tick::Done };
+        let reached = self.absorb(&at);
+        if upper.less_equal(&at) {
+            // Out of the interval: nothing can be emitted here, so there is nothing to close
+            // against either — a join with `at` is at or beyond `at`, hence also out of interval,
+            // and will be rediscovered from `at` in the round that admits it.
+            self.settle();
+            if reached { pended.push(at); return Tick::Pended; }
+            return Tick::Passed;
+        }
+        self.close(&at, reached, upper, pended);
+        if reached { return Tick::Crossing(at); }
+        self.settle();
+        Tick::Passed
+    }
+
+    /// The sweep's position: the least time any source still offers.
+    ///
+    /// The TOTAL order, not the partial one. Every time `close` produces is strictly greater than
+    /// the position that produced it, so new work only ever lands ahead of here and the sweep never
+    /// revisits.
+    fn frontier(&self) -> Option<T> {
+        [
+            self.seeds.get(self.seed_pos), self.input.time(),
+            self.output.time(), self.synth.last(),
+        ].into_iter().flatten().min().cloned()
+    }
+
+    /// Step every source sitting at `at`, and decide whether `at` is REACHED.
+    ///
+    /// Reached is clause two of `round_coverage` — `∃ nu ∈ novel, nu ≤ at` — evaluated
+    /// incrementally: either a seed lands exactly here, or one already stepped in lies below.
+    ///
+    /// Input and output are stepped whether or not `at` is reached, and that is forced rather than
+    /// eager: they are sources of the frontier, so leaving them would stall the sweep, and their
+    /// edits must reach the buffers or they are lost to every later accumulation. Stepping only
+    /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
+    /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
+    /// only where the buffers are actually read.
+    fn absorb(&mut self, at: &T) -> bool {
+        self.input.step_while_time_is(at);
+        self.output.step_while_time_is(at);
+
+        // A seed here — a due time or a novel-support time — is consumed into the reached set,
+        // where it becomes a witness and a join partner for every later time. So is a synthetic
+        // join scheduled for here.
+        let mut reached = false;
+        while self.synth.last() == Some(at) {
+            self.reached.push(self.synth.pop().expect("nonempty"));
+            reached = true;
+        }
+        while self.seeds.get(self.seed_pos) == Some(at) {
+            self.reached.push(at.clone());
+            self.seed_pos += 1;
+            reached = true;
+        }
+        // Absorption: a time at or above a seed already consumed is itself reached, because
+        // joining that seed with it yields it back.
+        reached || self.reached.iter().any(|t| t.less_equal(at))
+    }
+
+    /// Close `at` forward under joins — clause one of `round_coverage`, the join-closure.
+    ///
+    /// Against the REACHED (seed-derived) times always, reached or not: an unreached time joined
+    /// with a seed lands at or above that seed, so it carries a witness and is on the schedule.
+    ///
+    /// Against the PRIOR times only when `at` is itself reached, because the join then inherits
+    /// `at`'s witness. A join of two prior times carries none and is deliberately never produced —
+    /// that asymmetry is the whole of why an incremental operator does less work than the closure
+    /// of everything.
+    ///
+    /// `produced` counts as prior. A correction emitted at `p` changes the accumulated output at
+    /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
+    /// this round's corrections are not in the output history and `at` was not yet stepped in when
+    /// the sweep passed `p`.
+    fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
+        self.temporary.extend(self.reached.iter()
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        if reached {
+            if let Some(meet) = self.meet.as_ref() {
+                self.input.advance_buffer_by(meet);
+                self.output.advance_buffer_by(meet);
+            }
+            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        }
+        sort_dedup(&mut self.temporary);
+        let before = self.synth.len();
+        for time in self.temporary.drain(..) {
+            if upper.less_equal(&time) { pended.push(time); } else { self.synth.push(time); }
+        }
+        if self.synth.len() > before {
+            self.synth.sort_by(|x, y| y.cmp(x));
+            self.synth.dedup();
+        }
+    }
+
+    /// The input accumulation at the suspended time.
+    fn input_at(&self, at: &T, into: &mut Vec<(VIn, RIn)>) {
+        for ((id, time), diff) in self.input.buffer().iter() {
+            if time.less_equal(at) { into.push((*id, diff.clone())); }
+        }
+        crate::consolidation::consolidate(into);
+    }
+
+    /// The tentative output accumulation at the suspended time, including this sweep's corrections.
+    fn output_at(&self, at: &T, into: &mut Vec<(VOut, ROut)>) {
+        for ((id, time), diff) in self.output.buffer().iter().chain(self.produced.iter()) {
+            if time.less_equal(at) { into.push((*id, diff.clone())); }
+        }
+        crate::consolidation::consolidate(into);
+    }
+
+    /// Record the corrections evaluated at the suspended time, and collapse them by the meet.
+    fn commit(&mut self, at: &T, corrections: impl Iterator<Item = (VOut, ROut)>) {
+        let before = self.produced.len();
+        for (id, diff) in corrections { self.produced.push(((id, at.clone()), diff)); }
+        if self.produced.len() > before {
+            if let Some(meet) = self.meet.as_ref() {
+                for entry in self.produced.iter_mut() { (entry.0).1.join_assign(meet); }
+            }
+            crate::consolidation::consolidate(&mut self.produced);
+        }
+    }
+
+    /// Close a step: recompute the meet of everything still to come, and compact the reached set by
+    /// it. This is what keeps a key with a long history linear rather than quadratic.
+    fn settle(&mut self) {
+        let mut meet: Option<T> = None;
+        update_meet(&mut meet, self.input.meet());
+        update_meet(&mut meet, self.output.meet());
+        for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
+        update_meet(&mut meet, self.seed_meets.get(self.seed_pos));
+        if let Some(m) = meet.as_ref() {
+            for time in self.reached.iter_mut() { *time = time.join(m); }
+        }
+        sort_dedup(&mut self.reached);
+        self.meet = meet;
     }
 }
-
-/// Per-key application state for [`ProxyReduceTactic`]'s round-batched walk: the key's ordered
-/// interesting `moments` and their suffix `meets`, its input and output replays (meet-collapsed),
-/// the corrections `produced` this round so far, and a `cursor` into `moments`. Held for all of a
-/// window's keys at once so each round's crossing batches across keys — a key's own moments stay
-/// sequential (each sees its earlier corrections via `produced`), but distinct keys are independent.
-struct KeyState<T, RIn, ROut> {
-    key: u64,
-    moments: Vec<T>,
-    meets: Vec<T>,
-    in_replay: IdHistory<T, RIn>,
-    out_replay: IdHistory<T, ROut>,
-    produced: Vec<((u64, T), ROut)>,
-    cursor: usize,
-}
-
-impl<T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<T, RIn, ROut> {
-    /// An empty slot, to be filled by [`ProxyReduceTactic`]'s phase 1 (`reload`-style). The `states`
-    /// vector holds these across windows and reloads them in place, so a key's buffers are allocated
-    /// once (per slot) and reused — never dropped per key (which was ~18% of load in `free`).
-    fn empty() -> Self {
-        KeyState { key: 0, moments: Vec::new(), meets: Vec::new(), in_replay: IdHistory::new(), out_replay: IdHistory::new(), produced: Vec::new(), cursor: 0 }
-    }
-}
-

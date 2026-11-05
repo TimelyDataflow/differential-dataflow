@@ -1,0 +1,1 @@
+export "out" = input 0 : (int, int) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);

@@ -1,0 +1,27 @@
+let request = input 0 : ((int, int, List(int)), ());
+let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "ldbc.friend" : (int, (int, int));
+let tag     = import "ldbc.tag" : (int, (List(int), int));
+let by_name = import "ldbc.tag.by_name" : (List(int), int);
+let tagged  = import "ldbc.mtag.by_tag" : (int, int);
+let tags_of = import "ldbc.mtag.by_message" : (int, int);
+let hop1   = request | map(((rid, who, _), ()) -> (who, (rid, who))) | join(person, (who, req, _) -> (who, req))
+                     | join(friend, (_, (rid, who), (f, _)) -> (f, (rid, who)));
+let hop2   = hop1 | join(friend, (_, (rid, who), (g, _)) -> (g, (rid, who)));
+let circle = (hop1 + hop2) | filter((node, (_, who)) -> (node, who) ne)
+                           | map((node, (rid, _)) -> ((rid, node), ())) | distinct;
+let with_it = request | map(((rid, _, name), ()) -> (name, rid))
+                      | join(by_name, (_, rid, t) -> (t, rid))
+                      | join(tagged, (t, rid, m) -> (m, (rid, t)))
+                      | join(message, (m, (rid, t), (kind, _, author, _, _, _, _, _, _, _, _, _, _)) -> ((rid, author), (kind, m, t)))
+                      | filter((_, (kind, _, _)) -> (kind, 0) eq)
+                      | join(circle, ((rid, _), (_, m, t), ()) -> (m, (rid, t)));
+let others = with_it | join(tags_of, (_, (rid, t), other) -> ((rid, t, other), ()))
+                     | filter(((_, t, other), ()) -> (t, other) ne)
+                     | map(((rid, _, other), ()) -> ((rid, other), ())) | count;
+let ranked = others | map(((rid, other), n) -> (other, (rid, n)))
+                    | join(tag, (_, (rid, n), (name, _)) -> (rid, (n neg, name)))
+                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer = ranked | map((rid, (rank, (neg, other))) -> ((rid, rank), (other, neg neg)));
+export "ic6.answer" = answer | arrange;

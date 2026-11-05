@@ -1,0 +1,33 @@
+let request  = input 0 : ((int, int, List(int)), ());
+let person   = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = import "ldbc.friend" : (int, (int, int));
+let tag      = import "ldbc.tag" : (int, (List(int), int));
+let by_class = import "ldbc.tag.by_class" : (int, int);
+let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+let classes  = import "ldbc.tagclass.by_name" : (List(int), int);
+let mtag     = import "ldbc.mtag.by_tag" : (int, int);
+let below_hl = import "ic12.s.below_hl" : (int, int);
+let reply = import "ic12.s.reply" : (int, (int, int));
+let intag   = request | map(((rid, _, name), ()) -> (name, rid))
+                      | join(classes, (_, rid, high) -> (high, rid))
+                      | join(below_hl, (_, rid, low) -> (low, rid))
+                      | join(by_class, (_, rid, t) -> (t, rid))
+                      | join(tag, (t, rid, (name, _)) -> (t, (rid, name)))
+                      | join(mtag, (_, (rid, name), m) -> (m, (rid, name)))
+                      | join(message, (m, (rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, name), kind))
+                      | filter((_, kind) -> (kind, 0) eq)
+                      | map((key, _) -> (key, ()));
+let hits    = request | map(((rid, who, _), ()) -> (who, rid))
+                      | join(friend, (_, rid, (f, _)) -> (f, rid))
+                      | join(reply, (f, rid, (id, parent)) -> ((rid, parent), (f, id)))
+                      | join(intag | map(((rid, m, name), ()) -> ((rid, m), name)), ((rid, _), (f, id), name) -> ((rid, f), (id, name)));
+let counts  = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ())) | distinct
+                   | map(((rid, f, _), ()) -> ((rid, f), ())) | count;
+let tagset  = hits | map(((rid, f), (_, name)) -> ((rid, f, name), ())) | distinct
+                   | map(((rid, f, name), ()) -> ((rid, f), name)) | collect;
+let ranked  = counts | join(tagset, ((rid, f), n, list) -> (f, (rid, n, list)))
+                     | join(person, (f, (rid, n, list), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((n neg, f), (first, last, list))))
+                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let answer  = ranked | map((rid, (rank, ((neg, f), (first, last, list)))) -> ((rid, rank), (f, first, last, list, neg neg)));
+export "ic12.answer" = answer | arrange;

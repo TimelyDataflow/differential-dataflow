@@ -1,0 +1,10 @@
+--- lowered
++++ optimized
+@@ -1,6 +1,5 @@
+ -- Time lanes: epoch.
+-let input0 = input 0 : (int, (int, int));
+-let rows = input0 | map((k, v) -> (k, v));
++let rows = input 0 : (int, (int, int));
+ let first_map = rows | map((k, (a, _)) -> (k, a));
+ let second_map = rows | map((k, (_, b)) -> (k, b));
+ let rows_idx = rows | arrange;

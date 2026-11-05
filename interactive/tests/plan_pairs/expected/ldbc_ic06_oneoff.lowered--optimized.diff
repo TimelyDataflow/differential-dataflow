@@ -1,0 +1,30 @@
+--- lowered
++++ optimized
+@@ -16,12 +16,10 @@
+ let friend_idx = friend | arrange;
+ let hop1 = hop1_idx2 | join(friend_idx, (_, (rid, who), (f, _)) -> (f, (rid, who)));
+ let hop1_idx3 = hop1 | arrange;
+-let friend_idx2 = friend | arrange;
+-let hop2 = hop1_idx3 | join(friend_idx2, (_, (rid, who), (g, _)) -> (g, (rid, who)));
++let hop2 = hop1_idx3 | join(friend_idx, (_, (rid, who), (g, _)) -> (g, (rid, who)));
+ let circle_rows = hop1 + hop2;
+-let circle_filter = circle_rows | filter((node, (_, who)) -> (node, who) ne);
+-let circle_map = circle_filter | map((node, (rid, _)) -> ((rid, node), ()));
+-let circle_idx = circle_map | arrange;
++let circle_rows2 = circle_rows | filter((node, (_, who)) -> (node, who) ne) | map((node, (rid, _)) -> ((rid, node), ()));
++let circle_idx = circle_rows2 | arrange;
+ let circle = circle_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let with_it_map = request | map(((rid, _, name), ()) -> (name, rid));
+ let with_it_idx = with_it_map | arrange;
+@@ -39,9 +37,8 @@
+ let with_it_idx5 = with_it | arrange;
+ let tags_of_idx = tags_of | arrange;
+ let others_join = with_it_idx5 | join(tags_of_idx, (_, (rid, t), other) -> ((rid, t, other), ()));
+-let others_filter = others_join | filter(((_, t, other), ()) -> (t, other) ne);
+-let others_map = others_filter | map(((rid, _, other), ()) -> ((rid, other), ()));
+-let others_idx = others_map | arrange;
++let others_rows = others_join | filter(((_, t, other), ()) -> (t, other) ne) | map(((rid, _, other), ()) -> ((rid, other), ()));
++let others_idx = others_rows | arrange;
+ let others = others_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+ let ranked_map = others | map(((rid, other), n) -> (other, (rid, n)));
+ let ranked_idx = ranked_map | arrange;

@@ -1,0 +1,20 @@
+--- lowered
++++ optimized
+@@ -1,6 +1,7 @@
+ -- Time lanes: epoch.
+ let edges = input 0 : (int, int);
+ let seeds = input 1 : (int, ());
++let edges_idx = edges | arrange;
+ outer: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var again;
+@@ -9,8 +10,7 @@
+         -- Time lanes: epoch, then 2 scope coordinates; this scope enters at zero.
+         var reached;
+         let reached_idx = reached | arrange;
+-        let edges_idx = ::edges | arrange;
+-        let step = reached_idx | join(edges_idx, (_, (), dst) -> (dst, ()));
++        let step = reached_idx | join(::edges_idx, (_, (), dst) -> (dst, ()));
+         let reached_rows = outer::starts + step;
+         let reached_idx2 = reached_rows | arrange;
+         let reached_reduce = reached_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

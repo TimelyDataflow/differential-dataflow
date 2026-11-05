@@ -22,6 +22,11 @@ where
 }
 
 /// Possible different differential events.
+///
+/// The spine reports batches through `BatchEvent`, `MergeEvent`, and `DropEvent`, which balance:
+/// a consumer that adds one batch per `BatchEvent`, and removes one per `MergeEvent` with `complete`
+/// set and per `DropEvent`, counts the batches the trace holds. Batches without updates are counted,
+/// and report a length of zero.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Columnar)]
 pub enum DifferentialEvent {
     /// Batch creation.
@@ -38,12 +43,14 @@ pub enum DifferentialEvent {
     Batcher(BatcherEvent),
 }
 
-/// Either the start or end of a merge event.
+/// A batch introduced to a trace.
+///
+/// See [`DifferentialEvent`] for how batch, merge, and drop events balance.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Columnar)]
 pub struct BatchEvent {
     /// Operator identifier.
     pub operator: usize,
-    /// Which order of magnitude.
+    /// Number of updates in the batch.
     pub length: usize,
 }
 
@@ -67,18 +74,22 @@ pub struct BatcherEvent {
 
 impl From<BatcherEvent> for DifferentialEvent { fn from(e: BatcherEvent) -> Self { DifferentialEvent::Batcher(e) } }
 
-/// Either the start or end of a merge event.
+/// A batch dropped by a trace.
+///
+/// See [`DifferentialEvent`] for how batch, merge, and drop events balance.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Columnar)]
 pub struct DropEvent {
     /// Operator identifier.
     pub operator: usize,
-    /// Which order of magnitude.
+    /// Number of updates in the batch.
     pub length: usize,
 }
 
 impl From<DropEvent> for DifferentialEvent { fn from(e: DropEvent) -> Self { DifferentialEvent::Drop(e) } }
 
-/// Either the start or end of a merge event.
+/// Either the start or end of a merge of two batches into one.
+///
+/// See [`DifferentialEvent`] for how batch, merge, and drop events balance.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Columnar)]
 pub struct MergeEvent {
     /// Operator identifier.
@@ -89,7 +100,7 @@ pub struct MergeEvent {
     pub length1: usize,
     /// Length of second trace.
     pub length2: usize,
-    /// None implies a start.
+    /// None implies a start; otherwise the number of updates in the merged batch.
     pub complete: Option<usize>,
 }
 
