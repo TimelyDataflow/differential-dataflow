@@ -18,7 +18,7 @@ edition = "2021"
 rust-version = "1.88"
 
 [workspace.dependencies]
-differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.25.1" }
+differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.26.0" }
 #timely = { version = "0.31", default-features = false }
 columnar = { version = "0.13.3", default-features = false }
 timely = { version = "0.32", default-features = false }

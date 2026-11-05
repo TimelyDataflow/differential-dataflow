@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.25.1...differential-dogs3-v0.26.0) - 2026-11-05
+
+This release tracks differential-dataflow 0.26 and removes several helper modules.
+
+### Added
+
+- `HalfJoinTactic` and `half_join_with_tactic`, with proxy and vector backends (`ProxyHalfJoinBackend`, `ProxyHalfJoinTactic`, `VecHalfJoinBackend`).
+
+### Changed
+
+- `half_join` is re-exported from `operators::half_join::cursors`, and its signature drops the `CF` parameter.
+- `PrefixExtender`, `ProposeExtensionMethod`, and `ValidateExtensionMethod` drop the `R` parameter.
+- `CollectionIndex` and `CollectionExtender` drop the `R` parameter and gain a `'scope` lifetime.
+- `count`, `propose`, and `validate` take the `R` and `FF` type parameters.
+
+### Removed
+
+- `AltNeu`, and the `calculus` module with `Differentiate` and `Integrate`.
+- `lookup_map`, `propose_distinct`, and the `half_join2` module.
+- The old `half_join_internal_unsafe`. The `half_join::cursors` module has its own version.
+
+### Other
+
+- `Batcher` as subtrait ([#1074](https://github.com/TimelyDataflow/differential-dataflow/pull/1074))
+- Half joins read imported arrangements as of a frontier ([#1025](https://github.com/TimelyDataflow/differential-dataflow/pull/1025))
+- a proxy half-join tactic over a backend, built on int_proxy's public surface ([#1022](https://github.com/TimelyDataflow/differential-dataflow/pull/1022))
+- dogs3 half join: ship each output with the unit's capabilities ([#955](https://github.com/TimelyDataflow/differential-dataflow/pull/955))
+- Adapt to timely #817, #818, #819 ([#877](https://github.com/TimelyDataflow/differential-dataflow/pull/877))
+- Further reorganization ([#849](https://github.com/TimelyDataflow/differential-dataflow/pull/849))
+- Use `Batcher` to implement all of `Arrange` ([#845](https://github.com/TimelyDataflow/differential-dataflow/pull/845))
+- One `Batcher` trait, shaped like the one half_join had to write ([#844](https://github.com/TimelyDataflow/differential-dataflow/pull/844))
+- Batches as data: spans of history carrying `Option<Batch>` ([#842](https://github.com/TimelyDataflow/differential-dataflow/pull/842))
+- Half join tactic ([#840](https://github.com/TimelyDataflow/differential-dataflow/pull/840))
+- Correct dogs3 worst-case optimal tools ([#821](https://github.com/TimelyDataflow/differential-dataflow/pull/821))
+- Replace half_join with half_join2 ([#820](https://github.com/TimelyDataflow/differential-dataflow/pull/820))
+- Migrate Cursor/Navigable requirements ([#819](https://github.com/TimelyDataflow/differential-dataflow/pull/819))
+
 ## [0.25.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.24.0...differential-dogs3-v0.25.0) - 2026-07-15
 
 ### Changed
