@@ -69,9 +69,9 @@ use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::Description;
 
-use super::join::{JoinInstance, JoinMatches, ProxyJoinBackend};
+use super::join::{JoinBlock, JoinBridge, JoinInstance, ProxyJoinBackend};
 use super::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
-use super::{KeyPosition, ProxyBridge};
+use super::{KeyPosition, ProxyBridge, TimeColumn};
 
 /// A backend whose inputs are read as of `since`: every time the inner backend draws is advanced
 /// by it, and what then coincides is consolidated.
@@ -144,35 +144,58 @@ where
     type R0 = B::R0;
     type R1 = B::R1;
     type ROut = B::ROut;
+    type Times = B::Times;
     type Output = B::Output;
 
     fn advance(
         &mut self,
         instance: &JoinInstance<T, B0, B1>,
         from: &mut KeyPosition<Self::Key>,
-        bridge0: &mut ProxyBridge<T, Self::R0, Self::Key, Self::V0>,
-        bridge1: &mut ProxyBridge<T, Self::R1, Self::Key, Self::V1>,
+        bridge0: &mut JoinBridge<Self::Times, Self::R0, Self::Key, Self::V0>,
+        bridge1: &mut JoinBridge<Self::Times, Self::R1, Self::Key, Self::V1>,
     ) {
         self.inner.advance(instance, from, bridge0, bridge1);
         // Every output time is at or beyond the fresh input's times, hence `lower`: beyond `since`.
         if self.since.is_empty() || self.since.less_equal(&instance.lower) { return; }
+        // Scaffolding: read the bridges as rows of owned times, and write them back.
+        let (mut rows0, mut rows1) = (to_rows(bridge0), to_rows(bridge1));
         // A key whose updates net away on one side has nothing to match, and the harness requires
         // the bridges' keys to agree.
-        let moved0 = read_as_of(bridge0, &self.since);
-        let moved1 = read_as_of(bridge1, &self.since);
+        let moved0 = read_as_of(&mut rows0, &self.since);
+        let moved1 = read_as_of(&mut rows1, &self.since);
         if moved0 || moved1 {
-            common_keys(bridge1, bridge0);
-            common_keys(bridge0, bridge1);
+            common_keys(&mut rows1, &rows0);
+            common_keys(&mut rows0, &rows1);
+            from_rows(rows0, bridge0);
+            from_rows(rows1, bridge1);
         }
     }
 
     fn cross(
         &mut self,
         instance: &JoinInstance<T, B0, B1>,
-        matches: &mut JoinMatches<T, Self::ROut, Self::Key, Self::V0, Self::V1>,
+        bridge0: &JoinBridge<Self::Times, Self::R0, Self::Key, Self::V0>,
+        bridge1: &JoinBridge<Self::Times, Self::R1, Self::Key, Self::V1>,
+        blocks: &[JoinBlock],
         output: &mut Vec<Self::Output>,
     ) {
-        self.inner.cross(instance, matches, output)
+        self.inner.cross(instance, bridge0, bridge1, blocks, output)
+    }
+}
+
+/// Scaffolding: a join bridge's rows, with owned times.
+fn to_rows<T, C: TimeColumn<T>, R: Clone, K: Copy, V: Copy>(bridge: &JoinBridge<C, R, K, V>) -> ProxyBridge<T, R, K, V> {
+    (0..bridge.len()).map(|i| ((bridge.keys[i], bridge.vals[i]), bridge.times.owned_get(i), bridge.diffs[i].clone())).collect()
+}
+
+/// Scaffolding: replace a join bridge's rows with `rows`.
+fn from_rows<T, C: TimeColumn<T>, R, K, V>(rows: ProxyBridge<T, R, K, V>, bridge: &mut JoinBridge<C, R, K, V>) {
+    bridge.clear::<T>();
+    for ((key, val), time, diff) in rows {
+        bridge.keys.push(key);
+        bridge.vals.push(val);
+        bridge.times.owned_push(&time);
+        bridge.diffs.push(diff);
     }
 }
 

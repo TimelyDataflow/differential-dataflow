@@ -617,8 +617,8 @@ fn reduce_prior_advanced_past_novel() {
 // does. The proxy tactics read through backends, so `BackendFrontier` reads what a backend draws as
 // of a time. The reference is the same tactic over the rows with every time advanced by hand.
 
-use differential_dataflow::operators::int_proxy::join::{JoinInstance, JoinMatches, ProxyJoinBackend, ProxyJoinTactic};
-use differential_dataflow::operators::int_proxy::{BackendFrontier, KeyPosition, ProxyBridge};
+use differential_dataflow::operators::int_proxy::join::{JoinBlock, JoinBridge, JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
+use differential_dataflow::operators::int_proxy::{extend_cross_product, BackendFrontier, KeyPosition, ProxyBridge, TimeColumn};
 use differential_dataflow::operators::join::{Fresh, JoinTactic};
 
 /// The max-reduce's logic, as a plain function, so that its backends name one type.
@@ -669,22 +669,42 @@ impl ProxyJoinBackend<u64, Pairs, Pairs> for PairJoin {
     type R0 = i64;
     type R1 = i64;
     type ROut = i64;
+    type Times = Vec<u64>;
     type Output = Joined;
-    fn advance(&mut self, instance: &JoinInstance<u64, Pairs, Pairs>, from: &mut KeyPosition<u64>, bridge0: &mut ProxyBridge<u64, i64, u64, (u64, u64)>, bridge1: &mut ProxyBridge<u64, i64, u64, (u64, u64)>) {
+    fn advance(&mut self, instance: &JoinInstance<u64, Pairs, Pairs>, from: &mut KeyPosition<u64>, bridge0: &mut JoinBridge<Vec<u64>, i64, u64, (u64, u64)>, bridge1: &mut JoinBridge<Vec<u64>, i64, u64, (u64, u64)>) {
         fn draw(batches: &[Pairs]) -> ProxyBridge<u64, i64, u64, (u64, u64)> {
             let mut rows: Vec<_> = hread(batches).into_iter().map(|(kv, t, r)| ((kv.0.hashed(), kv), t, r)).collect();
             consolidate_updates(&mut rows);
             rows
         }
         let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
-        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
-        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        fill(bridge0, b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        fill(bridge1, b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
         *from = KeyPosition::End;
     }
-    fn cross(&mut self, _instance: &JoinInstance<u64, Pairs, Pairs>, matches: &mut JoinMatches<u64, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
-        let rows = matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, *t, *r)).collect();
-        output.push(rows);
+    fn cross(&mut self, _instance: &JoinInstance<u64, Pairs, Pairs>, bridge0: &JoinBridge<Vec<u64>, i64, u64, (u64, u64)>, bridge1: &JoinBridge<Vec<u64>, i64, u64, (u64, u64)>, blocks: &[JoinBlock], output: &mut Vec<Self::Output>) {
+        output.push(crossed(bridge0, bridge1, blocks));
     }
+}
+
+/// Append `rows` to `bridge`, a column each.
+fn fill<T>(bridge: &mut JoinBridge<Vec<T>, i64, u64, (u64, u64)>, rows: impl Iterator<Item = ((u64, (u64, u64)), T, i64)>) {
+    for ((key, val), time, diff) in rows {
+        bridge.keys.push(key);
+        bridge.vals.push(val);
+        bridge.times.push(time);
+        bridge.diffs.push(diff);
+    }
+}
+
+/// The rows `blocks` stand for, by the rule on [`JoinBlock`].
+fn crossed<T: Lattice + Clone>(bridge0: &JoinBridge<Vec<T>, i64, u64, (u64, u64)>, bridge1: &JoinBridge<Vec<T>, i64, u64, (u64, u64)>, blocks: &[JoinBlock]) -> Vec<((u64, ((u64, u64), (u64, u64))), T, i64)> {
+    let mut times = Vec::new();
+    times.extend_cross_join(&bridge0.times, &bridge1.times, blocks);
+    let mut diffs = Vec::new();
+    extend_cross_product(&mut diffs, &bridge0.diffs, &bridge1.diffs, blocks);
+    let ids = blocks.iter().flat_map(|(r0, r1)| r0.clone().flat_map(move |i| r1.clone().map(move |j| (bridge0.keys[i], (bridge0.vals[i], bridge1.vals[j])))));
+    ids.zip(times).zip(diffs).map(|((id, t), r)| (id, t, r)).collect()
 }
 
 /// The join's output, keyed by its two values and consolidated.
@@ -806,8 +826,9 @@ impl<T: Lattice + Timestamp> ProxyJoinBackend<T, PairsAt<T>, PairsAt<T>> for Pai
     type R0 = i64;
     type R1 = i64;
     type ROut = i64;
+    type Times = Vec<T>;
     type Output = JoinedAt<T>;
-    fn advance(&mut self, instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, from: &mut KeyPosition<u64>, bridge0: &mut ProxyBridge<T, i64, u64, (u64, u64)>, bridge1: &mut ProxyBridge<T, i64, u64, (u64, u64)>) {
+    fn advance(&mut self, instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, from: &mut KeyPosition<u64>, bridge0: &mut JoinBridge<Vec<T>, i64, u64, (u64, u64)>, bridge1: &mut JoinBridge<Vec<T>, i64, u64, (u64, u64)>) {
         let draw = |batches: &[PairsAt<T>]| {
             let mut rows: Vec<_> = hread(batches).into_iter().map(|(kv, mut t, r)| {
                 if self.apply_lower { t.join_assign(&instance.lower); }
@@ -817,12 +838,12 @@ impl<T: Lattice + Timestamp> ProxyJoinBackend<T, PairsAt<T>, PairsAt<T>> for Pai
             rows
         };
         let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
-        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
-        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        fill(bridge0, b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        fill(bridge1, b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
         *from = KeyPosition::End;
     }
-    fn cross(&mut self, _instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, matches: &mut JoinMatches<T, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
-        output.push(matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, t.clone(), *r)).collect());
+    fn cross(&mut self, _instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, bridge0: &JoinBridge<Vec<T>, i64, u64, (u64, u64)>, bridge1: &JoinBridge<Vec<T>, i64, u64, (u64, u64)>, blocks: &[JoinBlock], output: &mut Vec<Self::Output>) {
+        output.push(crossed(bridge0, bridge1, blocks));
     }
 }
 
