@@ -42,8 +42,7 @@ use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
 use corgi::{Bounds, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::col_times::{ColTime, ColTimes};
-use crate::runtime::search::matching_ranges;
-use crate::runtime::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
+use crate::runtime::chunk::{colliding_keys, columns_to_batch, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::lambda::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -240,14 +239,14 @@ impl<T> CorgiReduceBackend<T> {
 
 /// Where `chunks` hold the ascending `keys`.
 ///
-/// Both the keys and stored identifier lane are sorted; [`matching_ranges`] chooses between
-/// merging them and searching the keys in lockstep.
+/// Both the keys and stored identifier lane are sorted. A chunk's bounds skip the keys it cannot
+/// hold ([`CorgiChunk::find`]), and [`matching_ranges`](crate::runtime::search::matching_ranges) chooses between merging the rest with the
+/// lane and searching them in lockstep.
 fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches {
     let mut scratch = Vec::new();
     chunks.iter().map(|chunk| {
         let mut found = Vec::new();
-        if chunk.diffs().is_empty() { return found; }
-        matching_ranges(keys, ident(chunk.keys()), &mut scratch, &mut found);
+        chunk.find(keys, &mut scratch, &mut found);
         found
     }).collect()
 }

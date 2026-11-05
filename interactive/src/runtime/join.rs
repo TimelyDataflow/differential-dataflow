@@ -41,7 +41,6 @@ use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, equal_idx, gather_lanes};
-use crate::runtime::search::matching_ranges;
 use corgi::{shape_of_value, Demand, Graph, NumOp, Shape, Value as CValue};
 
 use crate::runtime::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
@@ -655,7 +654,7 @@ fn block_horizon<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], starts: &[usize], 
 /// Where each chunk's block ends: the first row at or past `horizon`, or its end.
 fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<i64>) -> Vec<usize> {
     chunks.iter().map(|c| match horizon {
-        Some(h) => ident(c).partition_point(|&x| x < h),
+        Some(h) => c.rows_before(h),
         None => c.len(),
     }).collect()
 }
@@ -727,10 +726,9 @@ pub(super) struct Probe<'a, T: ColTime> {
 
 impl<'a, T: ColTime> Probe<'a, T> {
     pub(super) fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[i64], proj: &'a SideProj) -> Self {
-        let keys = ident(chunk);
         let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
         let mut found = Vec::new();
-        matching_ranges(needles, keys, &mut Vec::new(), &mut found);
+        chunk.find(needles, &mut Vec::new(), &mut found);
         for (j, range) in found {
             lo[j] = range.start;
             hi[j] = range.end;
@@ -822,10 +820,11 @@ fn advance_leaf<T: ColTime>(
 ) {
     let start = from.expect("advance called on an exhausted unit");
     let hashed = key_is_hashed(chunks0[0].keys());
-    // Resume: the first row of each chunk at or past `start`, by binary search on its identifier
-    // lane. The lane is a sorted `i64` slice, so this is a slice operation, not a column probe.
+    // Resume: the first row of each chunk at or past `start`, from its bounds when `start` is past
+    // either end, else by binary search on its identifier lane. The lane is a sorted `i64` slice,
+    // so this is a slice operation, not a column probe.
     let seek = |chunks: &[&CorgiChunk<T, Diff>]| -> Vec<usize> {
-        chunks.iter().map(|c| ident(c).partition_point(|&x| x < start)).collect()
+        chunks.iter().map(|c| c.rows_before(start)).collect()
     };
     let start0 = seek(chunks0);
     let start1 = seek(chunks1);
@@ -893,9 +892,10 @@ fn leaf_probe<'a, T: ColTime>(
         return;
     }
 
-    // One batched probe of every probee chunk at the driver's keys.
+    // One batched probe of every probee chunk whose bounds meet the driver's keys.
+    let (first, last) = (keyset[0], keyset[keyset.len() - 1]);
     let probes: Vec<Probe<T>> = pchunks.iter().enumerate()
-        .filter(|(_, c)| c.len() > 0)
+        .filter(|(_, c)| c.len() > 0 && c.may_hold(first, last))
         .map(|(cid, c)| Probe::new(c, cid, &keyset, pproj))
         .collect();
 
