@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.25.1...differential-dogs3-v0.26.0) - 2026-11-05
 
+This release tracks differential-dataflow 0.26 and removes several helper modules.
+
+### Added
+
+- `HalfJoinTactic` and `half_join_with_tactic`, with proxy and vector backends (`ProxyHalfJoinBackend`, `ProxyHalfJoinTactic`, `VecHalfJoinBackend`).
+
+### Changed
+
+- `half_join` is re-exported from `operators::half_join::cursors`, and its signature drops the `CF` parameter.
+- `PrefixExtender`, `ProposeExtensionMethod`, and `ValidateExtensionMethod` drop the `R` parameter.
+- `CollectionIndex` and `CollectionExtender` drop the `R` parameter and gain a `'scope` lifetime.
+- `count`, `propose`, and `validate` take the `R` and `FF` type parameters.
+
+### Removed
+
+- `AltNeu`, and the `calculus` module with `Differentiate` and `Integrate`.
+- `lookup_map`, `propose_distinct`, and the `half_join2` module.
+- The old `half_join_internal_unsafe`. The `half_join::cursors` module has its own version.
+
 ### Other
 
 - `Batcher` as subtrait ([#1074](https://github.com/TimelyDataflow/differential-dataflow/pull/1074))
