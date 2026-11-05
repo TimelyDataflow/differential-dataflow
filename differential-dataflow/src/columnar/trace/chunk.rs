@@ -17,9 +17,9 @@
 //! A [`ColChunk`] is either [`Resident`](ColChunk::Resident) (the trie in memory)
 //! or [`Paged`](ColChunk::Paged) (resident bounds + a byte handle). [`Chunk::settle`]
 //! is the spill point: it pages committed chunks out via
-//! [`spill`](self::spill) when a worker has installed a spiller. Reads
+//! [`spill`] when a worker has installed a spiller. Reads
 //! fetch a paged chunk's trie back, caching it in a [`OnceCell`] so repeated
-//! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](Chunk::bounds)
+//! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](crate::trace::chunk::NavigableChunk::bounds)
 //! read the resident metadata and never fetch.
 //!
 //! [`Chunk::advance`] is trie-native: it melds its input in place and rewrites
@@ -59,7 +59,7 @@ use crate::trace::chunk::Chunk;
 const TARGET: usize = 8192;
 
 /// Resident bounds for a paged chunk: the first and last `(key, val, time)` as
-/// single-element columnar containers (so [`Chunk::bounds`] returns refs without
+/// single-element columnar containers (so [`crate::trace::chunk::NavigableChunk::bounds`] returns refs without
 /// fetching), plus the record count.
 pub struct ChunkMeta<U: ColumnarUpdate> {
     fk: ContainerOf<U::Key>, fv: ContainerOf<U::Val>, ft: ContainerOf<U::Time>,
@@ -382,7 +382,7 @@ where U::Time: 'static {
     /// withheld trailing `(key, val)` group (the `carry`) — it never pulls the whole
     /// chain into core. Cross-chunk consolidation happens *only* where a `(key, val)`
     /// straddles a boundary: the (un-advanced) carry is melded onto the next chunk's
-    /// head, a sorted-chain meld that just stitches that one group. [`advance_trie`]
+    /// head, a sorted-chain meld that just stitches that one group. `advance_trie`
     /// then advances and consolidates the time runs *within* each chunk (keys / vals /
     /// diffs stay columnar refs, no global re-sort). Grading the emitted chunks is
     /// left to [`Chunk::settle`].
@@ -438,7 +438,7 @@ where U::Time: 'static {
     /// Maximal packing via the harness [`pack`](crate::trace::chunk::pack): coalesce by melding
     /// each trie of the run onto the first (adjacent chunks of a sorted, consolidated
     /// chain, so meld's "strictly greater first triple" precondition holds), split
-    /// with [`trie_merger::split_at`], and seal through [`seal_chunk`] (the spill
+    /// with [`trie_merger::split_at`], and seal through `seal_chunk` (the spill
     /// point — pages a committed chunk when a spiller is installed).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         crate::trace::chunk::pack(

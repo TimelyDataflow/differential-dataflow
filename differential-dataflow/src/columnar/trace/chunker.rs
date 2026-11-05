@@ -1,8 +1,8 @@
 //! The container→batch chunker for the columnar trace.
 //!
 //! [`TrieChunker`] is the `ContainerBuilder` that turns a stream of
-//! [`RecordedUpdates`](crate::columnar::collection::RecordedUpdates) into
-//! [`ColChunk`](crate::columnar::trace::ColChunk) batches for the `Chunk`
+//! [`RecordedUpdates`] into
+//! [`ColChunk`] batches for the `Chunk`
 //! harness's batcher. It accumulates small inputs, consolidates, and ships
 //! chunks sized within 1-2x [`LINK_TARGET`](crate::columnar::LINK_TARGET).
 
