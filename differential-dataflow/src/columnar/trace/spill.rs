@@ -3,7 +3,7 @@
 //! [`ColChunk`](super::ColChunk) is either resident (a trie in
 //! memory) or paged (resident bounds + a byte handle to fetch the trie back).
 //! `Chunk::settle` is where committed chunks may be **paged out**: it calls
-//! [`try_page`], which consults a per-worker [`SpillState`] and, when over budget,
+//! `try_page`, which consults a per-worker `SpillState` and, when over budget,
 //! serializes the trie and hands the bytes to a pluggable [`BytesStore`]. Reads
 //! ([`Chunk::merge`](crate::trace::chunk::Chunk::merge) etc., and the cursor) fetch paged chunks back on demand.
 //!

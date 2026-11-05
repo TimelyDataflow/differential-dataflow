@@ -2,8 +2,7 @@
 //!
 //! Usage: scc [timely args] [nodes [edges [batch [rounds]]]]
 //!
-//! Mirrors `diagnostics/examples/scc-bench.rs` minus the logging dataflow,
-//! for a clean baseline to compare against `interactive/examples/ddir_col`.
+//! A baseline with no logging dataflow, for comparing other SCC implementations against.
 
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;

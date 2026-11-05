@@ -1110,7 +1110,7 @@ pub mod vec {
     {
         /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and yields pairs `(key, (val1, val2))`.
         ///
-        /// The [`join_map`](Join::join_map) method may be more convenient for non-trivial processing pipelines.
+        /// The [`join_map`](Collection::join_map) method may be more convenient for non-trivial processing pipelines.
         ///
         /// # Examples
         ///

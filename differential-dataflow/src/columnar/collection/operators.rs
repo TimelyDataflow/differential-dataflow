@@ -1,4 +1,4 @@
-//! Dataflow operators over the columnar [`RecordedUpdates`](super::RecordedUpdates)
+//! Dataflow operators over the columnar [`RecordedUpdates`]
 //! container — the collection-level surface of the columnar chunk.
 //!
 //! [`join_function`] is a columnar `flat_map` (subsuming map/filter/negate/

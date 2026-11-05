@@ -13,7 +13,7 @@
 //!
 //! Per window, the backend presents the input (the novel batches and the prior history, merged), the
 //! times of the novel records as seeds, and the prior output.
-//! Identifiers are ordinal positions minted by a single [`MergedWalk`] over the novel batches and the
+//! Identifiers are ordinal positions minted by a single `MergedWalk` over the novel batches and the
 //! prior ones together, so a value carries ONE identifier whichever run it appears in and a novel
 //! retraction cancels against its own history. They are minted after the walk consolidates, so a value
 //! whose records all cancel never reaches the tactic and never spends an identifier.
@@ -41,7 +41,7 @@ use super::{KeyPosition, ProxyReduceBackend, ReduceInstance, ReduceWindow};
 /// `D` is `(K, V)` on the input side and `(K, W)` on the output side.
 type VBatch<D, T, R> = Rc<ChunkBatch<VecChunk<u64, D, T, R>>>;
 
-/// A reference [`ProxyReduceBackend`] over [`VBatch`] storage.
+/// A reference [`ProxyReduceBackend`] over `VBatch` storage.
 pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// User supplied reduce closure.
     logic: L,
