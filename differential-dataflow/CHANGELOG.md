@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.1...differential-dataflow-v0.26.0) - 2026-11-05
+
+### Other
+
+- Target timely 0.32 from crates.io, and fix rustdoc link errors ([#1075](https://github.com/TimelyDataflow/differential-dataflow/pull/1075))
+- `Batcher` as subtrait ([#1074](https://github.com/TimelyDataflow/differential-dataflow/pull/1074))
+- fixed-seed foldhash in place of byte-at-a-time FNV ([#1066](https://github.com/TimelyDataflow/differential-dataflow/pull/1066))
+- PointStamp's lattice operations in one pass over the coordinates ([#1053](https://github.com/TimelyDataflow/differential-dataflow/pull/1053))
+- PointStamp takes its inline capacity as a const parameter ([#1051](https://github.com/TimelyDataflow/differential-dataflow/pull/1051))
+- build fewer join timestamps from scratch ([#1048](https://github.com/TimelyDataflow/differential-dataflow/pull/1048))
+- Half joins read imported arrangements as of a frontier ([#1025](https://github.com/TimelyDataflow/differential-dataflow/pull/1025))
+- a proxy half-join tactic over a backend, built on int_proxy's public surface ([#1022](https://github.com/TimelyDataflow/differential-dataflow/pull/1022))
+- BackendFrontier reads a proxy backend's inputs as of a frontier ([#1023](https://github.com/TimelyDataflow/differential-dataflow/pull/1023))
+- treat a zero count as absent ([#993](https://github.com/TimelyDataflow/differential-dataflow/pull/993))
+- read the source trace at its own batch bounds ([#991](https://github.com/TimelyDataflow/differential-dataflow/pull/991))
+- VecReduceBackend records seeds as it draws novel records ([#1016](https://github.com/TimelyDataflow/differential-dataflow/pull/1016))
+- reuse ordered reduction proxies and correction storage ([#942](https://github.com/TimelyDataflow/differential-dataflow/pull/942))
+- Balance spine batch events; document the stamp invariant ([#940](https://github.com/TimelyDataflow/differential-dataflow/pull/940))
+- Extract MergeLadder from MergeBatcher; split Extractor from Merger ([#938](https://github.com/TimelyDataflow/differential-dataflow/pull/938))
+- Chunk pack: combine a carried run once, when emitted ([#902](https://github.com/TimelyDataflow/differential-dataflow/pull/902))
+- Generalize int-proxy keys and values to Copy + Ord ([#891](https://github.com/TimelyDataflow/differential-dataflow/pull/891))
+- Move reduce timestamps and directly evaluate single dominating seeds ([#883](https://github.com/TimelyDataflow/differential-dataflow/pull/883))
+- Group int-proxy reduce pending times into sorted runs ([#881](https://github.com/TimelyDataflow/differential-dataflow/pull/881))
+- Adapt to timely #817, #818, #819 ([#877](https://github.com/TimelyDataflow/differential-dataflow/pull/877))
+- Reuse bounded groups of proxy reduction sweeps ([#871](https://github.com/TimelyDataflow/differential-dataflow/pull/871))
+- Cursor-based clean-up ([#866](https://github.com/TimelyDataflow/differential-dataflow/pull/866))
+- Further reorganization ([#849](https://github.com/TimelyDataflow/differential-dataflow/pull/849))
+- Relocation of narrowly used types and traits ([#848](https://github.com/TimelyDataflow/differential-dataflow/pull/848))
+- Split `Builder` along the seam its two users already follow ([#846](https://github.com/TimelyDataflow/differential-dataflow/pull/846))
+- Use `Batcher` to implement all of `Arrange` ([#845](https://github.com/TimelyDataflow/differential-dataflow/pull/845))
+- One `Batcher` trait, shaped like the one half_join had to write ([#844](https://github.com/TimelyDataflow/differential-dataflow/pull/844))
+- Retire the `Arrange` trait in favour of inherent methods ([#843](https://github.com/TimelyDataflow/differential-dataflow/pull/843))
+- Batches as data: spans of history carrying `Option<Batch>` ([#842](https://github.com/TimelyDataflow/differential-dataflow/pull/842))
+- Relocate batch merging traits into the fueled spine ([#841](https://github.com/TimelyDataflow/differential-dataflow/pull/841))
+- Track timely master: un-shred arrange with multi-capability stamps ([#838](https://github.com/TimelyDataflow/differential-dataflow/pull/838))
+- Corgi hash key lane ([#832](https://github.com/TimelyDataflow/differential-dataflow/pull/832))
+- Corgi reduce presentation perf ([#833](https://github.com/TimelyDataflow/differential-dataflow/pull/833))
+- start, emit an empty 'RecordedUpdates' in the columnar 'ValDistributor', when the input consolidates to nothing ([#834](https://github.com/TimelyDataflow/differential-dataflow/pull/834))
+- Seeds travel as times; records travel netted ([#830](https://github.com/TimelyDataflow/differential-dataflow/pull/830))
+- Drive VecReduceBackend windows from a resumable merge-walk ([#829](https://github.com/TimelyDataflow/differential-dataflow/pull/829))
+- Stream VecReduceBackend output into open chunks per tile ([#828](https://github.com/TimelyDataflow/differential-dataflow/pull/828))
+- Fuse discovery and evaluation in the proxy reduce tactic ([#826](https://github.com/TimelyDataflow/differential-dataflow/pull/826))
+- A reference VecReduceBackend, tests, and a tactic-vs-tactic benchmark ([#825](https://github.com/TimelyDataflow/differential-dataflow/pull/825))
+- Retire seed_times; visit only the keys with work due ([#824](https://github.com/TimelyDataflow/differential-dataflow/pull/824))
+- Move the wrapper cursors to the cursor module ([#823](https://github.com/TimelyDataflow/differential-dataflow/pull/823))
+- Remove the enter_at trace wrapper ([#822](https://github.com/TimelyDataflow/differential-dataflow/pull/822))
+- Migrate Cursor/Navigable requirements ([#819](https://github.com/TimelyDataflow/differential-dataflow/pull/819))
+- Name core join functions ([#816](https://github.com/TimelyDataflow/differential-dataflow/pull/816))
+- int_proxy join: draw the proxy collection lazily, a block at a time ([#809](https://github.com/TimelyDataflow/differential-dataflow/pull/809))
+
 ## [0.25.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.0...differential-dataflow-v0.25.1) - 2026-07-15
 
 ### Other
