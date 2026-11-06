@@ -20,6 +20,7 @@
 //! permits this — "consume at least one input; the harness may re-invoke."
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::rc::Rc;
 
 use timely::progress::Antichain;
@@ -32,6 +33,7 @@ use corgi::arrange::{equal_idx, gather, gather_lanes, group_bounds, sort_blocks,
 use corgi::Value as CValue;
 
 use crate::runtime::col_times::{ColTime, ColTimes};
+use crate::runtime::search::matching_ranges;
 
 use std::cmp::Ordering;
 
@@ -63,6 +65,10 @@ struct Inner<T, R> {
     times: ColTimes<T>,
     /// Per-update diffs.
     diffs: Vec<R>,
+    /// The first and last identifiers of the rows ([`ident`]), kept beside the columns so a reader
+    /// can rule the chunk out without reading its key column. `None` when the chunk is empty or its
+    /// keys have no `i64` identifier lane.
+    bounds: Option<(i64, i64)>,
 }
 
 /// A sorted, consolidated run of `((key, val), time, diff)` with corgi-columnar key/val, shared via `Rc`.
@@ -74,7 +80,7 @@ impl<T, R> Clone for CorgiChunk<T, R> {
 
 impl<T, R> Default for CorgiChunk<T, R> {
     fn default() -> Self {
-        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new() }))
+        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new(), bounds: None }))
     }
 }
 
@@ -88,7 +94,12 @@ fn split_kv(kv: CValue) -> (CValue, CValue) {
 
 impl<T, R> CorgiChunk<T, R> {
     fn from_parts(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
-        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs }))
+        // Rows are sorted by key, and the identifier leads the key, so its ends are the bounds.
+        let bounds = int_lane(key_lane(&keys)).and_then(|ids| {
+            debug_assert!(ids.windows(2).all(|w| w[0] <= w[1]), "a chunk's identifiers ascend");
+            Some((*ids.first()?, *ids.last()?))
+        });
+        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs, bounds }))
     }
     /// The `(key, val)` sort payload as one corgi `Prod` column (cheap `Arc` bumps).
     fn kv(&self) -> CValue { CValue::Prod(vec![self.0.keys.clone(), self.0.vals.clone()]) }
@@ -100,6 +111,55 @@ impl<T, R> CorgiChunk<T, R> {
     pub(crate) fn vals(&self) -> &CValue { &self.0.vals }
     pub fn times(&self) -> &ColTimes<T> { &self.0.times }
     pub(crate) fn diffs(&self) -> &[R] { &self.0.diffs }
+
+    /// Whether the chunk may hold an identifier in `first..=last`: false only when its bounds
+    /// rule that out.
+    pub(crate) fn may_hold(&self, first: i64, last: i64) -> bool {
+        !self.0.bounds.is_some_and(|(lo, hi)| hi < first || lo > last)
+    }
+
+    /// For each of `needles` (sorted, distinct identifiers) the chunk holds, its index in `needles`
+    /// and its rows, in needle order, as [`matching_ranges`] writes them to `out`. Needles outside
+    /// the chunk's bounds are not searched for.
+    pub(crate) fn find(&self, needles: &[i64], scratch: &mut Vec<usize>, out: &mut Vec<(usize, Range<usize>)>) {
+        out.clear();
+        if self.0.diffs.is_empty() { return; }
+        let (lo, hi) = match self.0.bounds {
+            Some((first, last)) => {
+                let lo = needles.partition_point(|&n| n < first);
+                (lo, lo + needles[lo..].partition_point(|&n| n <= last))
+            }
+            None => (0, needles.len()),
+        };
+        if lo == hi { return; }
+        matching_ranges(&needles[lo..hi], ident(&self.0.keys), scratch, out);
+        if lo > 0 {
+            for (index, _) in out.iter_mut() { *index += lo; }
+        }
+    }
+
+    /// How many rows have an identifier less than `id`: where a seek to `id` lands. The bounds
+    /// answer without a search when `id` is past either end.
+    pub(crate) fn rows_before(&self, id: i64) -> usize {
+        if self.0.times.len() == 0 { return 0; }
+        match self.0.bounds {
+            Some((_, last)) if last < id => self.0.times.len(),
+            Some((first, _)) if first >= id => 0,
+            _ => ident(&self.0.keys).partition_point(|&x| x < id),
+        }
+    }
+
+    /// An in-core chunk holding every row whose identifier is among `needles` (sorted, distinct
+    /// identifiers), and possibly other rows.
+    ///
+    /// A reader that touches a few rows of a large chunk asks for those rows this way, then
+    /// searches within what it gets as it would within the chunk, so the other rows are safe.
+    /// A chunk of independently decompressed pages would bring in only the pages the needles can
+    /// be in; while chunks are uncompressed and in memory, this is the chunk itself.
+    pub(crate) fn restrict(&self, needles: &[i64]) -> Self {
+        debug_assert!(needles.windows(2).all(|w| w[0] < w[1]), "restrict: needles are sorted and distinct");
+        self.clone()
+    }
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -805,6 +865,55 @@ mod test {
 
     /// An integer column's values.
     fn lane(col: &CValue) -> Vec<u64> { col.as_i64("lane").unwrap().iter().map(|&x| x as u64).collect() }
+
+    /// A chunk's bounds only skip work: `find`, `rows_before` and `may_hold` agree with searching
+    /// the whole identifier lane, for integer keys and for hashed compound keys, with needles
+    /// below, inside, between and above the chunk's identifiers.
+    #[test]
+    fn bounds_agree_with_the_identifier_lane() {
+        type T = crate::ir::Time;
+        let mut seed = 4211;
+        for hashed in [false, true] {
+            for n in [1usize, 2, 17, 300] {
+                let raw: Vec<u64> = (0..n).map(|_| 100 + xorshift(&mut seed) % 50).collect();
+                let keys = if hashed {
+                    present_key(CValue::Prod(vec![ints(raw.clone()), ints(raw.iter().map(|x| x % 3).collect())]))
+                } else { present_key(ints(raw)) };
+                let vals = ints((0..n as u64).collect());
+                let times: ColTimes<T> = (0..n).map(|_| T::new([0u64, 0, 0].into_iter().collect())).collect();
+                let chunk = CorgiChunk::from_columns(keys, vals, times, vec![1i64; n]);
+                let ids = ident(chunk.keys()).to_vec();
+                let (first, last) = (ids[0], ids[ids.len() - 1]);
+                assert_eq!(chunk.0.bounds, Some((first, last)));
+                // Needles: some held, and some outside on either side, or between held ones.
+                let mut needles: Vec<i64> = ids.iter().step_by(3).copied()
+                    .chain([first.saturating_sub(7), first.saturating_sub(1), last.saturating_add(1), last.saturating_add(9)])
+                    .chain((0..8).map(|_| xorshift(&mut seed) as i64))
+                    .collect();
+                needles.sort();
+                needles.dedup();
+                let (mut expected, mut found) = (Vec::new(), Vec::new());
+                matching_ranges(&needles, &ids, &mut Vec::new(), &mut expected);
+                chunk.find(&needles, &mut Vec::new(), &mut found);
+                assert_eq!(found, expected, "hashed={hashed}, n={n}");
+                for &id in &needles {
+                    assert_eq!(chunk.rows_before(id), ids.partition_point(|&x| x < id), "id={id}");
+                    let held = ids.binary_search(&id).is_ok();
+                    assert!(!held || chunk.may_hold(id, id));
+                }
+                assert!(!chunk.may_hold(i64::MIN, first.saturating_sub(1)) || first == i64::MIN);
+                assert!(!chunk.may_hold(last.saturating_add(1), i64::MAX) || last == i64::MAX);
+                assert!(chunk.may_hold(first, first) && chunk.may_hold(last, last));
+            }
+        }
+        // An empty chunk holds nothing and has no bounds to rule anything out.
+        let empty = CorgiChunk::<T, i64>::default();
+        let mut found = vec![(0, 0..1)];
+        empty.find(&[1, 2, 3], &mut Vec::new(), &mut found);
+        assert!(found.is_empty());
+        assert_eq!(empty.rows_before(5), 0);
+        assert!(empty.may_hold(1, 3));
+    }
 
     #[test]
     fn ingest_nested_payload_matches_scalar_consolidation() {
