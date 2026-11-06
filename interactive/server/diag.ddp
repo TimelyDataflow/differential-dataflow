@@ -7,10 +7,11 @@ let operator = import "diag.operator" : ((int, int), (List(int), List(int), List
 let time     = import "diag.time" : ((int, int), ());
 let retired  = import "diag.time_retired" : ((int, List(int), List(int), List(int)), ());
 let records  = import "diag.records" : ((int, int), ());
+let bytes    = import "diag.bytes" : ((int, int), ());
 
--- (worker, op) -> (program, statement), for the operators of every other program.
-let placed = operator | filter((_, (program, _, _, _)) -> (program, "diag") ne)
-                      | map((key, (program, statement, _, _)) -> (key, (program, statement)));
+-- (worker, op) -> (program, statement, name, address), for the operators of every other program.
+let described = operator | filter((_, (program, _, _, _)) -> (program, "diag") ne);
+let placed = described | map((key, (program, statement, _, _)) -> (key, (program, statement)));
 
 -- Nanoseconds scheduled: by live operators where they are, plus by operators that have shut down.
 let timed = time | join(placed, (_, (), place) -> (place, ()))
@@ -23,5 +24,19 @@ export "diag.time_by_program" = timed | map(((program, _), ()) -> (program, ()))
 -- Updates the arrangements hold, by where they are.
 export "diag.records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
 
--- Live operators per program.
-export "diag.operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;
+-- What each arrangement's chunks hold, summed over workers: (program, statement, name, address)
+-- -> (updates, bytes), and the same by program. Chunks counted in no live operator's account are
+-- the row of program "(unattributed)". An account holds updates exactly when it holds bytes, so
+-- joining the two counts drops no row.
+let held_records = records | join(described, (_, (), at) -> (at, ()));
+let held_bytes = bytes | join(described, (_, (), at) -> (at, ()));
+let arrangement_records = held_records | count;
+let arrangement_bytes = held_bytes | count;
+export "diag.arrangements" = arrangement_records | join(arrangement_bytes, (at, n, b) -> (at, (n, b)));
+let program_records = held_records | map(((program, _, _, _), ()) -> (program, ())) | count;
+let program_bytes = held_bytes | map(((program, _, _, _), ()) -> (program, ())) | count;
+export "diag.arrangements_by_program" = program_records | join(program_bytes, (program, n, b) -> (program, (n, b)));
+
+-- Live operators per program, leaving out the unattributed accounts, which are not operators.
+export "diag.operators_by_program" = placed | filter((_, (program, _)) -> (program, "(unattributed)") ne)
+                                            | map((_, (program, _)) -> (program, ())) | count;

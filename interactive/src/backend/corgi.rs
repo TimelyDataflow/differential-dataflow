@@ -27,6 +27,7 @@ use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
+use crate::runtime::account::{self, Account, AccountedBatcher};
 use crate::runtime::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::runtime::col_times::ColTime;
 use crate::runtime::container::CorgiContainer;
@@ -328,11 +329,16 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
+        // The batcher makes its chunks under the arrange operator's account.
+        let logger = account::logger(c.inner.scope().worker());
         Arr::built(arrange_core::<_, CC, _, CTrace>(
             c.inner,
             CorgiPact,
             "CorgiArrange",
-            ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new,
+            move |dd_logger, operator| AccountedBatcher::new(
+                ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new(dd_logger, operator),
+                logger.map(|logger| Account::new(operator, logger)),
+            ),
         ))
     }
 
@@ -380,10 +386,14 @@ impl Backend for CorgiBackend {
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
-        let backend = CorgiReduceBackend::new(reducer.clone(), limit, shape);
+        // The output chunks are made under the reduce operator's account: it is the next operator
+        // the scope builds, as nothing below allocates an identifier before `reduce_with_tactic`.
+        let Arr { arranged, since } = a;
+        let worker = arranged.stream.scope().worker();
+        let account = account::logger(worker).map(|logger| Account::new(worker.peek_identifier(), logger));
+        let backend = CorgiReduceBackend::new(reducer.clone(), limit, shape, account);
         // An import is read as of its time; the output is the program's own, read as it is.
         // As for the join, the wrapper at the minimum is one comparison per unit.
-        let Arr { arranged, since } = a;
         let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
         Arr::built(reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(backend).with_key_batch_size(256)))
     }

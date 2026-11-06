@@ -1,7 +1,8 @@
 //! Diagnostics: the server's own logging, as `diag.*` collections a program can import.
 //!
-//! With diagnostics on, each worker keeps timely's `"timely"` events, DD's
-//! `"differential/arrange"` events, and the statement labels rendering logs to `"ddir/labels"`.
+//! With diagnostics on, each worker keeps timely's `"timely"` events, the chunk events DDIR's
+//! chunks log to `"ddir/chunks"` (see [`account`](crate::runtime::account)), and the statement
+//! labels rendering logs to `"ddir/labels"`.
 //! At each `tick` the server turns the events since the last one into rows of these sources, at
 //! the epoch being closed. Each source's count carries its magnitude:
 //!
@@ -13,13 +14,17 @@
 //!   have shut down. When an operator shuts down its total moves here from `diag.time`, so a
 //!   program installed and dropped every epoch still adds up, while the state stays bounded by the
 //!   distinct `(program, statement, name)` triples.
-//! - `diag.records`: `((worker, op), ())`, the updates the operator's arrangement holds, from
-//!   DD's batch, merge and drop events. Retracted, if anything is left, when the operator shuts
-//!   down.
+//! - `diag.records`: `((worker, op), ())`, the updates in the chunks counted in the operator's
+//!   account: those its arrangement made, wherever they are now (its trace, its batcher, a merge in
+//!   progress, a batch a reader still holds).
+//! - `diag.bytes`: `((worker, op), ())`, the bytes of those chunks, by stored length.
 //!
 //! Strings (program, statement and operator names) are lists of their bytes. An operator outside
 //! any installed program (the server's own control dataflow, a peek) belongs to `(server)`, and
-//! the diagnostics program and sources to `diag`.
+//! the diagnostics program and sources to `diag`. Each worker's unattributed account is described
+//! as an operator of program `(unattributed)` with no address. It holds chunks made while no
+//! operator's account was current, and those still alive once the operator that made them has
+//! shut down: what they hold moves there when it does, and their drops are counted there.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -27,16 +32,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use corgi::{Shape, Value as CValue};
-use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
 use timely::worker::Worker;
 
 use crate::backend::LabelEventBuilder;
+use crate::runtime::account::{self, ChunkEvent, ChunkEventBuilder, UNATTRIBUTED};
 use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
 /// The diagnostics sources, by the name a program imports.
-pub(crate) const SOURCES: [&str; 4] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records"];
+pub(crate) const SOURCES: [&str; 5] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records", "diag.bytes"];
 
 /// Whether `name` is a diagnostics source.
 pub(crate) fn is_source(name: &str) -> bool {
@@ -52,7 +57,7 @@ pub(crate) fn shape(name: &str) -> Option<(Shape, Shape)> {
     let worker_op = Shape::Prod(vec![Shape::Int, Shape::Int]);
     match name {
         "diag.operator" => Some((worker_op, Shape::Prod(vec![text(), text(), text(), Shape::List(Box::new(Shape::Int))]))),
-        "diag.time" | "diag.records" => Some((worker_op, Shape::Unit)),
+        "diag.time" | "diag.records" | "diag.bytes" => Some((worker_op, Shape::Unit)),
         "diag.time_retired" => Some((Shape::Prod(vec![Shape::Int, text(), text(), text()]), Shape::Unit)),
         _ => None,
     }
@@ -72,8 +77,10 @@ struct Op {
     addr: Vec<usize>,
     /// Nanoseconds scheduled so far, net of nested operators: what `diag.time` holds for it.
     time: i64,
-    /// Updates its arrangement holds: what `diag.records` holds for it.
+    /// Updates in the chunks counted in its account: what `diag.records` holds for it.
     records: i64,
+    /// The bytes of those chunks: what `diag.bytes` holds for it.
+    bytes: i64,
 }
 
 /// One worker's diagnostics: events not yet processed, the live operators, and the changes not
@@ -82,7 +89,7 @@ struct Op {
 pub struct Diagnostics {
     worker: usize,
     timely: Vec<(Duration, TimelyEvent)>,
-    differential: Vec<DifferentialEvent>,
+    chunks: Vec<ChunkEvent>,
     /// Operator id -> the statement that built it, from `"ddir/labels"`, until its operator's
     /// creation is processed; the first label wins, which is the most specific.
     labels: HashMap<usize, String>,
@@ -97,9 +104,9 @@ pub struct Diagnostics {
     retired: HashMap<(String, String, String), i64>,
     /// Changes since the last feed, per source.
     pending: Pending,
-    /// How often a dropped operator still held records when it shut down, which DD's drop
-    /// events should have retracted.
-    pub unbalanced_records: usize,
+    /// How often an operator shut down while chunks counted in its account were still alive, whose
+    /// holdings then moved to the unattributed account.
+    pub outlived: usize,
 }
 
 #[derive(Default)]
@@ -111,6 +118,7 @@ struct Pending {
     time: HashMap<usize, i64>,
     retired: HashMap<(String, String, String), i64>,
     records: HashMap<usize, i64>,
+    bytes: HashMap<usize, i64>,
 }
 
 /// Register this worker's loggers, which feed a fresh [`Diagnostics`]. Call before the worker
@@ -130,16 +138,10 @@ pub fn register(worker: &mut Worker) -> Rc<RefCell<Diagnostics>> {
             }
         }
     });
-    let arrange_sink = Rc::clone(&diag);
-    registry.insert::<DifferentialEventBuilder, _>("differential/arrange", move |_time, data| {
+    let chunk_sink = Rc::clone(&diag);
+    registry.insert::<ChunkEventBuilder, _>(account::STREAM, move |_time, data| {
         if let Some(events) = data {
-            let mut state = arrange_sink.borrow_mut();
-            for (_, event) in events.drain(..) {
-                match event {
-                    DifferentialEvent::Batch(_) | DifferentialEvent::Merge(_) | DifferentialEvent::Drop(_) => state.differential.push(event),
-                    _ => {}
-                }
-            }
+            chunk_sink.borrow_mut().chunks.extend(events.drain(..).map(|(_, event)| event));
         }
     });
     let label_sink = Rc::clone(&diag);
@@ -153,6 +155,14 @@ pub fn register(worker: &mut Worker) -> Rc<RefCell<Diagnostics>> {
             }
         }
     });
+    drop(registry);
+    account::start(worker);
+    {
+        let mut state = diag.borrow_mut();
+        let unattributed = Op { program: "(unattributed)".to_string(), statement: String::new(), name: "chunks".to_string(), addr: Vec::new(), time: 0, records: 0, bytes: 0 };
+        state.ops.insert(UNATTRIBUTED, unattributed);
+        state.pending.operator.push((UNATTRIBUTED, 1));
+    }
     diag
 }
 
@@ -180,7 +190,7 @@ impl Diagnostics {
                 TimelyEvent::Operates(e) => {
                     let program = e.addr.first().and_then(|d| self.dataflows.get(d)).cloned().unwrap_or_else(|| "(server)".to_string());
                     created.push(e.id);
-                    self.ops.insert(e.id, Op { program, statement: String::new(), name: e.name, addr: e.addr, time: 0, records: 0 });
+                    self.ops.insert(e.id, Op { program, statement: String::new(), name: e.name, addr: e.addr, time: 0, records: 0, bytes: 0 });
                 }
                 TimelyEvent::Schedule(e) => match e.start_stop {
                     StartStop::Start => { self.starts.insert(e.id, time); }
@@ -222,20 +232,15 @@ impl Diagnostics {
                 *self.pending.time.entry(id).or_default() += nanos;
             }
         }
-        for event in std::mem::take(&mut self.differential) {
-            let (op, diff) = match event {
-                DifferentialEvent::Batch(e) => (e.operator, e.length as i64),
-                DifferentialEvent::Merge(e) => match e.complete {
-                    Some(complete) => (e.operator, complete as i64 - (e.length1 + e.length2) as i64),
-                    None => continue,
-                },
-                DifferentialEvent::Drop(e) => (e.operator, -(e.length as i64)),
-                _ => continue,
-            };
-            if diff == 0 { continue; }
+        for ChunkEvent { operator, updates, bytes } in std::mem::take(&mut self.chunks) {
+            // An operator that has shut down has handed what its chunks hold to the unattributed
+            // account, which counts their drops.
+            let op = if self.ops.contains_key(&operator) { operator } else { UNATTRIBUTED };
             if let Some(entry) = self.ops.get_mut(&op) {
-                entry.records += diff;
-                *self.pending.records.entry(op).or_default() += diff;
+                entry.records += updates;
+                entry.bytes += bytes;
+                *self.pending.records.entry(op).or_default() += updates;
+                *self.pending.bytes.entry(op).or_default() += bytes;
             }
         }
         for &id in &created {
@@ -259,9 +264,18 @@ impl Diagnostics {
                 *self.retired.entry(key.clone()).or_default() += op.time;
                 *self.pending.retired.entry(key).or_default() += op.time;
             }
-            if op.records != 0 {
-                self.unbalanced_records += 1;
+            if op.records != 0 || op.bytes != 0 {
+                // Chunks it made outlive it, as a reader still holds them: what they hold moves
+                // to the unattributed account.
+                self.outlived += 1;
                 *self.pending.records.entry(id).or_default() -= op.records;
+                *self.pending.bytes.entry(id).or_default() -= op.bytes;
+                if let Some(unattributed) = self.ops.get_mut(&UNATTRIBUTED) {
+                    unattributed.records += op.records;
+                    unattributed.bytes += op.bytes;
+                    *self.pending.records.entry(UNATTRIBUTED).or_default() += op.records;
+                    *self.pending.bytes.entry(UNATTRIBUTED).or_default() += op.bytes;
+                }
             }
             self.pending.operator.push((id, -1));
             self.pending.gone.insert(id, (op.program, op.statement, op.name, op.addr));
@@ -289,6 +303,7 @@ impl Diagnostics {
             }
             "diag.time" => keyed_rows(worker, std::mem::take(&mut self.pending.time)),
             "diag.records" => keyed_rows(worker, std::mem::take(&mut self.pending.records)),
+            "diag.bytes" => keyed_rows(worker, std::mem::take(&mut self.pending.bytes)),
             "diag.time_retired" => retired_rows(worker, std::mem::take(&mut self.pending.retired)),
             _ => None,
         }
@@ -303,6 +318,7 @@ impl Diagnostics {
                 .collect()),
             "diag.time" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.time)).collect()),
             "diag.records" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.records)).collect()),
+            "diag.bytes" => keyed_rows(worker, self.ops.iter().map(|(id, op)| (*id, op.bytes)).collect()),
             "diag.time_retired" => retired_rows(worker, self.retired.clone()),
             _ => None,
         }
@@ -319,12 +335,17 @@ impl Diagnostics {
         (self.ops.len(), self.retired.len())
     }
 
-    /// The updates each program's live arrangements hold on this worker, as the feeder counts
-    /// them: what `diag.records` holds, by program, including the diagnostics program's own.
-    pub fn records_by_program(&self) -> HashMap<String, i64> {
-        let mut out = HashMap::new();
+    /// The updates and bytes each program's chunks hold on this worker, as the feeder counts them:
+    /// what `diag.records` and `diag.bytes` hold, by program, including the diagnostics program's
+    /// own and `(unattributed)`.
+    pub fn held_by_program(&self) -> HashMap<String, (i64, i64)> {
+        let mut out: HashMap<String, (i64, i64)> = HashMap::new();
         for op in self.ops.values() {
-            if op.records != 0 { *out.entry(op.program.clone()).or_default() += op.records; }
+            if op.records != 0 || op.bytes != 0 {
+                let held = out.entry(op.program.clone()).or_default();
+                held.0 += op.records;
+                held.1 += op.bytes;
+            }
         }
         out
     }
