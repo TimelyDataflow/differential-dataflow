@@ -1,6 +1,6 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
-let store = import "store" : ((int), (int, int));
+let store = import "store::store" : ((int), (int, int));
 let intents = input 0 : ((int, int, int), (int));
 let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
 let wid_idx = wid | arrange;

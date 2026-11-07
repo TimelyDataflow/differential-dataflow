@@ -3,7 +3,7 @@
 @@ -1,2 +1,8 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
- let rows = import "rows" : (int, int);
+ let rows = import "rows::rows" : (int, int);
 -output "out" = rows | lift | half_join(rows, 1, (k, v, _) -> (k, v));
 +let out_rows = rows | lift;
 +let rows_idx = rows | arrange;

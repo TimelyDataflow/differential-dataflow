@@ -18,7 +18,8 @@ struct Case {
     name: &'static str,
     input: &'static str,
     providers: &'static [&'static str],
-    request: Option<&'static str>,
+    /// The program name a provider is installed under: its outputs are published as `<instance>::<output>`.
+    instance: &'static str,
     explain: bool,
     problem: Option<&'static str>,
     functions: &'static str,
@@ -27,12 +28,12 @@ struct Case {
 
 impl Case {
     const fn new(name: &'static str, input: &'static str, providers: &'static [&'static str]) -> Self {
-        Self { name, input, providers, request: None, explain: false, problem: None, functions: "none", parsed_distinct: false }
+        Self { name, input, providers, instance: name, explain: false, problem: None, functions: "none", parsed_distinct: false }
     }
     // Parsed output expands distinct before shapes are known; lowering the original
     // can instead use the unit-valued fast path. Their collection graphs differ.
     const fn parsed_distinct(mut self) -> Self { self.parsed_distinct = true; self }
-    const fn request(mut self, name: &'static str) -> Self { self.request = Some(name); self }
+    const fn instance(mut self, instance: &'static str) -> Self { self.instance = instance; self }
     const fn explain(mut self) -> Self { self.explain = true; self }
     const fn problem(mut self, problem: &'static str) -> Self { self.problem = Some(problem); self }
     const fn functions(mut self, functions: &'static str) -> Self { self.functions = functions; self }
@@ -299,13 +300,7 @@ fn reviewed_plan_pairs() {
             assert_eq!(case.functions, "plan_pair_identity(int) -> int; pure identity");
             interactive::lambda::register(std::sync::Arc::new(Identity(corgi::Shape::Prod(vec![corgi::Shape::Int]))));
         }
-        let mut text = fs::read_to_string(root.join(case.input)).unwrap();
-        if let Some(name) = case.request {
-            let original = format!("output \"{name}.answer\"");
-            assert_eq!(text.matches(&original).count(), 1, "{}: request export changed", case.name);
-            // The replacement in interactive_v2/systems.py, with request id fixed to 1.
-            text = text.replace(&original, &format!("output \"{name}x1.answer\""));
-        }
+        let text = fs::read_to_string(root.join(case.input)).unwrap();
         let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
         let report = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
@@ -320,7 +315,7 @@ fn reviewed_plan_pairs() {
         assert!(case.problem.is_some() || report.compare_final(&repeated).is_empty(), "{}: planning changed on repetition", case.name);
         let out = emitted(case, &report, &source);
         assert_eq!(out, emitted(case, &repeated, &source), "{}: emitted bytes changed on repetition", case.name);
-        providers.insert(case.name, report.exports);
+        providers.insert(case.name, report.exports.into_iter().map(|(name, shape)| (interactive::server::output_name(case.instance, &name), shape)).collect());
         outputs.extend(out.into_iter().map(|(name, text)| (pairs.join("expected").join(name), text)));
     }
     // Check all cases before accepting any expected output.
@@ -376,10 +371,7 @@ fn all_pass_subsets() {
             if case.functions != "none" {
                 interactive::lambda::register(std::sync::Arc::new(Identity(corgi::Shape::Prod(vec![corgi::Shape::Int]))));
             }
-            let mut text = fs::read_to_string(root.join(case.input)).unwrap();
-            if let Some(name) = case.request {
-                text = text.replace(&format!("output \"{name}.answer\""), &format!("output \"{name}x1.answer\""));
-            }
+            let text = fs::read_to_string(root.join(case.input)).unwrap();
             let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
             let report = if case.explain {
                 let p = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));

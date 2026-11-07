@@ -5,11 +5,11 @@
 -- each message's date in the message arrangement.
 
 let request  = input 0 : ((int, int, List(int)), ());        -- (rid, date, class name)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let tag      = import "ldbc.tag"           : (int, (List(int), int));        -- (id, (name, class))
-let tagged   = import "ldbc.mtag.by_tag"   : (int, int);                     -- (tag, message)
-let class_id = import "ldbc.tagclass.by_name" : (List(int), int);            -- (name, id)
+let tag      = import "graph::tag"           : (int, (List(int), int));        -- (id, (name, class))
+let tagged   = import "graph::mtag.by_tag"   : (int, int);                     -- (tag, message)
+let class_id = import "graph::tagclass.by_name" : (List(int), int);            -- (name, id)
 
 -- ((class, day), (tag name, created)) for every tagged message, and each class's days.
 let byday   = tag | join(tagged, (_, (name, cls), m) -> (m, (cls, name)))
@@ -36,4 +36,4 @@ let ranked  = counts | map(((rid, name), (a, b)) -> (rid, ((((a, b) sub, 0) lt, 
                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, name), (a, b, diff)))) -> ((rid, rank), (name, a, b, diff)));
 
-output "bi2.answer" = answer | arrange;
+output "answer" = answer | arrange;

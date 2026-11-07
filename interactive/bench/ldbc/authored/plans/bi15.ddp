@@ -4,10 +4,10 @@
 -- computed when the search reaches it.
 
 let request = input 0 : ((int, int, int, int, int), ());     -- (rid, from, to, start, end)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let root    = import "ldbc.message.root" : (int, int);              -- (message, root post of its thread)
-let forum   = import "ldbc.forum" : (int, (List(int), int, int));
-let friend  = import "ldbc.friend" : (int, (int, int));             -- (person, (friend, since))
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = import "graph::message.root" : (int, int);              -- (message, root post of its thread)
+let forum   = import "graph::forum" : (int, (List(int), int, int));
+let friend  = import "graph::friend" : (int, (int, int));             -- (person, (friend, since))
 
 -- Every reply between two people, scored (2 to a post, 1 to a comment) and dated by its
 -- thread's forum (the root post's): ((a, b), (forum created, score)), in both directions.
@@ -66,4 +66,4 @@ let asked  = request | map(((rid, _, _, _, _), ()) -> (rid, ()));
 let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
 let answer = (best | map((rid, c) -> ((rid, 0), (c)))) + (never | map((rid, ()) -> ((rid, 0), (-1 to_float))));
 
-output "bi15.answer" = answer | arrange;
+output "answer" = answer | arrange;

@@ -1,13 +1,13 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, List(int)), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "ldbc.friend" : (int, (int, int));
-let tag = import "ldbc.tag" : (int, (List(int), int));
-let by_name = import "ldbc.tag.by_name" : (List(int), int);
-let tagged = import "ldbc.mtag.by_tag" : (int, int);
-let tags_of = import "ldbc.mtag.by_message" : (int, int);
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = import "graph::friend" : (int, (int, int));
+let tag = import "graph::tag" : (int, (List(int), int));
+let by_name = import "graph::tag.by_name" : (List(int), int);
+let tagged = import "graph::mtag.by_tag" : (int, int);
+let tags_of = import "graph::mtag.by_message" : (int, int);
 let hop1_map = request | map(((rid, who, _), ()) -> (who, (rid, who)));
 let hop1_idx = hop1_map | arrange;
 let person_idx = person | arrange;
@@ -49,4 +49,4 @@ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) 
 let answer = ranked | map((rid, (rank, (neg, other))) -> ((rid, rank), (other, neg neg)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-output "ic6x1.answer" = answer_idx;
+output "answer" = answer_idx;

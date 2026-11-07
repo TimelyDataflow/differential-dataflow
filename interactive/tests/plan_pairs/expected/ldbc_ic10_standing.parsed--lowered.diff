@@ -3,12 +3,12 @@
 @@ -1,12 +1,24 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
- let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let friend = import "ldbc.friend" : (int, (int, int));
- let place = import "ldbc.place" : (int, (List(int), List(int), int));
- let tags_of = import "ldbc.mtag.by_message" : (int, int);
- let interest = import "ldbc.interest.by_person" : (int, int);
+ let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "graph::friend" : (int, (int, int));
+ let place = import "graph::place" : (int, (List(int), List(int), int));
+ let tags_of = import "graph::mtag.by_message" : (int, int);
+ let interest = import "graph::interest.by_person" : (int, int);
 -let people = person | map((id, (first, last, gender, _, _, _, _, home, bmonth, bday, _)) -> (home, (id, first, last, gender, bmonth, bday))) | join(place, (_, (id, first, last, gender, bmonth, bday), (town, _, _)) -> (id, (first, last, gender, town, bmonth, bday)));
 -let posts = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((id, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, id));
 +let people_map = person | map((id, (first, last, gender, _, _, _, _, home, bmonth, bday, _)) -> (home, (id, first, last, gender, bmonth, bday)));
@@ -18,15 +18,15 @@
 +let posts_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq);
 +let posts = posts_filter | map((id, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, id));
  let likes = interest | map((p, t) -> ((p, t), ()));
--output "ic10.s.people" = people | arrange;
--output "ic10.s.posts" = posts | arrange;
--output "ic10.s.likes" = likes | arrange;
+-output "people" = people | arrange;
+-output "posts" = posts | arrange;
+-output "likes" = likes | arrange;
 +let people_idx2 = people | arrange;
 +let posts_idx = posts | arrange;
 +let likes_idx = likes | arrange;
 +-- Renderer: publish the existing arrangement.
-+output "ic10.s.people" = people_idx2;
++output "people" = people_idx2;
 +-- Renderer: publish the existing arrangement.
-+output "ic10.s.posts" = posts_idx;
++output "posts" = posts_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ic10.s.likes" = likes_idx;
++output "likes" = likes_idx;

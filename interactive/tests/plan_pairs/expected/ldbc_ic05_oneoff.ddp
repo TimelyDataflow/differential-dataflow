@@ -1,13 +1,13 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let friend = import "ldbc.friend" : (int, (int, int));
-let forum = import "ldbc.forum" : (int, (List(int), int, int));
-let member = import "ldbc.member.by_person" : (int, (int, int));
-let posted = import "ic5.s.posted" : ((int, int), int);
-let first = import "ic5.s.first" : (int, int);
-let lowest = import "ic5.s.lowest" : (int, int);
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend = import "graph::friend" : (int, (int, int));
+let forum = import "graph::forum" : (int, (List(int), int, int));
+let member = import "graph::member.by_person" : (int, (int, int));
+let posted = import "ic5s::posted" : ((int, int), int);
+let first = import "ic5s::first" : (int, int);
+let lowest = import "ic5s::lowest" : (int, int);
 let hop1_map = request | map(((rid, who, date), ()) -> (who, (rid, who, date)));
 let hop1_idx = hop1_map | arrange;
 let person_idx = person | arrange;
@@ -60,4 +60,4 @@ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) 
 let answer = ranked | map((rid, (rank, ((neg, _), title))) -> ((rid, rank), (title, neg neg)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-output "ic5x1.answer" = answer_idx;
+output "answer" = answer_idx;

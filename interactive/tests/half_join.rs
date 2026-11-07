@@ -68,7 +68,7 @@ fn run(workers: usize) -> Vec<[Vec<(String, String, i64)>; 4]> {
                 }
             }
             server.tick(worker);
-            seen.push(["delta", "join", "reach_delta", "reach_join"].map(|name| server.snapshot(worker, name).unwrap().rows()));
+            seen.push(["delta", "join", "reach_delta", "reach_join"].map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()));
         }
         seen
     })

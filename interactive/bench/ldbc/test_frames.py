@@ -44,8 +44,8 @@ def main():
             server.commands([f'load feeds begin\n{program}\n{{rid}} end-load',
                              (f'feed feeds 0 frame {len(frame)}', frame),
                              f'feed feeds 1 begin\n{body}\n{{rid}} end-feed', 'tick'])
-            _, (framed,) = server.commands(['peek framed as corgi'])
-            _, (texted,) = server.commands(['peek texted as corgi'])
+            _, (framed,) = server.commands(['peek feeds::framed as corgi'])
+            _, (texted,) = server.commands(['peek feeds::texted as corgi'])
             def key(row):
                 text = list(row[1].encode()) if isinstance(row[1], str) else row[1]
                 return [row[0], text, row[2], row[3]]
@@ -60,7 +60,7 @@ def main():
             except RuntimeError as error:
                 assert 'shape' in str(error), error
             server.commands(['tick'])
-            _, (again,) = server.commands(['peek framed as corgi'])
+            _, (again,) = server.commands(['peek feeds::framed as corgi'])
             assert decode(again) == want
     print(f'OK ({args.workers} workers)')
 

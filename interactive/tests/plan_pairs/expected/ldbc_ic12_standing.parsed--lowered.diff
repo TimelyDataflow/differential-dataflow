@@ -3,11 +3,11 @@
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
- let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let friend = import "ldbc.friend" : (int, (int, int));
+ let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "graph::friend" : (int, (int, int));
 @@ -8,10 +10,25 @@
- let mtag = import "ldbc.mtag.by_tag" : (int, int);
+ let mtag = import "graph::mtag.by_tag" : (int, int);
  let selves = tagclass | map((id, _) -> ((id, id), ()));
  below: {
 -    let step = below | map(((low, high), ()) -> (high, low)) | join(tagclass, (_, low, (_, parent)) -> (low, parent)) | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));
@@ -27,13 +27,13 @@
  }
  let below_hl = below::below | map(((low, high), ()) -> (high, low));
 -let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
--output "ic12.s.below_hl" = below_hl | arrange;
--output "ic12.s.reply" = reply | arrange;
+-output "below_hl" = below_hl | arrange;
+-output "reply" = reply | arrange;
 +let reply_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);
 +let reply = reply_filter | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
 +let below_hl_idx = below_hl | arrange;
 +let reply_idx = reply | arrange;
 +-- Renderer: publish the existing arrangement.
-+output "ic12.s.below_hl" = below_hl_idx;
++output "below_hl" = below_hl_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ic12.s.reply" = reply_idx;
++output "reply" = reply_idx;

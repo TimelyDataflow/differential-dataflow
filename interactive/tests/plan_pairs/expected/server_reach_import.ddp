@@ -1,6 +1,6 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
-let edges = import "edges" : ((int), (int));
+let edges = import "prod::edges" : ((int), (int));
 let roots = input 0 : ((int), ());
 reach: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.

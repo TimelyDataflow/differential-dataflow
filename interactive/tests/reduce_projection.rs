@@ -34,14 +34,14 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
         ].into_iter().enumerate() {
             for name in ["before", "after"] { server.feed(name, 0, rows, None).unwrap(); }
             server.tick(worker);
-            let after = server.snapshot(worker, "after").unwrap();
-            assert_eq!(server.snapshot(worker, "before").unwrap().rows(), after.rows());
+            let after = server.snapshot(worker, "after::after").unwrap();
+            assert_eq!(server.snapshot(worker, "before::before").unwrap().rows(), after.rows());
             if tick < 3 {
                 // This export directly reads the reduce's output arrangement.
                 assert_eq!(corgi::shape_of_value(&after.vals), Shape::Prod(vec![Shape::Unit, Shape::Int]));
                 assert_eq!(after.rows(), vec![("1".into(), format!("tuple(tuple(),{})", if tick < 2 { 7 } else { 8 }), 1)]);
             }
-            let changes = server.take_changes("after");
+            let changes = server.take_changes("after::after");
             let records: usize = changes.iter().map(|c| c.diffs.len()).sum();
             if tick == 1 { assert_eq!(records, 0, "no output update, even before consolidation"); }
             else { assert!(records > 0); }
@@ -77,7 +77,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
         for rows in ["1,10,7\n1,20,7 diff=-2", "1,10,7 diff=-1\n1,20,7 diff=2"] {
             for name in ["before", "after"] { server.feed(name, 0, rows, None).unwrap(); }
             server.tick(worker);
-            assert_eq!(server.snapshot(worker, "before").unwrap().rows(), server.snapshot(worker, "after").unwrap().rows());
+            assert_eq!(server.snapshot(worker, "before::before").unwrap().rows(), server.snapshot(worker, "after::after").unwrap().rows());
         }
     });
 }

@@ -3,61 +3,61 @@
 @@ -1,64 +1,198 @@
 +-- Time lanes: epoch.
  let person = input 0 : ((int, List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int), ());
--output "ldbc.person" = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth))) | arrange;
--output "ldbc.person.by_city" = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (city, id)) | arrange;
+-output "person" = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth))) | arrange;
+-output "person.by_city" = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (city, id)) | arrange;
  let message = input 1 : ((int, int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int), ());
--output "ldbc.message" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))) | arrange;
--output "ldbc.message.by_creator" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id)) | arrange;
--output "ldbc.message.by_parent" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id)) | arrange;
--output "ldbc.message.by_forum" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id)) | arrange;
+-output "message" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))) | arrange;
+-output "message.by_creator" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id)) | arrange;
+-output "message.by_parent" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id)) | arrange;
+-output "message.by_forum" = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id)) | arrange;
  let forum = input 2 : ((int, List(int), int, int), ());
--output "ldbc.forum" = forum | map(((id, title, created, moderator), ()) -> (id, (title, created, moderator))) | arrange;
--output "ldbc.forum.by_moderator" = forum | map(((id, title, created, moderator), ()) -> (moderator, id)) | arrange;
+-output "forum" = forum | map(((id, title, created, moderator), ()) -> (id, (title, created, moderator))) | arrange;
+-output "forum.by_moderator" = forum | map(((id, title, created, moderator), ()) -> (moderator, id)) | arrange;
  let knows = input 3 : ((int, int, int), ());
--output "ldbc.knows.by_src" = knows | map(((src, dst, created), ()) -> (src, (dst, created))) | arrange;
+-output "knows.by_src" = knows | map(((src, dst, created), ()) -> (src, (dst, created))) | arrange;
  let member = input 4 : ((int, int, int), ());
--output "ldbc.member.by_forum" = member | map(((forum, person, created), ()) -> (forum, (person, created))) | arrange;
--output "ldbc.member.by_person" = member | map(((forum, person, created), ()) -> (person, (forum, created))) | arrange;
+-output "member.by_forum" = member | map(((forum, person, created), ()) -> (forum, (person, created))) | arrange;
+-output "member.by_person" = member | map(((forum, person, created), ()) -> (person, (forum, created))) | arrange;
  let tag = input 5 : ((int, List(int), int), ());
--output "ldbc.tag" = tag | map(((id, name, class), ()) -> (id, (name, class))) | arrange;
--output "ldbc.tag.by_name" = tag | map(((id, name, class), ()) -> (name, id)) | arrange;
--output "ldbc.tag.by_class" = tag | map(((id, name, class), ()) -> (class, id)) | arrange;
+-output "tag" = tag | map(((id, name, class), ()) -> (id, (name, class))) | arrange;
+-output "tag.by_name" = tag | map(((id, name, class), ()) -> (name, id)) | arrange;
+-output "tag.by_class" = tag | map(((id, name, class), ()) -> (class, id)) | arrange;
  let tagclass = input 6 : ((int, List(int), int), ());
--output "ldbc.tagclass" = tagclass | map(((id, name, parent), ()) -> (id, (name, parent))) | arrange;
--output "ldbc.tagclass.by_name" = tagclass | map(((id, name, parent), ()) -> (name, id)) | arrange;
--output "ldbc.tagclass.by_parent" = tagclass | map(((id, name, parent), ()) -> (parent, id)) | arrange;
+-output "tagclass" = tagclass | map(((id, name, parent), ()) -> (id, (name, parent))) | arrange;
+-output "tagclass.by_name" = tagclass | map(((id, name, parent), ()) -> (name, id)) | arrange;
+-output "tagclass.by_parent" = tagclass | map(((id, name, parent), ()) -> (parent, id)) | arrange;
  let place = input 7 : ((int, List(int), List(int), int), ());
--output "ldbc.place" = place | map(((id, name, typ, parent), ()) -> (id, (name, typ, parent))) | arrange;
--output "ldbc.place.by_name" = place | map(((id, name, typ, parent), ()) -> (name, id)) | arrange;
--output "ldbc.place.by_parent" = place | map(((id, name, typ, parent), ()) -> (parent, id)) | arrange;
+-output "place" = place | map(((id, name, typ, parent), ()) -> (id, (name, typ, parent))) | arrange;
+-output "place.by_name" = place | map(((id, name, typ, parent), ()) -> (name, id)) | arrange;
+-output "place.by_parent" = place | map(((id, name, typ, parent), ()) -> (parent, id)) | arrange;
  let org = input 8 : ((int, List(int), List(int), int), ());
--output "ldbc.org" = org | map(((id, name, typ, place), ()) -> (id, (name, typ, place))) | arrange;
--output "ldbc.org.by_name" = org | map(((id, name, typ, place), ()) -> (name, id)) | arrange;
+-output "org" = org | map(((id, name, typ, place), ()) -> (id, (name, typ, place))) | arrange;
+-output "org.by_name" = org | map(((id, name, typ, place), ()) -> (name, id)) | arrange;
  let interest = input 9 : ((int, int), ());
--output "ldbc.interest.by_person" = interest | map(((person, tag), ()) -> (person, tag)) | arrange;
--output "ldbc.interest.by_tag" = interest | map(((person, tag), ()) -> (tag, person)) | arrange;
+-output "interest.by_person" = interest | map(((person, tag), ()) -> (person, tag)) | arrange;
+-output "interest.by_tag" = interest | map(((person, tag), ()) -> (tag, person)) | arrange;
  let mtag = input 10 : ((int, int), ());
--output "ldbc.mtag.by_message" = mtag | map(((message, tag), ()) -> (message, tag)) | arrange;
--output "ldbc.mtag.by_tag" = mtag | map(((message, tag), ()) -> (tag, message)) | arrange;
+-output "mtag.by_message" = mtag | map(((message, tag), ()) -> (message, tag)) | arrange;
+-output "mtag.by_tag" = mtag | map(((message, tag), ()) -> (tag, message)) | arrange;
  let ftag = input 11 : ((int, int), ());
--output "ldbc.ftag.by_forum" = ftag | map(((forum, tag), ()) -> (forum, tag)) | arrange;
+-output "ftag.by_forum" = ftag | map(((forum, tag), ()) -> (forum, tag)) | arrange;
  let likes = input 12 : ((int, int, int), ());
--output "ldbc.likes.by_person" = likes | map(((person, message, created), ()) -> (person, (message, created))) | arrange;
--output "ldbc.likes.by_message" = likes | map(((person, message, created), ()) -> (message, (person, created))) | arrange;
+-output "likes.by_person" = likes | map(((person, message, created), ()) -> (person, (message, created))) | arrange;
+-output "likes.by_message" = likes | map(((person, message, created), ()) -> (message, (person, created))) | arrange;
  let study = input 13 : ((int, int, int), ());
--output "ldbc.study.by_person" = study | map(((person, org, year), ()) -> (person, (org, year))) | arrange;
+-output "study.by_person" = study | map(((person, org, year), ()) -> (person, (org, year))) | arrange;
  let work = input 14 : ((int, int, int), ());
--output "ldbc.work.by_person" = work | map(((person, org, year), ()) -> (person, (org, year))) | arrange;
--output "ldbc.work.by_org" = work | map(((person, org, year), ()) -> (org, (person, year))) | arrange;
+-output "work.by_person" = work | map(((person, org, year), ()) -> (person, (org, year))) | arrange;
+-output "work.by_org" = work | map(((person, org, year), ()) -> (org, (person, year))) | arrange;
  let email = input 15 : ((int, List(int)), ());
--output "ldbc.email.by_person" = email | map(((person, value), ()) -> (person, value)) | arrange;
+-output "email.by_person" = email | map(((person, value), ()) -> (person, value)) | arrange;
  let language = input 16 : ((int, List(int)), ());
--output "ldbc.language.by_person" = language | map(((person, value), ()) -> (person, value)) | arrange;
+-output "language.by_person" = language | map(((person, value), ()) -> (person, value)) | arrange;
 -let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 -let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
 -let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t))) | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
--output "ldbc.friend" = friends | arrange;
--output "ldbc.friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
+-output "friend" = friends | arrange;
+-output "friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
 -let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 -let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
 +let exists_map = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ()));
@@ -91,156 +91,156 @@
 +    let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set thread = thread_reduce;
  }
--output "ldbc.message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
--output "ldbc.message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;
-+let ldbc_person_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
-+let ldbc_person_idx = ldbc_person_map | arrange;
-+let ldbc_person_by_city_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (city, id));
-+let ldbc_person_by_city_idx = ldbc_person_by_city_map | arrange;
-+let ldbc_message_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day)));
-+let ldbc_message_idx = ldbc_message_map | arrange;
-+let ldbc_message_by_creator_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
-+let ldbc_message_by_creator_idx = ldbc_message_by_creator_map | arrange;
-+let ldbc_message_by_parent_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
-+let ldbc_message_by_parent_idx = ldbc_message_by_parent_map | arrange;
-+let ldbc_message_by_forum_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
-+let ldbc_message_by_forum_idx = ldbc_message_by_forum_map | arrange;
-+let ldbc_forum_map = forum | map(((id, title, created, moderator), ()) -> (id, (title, created, moderator)));
-+let ldbc_forum_idx = ldbc_forum_map | arrange;
-+let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
-+let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
-+let ldbc_knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
-+let ldbc_knows_by_src_idx = ldbc_knows_by_src_map | arrange;
-+let ldbc_member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
-+let ldbc_member_by_forum_idx = ldbc_member_by_forum_map | arrange;
-+let ldbc_member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));
-+let ldbc_member_by_person_idx = ldbc_member_by_person_map | arrange;
-+let ldbc_tag_map = tag | map(((id, name, class), ()) -> (id, (name, class)));
-+let ldbc_tag_idx = ldbc_tag_map | arrange;
-+let ldbc_tag_by_name_map = tag | map(((id, name, class), ()) -> (name, id));
-+let ldbc_tag_by_name_idx = ldbc_tag_by_name_map | arrange;
-+let ldbc_tag_by_class_map = tag | map(((id, name, class), ()) -> (class, id));
-+let ldbc_tag_by_class_idx = ldbc_tag_by_class_map | arrange;
-+let ldbc_tagclass_map = tagclass | map(((id, name, parent), ()) -> (id, (name, parent)));
-+let ldbc_tagclass_idx = ldbc_tagclass_map | arrange;
-+let ldbc_tagclass_by_name_map = tagclass | map(((id, name, parent), ()) -> (name, id));
-+let ldbc_tagclass_by_name_idx = ldbc_tagclass_by_name_map | arrange;
-+let ldbc_tagclass_by_parent_map = tagclass | map(((id, name, parent), ()) -> (parent, id));
-+let ldbc_tagclass_by_parent_idx = ldbc_tagclass_by_parent_map | arrange;
-+let ldbc_place_map = place | map(((id, name, typ, parent), ()) -> (id, (name, typ, parent)));
-+let ldbc_place_idx = ldbc_place_map | arrange;
-+let ldbc_place_by_name_map = place | map(((id, name, typ, parent), ()) -> (name, id));
-+let ldbc_place_by_name_idx = ldbc_place_by_name_map | arrange;
-+let ldbc_place_by_parent_map = place | map(((id, name, typ, parent), ()) -> (parent, id));
-+let ldbc_place_by_parent_idx = ldbc_place_by_parent_map | arrange;
-+let ldbc_org_map = org | map(((id, name, typ, place), ()) -> (id, (name, typ, place)));
-+let ldbc_org_idx = ldbc_org_map | arrange;
-+let ldbc_org_by_name_map = org | map(((id, name, typ, place), ()) -> (name, id));
-+let ldbc_org_by_name_idx = ldbc_org_by_name_map | arrange;
-+let ldbc_interest_by_person_map = interest | map(((person, tag), ()) -> (person, tag));
-+let ldbc_interest_by_person_idx = ldbc_interest_by_person_map | arrange;
-+let ldbc_interest_by_tag_map = interest | map(((person, tag), ()) -> (tag, person));
-+let ldbc_interest_by_tag_idx = ldbc_interest_by_tag_map | arrange;
-+let ldbc_mtag_by_message_map = mtag | map(((message, tag), ()) -> (message, tag));
-+let ldbc_mtag_by_message_idx = ldbc_mtag_by_message_map | arrange;
-+let ldbc_mtag_by_tag_map = mtag | map(((message, tag), ()) -> (tag, message));
-+let ldbc_mtag_by_tag_idx = ldbc_mtag_by_tag_map | arrange;
-+let ldbc_ftag_by_forum_map = ftag | map(((forum, tag), ()) -> (forum, tag));
-+let ldbc_ftag_by_forum_idx = ldbc_ftag_by_forum_map | arrange;
-+let ldbc_likes_by_person_map = likes | map(((person, message, created), ()) -> (person, (message, created)));
-+let ldbc_likes_by_person_idx = ldbc_likes_by_person_map | arrange;
-+let ldbc_likes_by_message_map = likes | map(((person, message, created), ()) -> (message, (person, created)));
-+let ldbc_likes_by_message_idx = ldbc_likes_by_message_map | arrange;
-+let ldbc_study_by_person_map = study | map(((person, org, year), ()) -> (person, (org, year)));
-+let ldbc_study_by_person_idx = ldbc_study_by_person_map | arrange;
-+let ldbc_work_by_person_map = work | map(((person, org, year), ()) -> (person, (org, year)));
-+let ldbc_work_by_person_idx = ldbc_work_by_person_map | arrange;
-+let ldbc_work_by_org_map = work | map(((person, org, year), ()) -> (org, (person, year)));
-+let ldbc_work_by_org_idx = ldbc_work_by_org_map | arrange;
-+let ldbc_email_by_person_map = email | map(((person, value), ()) -> (person, value));
-+let ldbc_email_by_person_idx = ldbc_email_by_person_map | arrange;
-+let ldbc_language_by_person_map = language | map(((person, value), ()) -> (person, value));
-+let ldbc_language_by_person_idx = ldbc_language_by_person_map | arrange;
+-output "message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
+-output "message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;
++let person_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (id, (first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth)));
++let person_idx = person_map | arrange;
++let person_by_city_map = person | map(((id, first, last, gender, birthday, created, ip, browser, city, birthmonth, birthdaynum, creationmonth), ()) -> (city, id));
++let person_by_city_idx = person_by_city_map | arrange;
++let message_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day)));
++let message_idx = message_map | arrange;
++let message_by_creator_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
++let message_by_creator_idx = message_by_creator_map | arrange;
++let message_by_parent_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
++let message_by_parent_idx = message_by_parent_map | arrange;
++let message_by_forum_map = message | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
++let message_by_forum_idx = message_by_forum_map | arrange;
++let forum_map = forum | map(((id, title, created, moderator), ()) -> (id, (title, created, moderator)));
++let forum_idx = forum_map | arrange;
++let forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
++let forum_by_moderator_idx = forum_by_moderator_map | arrange;
++let knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
++let knows_by_src_idx = knows_by_src_map | arrange;
++let member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
++let member_by_forum_idx = member_by_forum_map | arrange;
++let member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));
++let member_by_person_idx = member_by_person_map | arrange;
++let tag_map = tag | map(((id, name, class), ()) -> (id, (name, class)));
++let tag_idx = tag_map | arrange;
++let tag_by_name_map = tag | map(((id, name, class), ()) -> (name, id));
++let tag_by_name_idx = tag_by_name_map | arrange;
++let tag_by_class_map = tag | map(((id, name, class), ()) -> (class, id));
++let tag_by_class_idx = tag_by_class_map | arrange;
++let tagclass_map = tagclass | map(((id, name, parent), ()) -> (id, (name, parent)));
++let tagclass_idx = tagclass_map | arrange;
++let tagclass_by_name_map = tagclass | map(((id, name, parent), ()) -> (name, id));
++let tagclass_by_name_idx = tagclass_by_name_map | arrange;
++let tagclass_by_parent_map = tagclass | map(((id, name, parent), ()) -> (parent, id));
++let tagclass_by_parent_idx = tagclass_by_parent_map | arrange;
++let place_map = place | map(((id, name, typ, parent), ()) -> (id, (name, typ, parent)));
++let place_idx = place_map | arrange;
++let place_by_name_map = place | map(((id, name, typ, parent), ()) -> (name, id));
++let place_by_name_idx = place_by_name_map | arrange;
++let place_by_parent_map = place | map(((id, name, typ, parent), ()) -> (parent, id));
++let place_by_parent_idx = place_by_parent_map | arrange;
++let org_map = org | map(((id, name, typ, place), ()) -> (id, (name, typ, place)));
++let org_idx = org_map | arrange;
++let org_by_name_map = org | map(((id, name, typ, place), ()) -> (name, id));
++let org_by_name_idx = org_by_name_map | arrange;
++let interest_by_person_map = interest | map(((person, tag), ()) -> (person, tag));
++let interest_by_person_idx = interest_by_person_map | arrange;
++let interest_by_tag_map = interest | map(((person, tag), ()) -> (tag, person));
++let interest_by_tag_idx = interest_by_tag_map | arrange;
++let mtag_by_message_map = mtag | map(((message, tag), ()) -> (message, tag));
++let mtag_by_message_idx = mtag_by_message_map | arrange;
++let mtag_by_tag_map = mtag | map(((message, tag), ()) -> (tag, message));
++let mtag_by_tag_idx = mtag_by_tag_map | arrange;
++let ftag_by_forum_map = ftag | map(((forum, tag), ()) -> (forum, tag));
++let ftag_by_forum_idx = ftag_by_forum_map | arrange;
++let likes_by_person_map = likes | map(((person, message, created), ()) -> (person, (message, created)));
++let likes_by_person_idx = likes_by_person_map | arrange;
++let likes_by_message_map = likes | map(((person, message, created), ()) -> (message, (person, created)));
++let likes_by_message_idx = likes_by_message_map | arrange;
++let study_by_person_map = study | map(((person, org, year), ()) -> (person, (org, year)));
++let study_by_person_idx = study_by_person_map | arrange;
++let work_by_person_map = work | map(((person, org, year), ()) -> (person, (org, year)));
++let work_by_person_idx = work_by_person_map | arrange;
++let work_by_org_map = work | map(((person, org, year), ()) -> (org, (person, year)));
++let work_by_org_idx = work_by_org_map | arrange;
++let email_by_person_map = email | map(((person, value), ()) -> (person, value));
++let email_by_person_idx = email_by_person_map | arrange;
++let language_by_person_map = language | map(((person, value), ()) -> (person, value));
++let language_by_person_idx = language_by_person_map | arrange;
 +let friends_idx3 = friends | arrange;
-+let ldbc_friend_pair_map = friends | map((a, (b, _)) -> ((a, b), ()));
-+let ldbc_friend_pair_idx = ldbc_friend_pair_map | arrange;
-+let ldbc_message_root_map = thread::thread | map(((mid, root), ()) -> (mid, root));
-+let ldbc_message_root_idx = ldbc_message_root_map | arrange;
-+let ldbc_message_by_root_map = thread::thread | map(((mid, root), ()) -> (root, mid));
-+let ldbc_message_by_root_idx = ldbc_message_by_root_map | arrange;
++let friend_pair_map = friends | map((a, (b, _)) -> ((a, b), ()));
++let friend_pair_idx = friend_pair_map | arrange;
++let message_root_map = thread::thread | map(((mid, root), ()) -> (mid, root));
++let message_root_idx = message_root_map | arrange;
++let message_by_root_map = thread::thread | map(((mid, root), ()) -> (root, mid));
++let message_by_root_idx = message_by_root_map | arrange;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.person" = ldbc_person_idx;
++output "person" = person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.person.by_city" = ldbc_person_by_city_idx;
++output "person.by_city" = person_by_city_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message" = ldbc_message_idx;
++output "message" = message_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message.by_creator" = ldbc_message_by_creator_idx;
++output "message.by_creator" = message_by_creator_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message.by_parent" = ldbc_message_by_parent_idx;
++output "message.by_parent" = message_by_parent_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message.by_forum" = ldbc_message_by_forum_idx;
++output "message.by_forum" = message_by_forum_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.forum" = ldbc_forum_idx;
++output "forum" = forum_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.forum.by_moderator" = ldbc_forum_by_moderator_idx;
++output "forum.by_moderator" = forum_by_moderator_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.knows.by_src" = ldbc_knows_by_src_idx;
++output "knows.by_src" = knows_by_src_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.member.by_forum" = ldbc_member_by_forum_idx;
++output "member.by_forum" = member_by_forum_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.member.by_person" = ldbc_member_by_person_idx;
++output "member.by_person" = member_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tag" = ldbc_tag_idx;
++output "tag" = tag_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tag.by_name" = ldbc_tag_by_name_idx;
++output "tag.by_name" = tag_by_name_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tag.by_class" = ldbc_tag_by_class_idx;
++output "tag.by_class" = tag_by_class_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tagclass" = ldbc_tagclass_idx;
++output "tagclass" = tagclass_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tagclass.by_name" = ldbc_tagclass_by_name_idx;
++output "tagclass.by_name" = tagclass_by_name_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.tagclass.by_parent" = ldbc_tagclass_by_parent_idx;
++output "tagclass.by_parent" = tagclass_by_parent_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.place" = ldbc_place_idx;
++output "place" = place_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.place.by_name" = ldbc_place_by_name_idx;
++output "place.by_name" = place_by_name_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.place.by_parent" = ldbc_place_by_parent_idx;
++output "place.by_parent" = place_by_parent_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.org" = ldbc_org_idx;
++output "org" = org_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.org.by_name" = ldbc_org_by_name_idx;
++output "org.by_name" = org_by_name_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.interest.by_person" = ldbc_interest_by_person_idx;
++output "interest.by_person" = interest_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.interest.by_tag" = ldbc_interest_by_tag_idx;
++output "interest.by_tag" = interest_by_tag_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.mtag.by_message" = ldbc_mtag_by_message_idx;
++output "mtag.by_message" = mtag_by_message_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.mtag.by_tag" = ldbc_mtag_by_tag_idx;
++output "mtag.by_tag" = mtag_by_tag_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.ftag.by_forum" = ldbc_ftag_by_forum_idx;
++output "ftag.by_forum" = ftag_by_forum_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.likes.by_person" = ldbc_likes_by_person_idx;
++output "likes.by_person" = likes_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.likes.by_message" = ldbc_likes_by_message_idx;
++output "likes.by_message" = likes_by_message_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.study.by_person" = ldbc_study_by_person_idx;
++output "study.by_person" = study_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.work.by_person" = ldbc_work_by_person_idx;
++output "work.by_person" = work_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.work.by_org" = ldbc_work_by_org_idx;
++output "work.by_org" = work_by_org_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.email.by_person" = ldbc_email_by_person_idx;
++output "email.by_person" = email_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.language.by_person" = ldbc_language_by_person_idx;
++output "language.by_person" = language_by_person_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.friend" = friends_idx3;
++output "friend" = friends_idx3;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.friend.pair" = ldbc_friend_pair_idx;
++output "friend.pair" = friend_pair_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message.root" = ldbc_message_root_idx;
++output "message.root" = message_root_idx;
 +-- Renderer: publish the existing arrangement.
-+output "ldbc.message.by_root" = ldbc_message_by_root_idx;
++output "message.by_root" = message_by_root_idx;

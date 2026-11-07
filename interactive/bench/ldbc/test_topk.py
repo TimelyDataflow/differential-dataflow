@@ -102,10 +102,10 @@ def check(server, output, workers):
             engine.commands([*commands, 'tick'])
             want = expected(state)
             for name in ('baseline', *VARIANTS):
-                frames, = engine.commands([f'peek {name} as corgi'])[1]
+                frames, = engine.commands([f'peek test::{name} as corgi'])[1]
                 checked(decode(frames), want, f'{workers} workers/{epoch}/{name}')
             for name, options in COMPILED.items():
-                frames, = engine.commands([f'peek compiled_{name} as corgi'])[1]
+                frames, = engine.commands([f'peek test::compiled_{name} as corgi'])[1]
                 checked(decode(frames), compiled_expected(state,*options),
                         f'{workers} workers/{epoch}/compiled_{name}')
     print(f'{workers} workers: collect, five lambda plans and six compiler cases match all five states', flush=True)

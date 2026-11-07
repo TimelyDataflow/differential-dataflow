@@ -25,8 +25,8 @@
 //!
 //! - **`Source::Trace(name)`** — `import` the registered trace into the new
 //!   dataflow, as the producer's arrangement or as a root collection.
-//! - **`Export(name, _)`** — arrange the exported collection and register its
-//!   trace under `name`, so a later install can import it.
+//! - **`Export(name, _)`** — arrange the output collection and register its
+//!   trace under `<program>::<name>` ([`output_name`]), so a later install can import it.
 //!
 //! # Lifecycle
 //!
@@ -95,6 +95,15 @@ pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
 use self::bind::Binding;
 use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
 pub use self::sources::generated_shape;
+
+/// The name an installed program's output is published under: `<program>::<output>`. Every
+/// program has its own namespace, so two programs may name their outputs alike, and one program
+/// text may be installed several times under different names. Generated sources (`clock`,
+/// recipes such as `random:...`, and the `diag.*` sources) belong to no program and keep their
+/// own names.
+pub fn output_name(program: &str, output: &str) -> String {
+    format!("{program}::{output}")
+}
 
 /// A published export as its readers see it: a trace of corgi chunks.
 /// Its declared root width is available from [`Server::trace_width`].

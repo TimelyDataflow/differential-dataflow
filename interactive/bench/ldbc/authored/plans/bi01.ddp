@@ -5,7 +5,7 @@
 -- every message, so this plan scans the message arrangement rather than looking up in it.
 
 let request = input 0 : ((int, int), ());                    -- (rid, end time in ms)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
 
 -- Length categories: under 40, under 80, under 160, longer.
@@ -47,4 +47,4 @@ let ranked = groups | map(((rid, year, kind, cat), (n, s)) -> (rid, (year, kind,
 let answer = ranked | map((rid, (rank, ((neg_year, kind, cat), (n, s, all)))) -> ((rid, rank),
                  (neg_year neg, kind, cat, n, (s to_float, n to_float) div, s, ((n, 100) mul to_float, all to_float) div)));
 
-output "bi1.answer" = answer | arrange;
+output "answer" = answer | arrange;

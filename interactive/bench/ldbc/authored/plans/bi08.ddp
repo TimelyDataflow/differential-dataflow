@@ -4,12 +4,12 @@
 -- the scored people's friends.
 
 let request  = input 0 : ((int, List(int), int, int), ());   -- (rid, tag name, start, end)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let friend   = import "ldbc.friend"       : (int, (int, int));         -- (person, (friend, since))
-let tag_id   = import "ldbc.tag.by_name"  : (List(int), int);          -- (name, id)
-let tagged   = import "ldbc.mtag.by_tag"  : (int, int);                -- (tag, message)
-let fans_of  = import "ldbc.interest.by_tag" : (int, int);             -- (tag, person)
+let friend   = import "graph::friend"       : (int, (int, int));         -- (person, (friend, since))
+let tag_id   = import "graph::tag.by_name"  : (List(int), int);          -- (name, id)
+let tagged   = import "graph::mtag.by_tag"  : (int, int);                -- (tag, message)
+let fans_of  = import "graph::interest.by_tag" : (int, int);             -- (tag, person)
 
 let tag_rid = request | map(((rid, name, _, _), ()) -> (name, rid)) | join(tag_id, (_, rid, t) -> (t, rid));
 let fans    = tag_rid | join(fans_of, (_, rid, who) -> ((rid, who), 100));
@@ -34,4 +34,4 @@ let ranked  = score | join(friends, ((rid, who), s, fs) -> (rid, (((s, fs) add n
                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, who), (s, fs)))) -> ((rid, rank), (who, s, fs)));
 
-output "bi8.answer" = answer | arrange;
+output "answer" = answer | arrange;

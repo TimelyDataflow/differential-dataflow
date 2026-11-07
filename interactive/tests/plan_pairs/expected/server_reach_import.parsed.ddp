@@ -1,4 +1,4 @@
-let edges = import "edges";
+let edges = import "prod::edges";
 let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

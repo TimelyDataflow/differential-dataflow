@@ -19,7 +19,7 @@ committed writes, which keep their transaction ids. After a tick seals the
 epoch's ids, everything else in the log (reads, rejected writes, superseded
 writes) is `log - store`, exported as `retire`, and
 
-    feed bank 0 from retire diff=-1
+    feed bank 0 from bank::retire diff=-1
 
 leaves the log equal to the store. A second tick applies the deletions. That
 tick is the cost of the design: every row of the batch goes into the

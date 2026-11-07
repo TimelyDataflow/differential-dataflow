@@ -1108,8 +1108,6 @@ mod tests {
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 0);
-        original.root.exports[0].name = "before.out".into();
-        projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();
@@ -1120,8 +1118,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().rows(),
-                server.snapshot(worker, "after.out").unwrap().rows()
+                server.snapshot(worker, "before::out").unwrap().rows(),
+                server.snapshot(worker, "after::out").unwrap().rows()
             );
         });
     }
@@ -1188,8 +1186,6 @@ mod tests {
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
-        original.root.exports[0].name = "before.out".into();
-        projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();
@@ -1200,8 +1196,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().rows(),
-                server.snapshot(worker, "after.out").unwrap().rows()
+                server.snapshot(worker, "before::out").unwrap().rows(),
+                server.snapshot(worker, "after::out").unwrap().rows()
             );
         });
     }

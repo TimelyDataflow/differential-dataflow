@@ -17,9 +17,9 @@ fn a_rejected_install_leaves_no_generated_sources() {
         let recipe = "random:nodes=8,edges=12";
         server.install(worker, "first", &program(r#"output "taken" = input 0 : ((int), ());"#)).unwrap();
 
-        // The recipe would be generated, but the export is taken.
+        // The recipe would be generated, but the program name is taken.
         let clash = program(&format!(r#"let e = import "{recipe}"; output "taken" = e;"#));
-        assert!(server.install(worker, "second", &clash).is_err());
+        assert!(server.install(worker, "first", &clash).is_err());
         assert!(server.snapshot(worker, recipe).is_err());
 
         // The recipe would be generated, but the other import is unknown.
@@ -82,8 +82,8 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
         server.tick(worker);
         for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", None).unwrap(); }
         server.tick(worker);
-        let original = server.snapshot(worker, "original").unwrap().rows();
+        let original = server.snapshot(worker, "original::original").unwrap().rows();
         assert_eq!(original, vec![("1".into(), "tuple(10,tuple(1))".into(), 1)]);
-        assert_eq!(server.snapshot(worker, "emitted").unwrap().rows(), original);
+        assert_eq!(server.snapshot(worker, "emitted::emitted").unwrap().rows(), original);
     });
 }

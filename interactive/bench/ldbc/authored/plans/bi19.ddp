@@ -2,10 +2,10 @@
 -- city 2: every (person1, person2) pair at the least cost, ordered by the pair.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, city 1, city 2)
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let pals    = import "ldbc.friend.pair" : ((int, int), ());        -- ((person, friend), ())
-let person_by_city = import "ldbc.person.by_city" : (int, int);     -- (city, person)
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals    = import "graph::friend.pair" : ((int, int), ());        -- ((person, friend), ())
+let person_by_city = import "graph::person.by_city" : (int, int);     -- (city, person)
 
 -- Interaction weights between friends: replies in either direction are counted per
 -- pair (n), and a friendship costs max(round(40 - sqrt(n)), 1), computed exactly as
@@ -41,4 +41,4 @@ let ranked = ends | join(best, (rid, (source, node, cost), least) -> (rid, (sour
                   | collect | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((source, node), cost))) -> ((rid, rank), (source, node, cost)));
 
-output "bi19.answer" = answer | arrange;
+output "answer" = answer | arrange;

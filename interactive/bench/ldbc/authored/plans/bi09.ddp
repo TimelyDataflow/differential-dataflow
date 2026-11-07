@@ -7,12 +7,12 @@
 -- (no published index is keyed by day).
 
 let request = input 0 : ((int, int, int), ());               -- (rid, start, end)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
     -- (id, (first, last, gender, birthday, created, ip, browser, city, birth month, birth day, creation month))
-let root_of = import "ldbc.message.root"    : (int, int);    -- (message, thread root)
-let thread  = import "ldbc.message.by_root" : (int, int);    -- (root, message)
+let root_of = import "graph::message.root"    : (int, int);    -- (message, thread root)
+let thread  = import "graph::message.by_root" : (int, int);    -- (root, message)
 
 -- Messages by day, and the request's window days.
 let byday   = message | map((id, (kind, created, who, _, _, _, _, _, _, _, _, _, day)) -> (day, (id, kind, created, who)));
@@ -46,4 +46,4 @@ let ranked  = started | join(msgs, ((rid, who), t, m) -> (who, (rid, t, m)))
                       | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((neg, who), (first, last, t)))) -> ((rid, rank), (who, first, last, t, neg neg)));
 
-output "bi9.answer" = answer | arrange;
+output "answer" = answer | arrange;

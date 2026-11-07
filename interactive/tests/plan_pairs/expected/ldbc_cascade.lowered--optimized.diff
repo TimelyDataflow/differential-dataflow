@@ -93,12 +93,12 @@
      let thread_idx = thread_rows | arrange;
      let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -238,8 +227,7 @@
- let ldbc_forum_idx = ldbc_forum_map | arrange;
- let ldbc_forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
- let ldbc_forum_by_moderator_idx = ldbc_forum_by_moderator_map | arrange;
--let ldbc_knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
--let ldbc_knows_by_src_idx = ldbc_knows_by_src_map | arrange;
-+let ldbc_knows_by_src_idx = either_map | arrange;
- let ldbc_member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
- let ldbc_member_by_forum_idx = ldbc_member_by_forum_map | arrange;
- let ldbc_member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));
+ let forum_idx3 = forum_map4 | arrange;
+ let forum_by_moderator_map = forum | map(((id, title, created, moderator), ()) -> (moderator, id));
+ let forum_by_moderator_idx = forum_by_moderator_map | arrange;
+-let knows_by_src_map = knows | map(((src, dst, created), ()) -> (src, (dst, created)));
+-let knows_by_src_idx = knows_by_src_map | arrange;
++let knows_by_src_idx = either_map | arrange;
+ let member_by_forum_map = member | map(((forum, person, created), ()) -> (forum, (person, created)));
+ let member_by_forum_idx = member_by_forum_map | arrange;
+ let member_by_person_map = member | map(((forum, person, created), ()) -> (person, (forum, created)));

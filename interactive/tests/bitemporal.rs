@@ -143,7 +143,7 @@ impl Fed {
 /// `(point, export)` checks made on worker 0.
 fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let text = if shared { PROGRAM.replace("let owners = input 1 : ((int), (int));", "let owners = (input 1 : ((int), (int))) + (import \"seed_owners\");") } else { PROGRAM.to_string() };
+        let text = if shared { PROGRAM.replace("let owners = input 1 : ((int), (int));", "let owners = (input 1 : ((int), (int))) + (import \"seed::seed_owners\");") } else { PROGRAM.to_string() };
         let program = lower::lower_tree(parse::pipe::parse(&text));
         let mut server = Server::new();
         if shared {
@@ -192,13 +192,13 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             let s = lane(&now, 0);
             let mut points: Vec<Point> = (0..=max_event + 1).chain([u64::MAX]).flat_map(|ev| [(s.saturating_sub(1), ev), (s, ev)]).collect();
             points.retain(|p| !now.less_equal(&at(*p))
-                && server.trace_since("balance").unwrap().less_equal(&at(*p)));
+                && server.trace_since("bank::balance").unwrap().less_equal(&at(*p)));
             for point in points {
                 let expected = fed.expected(point);
                 for export in EXPORTS {
                     // Reads conservatively require the whole program and its imports to close the point.
                     if shared && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
-                    let got: Rows = server.snapshot_as_of(worker, export, &at(point)).unwrap().rows().into_iter()
+                    let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at(point)).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     if !w0 { continue; }
                     assert_eq!(sorted(got), sorted(expected[export].clone()), "export {export} at {point:?}, now {now:?}, {workers} workers");
@@ -208,13 +208,13 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
         }
         // A point compacted away is refused.
         let now = server.now("bank").unwrap().clone();
-        if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
+        if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "bank::balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
-            let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "balance";"#));
+            let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "bank::balance";"#));
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
-            assert!(server.trace_width("bad").is_none());
-            assert_eq!(server.trace_width("seed_owners"), Some(1));
-            assert_eq!(server.trace_width("balance"), Some(2));
+            assert!(server.trace_width("narrow::bad").is_none());
+            assert_eq!(server.trace_width("seed::seed_owners"), Some(1));
+            assert_eq!(server.trace_width("bank::balance"), Some(2));
         }
         checks
     }).unwrap();
@@ -384,7 +384,7 @@ fn bitemporal_demo() {
             println!("\n== {label}\n   (now: bookkeeping day {} open)", lane(server.now("bank").unwrap(), 0));
             for export in DEMO_EXPORTS {
                 let row: Vec<Rows> = events.iter().map(|&(_, e)| {
-                    let got: Rows = server.snapshot_as_of(worker, export, &at((closed, e))).unwrap().rows().into_iter()
+                    let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at((closed, e))).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     let got = sorted(got);
                     assert_eq!(got, sorted(fed.expected((closed, e))[export].clone()), "{export} at ({closed}, {e})");
@@ -456,11 +456,11 @@ fn independent_inputs_and_time_shapes() {
                 server.feed_at("split", 0, "8 val=1", &at((0, 5))).unwrap();
             }
             server.advance_input("split", 0, &at((1, 0))).unwrap();
-            server.wait_for(worker, "left", &at((1, 0))).unwrap();
+            server.wait_for(worker, "split::left", &at((1, 0))).unwrap();
             // Input 1 and the exports using it remain open at the minimum.
-            let error = server.snapshot(worker, "left").unwrap_err();
+            let error = server.snapshot(worker, "split::left").unwrap_err();
             assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
-            assert_eq!(server.peek(worker, "left", None).unwrap_err(), error);
+            assert_eq!(server.peek(worker, "split::left", None).unwrap_err(), error);
             assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
             server.advance_input("split", 0, &at((5, 0))).unwrap();
             let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
@@ -470,29 +470,29 @@ fn independent_inputs_and_time_shapes() {
             assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
             if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
             server.advance_input("split", 1, &at((2, 0))).unwrap();
-            for export in ["left", "seen", "delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
-            let left = server.snapshot_as_of(worker, "left", &at((0, u64::MAX))).unwrap();
-            let seen = server.snapshot_as_of(worker, "seen", &at((0, u64::MAX))).unwrap();
-            let keyed = server.peek_as_of(worker, "left", Some("7"), &at((0, 0))).unwrap();
+            for export in ["split::left", "split::seen", "split::delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
+            let left = server.snapshot_as_of(worker, "split::left", &at((0, u64::MAX))).unwrap();
+            let seen = server.snapshot_as_of(worker, "split::seen", &at((0, u64::MAX))).unwrap();
+            let keyed = server.peek_as_of(worker, "split::left", Some("7"), &at((0, 0))).unwrap();
             if worker.index() == 0 {
                 assert_eq!(left.len(), 2);
                 assert_eq!(keyed.rows(), vec![("7".into(), "1".into(), 1)]);
                 let rows: Rows = seen.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(sorted(rows), vec![(vec![7], vec![0, 0, 256, 256], 1), (vec![8], vec![0, 5, 256, 256], 1)]);
             }
-            let delta = server.snapshot_as_of(worker, "delta", &at((0, u64::MAX))).unwrap();
+            let delta = server.snapshot_as_of(worker, "split::delta", &at((0, u64::MAX))).unwrap();
             if worker.index() == 0 {
                 let rows: Rows = delta.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(rows, vec![(vec![7], vec![1, 2, 0, 0], 1)]);
             }
-            server.compact("left", &at((0, 3))).unwrap();
-            assert!(server.snapshot_as_of(worker, "left", &at((0, 2))).is_err());
-            assert!(server.compact("left", &at((0, 1))).is_err());
-            let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "left" | lift;"#));
+            server.compact("split::left", &at((0, 3))).unwrap();
+            assert!(server.snapshot_as_of(worker, "split::left", &at((0, 2))).is_err());
+            assert!(server.compact("split::left", &at((0, 1))).is_err());
+            let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "split::left" | lift;"#));
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
-            server.wait_for(worker, "wide", &at((2, 0))).unwrap();
-            let wide = server.snapshot_as_of(worker, "wide", &HostTime::new(smallvec::smallvec![0, 5, 0])).unwrap();
+            server.wait_for(worker, "wide::wide", &at((2, 0))).unwrap();
+            let wide = server.snapshot_as_of(worker, "wide::wide", &HostTime::new(smallvec::smallvec![0, 5, 0])).unwrap();
             if worker.index() == 0 {
                 let rows: Rows = wide.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(sorted(rows), vec![(vec![7], vec![1, 0, 3, 0], 1), (vec![8], vec![1, 0, 5, 0], 1)]);
@@ -503,17 +503,17 @@ fn independent_inputs_and_time_shapes() {
             server.install(worker, "producer", &producer).unwrap();
             for width in [1, 2] {
                 let name = format!("consumer{width}");
-                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = import \"lagging\";")));
+                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = import \"producer::lagging\";")));
                 server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
                 server.advance_to(worker, &name, &at((3, 0))).unwrap();
                 let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };
-                let error = server.snapshot_as_of(worker, &name, &point).unwrap_err();
+                let error = server.snapshot_as_of(worker, &format!("{name}::{name}"), &point).unwrap_err();
                 assert!(error.contains("not closed") && error.contains("input/import frontier"), "{error}");
-                assert_eq!(server.peek_as_of(worker, &name, None, &point).unwrap_err(), error);
-                let default_error = server.snapshot(worker, &name).unwrap_err();
-                assert_eq!(server.peek(worker, &name, None).unwrap_err(), default_error);
+                assert_eq!(server.peek_as_of(worker, &format!("{name}::{name}"), None, &point).unwrap_err(), error);
+                let default_error = server.snapshot(worker, &format!("{name}::{name}")).unwrap_err();
+                assert_eq!(server.peek(worker, &format!("{name}::{name}"), None).unwrap_err(), default_error);
                 // Loading a published trace calls snapshot_local, with the same read checks.
-                assert_eq!(server.load(worker, "split", 1, &name, 1).unwrap_err(), default_error);
+                assert_eq!(server.load(worker, "split", 1, &format!("{name}::{name}"), 1).unwrap_err(), default_error);
                 if width == 1 { assert_eq!(default_error, error); }
             }
         }).unwrap();

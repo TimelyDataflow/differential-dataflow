@@ -19,5 +19,5 @@ feed world 0 2,2 val=2,0
 tick
 
 # owner: (1,1) -> client 1 (won the race), (2,2) -> client 2 (uncontested).
-peek owner
+peek world::owner
 exit

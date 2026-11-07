@@ -10,20 +10,20 @@ type Snapshot = Vec<(String, String, i64)>;
 
 const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));"#;
 
-/// A consumer of `edges`, its exports suffixed by `tag`.
-fn consumer(tag: &str) -> String {
+/// A consumer of `edges`. Each install of it publishes its outputs under its own program name.
+fn consumer() -> String {
     format!(
         r#"
-        let edges = import "edges";
+        let edges = import "prod::edges";
         let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
         r: {{
             let step = reach | join(edges, (_, _, dst) -> (dst, ()));
             set reach = roots + step | distinct;
         }}
-        output "hop{tag}" = roots | join(edges, (n, _, dst) -> (dst, n));
-        output "degree{tag}" = edges | count;
-        output "reach{tag}" = r::reach;
-        output "flipped{tag}" = edges | map((src, dst) -> (dst, src));
+        output "hop" = roots | join(edges, (n, _, dst) -> (dst, n));
+        output "degree" = edges | count;
+        output "reach" = r::reach;
+        output "flipped" = edges | map((src, dst) -> (dst, src));
 
         "#
     )
@@ -65,8 +65,8 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         let mut exports: Vec<String> = Vec::new();
 
         // An importer installed over an existing trace.
-        install(&mut server, worker, "early", &consumer("_early"));
-        exports.extend(["hop_early", "degree_early", "reach_early", "flipped_early"].map(String::from));
+        install(&mut server, worker, "early", &consumer());
+        exports.extend(["early::hop", "early::degree", "early::reach", "early::flipped"].map(String::from));
         root(&mut server, "early", 1);
         server.tick(worker);
         take(&mut server, worker, &exports, &mut snapshots);
@@ -78,8 +78,8 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         take(&mut server, worker, &exports, &mut snapshots);
 
         // An importer installed after the trace has history.
-        install(&mut server, worker, "late", &consumer("_late"));
-        exports.extend(["hop_late", "degree_late", "reach_late", "flipped_late"].map(String::from));
+        install(&mut server, worker, "late", &consumer());
+        exports.extend(["late::hop", "late::degree", "late::reach", "late::flipped"].map(String::from));
         root(&mut server, "late", 2);
         edge(&mut server, 2, 3, 1);
         server.tick(worker);

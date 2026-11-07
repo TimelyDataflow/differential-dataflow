@@ -4,12 +4,12 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 @@ -8,16 +10,59 @@
- let people = import "ic10.s.people" : (int, (List(int), List(int), List(int), List(int), int, int));
- let posts = import "ic10.s.posts" : (int, int);
- let likes = import "ic10.s.likes" : ((int, int), ());
+ let people = import "ic10s::people" : (int, (List(int), List(int), List(int), List(int), int, int));
+ let posts = import "ic10s::posts" : (int, int);
+ let likes = import "ic10s::likes" : ((int, int), ());
 -let hop1 = request | map(((rid, who, month), ()) -> (who, (rid, who, month))) | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
 -let hop2 = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
 -let twohop = hop1 + hop2 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d)) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist) | filter((_, d) -> (d, 2) eq);
@@ -73,7 +73,7 @@
 +let ranked_idx = ranked_join | arrange;
 +let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
  let answer = ranked | map((rid, (rank, ((_, node), (first, last, s, gender, town)))) -> ((rid, rank), (node, first, last, s, gender, town)));
--output "ic10x1.answer" = answer | arrange;
+-output "answer" = answer | arrange;
 +let answer_idx = answer | arrange;
 +-- Renderer: publish the existing arrangement.
-+output "ic10x1.answer" = answer_idx;
++output "answer" = answer_idx;

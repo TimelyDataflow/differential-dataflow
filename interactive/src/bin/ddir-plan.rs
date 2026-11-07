@@ -29,16 +29,21 @@ fn run() -> Result<(), String> {
             "--check-roundtrip" => check_roundtrip = true,
             "--passes" => passes = interactive::passes::Config::parse(&args.next().ok_or("--passes requires a list, such as all, none, or all,-projection")?)?,
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}")),
-            _ => files.push(arg),
+            // `name=file.ddp` plans the file as program `name`; otherwise the program is named by the file's stem.
+            // Its outputs supply later files' imports as `<name>::<output>`.
+            _ => files.push(match arg.split_once('=') {
+                Some((name, file)) => (name.to_string(), file.to_string()),
+                None => (std::path::Path::new(&arg).file_stem().map_or(arg.clone(), |s| s.to_string_lossy().into_owned()), arg),
+            }),
         }
     }
-    if files.is_empty() { return Err("usage: ddir-plan [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] file.ddp [more.ddp ...]".into()); }
+    if files.is_empty() { return Err("usage: ddir-plan [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] [name=]file.ddp [[name=]more.ddp ...]".into()); }
     if emit_ddp && options.lambda_source { return Err("--emit-ddp always checks source against the compiled graph".into()); }
     if check_roundtrip && !emit_ddp { return Err("--check-roundtrip requires --emit-ddp".into()); }
     let mut catalog = BTreeMap::new();
     let mut incomplete = false;
     let mut out = io::stdout().lock();
-    for (i, file) in files.iter().enumerate() {
+    for (i, (program, file)) in files.iter().enumerate() {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
         let report = interactive::plan::report_at(&text, &|name| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name)), &passes, as_of).map_err(|e| format!("{file}: {e}"))?;
         if emit_ddp {
@@ -69,7 +74,8 @@ fn run() -> Result<(), String> {
         // Lowered diagnostics can mention an unread import that cleanup removed.
         incomplete |= !report.unresolved.is_empty() || !report.stages.last().unwrap().problems.is_empty();
         for (name, shape) in report.exports {
-            if catalog.insert(name.clone(), shape).is_some() { return Err(format!("duplicate export {name:?}")); }
+            let name = interactive::server::output_name(program, &name);
+            if catalog.insert(name.clone(), shape).is_some() { return Err(format!("duplicate output {name:?}")); }
         }
     }
     if incomplete { Err("planning incomplete; see imports, shape problems, and lambda checks above".into()) }

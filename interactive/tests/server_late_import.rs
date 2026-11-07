@@ -20,8 +20,8 @@ const PRODUCER: &str = r#"
 /// A row `(a, b)` of `x` meets an equal row of `edges` and steps to `(b % 5, b)`: `(5, 5)` steps
 /// to `(0, 5)`, which steps to itself while `edges` holds `(0, 5)`.
 const CONSUMER: &str = r#"
-    let seeds = import "seeds";
-    let edges = import "edges";
+    let seeds = import "producer::seeds";
+    let edges = import "producer::edges";
     s: {
         let step = x | join(edges, ((_, b), (), ()) -> (((b, 5) rem, b), ()));
         set x = (seeds + step) | distinct;
@@ -61,7 +61,7 @@ fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
             }
             server.tick(worker);
         }
-        server.snapshot(worker, "result").unwrap().rows()
+        server.snapshot(worker, "consumer::result").unwrap().rows()
     })
 }
 
@@ -91,8 +91,8 @@ const ARRANGED_PRODUCER: &str = r#"
 "#;
 
 const ARRANGED_CONSUMER: &str = r#"
-    let pairs = import "pairs";
-    let weights = import "weights";
+    let pairs = import "producer::pairs";
+    let weights = import "producer::weights";
     let r = pairs | join(pairs, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)) | distinct;
     s: {
         let step = x | join(weights, (k, v, _) -> (k, v));
@@ -135,7 +135,7 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
             }
             server.tick(worker);
         }
-        (server.snapshot(worker, "result").unwrap().rows(), server.snapshot(worker, "least").unwrap().rows())
+        (server.snapshot(worker, "consumer::result").unwrap().rows(), server.snapshot(worker, "consumer::least").unwrap().rows())
     })
 }
 
@@ -145,8 +145,8 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
 /// a stream read as of that time, and the pair meets exactly once only if both paths compare the
 /// same times.
 const DELTA_CONSUMER: &str = r#"
-    let pairs = import "pairs";
-    let weights = import "weights";
+    let pairs = import "producer::pairs";
+    let weights = import "producer::weights";
     let r = ((pairs | lift | half_join(pairs, 0, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)))
            + (pairs | lift | half_join(pairs, 1, ((a, b), (), _) -> ((b, (a, b) min) eq, 0))))
           | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
@@ -172,7 +172,7 @@ fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)
             }
             server.tick(worker);
         }
-        (server.snapshot(worker, "result").unwrap().rows(), server.snapshot(worker, "least").unwrap().rows())
+        (server.snapshot(worker, "consumer::result").unwrap().rows(), server.snapshot(worker, "consumer::least").unwrap().rows())
     })
 }
 
@@ -224,9 +224,9 @@ const TRIPLE_FEEDS: &[(u64, usize, &str)] = &[
 
 /// The three-way join of the imports, as joins.
 const TRIPLE_JOIN: &str = r#"
-    let a = import "a";
-    let b = import "b";
-    let c = import "c";
+    let a = import "producer::a";
+    let b = import "producer::b";
+    let c = import "producer::c";
     output "r" = a | join(b, (k, x, y) -> (k, (x, y))) | join(c, (k, (x, y), z) -> (k, (x, y, z)));
 "#;
 
@@ -234,9 +234,9 @@ const TRIPLE_JOIN: &str = r#"
 /// Read as of a late install, `b`'s and `c`'s paths carry their history at the as-of time to a
 /// strict half join, which meets nothing there, so the install drops it where they are lifted.
 const TRIPLE_DELTA: &str = r#"
-    let a = import "a";
-    let b = import "b";
-    let c = import "c";
+    let a = import "producer::a";
+    let b = import "producer::b";
+    let c = import "producer::c";
     let pa = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
     let pb = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
     let pc = c | lift | half_join(a, 1, (k, z, x) -> (k, (x, z))) | half_join(b, 1, (k, (x, z), y) -> (k, (x, y, z)));
@@ -257,7 +257,7 @@ fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String,
             }
             server.tick(worker);
         }
-        server.snapshot(worker, "r").unwrap().rows()
+        server.snapshot(worker, "consumer::r").unwrap().rows()
     })
 }
 

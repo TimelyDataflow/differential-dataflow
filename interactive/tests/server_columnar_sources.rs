@@ -34,7 +34,7 @@ const LOOSE: &str = r#"
 
 /// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
-    let l = import "loose" : ((int), ());
+    let l = import "undeclared::loose" : ((int), ());
     output "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;
@@ -53,7 +53,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         install(&mut server, worker, "undeclared", LOOSE);
         install(&mut server, worker, "declaring", DECLARING);
         install(&mut server, worker, "mirror", MIRROR);
-        server.bind(worker, "doubled", "mirror", 0).unwrap();
+        server.bind(worker, "declaring::doubled", "mirror", 0).unwrap();
         server.load(worker, "loaded", 0, "random:nodes=5,edges=40,arity=3,churn=4", 1).unwrap();
         let mut seen = Vec::new();
         for epoch in 1..5i64 {
@@ -63,7 +63,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
                 }
             }
             server.tick(worker);
-            for name in [RANDOM, "iota:12", "clock", "degrees", "small", "now", "sums", "doubled", "mirror"] {
+            for name in [RANDOM, "iota:12", "clock", "sources::degrees", "sources::small", "sources::now", "loaded::sums", "declaring::doubled", "mirror::mirror"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());
             }
         }

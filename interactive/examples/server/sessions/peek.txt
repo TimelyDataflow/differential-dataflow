@@ -9,10 +9,10 @@ feed reach 0 1
 tick
 
 # Snapshot the shared edge trace, and the reachability result.
-peek edges
-peek result
+peek prod::edges
+peek reach::result
 # Just one key of the result.
-peek result 2
+peek reach::result 2
 # An unknown trace reports an error, not a crash.
 peek nope
 exit

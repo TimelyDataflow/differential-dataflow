@@ -2,8 +2,8 @@
 -- cheap paths, the lexicographically smallest list of people.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, from, to)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let pals    = import "ldbc.friend.pair" : ((int, int), ());         -- ((person, friend), ())
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals    = import "graph::friend.pair" : ((int, int), ());         -- ((person, friend), ())
 
 -- Interaction weights between friends: replies in either direction are counted per
 -- pair (n), and a friendship costs max(round(40 - sqrt(n)), 1), computed exactly as
@@ -56,4 +56,4 @@ let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path))
                         | join(targets, ((rid, node), path, ()) -> ((rid, node), path))
                         | join(best, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
 
-output "ic14.answer" = answer | arrange;
+output "answer" = answer | arrange;

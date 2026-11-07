@@ -20,7 +20,7 @@ use timely::order::PartialOrder;
 const PROGRAM: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
     let trans = edges | map((src, dst) -> (dst, src));
-    let allowed = import "allowed";
+    let allowed = import "allow::allowed";
     outer: {
         let scc = edges + trim;
         let degrees = scc | map((src, _) -> (src, ())) | count;
@@ -56,7 +56,7 @@ const PROGRAM: &str = r#"
     output "degrees" = outer::degrees;
 "#;
 
-const EXPORTS: [&str; 2] = ["scc", "degrees"];
+const EXPORTS: [&str; 2] = ["graph::scc", "graph::degrees"];
 type Point = [u64; 3];
 type Edge = (usize, usize);
 type Rows = Vec<(String, String, i64)>;
@@ -159,7 +159,7 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
         let program = lower::lower_tree(parse::pipe::parse(PROGRAM));
         server.install(worker, "allow", &allow).unwrap();
         server.install_with_root(worker, "graph", &program, 3, at([0, 0, 0])).unwrap();
-        assert_eq!(server.trace_width("allowed"), Some(1));
+        assert_eq!(server.trace_width("allow::allowed"), Some(1));
         for export in EXPORTS { assert_eq!(server.trace_width(export), Some(3)); }
         let w0 = worker.index() == 0;
         let mut fed = Fed::default();
@@ -191,7 +191,7 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                     assert_eq!((0..3).filter(|&i| previous.get(i).copied().unwrap_or(0) != point[i]).count(), 1);
                     let row = match input { Input::Edges => "1,2", Input::Allowed => "1" };
                     assert!(server.feed_at(input.program(), 0, row, &previous).is_err());
-                    if matches!(input, Input::Allowed) { server.wait_for(worker, "allowed", &at(*point)).unwrap(); }
+                    if matches!(input, Input::Allowed) { server.wait_for(worker, "allow::allowed", &at(*point)).unwrap(); }
                 }
                 Step::Compact(since) => {
                     for export in EXPORTS {
@@ -221,7 +221,7 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                         let point = [s, a, b];
                         let time = at(point);
                         if edge_frontier.less_equal(&time) || allow_frontier.less_equal(&time)
-                            || !server.trace_since("scc").unwrap().less_equal(&time) { continue; }
+                            || !server.trace_since("graph::scc").unwrap().less_equal(&time) { continue; }
                         let expected = fed.expected(point);
                         for (export, expected) in EXPORTS.into_iter().zip(&expected) {
                             let got = server.snapshot_as_of(worker, export, &time).unwrap().rows();
@@ -233,7 +233,7 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                         // One keyed peek per checkpoint, including exactly the read floor
                         // immediately after compaction, when it is the grid's first point.
                         if !peeked {
-                            let got = server.peek_as_of(worker, "scc", Some("1"), &time).unwrap().rows();
+                            let got = server.peek_as_of(worker, "graph::scc", Some("1"), &time).unwrap().rows();
                             if w0 {
                                 let expected: Rows = expected[0].iter().filter(|(k, _, _)| k == "1").cloned().collect();
                                 assert_eq!(sorted(got), expected, "peek at {point:?}, step {step_index}");

@@ -3,10 +3,10 @@
 -- Reaches the replies through the author and parent indexes.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote   = import "ldbc.message.by_creator" : (int, int);          -- (author, message)
-let replies = import "ldbc.message.by_parent" : (int, int);           -- (parent, message)
+let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = import "graph::message.by_creator" : (int, int);          -- (author, message)
+let replies = import "graph::message.by_parent" : (int, int);           -- (parent, message)
 
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
@@ -22,4 +22,4 @@ let answer  = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg 
                   | join(message, (id, (rid, rank, created, who), (_, _, _, _, content, _, _, _, _, _, _, _, _)) -> (who, (rid, rank, id, content, created)))
                   | join(person, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
 
-output "ic8.answer" = answer | arrange;
+output "answer" = answer | arrange;

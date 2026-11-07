@@ -2,8 +2,8 @@
 
 A long-running Timely worker group hosts interpreted DDIR dataflows through a
 load-run-drop lifecycle. Programs share results by name — each may import
-collections that others export — and clients follow along over TCP, WebSocket,
-or stdin.
+collections that others output, a program installed as `p` publishing its
+`output "x"` as `p::x` — and clients follow along over TCP, WebSocket, or stdin.
 
 Run `cargo run -p ddir-server`, then connect a line-oriented client to TCP port
 7777. The same protocol is available
@@ -11,7 +11,7 @@ over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
 defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
 becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
 the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
-`peek diag.time_by_statement` reads time by program statement like any other
+`peek diag::time_by_statement` reads time by program statement like any other
 trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
 (default `all,-projection`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
@@ -58,8 +58,8 @@ or `iota:N`, or a file of integer rows — with each worker taking its shard, so
 no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
 `tick`. The source may also be a published trace, read as its contents before
 the current epoch, each worker reading its own share of the arrangement, and
-`diff=<d>` scales every row: `feed bank 0 from retire diff=-1` deletes from an
-input the rows a program exports as no longer needed (see
+`diff=<d>` scales every row: `feed bank 0 from bank::retire diff=-1` deletes from an
+input the rows a program outputs as no longer needed (see
 [`bench/txn`](../bench/txn/README.md)). Unlike `bind`, this is one delivery of the
 trace's contents, not a standing mirror of its changes. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
@@ -68,9 +68,9 @@ an inline pipe-syntax program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
-    output "graph.edges" = edges;
+    output "edges" = edges;
     graph end-load
-    tail graph.edges
+    tail graph::edges
     tick
 
 A binding may also be spelled as a call, so

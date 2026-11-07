@@ -4,9 +4,9 @@
 -- all requests, so a request reads only its languages.
 
 let request = input 0 : ((int, int, int, List(int), int), ());   -- (rid, start, length, language, enabled); one row per language
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let root    = import "ldbc.message.root" : (int, int);                  -- (message, root post of its thread)
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = import "graph::message.root" : (int, int);                  -- (message, root post of its thread)
 
 -- Messages with text, keyed by their thread's language (the root post's language).
 let texts   = message | filter((_, (_, _, _, _, text, _, _, _, _, _, _, _, _)) -> (text len, 0) gt)
@@ -32,4 +32,4 @@ let ranked  = people | map(((rid, n), p) -> (rid, (p neg, n neg)))
                      | collect | flatmap((_, entries) -> entries);
 let answer  = ranked | map((rid, (rank, (np, nn))) -> ((rid, rank), (nn neg, np neg)));
 
-output "bi12.answer" = answer | arrange;
+output "answer" = answer | arrange;

@@ -3,7 +3,7 @@
 -- distance reaches the best meeting found so far.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, from, to)
-let friend  = import "ldbc.friend" : (int, (int, int));              -- (person, (friend, since))
+let friend  = import "graph::friend" : (int, (int, int));              -- (person, (friend, since))
 
 -- Searches are rows (rid, side, node, hops): side 0 grows from `from`, side 1 from `to`.
 let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ())))
@@ -38,4 +38,4 @@ let asked  = request | map(((rid, _, _), ()) -> (rid, ()));
 let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
 let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
 
-output "ic13.answer" = answer | arrange;
+output "answer" = answer | arrange;

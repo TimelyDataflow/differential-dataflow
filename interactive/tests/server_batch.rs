@@ -20,13 +20,13 @@ fn feed_validates_before_staging_one_epoch() {
 
         assert!(server.feed("world", 1, rows, None).is_err());
         server.tick(worker);
-        assert!(server.snapshot(worker, "rows").unwrap().is_empty());
+        assert!(server.snapshot(worker, "world::rows").unwrap().is_empty());
 
         server.feed("world", 0, rows, None).unwrap();
-        assert!(server.snapshot(worker, "rows").unwrap().is_empty());
+        assert!(server.snapshot(worker, "world::rows").unwrap().is_empty());
         server.tick(worker);
         assert_eq!(
-            server.snapshot(worker, "rows").unwrap().rows(),
+            server.snapshot(worker, "world::rows").unwrap().rows(),
             vec![(tup(&[1]), tup(&[10]), 1), (tup(&[2]), tup(&[20]), 1),]
         );
     });
@@ -59,7 +59,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
                 if worker.index() == (epoch + 1) % 3 {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                let rows = server.snapshot(worker, "rows").unwrap().rows();
+                let rows = server.snapshot(worker, "world::rows").unwrap().rows();
                 let expected: Vec<_> = if worker.index() == 0 {
                     (0..3).filter(|&i| if epoch < 3 { i <= epoch } else { i > epoch - 3 })
                         .map(|i| (tup(&[i as i64]), "tuple()".to_string(), 1)).collect()
@@ -106,7 +106,7 @@ fn split_feeds_keep_their_shapes() {
         let mine: Vec<usize> = (worker.index()..columns.len()).step_by(worker.peers()).collect();
         server.feed_columns("world", 0, columns.select(&mine), None).unwrap();
         server.tick(worker);
-        server.snapshot(worker, "rows").unwrap().rows()
+        server.snapshot(worker, "world::rows").unwrap().rows()
     }).unwrap();
     let rows = guards.join().into_iter().next().unwrap().unwrap();
     assert_eq!(rows, vec![(listed(1, &[7]), "tuple()".to_string(), 1), (listed(2, &[]), "tuple()".to_string(), 1)]);
@@ -123,7 +123,7 @@ fn misshaped_columns_are_refused() {
         assert_eq!(refused, "a feed of shape ((Int, Int), ()) reached an input of shape ((Int, List<Int>), ())");
         server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), None).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "rows").unwrap().rows(), vec![(listed(1, &[]), "tuple()".to_string(), 1)]);
+        assert_eq!(server.snapshot(worker, "world::rows").unwrap().rows(), vec![(listed(1, &[]), "tuple()".to_string(), 1)]);
     });
 }
 
@@ -141,11 +141,11 @@ fn fed_sums_arrive_at_their_time() {
         server.feed_columns("world", 0, decoded(&node, &["inject(0,7)"]), Some(2)).unwrap();
         server.tick(worker);
         let pair = "inject(1,tuple(1,2))".to_string();
-        assert_eq!(server.snapshot(worker, "rows").unwrap().rows(), vec![(pair.clone(), "tuple()".to_string(), 1)]);
+        assert_eq!(server.snapshot(worker, "world::rows").unwrap().rows(), vec![(pair.clone(), "tuple()".to_string(), 1)]);
         server.tick(worker);
         server.tick(worker);
         let leaf = "inject(0,7)".to_string();
-        let mut rows = server.snapshot(worker, "rows").unwrap().rows();
+        let mut rows = server.snapshot(worker, "world::rows").unwrap().rows();
         rows.sort();
         assert_eq!(rows, vec![(leaf, "tuple()".to_string(), 1), (pair, "tuple()".to_string(), 1)]);
     });
@@ -161,7 +161,7 @@ fn peek_by_key_reads_reference_keys() {
         let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
         server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
         server.tick(worker);
-        let mut rows = |key: &str| server.peek(worker, "rows", Some(key)).map(|u| u.rows());
+        let mut rows = |key: &str| server.peek(worker, "world::rows", Some(key)).map(|u| u.rows());
         assert_eq!(rows("list(1,2)").unwrap(), vec![("list(1,2)".to_string(), "tuple()".to_string(), 1)]);
         assert_eq!(rows("list()").unwrap(), vec![("list()".to_string(), "tuple()".to_string(), 1)]);
         assert!(rows("list(9)").unwrap().is_empty());

@@ -6,10 +6,10 @@
 -- winners' text and their root posts' authors' names.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let by_creator = import "ldbc.message.by_creator" : (int, int);
-let root_of    = import "ldbc.message.root" : (int, int);
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let by_creator = import "graph::message.by_creator" : (int, int);
+let root_of    = import "graph::message.root" : (int, int);
 
 -- The person's messages, newest first (ties by larger id), keeping only ids and times to rank.
 let mine   = request | map(((rid, who), ()) -> (who, rid))
@@ -29,4 +29,4 @@ let answer = top | map((rid, (rank, (_, (id, created, root)))) -> (id, (rid, ran
                  | join(person, (op, (rid, rank, id, body, created, root), (first, last, _, _, _, _, _, _, _, _, _)) ->
                         ((rid, rank), (id, body, created, root, op, first, last)));
 
-output "is2.answer" = answer | arrange;
+output "answer" = answer | arrange;

@@ -4,15 +4,16 @@ use super::*;
 
 impl Server {
     /// Install `prog` under `name`: build its dataflow in `worker`, wiring each
-    /// root `Source::Trace` to a registered trace and registering each export's
-    /// trace for later imports. New inputs are advanced to the current epoch so
-    /// they are consistent with the traces they may already see.
+    /// root `Source::Trace` to a registered trace and registering each output's
+    /// trace for later imports, as `<name>::<output>` (see [`output_name`]). New
+    /// inputs are advanced to the current epoch so they are consistent with the
+    /// traces they may already see.
     ///
     /// A `Source::Trace` that names a *recipe* (e.g. `random:nodes=8,edges=12`)
     /// is installed on demand if absent — generated sources are content-addressed,
     /// so two importers of the same recipe share one source. Any other
     /// unregistered import errors (install its producer first). Also errors if
-    /// the name is taken or it would republish an existing export name.
+    /// the name is taken, empty, or contains `::`.
     pub fn install(
         &mut self,
         worker: &mut Worker,
@@ -34,6 +35,10 @@ impl Server {
         }
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
+        }
+        // A program's outputs are published as `<name>::<output>`, so the name is one path component.
+        if name.is_empty() || name.contains("::") {
+            return Err(format!("a program name must be non-empty and contain no `::`, got {:?}", name));
         }
         // The root is not a loop: a published trace holds what its program computes at each
         // epoch, not a round of an iteration. Loops live in named scopes.
@@ -87,8 +92,9 @@ impl Server {
             }
         }
         for e in &prog.root.exports {
-            if self.is_published(&e.name) || generated.contains(&e.name) {
-                return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
+            let published = output_name(name, &e.name);
+            if self.is_published(&published) || generated.contains(&published) {
+                return Err(format!("output {:?} is already published; choose another program name or drop its producer", published));
             }
         }
         self.check_shapes(name, prog, root_width)?;
@@ -127,7 +133,7 @@ impl Server {
                 _ => None,
             })
             .collect();
-        let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
+        let export_names: Vec<String> = prog.root.exports.iter().map(|e| output_name(name, &e.name)).collect();
 
         let mut output_probes = HashMap::new();
         let root = &prog.root;
@@ -195,8 +201,9 @@ impl Server {
                         };
                         let probe = ProbeHandle::new();
                         stream.probe_with(&probe);
-                        output_probes.insert(e.name.clone(), probe);
-                        (e.name.clone(), arranged.trace, tap)
+                        let published = output_name(name, &e.name);
+                        output_probes.insert(published.clone(), probe);
+                        (published, arranged.trace, tap)
                     })
                     .collect();
 
@@ -204,7 +211,7 @@ impl Server {
             });
 
         for (export_name, shape) in export_shapes {
-            self.shapes.insert(export_name, shape);
+            self.shapes.insert(output_name(name, &export_name), shape);
         }
         for (export_name, trace, tap) in published {
             self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });

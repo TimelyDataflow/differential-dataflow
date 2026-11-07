@@ -64,8 +64,8 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
                     server.tick(worker);
                 }
                 for export in &original.root.exports {
-                    let mut want = before.snapshot(worker, &export.name).unwrap().rows();
-                    let mut got = after.snapshot(worker, &export.name).unwrap().rows();
+                    let mut want = before.snapshot(worker, &format!("before::{}", export.name)).unwrap().rows();
+                    let mut got = after.snapshot(worker, &format!("after::{}", export.name)).unwrap().rows();
                     want.sort(); got.sort();
                     assert_eq!(got, want, "{}", export.name);
                 }

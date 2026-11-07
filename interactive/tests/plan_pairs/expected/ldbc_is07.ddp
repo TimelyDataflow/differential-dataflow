@@ -1,10 +1,10 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let by_parent = import "ldbc.message.by_parent" : (int, int);
-let friend = import "ldbc.friend" : (int, (int, int));
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let by_parent = import "graph::message.by_parent" : (int, int);
+let friend = import "graph::friend" : (int, (int, int));
 let reply_map = request | map(((rid, m), ()) -> (m, rid));
 let reply_idx = reply_map | arrange;
 let message_idx = message | arrange;
@@ -37,4 +37,4 @@ let ranked_reduce = ranked_idx | reduce((_, vals) -> let lists = vals map ((v, d
 let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-output "is7.answer" = answer_idx;
+output "answer" = answer_idx;

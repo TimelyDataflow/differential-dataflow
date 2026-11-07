@@ -64,7 +64,7 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
             let mine = if worker.index() == 0 { batch.as_str() } else { "" };
             server.feed("p", 0, mine, None).unwrap();
             server.tick(worker);
-            let mut rows = server.snapshot(worker, "result").unwrap().rows();
+            let mut rows = server.snapshot(worker, "p::result").unwrap().rows();
             rows.sort();
             seen.push(rows);
         }

@@ -1,11 +1,11 @@
 --- parsed
 +++ lowered
 @@ -1,7 +1,19 @@
--let edges = import "edges";
+-let edges = import "prod::edges";
 -let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
-+let edges = import "edges" : ((int), (int));
++let edges = import "prod::edges" : ((int), (int));
 +let input0 = input 0 : ((int), ());
 +let roots = input0 | map((n, ()) -> (n, ()));
  reach: {

@@ -71,7 +71,7 @@ def mismatches(server, workers, steps):
             s.commands(['tick'])
         bad = []
         for name in RELATIONS:
-            _, (lines,) = s.commands([f'peek live.{name} as corgi'])
+            _, (lines,) = s.commands([f'peek graph::live.{name} as corgi'])
             got = {tuple(bytes(x).decode() if isinstance(x, list) else x for x in key)
                    for key, _, diff in decode(lines) for _ in range(diff)}
             if got != oracle.graph[name]:

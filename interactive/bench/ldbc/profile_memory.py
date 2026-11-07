@@ -129,7 +129,7 @@ def profile(args):
                 record['points'][label] = dict(seconds=time.perf_counter()-started,**value)
                 write_json(destination/'report.json',record)
             def read(label):
-                frames, = command('read-'+label,[f'peek {name}.answer as corgi'])
+                frames, = command('read-'+label,[f'peek {name}::answer as corgi'])
                 actual = decode(frames)
                 write_json(destination/(label+'.json'),actual)
                 validation = 'captured-unchecked'
@@ -173,7 +173,7 @@ def profile(args):
             command('retire',[Server.feed(name,0,binding,-1,request_shape),'tick'] if query else ['tick'])
             settle('settle-retired');mark('after_retirement')
             if query:
-                frames, = command('read-empty',[f'peek {name}.answer as corgi'])
+                frames, = command('read-empty',[f'peek {name}::answer as corgi'])
                 assert decode(frames)==[], 'request retirement did not empty the answer'
             if budget.failure or server.failure: raise MemoryError(budget.failure or server.failure)
             record['status'] = 'profiled'

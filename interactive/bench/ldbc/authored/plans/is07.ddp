@@ -2,10 +2,10 @@
 -- message's author.
 
 let request   = input 0 : ((int, int), ());                  -- (rid, message)
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let by_parent = import "ldbc.message.by_parent" : (int, int);
-let friend    = import "ldbc.friend" : (int, (int, int));    -- (person, (friend, since))
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let by_parent = import "graph::message.by_parent" : (int, int);
+let friend    = import "graph::friend" : (int, (int, int));    -- (person, (friend, since))
 
 -- The request's replies: ((replier, author of the message), (rid, comment, content, created)).
 let reply   = request | map(((rid, m), ()) -> (m, rid))
@@ -27,4 +27,4 @@ let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, 
                     | collect | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 
-output "is7.answer" = answer | arrange;
+output "answer" = answer | arrange;

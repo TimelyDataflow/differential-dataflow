@@ -5,6 +5,6 @@ feed reach 0 0
 tick
 # The derived edge set (note iota:12 was installed on demand to back it):
 peek iota:12
-peek result
+peek reach::result
 list
 exit

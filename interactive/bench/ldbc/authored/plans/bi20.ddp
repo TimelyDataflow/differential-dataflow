@@ -4,10 +4,10 @@
 -- found from the friendships (each person's few schools), not from all pairs of classmates.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, company name, person)
-let friend          = import "ldbc.friend"          : (int, (int, int));  -- (person, (friend, since))
-let study_by_person = import "ldbc.study.by_person" : (int, (int, int));  -- (person, (school, year))
-let org_by_name     = import "ldbc.org.by_name"     : (List(int), int);   -- (name, org)
-let work_by_org     = import "ldbc.work.by_org"     : (int, (int, int));  -- (org, (person, year))
+let friend          = import "graph::friend"          : (int, (int, int));  -- (person, (friend, since))
+let study_by_person = import "graph::study.by_person" : (int, (int, int));  -- (person, (school, year))
+let org_by_name     = import "graph::org.by_name"     : (List(int), int);   -- (name, org)
+let work_by_org     = import "graph::work.by_org"     : (int, (int, int));  -- (org, (person, year))
 
 -- Classmate friendships, weighted by the closest pair of graduation years: start from
 -- each friendship and look up both people's schools.
@@ -45,4 +45,4 @@ let ranked   = reached | join(best, (rid, (node, _, cost), least) -> (rid, (node
                        | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer   = ranked | map((rid, (rank, (cost, node))) -> ((rid, rank), (node, cost)));
 
-output "bi20.answer" = answer | arrange;
+output "answer" = answer | arrange;

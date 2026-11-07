@@ -2,8 +2,8 @@
 +++ optimized
 @@ -2,9 +2,8 @@
  -- Trace imports use provider arrangements; history advances to G = (0, []).
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let pals = import "ldbc.friend.pair" : ((int, int), ());
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let pals = import "graph::friend.pair" : ((int, int), ());
 -let answered_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);
 -let answered_map = answered_filter | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who));
 -let answered_idx = answered_map | arrange;

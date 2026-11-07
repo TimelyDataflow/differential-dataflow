@@ -2,11 +2,11 @@
 -- how many minutes after it was posted, and whether they are not yet a friend.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote   = import "ldbc.message.by_creator" : (int, int);          -- (author, message)
-let likes   = import "ldbc.likes.by_message" : (int, (int, int));    -- (message, (liker, when))
-let pals    = import "ldbc.friend.pair" : ((int, int), ());         -- ((person, friend), ())
+let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = import "graph::message.by_creator" : (int, int);          -- (author, message)
+let likes   = import "graph::likes.by_message" : (int, (int, int));    -- (message, (liker, when))
+let pals    = import "graph::friend.pair" : ((int, int), ());         -- ((person, friend), ())
 
 -- Each liker's latest like on one of the person's messages (ties: smaller message id).
 let latest   = request | map(((rid, who), ()) -> (who, rid))
@@ -29,4 +29,4 @@ let ranked   = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker,
 let answer   = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) ->
                             ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
 
-output "ic7.answer" = answer | arrange;
+output "answer" = answer | arrange;

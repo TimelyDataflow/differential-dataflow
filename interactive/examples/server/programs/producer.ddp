@@ -1,5 +1,5 @@
 -- Publishes positional input 0 : ((int, int), ()) (edge pairs) as the named trace "edges",
--- keyed by source. A consumer installed later can `import "edges"`.
+-- keyed by source. A consumer installed later can `import "prod::edges"`, when it is installed as `prod`.
 -- input 0: ((src, dst), )
 
 output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));

@@ -2,7 +2,7 @@
 +++ optimized
 @@ -2,21 +2,17 @@
  -- Trace imports use provider arrangements; history advances to G = (0, []).
- let store = import "store" : ((int), (int, int));
+ let store = import "store::store" : ((int), (int, int));
  let intents = input 0 : ((int, int, int), (int));
 -let reads_filter = intents | filter(((_, r, _), _) -> (r, 1) eq);
 -let reads = reads_filter | map(((rid, _, k), (e)) -> ((rid, k), (e)));

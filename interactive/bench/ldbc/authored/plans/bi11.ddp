@@ -2,10 +2,10 @@
 -- residents of a country, with all three friendships made inside [start, end]?
 
 let request = input 0 : ((int, List(int), int, int), ());     -- (rid, country, start, end)
-let place_by_name   = import "ldbc.place.by_name"   : (List(int), int);     -- (name, place)
-let place_by_parent = import "ldbc.place.by_parent" : (int, int);           -- (country, city)
-let person_by_city  = import "ldbc.person.by_city"  : (int, int);           -- (city, person)
-let friend          = import "ldbc.friend"          : (int, (int, int));    -- (person, (friend, since))
+let place_by_name   = import "graph::place.by_name"   : (List(int), int);     -- (name, place)
+let place_by_parent = import "graph::place.by_parent" : (int, int);           -- (country, city)
+let person_by_city  = import "graph::person.by_city"  : (int, int);           -- (city, person)
+let friend          = import "graph::friend"          : (int, (int, int));    -- (person, (friend, since))
 
 -- Each request's residents, keyed by person, carrying the request and its window:
 -- country name -> country -> its cities -> the people living there.
@@ -35,4 +35,4 @@ let none    = request | map(((rid, _, _, _), ()) -> (rid, ()));
 let zero    = none - (none | join(counted, (rid, (), _) -> (rid, ())));
 let answer  = (counted | map((rid, n) -> ((rid, 0), (n)))) + (zero | map((rid, ()) -> ((rid, 0), (0))));
 
-output "bi11.answer" = answer | arrange;
+output "answer" = answer | arrange;

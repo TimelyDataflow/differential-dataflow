@@ -263,7 +263,7 @@ def run_query(args, name, plan, manifest, report):
 
             def read(label):
                 want, reference_ms = expected() if not deferred else (None,None)
-                replies, = command('peek', lambda:[f'peek {name}.answer as corgi'])
+                replies, = command('peek', lambda:[f'peek {name}::answer as corgi'])
                 metrics = record['events'][-1]
                 actual = measure.decode_answer(replies, metrics)
                 result = dict(rows=len(actual), peek_ms=metrics['wire_ms'],
@@ -350,7 +350,7 @@ def run_query(args, name, plan, manifest, report):
                                             1000*(time.perf_counter()-started_query))
             record['replay']['includes_reference'] = not deferred
             command('retire', lambda:[Server.feed(name,0,sorted(active),-1,request_shape),'tick'])
-            actual, = command('empty', lambda:[f'peek {name}.answer as corgi'])
+            actual, = command('empty', lambda:[f'peek {name}::answer as corgi'])
             compare(decode(actual), [], 'retired')
             record['retirement_checked'] = True
         if deferred:

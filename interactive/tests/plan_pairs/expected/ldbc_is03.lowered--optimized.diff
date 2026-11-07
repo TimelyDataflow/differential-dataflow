@@ -9,4 +9,4 @@
 +let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
  let answer_idx = answer | arrange;
  -- Renderer: publish the existing arrangement.
- output "is3.answer" = answer_idx;
+ output "answer" = answer_idx;

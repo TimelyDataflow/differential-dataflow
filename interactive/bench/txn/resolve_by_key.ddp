@@ -4,7 +4,7 @@
 -- with the group's writes (`cap_list`), keeps the latest write before the read,
 -- and emits the reads it contradicts. Same input, exports, and answers.
 
-let store = import "store" : ((int), (int, int));
+let store = import "store::store" : ((int), (int, int));
 let intents = input 0 : ((int, int, int), (int));
 
 let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));

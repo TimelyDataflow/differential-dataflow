@@ -1,11 +1,11 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote = import "ldbc.message.by_creator" : (int, int);
-let likes = import "ldbc.likes.by_message" : (int, (int, int));
-let pals = import "ldbc.friend.pair" : ((int, int), ());
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = import "graph::message.by_creator" : (int, int);
+let likes = import "graph::likes.by_message" : (int, (int, int));
+let pals = import "graph::friend.pair" : ((int, int), ());
 let latest_map = request | map(((rid, who), ()) -> (who, rid));
 let latest_idx = latest_map | arrange;
 let wrote_idx = wrote | arrange;
@@ -37,4 +37,4 @@ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) 
 let answer = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) -> ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-output "ic7x1.answer" = answer_idx;
+output "answer" = answer_idx;

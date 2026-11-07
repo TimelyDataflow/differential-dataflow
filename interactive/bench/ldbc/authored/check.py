@@ -83,7 +83,7 @@ def run_plan(args, name, program, schema, bank, graph):
             samples, answer = [], None
             for rep in range(args.warmup + args.reps):
                 mb, _ = command(lambda: [Server.feed(name, 0, rows, 1, request_shape), 'tick'])
-                mp, (lines,) = command(lambda: [f'peek {name}.answer as corgi'])
+                mp, (lines,) = command(lambda: [f'peek {name}::answer as corgi'])
                 got = measure.decode_answer(lines, mp)
                 command(lambda: [Server.feed(name, 0, rows, -1, request_shape), 'tick'])
                 answer = got if answer is None else answer

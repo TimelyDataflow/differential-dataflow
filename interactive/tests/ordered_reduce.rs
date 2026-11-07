@@ -99,13 +99,13 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
             }
             for (k, n, xs, diff) in updates { apply(&mut net, (k, (n, xs)), diff) }
             col.tick(worker);
-            assert_eq!(sorted(col.snapshot(worker, "keyed").unwrap().rows()), rows(&net, key, val));
+            assert_eq!(sorted(col.snapshot(worker, "col::keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted", "distinct"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net, key, val), "{name}");
+                assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net, key, val), "{name}");
             }
         }
         for name in ["minimum", "collected", "counted", "distinct"] {
-            assert!(col.snapshot(worker, name).unwrap().is_empty());
+            assert!(col.snapshot(worker, &format!("col::{name}")).unwrap().is_empty());
         }
     });
 }
@@ -131,12 +131,12 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
             col.feed("col", 0, &updates.join("\n"), None).unwrap();
             for k in -2500..2500 { apply(&mut net, ((k, k * 7), vec![k, -k, k + 1]), diff) }
             col.tick(worker);
-            assert_eq!(sorted(col.snapshot(worker, "keyed").unwrap().rows()), rows(&net, key, val));
+            assert_eq!(sorted(col.snapshot(worker, "col::keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net, key, val), "{name}, diff={diff}");
+                assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net, key, val), "{name}, diff={diff}");
             }
         }
-        for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, name).unwrap().is_empty()); }
+        for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, &format!("col::{name}")).unwrap().is_empty()); }
     });
 }
 
@@ -192,11 +192,11 @@ fn lambdas_reading_part_of_their_input_match_their_definitions() {
             for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
             col.tick(worker);
             for name in ["lengths", "sums", "firsts", "sizes"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net), "{name}");
+                assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net), "{name}");
             }
         }
         assert!(net.is_empty());
-        for name in ["lengths", "sums", "firsts", "sizes"] { assert!(col.snapshot(worker, name).unwrap().is_empty(), "{name}"); }
+        for name in ["lengths", "sums", "firsts", "sizes"] { assert!(col.snapshot(worker, &format!("col::{name}")).unwrap().is_empty(), "{name}"); }
     });
 }
 
@@ -245,10 +245,10 @@ fn limited_reduces_see_each_keys_first_values() {
             for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
             col.tick(worker);
             for name in ["first_two", "how_many", "minimum"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net), "{name}");
+                assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net), "{name}");
             }
         }
         assert!(net.is_empty());
-        for name in ["first_two", "how_many", "minimum"] { assert!(col.snapshot(worker, name).unwrap().is_empty(), "{name}"); }
+        for name in ["first_two", "how_many", "minimum"] { assert!(col.snapshot(worker, &format!("col::{name}")).unwrap().is_empty(), "{name}"); }
     });
 }

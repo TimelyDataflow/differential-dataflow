@@ -1,5 +1,5 @@
 # Cross-dataflow shared-trace demo.
-# `prod` publishes the edge set as trace "edges"; `reach` imports it and
+# `prod` publishes the edge set as trace "prod::edges"; `reach` imports it and
 # tracks the nodes reachable from its roots. Run from the interactive/ dir:
 #   cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
 
