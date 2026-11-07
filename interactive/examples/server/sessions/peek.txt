@@ -1,11 +1,11 @@
 # Reading results back out with `peek`.
 load prod from examples/server/programs/producer.ddp
-load reach from examples/server/programs/reach_import.ddp
+load reach from examples/server/programs/reach_import.ddp edges=prod::edges
 
 # graph 1 -> 2 -> 3, root 1
 feed prod 0 1,2
 feed prod 0 2,3
-feed reach 0 1
+feed reach roots 1
 tick
 
 # Snapshot the shared edge trace, and the reachability result.

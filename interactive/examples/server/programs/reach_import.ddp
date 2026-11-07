@@ -1,9 +1,11 @@
--- Reachability over an edge set imported from another installed program.
--- trace "prod::edges": (src, dst), published by `producer.ddp` installed as `prod`.
--- input 0 : ((int), ()): roots (node, ())
+-- Reachability over an edge set read from another installed program.
+-- input `edges` : ((int), (int)), (src, dst): bound at load to another program's output, as in
+--   `load reach from examples/server/programs/reach_import.ddp edges=prod::edges`
+--   for `producer.ddp` installed as `prod`.
+-- input `roots` : ((int), ()): the nodes to start from, fed.
 
-let edges = import "prod::edges";
-let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
+let edges = input "edges" : ((int), (int));
+let roots = input "roots" : ((int), ());
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

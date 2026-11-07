@@ -43,7 +43,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 | command | effect |
 |---|---|
-| `load <name> from <file> [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
 | `feed <prog> <in> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
 | `feed <prog> <in> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
 | `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |
@@ -137,7 +137,7 @@ log-work form is left for later.)
 
 - **`producer.ddp`** — republishes input 0 as the output `edges`
   (keyed by source), published as `prod::edges` when it is installed as `prod`. A producer whose arrangement others import.
-- **`reach_import.ddp`** — `import "prod::edges"` + roots on input 0, computes
+- **`reach_import.ddp`** — input `edges`, bound at load as `edges=prod::edges`, and input `roots`; computes
   reachability in an iterative scope, `output "result"`. A consumer of a shared
   trace.
 - **`echo.ddp`** — passes input straight to output via `inspect`; used to show
@@ -161,7 +161,7 @@ log-work form is left for later.)
   add and retract an edge to see `+1`/`-1` changes propagate **across two
   separately-installed dataflows**.
 - **`drop.txt`** — the teardown gate: dropping `prod` is refused while `reach`
-  imports `prod::edges`; drop the consumer first, then the producer drops cleanly and
+  reads `prod::edges`; drop the consumer first, then the producer drops cleanly and
   its name frees for reuse.
 - **`values.txt`** — structured ADT input (`inject`/`tuple`/`list`), an update
   **scheduled for a future logical time** (`time=3`, visible only once the

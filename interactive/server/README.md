@@ -75,9 +75,14 @@ an inline pipe-syntax program:
     tail graph::edges
     tick
 
+A load may bind its program's inputs and imports, as `load <name> from <path> <param>=<trace> ...`.
+A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by
+the name it imports. A bound input reads the trace as an import does, checked against the shape
+the input declares, and is no longer fed: `load reach from reach_import.ddp edges=prod::edges`
+reads `prod`'s output `edges` as `reach`'s input `edges`.
 A binding may also be spelled as a call, so
-`edges=random(seed=1,arity=2,range=8,count=12,churn=1)` redirects the local
-import named `edges` to the same content-addressed source as the
+`edges=random(seed=1,arity=2,range=8,count=12,churn=1)` binds
+`edges` to the same content-addressed source as the
 `random:...` form. Such a source is deterministic: it begins with a
 fixed-size window into an infinite hash-derived sequence and replaces
 `churn` rows on every tick.

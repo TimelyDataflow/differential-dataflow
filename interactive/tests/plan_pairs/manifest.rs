@@ -58,7 +58,7 @@ pub(super) const CASES: &[Case] = &[
     Case::new("server_echo", "examples/server/programs/echo.ddp", &[]),
     Case::new("server_rand_reach", "examples/server/programs/rand_reach.ddp", &[]).parsed_distinct(),
     Case::new("server_reach_gen", "examples/server/programs/reach_gen.ddp", &[]).parsed_distinct(),
-    Case::new("server_reach_import", "examples/server/programs/reach_import.ddp", &["server_producer"]).parsed_distinct(),
+    Case::new("server_reach_import", "examples/server/programs/reach_import.ddp", &[]).parsed_distinct(),
     Case::new("access_shared", "tests/plan_pairs/cases/access_shared.ddp", &[]),
     Case::new("arrange_collapse", "tests/plan_pairs/cases/arrange_collapse.ddp", &[]),
     Case::new("fusion_dedup", "tests/plan_pairs/cases/fusion_dedup.ddp", &[]),

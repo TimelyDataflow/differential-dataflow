@@ -78,8 +78,9 @@ pub type ConnectionId = u64;
 pub enum Cmd {
     /// Install a dataflow.
     /// `id_hint` — the client-chosen name the dataflow is installed under.
-    /// `bindings` — `import-name -> binding`, where the binding is either a
-    /// registered trace name or a builtin call (`random(...)`).
+    /// `bindings` — `name -> binding`, where the name is a root input's (as written,
+    /// `input "name"`, or `input<N>` if unnamed) or an import's, and the binding is either a published trace name or a
+    /// builtin call (`random(...)`). A bound input becomes an import of the binding.
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
     /// from a file (`load <name> from <path>`).
     /// `explain` — `explain` or `explain=debug`: apply the explanation rewrite,
@@ -270,7 +271,7 @@ fn apply_bindings(
             .imports
             .iter_mut()
             .find(|import| import.name == *local)
-            .ok_or_else(|| format!("binding names no import {:?}", local))?;
+            .ok_or_else(|| format!("binding names no input or import {:?}", local))?;
         import.from = Source::Trace(random_binding(binding)?);
     }
     Ok(())
@@ -1323,5 +1324,26 @@ mod tests {
         assert!(matches!(&got[3].1, Err(e) if e.contains("no input named \"e\"")), "{:?}", got[3]);
         assert!(matches!(&got[4].1, Ok(Cmd::Bind { trace, prog, input: 1 }) if trace == "g::reach" && prog == "g"), "{:?}", got[4]);
         assert!(matches!(&got[5].1, Ok(Cmd::Unbind { input: 1, .. })), "{:?}", got[5]);
+    }
+
+    /// A load binds an input to a published trace: the input becomes an import of it, and is no
+    /// longer fed. A binding that names no input or import is refused.
+    #[test]
+    fn loads_bind_inputs_to_traces() {
+        let catalog = Catalog::default();
+        let text = "let edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));";
+        let bindings: BTreeMap<String, String> = [("edges".to_string(), "g::edges".to_string())].into();
+        let load = Cmd::Load { id_hint: "q".into(), bindings, program: text.into(), explain: None };
+        let Ok(PreparedCommand::Server(ServerCommand::Install { program, .. })) = prepare(load, &catalog) else { panic!("the program lowers") };
+        let edges = program.root.imports.iter().find(|i| i.name == "edges").expect("an import named edges");
+        assert_eq!(edges.from, Source::Trace("g::edges".into()));
+        assert!(edges.shape.is_some(), "the input's declared shape is checked against the trace's");
+        let mut p = LineParser::new(catalog);
+        let got = feed_all(&mut p, &["r0 feed q roots 1", "r1 feed q edges 1 val=2"]);
+        assert!(matches!(&got[0].1, Ok(Cmd::Feed { input: 1, .. })), "{:?}", got[0]);
+        assert!(matches!(&got[1].1, Err(e) if e.contains("no input named \"edges\"")), "{:?}", got[1]);
+        let bindings: BTreeMap<String, String> = [("paths".to_string(), "g::edges".to_string())].into();
+        let load = Cmd::Load { id_hint: "r".into(), bindings, program: text.into(), explain: None };
+        assert!(matches!(prepare(load, &Catalog::default()), Err(e) if e.contains("binding names no input or import \"paths\"")));
     }
 }

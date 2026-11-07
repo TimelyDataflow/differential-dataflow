@@ -629,3 +629,22 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
     assert!(stages > 0, "{report}");
     assert!(report.contains(&format!("p ok planned \"preview\" ({stages} stages)")), "{report}");
 }
+
+/// A load binds an input of its program to another program's output: the input reads the output,
+/// as an import does, and follows its changes.
+#[test]
+fn loads_bind_inputs_to_published_outputs() {
+    let (server, mut writer, mut reader) = start_server(2);
+    request(&mut writer, &mut reader, "g", "g load g begin\nlet e = input \"e\" : ((int), (int));\noutput \"edges\" = e | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "q", "q load q edges=g::edges begin\nlet edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));\nq end-load\n");
+    request(&mut writer, &mut reader, "f", "f feed g e begin\n1 val=2\n1 val=3\n4 val=5\nf end-feed\n");
+    request(&mut writer, &mut reader, "r", "r feed q roots 1\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek q::hop\n"), ["tuple(tuple(2))", "tuple(tuple(3))"]);
+    request(&mut writer, &mut reader, "f", "f feed g::e 1 val=3 diff=-1\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek q::hop\n"), ["tuple(tuple(2))"]);
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
