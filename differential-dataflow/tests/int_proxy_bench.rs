@@ -57,7 +57,7 @@ macro_rules! harrange {
             Vec<((u64, (u64, u64)), $t, isize)>,
             _,
             VChunkSpine<u64, (u64, u64), $t, isize>,
-        >(hashed.inner, Pipeline, $name, VChunkBatcher::new)
+        >(hashed.inner, Pipeline, $name, true, VChunkBatcher::new)
     }};
 }
 
@@ -97,7 +97,7 @@ macro_rules! proxy_reduce {
     ($arr:expr, $t:ty, $name:expr, $fold:expr) => {
         reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), $t, isize>, _>(
             $arr,
-            $name,
+            $name, true,
             ProxyReduceTactic::new(VecReduceBackend::new(
                 |k: &u64, input: &[(u64, isize)], current: &mut Vec<(u64, isize)>, updates: &mut Vec<(u64, isize)>| {
                     if let Some((_, w)) = $fold(input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| (*k, *v))) {
@@ -145,7 +145,7 @@ fn run_wide(mode: Mode) -> f64 {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         _,
-                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", true, VChunkBatcher::new);
                     arr.reduce_core::<_, VChunkBuilder<u64, (u64, String), u64, isize>,
                         VChunkSpine<u64, (u64, String), u64, isize>,
                         <VecChunkCursor<u64, (u64, String), u64, isize> as Cursor>::KeyContainer, _>(
@@ -167,9 +167,9 @@ fn run_wide(mode: Mode) -> f64 {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         _,
-                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", true, VChunkBatcher::new);
                     reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, isize>, _>(
-                        arr, "ProxyWide",
+                        arr, "ProxyWide", true,
                         ProxyReduceTactic::new(VecReduceBackend::new(
                             |_k: &u64, input: &[(String, isize)], current: &mut Vec<(String, isize)>, updates: &mut Vec<(String, isize)>| {
                                 if let Some(m) = input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| v.clone()).max() {

@@ -31,7 +31,7 @@ fn arrange_reaches_one(config: Config, diffs: &'static [i64]) -> bool {
                 _,
                 _,
                 Spine<u64, (), u64, i64>,
-            >(stream, pact, "Arrange", Batcher::new)
+            >(stream, pact, "Arrange", true, Batcher::new)
             .stream
             .probe_with(&mut probe);
         });

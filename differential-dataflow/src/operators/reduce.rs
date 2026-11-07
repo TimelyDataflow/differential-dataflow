@@ -11,7 +11,8 @@
 
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
@@ -75,7 +76,11 @@ pub use crate::operators::cursor::reduce::reduce_trace;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+///
+/// `frontier_interest` is `true` for `Always` (required for imports), or `false` for
+/// `IfCapability`. For a local output, pass `false` and replace the returned arrangement's
+/// trace with `trace.into_intra()`. Existing convenience methods pass `true`.
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, frontier_interest: bool, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
@@ -89,7 +94,13 @@ where
         let mut source_trace = trace.trace;
         let result_trace = &mut result_trace;
         let scope = trace.stream.scope();
-        trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
+        let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+        let operator_info = builder.operator_info();
+        let mut input = builder.new_input(trace.stream, Pipeline);
+        builder.set_notify_for(0, if frontier_interest { FrontierInterest::Always } else { FrontierInterest::IfCapability });
+        let (output, stream) = builder.new_output();
+        let mut output = OutputBuilder::from(output);
+        builder.build(move |_capabilities| {
 
             // Acquire a logger for arrange events.
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
@@ -117,7 +128,9 @@ where
             let mut source_upper = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
             let mut source_lower = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
 
-            move |(input, frontier), output| {
+            move |frontiers| {
+                let frontier = &frontiers[0];
+                let mut output = output.activate();
 
                 // The operator receives input batches, which it treats as contiguous and will collect and
                 // then process as one batch. It captures the input frontier from the batches, from the upstream
@@ -205,8 +218,8 @@ where
                 // Exert trace maintenance if we have been so requested.
                 output_writer.exert();
             }
-        }
-    )
+        });
+        stream
     };
 
     Arranged { stream, trace: result_trace.unwrap() }
