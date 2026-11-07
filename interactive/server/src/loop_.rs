@@ -270,6 +270,9 @@ fn dispatch(
             ServerCommand::Install { name, program } => server
                 .install(worker, &name, &program)
                 .map(|()| format!("installed {:?} ({} ops)", name, program.op_count())),
+            ServerCommand::Data { name, shape } => server
+                .data(worker, &name, shape)
+                .map(|()| format!("made data {name:?}")),
             ServerCommand::Drop { name } => {
                 if tails.values().any(|tail| {
                     server

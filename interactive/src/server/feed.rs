@@ -201,7 +201,7 @@ impl Server {
             .programs
             .get(&prog)
             .ok_or_else(|| format!("no program {:?}", prog))?;
-        if installed.origin != Origin::Program {
+        if !matches!(installed.origin, Origin::Program | Origin::Data) {
             let kind = if installed.origin == Origin::Clock {
                 "clock"
             } else {

@@ -750,6 +750,15 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
     scope.declare(&format!("enum {name} = {}", body.join(" | "))).unwrap_or_else(|e| panic!("type `{name}`: {e}"));
 }
 
+/// A collection shape as a program declares one, `(key, value)`, such as `((int), (int))`. It may
+/// use only the built-in shapes, as no program declares types for it.
+pub fn parse_row_shape(text: &str) -> crate::scope_ir::RowShape {
+    let mut p = Parser::new(tokenize(&format!(": {text}")));
+    let shape = p.declared_shape().expect("a shape follows the colon");
+    assert!(*p.peek() == Token::Eof, "unexpected {:?} after the shape", p.peek());
+    shape
+}
+
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.collect_types(); p.parse_program() }
 
 /// The resolved type declarations and lambda scope, retained by the plan printer.

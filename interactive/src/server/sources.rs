@@ -318,6 +318,35 @@ impl Server {
 
     /// Build a source's dataflow, one input arranged and published as trace `name` of `shape`, as
     /// corgi chunks. Returns the input, the dataflow's id, and the probe on its arrangement.
+    /// Make the named collection `name`, of shape `shape`: a collection that stands alone, which
+    /// clients feed as `feed <name> …` and read as the trace `<name>`, until it is dropped.
+    /// Its name is an identifier, distinct from every program's and from `clock`.
+    pub fn data(&mut self, worker: &mut Worker, name: &str, shape: RowShape) -> Result<(), String> {
+        if !InputId::is_name(name) || name == "clock" {
+            return Err(format!("data name {name:?} must be an identifier, other than `clock` and `input<N>`"));
+        }
+        if self.programs.contains_key(name) {
+            return Err(format!("the name {name:?} is already taken"));
+        }
+        let (mut input, dataflow_id, _probe) = self.install_source(worker, name, shape);
+        input.advance_to(self.epoch);
+        self.programs.insert(
+            name.to_string(),
+            Installed {
+                inputs: HashMap::from([(0usize, input)]),
+                input_names: HashMap::new(),
+                imports: Vec::new(),
+                exports: vec![name.to_string()],
+                dataflow_id,
+                root_width: 1,
+                now: host_time(self.epoch),
+                origin: Origin::Data,
+                generators: HashMap::new(),
+            },
+        );
+        Ok(())
+    }
+
     pub(super) fn install_source(&mut self, worker: &mut Worker, name: &str, shape: RowShape) -> (ServerInput, usize, ProbeHandle<HostTime>) {
         let probe = ProbeHandle::new();
         let dataflow_id = worker.next_dataflow_index();
