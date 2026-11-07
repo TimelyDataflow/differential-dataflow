@@ -91,6 +91,21 @@ impl Work {
                     })
                     .collect()
             }
+            Work::Request {
+                token, reqid, command: Ok(PreparedCommand::Server(ServerCommand::FeedAt { prog, input, columns, time })),
+                connection_id, logical_count: _,
+            } => {
+                let logical_count = columns.len();
+                (0..peers).map(|target| {
+                    let rows: Vec<usize> = (target..logical_count).step_by(peers).collect();
+                    (target as u64, Work::Request {
+                        token, reqid: reqid.clone(), connection_id, logical_count: Some(logical_count),
+                        command: Ok(PreparedCommand::Server(ServerCommand::FeedAt {
+                            prog: prog.clone(), input, columns: columns.select(&rows), time: time.clone(),
+                        })),
+                    })
+                }).collect()
+            }
             work => (0..peers)
                 .map(|target| (target as u64, work.clone()))
                 .collect(),
@@ -252,6 +267,10 @@ pub fn run_worker(
     }
 }
 
+fn format_point(point: &interactive::server::HostTime, width: usize) -> String {
+    format!("[{}]", (0..width).map(|i| point.get(i).copied().unwrap_or(0).to_string()).collect::<Vec<_>>().join(","))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dispatch(
     command: Result<PreparedCommand, String>,
@@ -270,6 +289,15 @@ fn dispatch(
             ServerCommand::Install { name, program } => server
                 .install(worker, &name, &program)
                 .map(|()| format!("installed {:?} ({} ops)", name, program.op_count())),
+            ServerCommand::InstallManual { name, program, width, as_of } => server
+                .install_with_root(worker, &name, &program, width, as_of)
+                .map(|()| format!("installed {name:?} ({} ops)", program.op_count())),
+            ServerCommand::FeedAt { prog, input, columns, time } => server
+                .feed_columns_at(&prog, input, columns, &time)
+                .map(|()| format!("fed {} rows to {prog:?} input {input} at {time:?}", logical_count.unwrap())),
+            ServerCommand::AdvanceWrite { prog, input, lower, upper } => server
+                .advance_write(&prog, input, &lower, &upper)
+                .map(|()| format!("advanced {prog:?} input {input} to {upper:?}")),
             ServerCommand::Drop { name } => {
                 if tails.values().any(|tail| {
                     server
@@ -345,21 +373,32 @@ fn dispatch(
                             reqid,
                             "data",
                             format!(
-                                "program name={:?} origin={} inputs={:?} imports={:?} exports={:?}",
+                                "program name={:?} origin={} inputs={:?} imports={:?} exports={:?} width={} mode={}",
                                 program.name,
                                 program.origin,
                                 program.inputs,
                                 program.imports,
-                                program.exports
+                                program.exports,
+                                program.width,
+                                if program.manual { "manual" } else { "legacy" }
                             ),
                         );
+                    }
+                    for program in server.program_info() {
+                        for input in program.inputs {
+                            let lower = format_point(server.input_frontier(&program.name, input).unwrap(), program.width);
+                            send(response, reqid, "data", format!("input program={:?} index={input} width={} write_frontier={{{lower}}}", program.name, program.width));
+                        }
                     }
                     for (name, importers) in server.trace_info() {
                         send(
                             response,
                             reqid,
                             "data",
-                            format!("trace name={:?} importers={}", name, importers),
+                            format!("trace name={name:?} importers={importers} width={} read_frontier={{{}}} upper={{{}}}",
+                                server.trace_width(&name).unwrap(),
+                                format_point(server.trace_since(&name).unwrap(), server.trace_width(&name).unwrap()),
+                                server.trace_upper(&name).unwrap().iter().map(|p| format_point(p, server.trace_width(&name).unwrap())).collect::<Vec<_>>().join(",")),
                         );
                     }
                     for (source, target, input) in server.binding_info() {
@@ -403,7 +442,12 @@ fn dispatch(
                 })
             } else { Ok(String::new()) }
         }
-        Ok(PreparedCommand::Peek { name, key, format }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
+        Ok(PreparedCommand::Peek { name, key, format, as_of }) => {
+            let result = match &as_of {
+                Some(point) => server.peek_as_of(worker, &name, key.as_deref(), point),
+                None => server.peek(worker, &name, key.as_deref()),
+            };
+            result.map(|updates| {
             if let Some(response) = response.as_ref() {
                 match format {
                     ReadFormat::Corgi => {
@@ -422,8 +466,12 @@ fn dispatch(
                     ReadFormat::Columns => {}
                 }
             }
-            format!("t={}", server.epoch())
-        }),
+            match &as_of {
+                Some(point) => format!("as_of={{{}}} kind=snapshot", format_point(point, server.trace_width(&name).unwrap())),
+                None => format!("t={}", server.epoch()),
+            }
+        })
+        },
         Ok(PreparedCommand::Tail { name, format }) => start_tail(
             connection_id,
             reqid,
@@ -485,6 +533,9 @@ fn start_tail(
     let key = (connection, reqid.to_string());
     if tails.contains_key(&key) {
         return Err(format!("tail reqid {:?} is already active", reqid));
+    }
+    if server.trace_manual(name) == Some(true) {
+        return Err("tail currently requires legacy mode; use point peeks for manual traces".into());
     }
     let mut trace = server
         .published(name)

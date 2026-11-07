@@ -26,7 +26,7 @@ use interactive::runtime::container::Updates;
 use interactive::runtime::feed::FeedDecoder;
 use interactive::ir::Diff;
 use interactive::scope_ir::{Program, Source};
-use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
+use interactive::server::{Command as ServerCommand, HostTime, RowShape};
 
 pub type ReqId = String;
 
@@ -90,6 +90,7 @@ pub enum Cmd {
         bindings: BTreeMap<String, String>,
         program: String,
         explain: Option<bool>,
+        root: Option<(usize, HostTime)>,
     },
     /// Print preparation stages without installing, using the live export catalog.
     Plan { name: String, program: String, timings: bool },
@@ -100,7 +101,7 @@ pub enum Cmd {
     List,
     /// One-shot snapshot of a named trace, optionally of one key (text, read at the trace's key
     /// shape): one text line per row, columns with `as columns`, or binary frames with `as corgi`.
-    Peek { name: String, key: Option<String>, format: ReadFormat },
+    Peek { name: String, key: Option<String>, format: ReadFormat, as_of: Option<HostTime> },
     /// Persistent subscription to a named trace in the same formats as `peek`.
     Tail { name: String, format: ReadFormat },
     /// Cancel a previous `tail` (matched by its reqid).
@@ -115,7 +116,7 @@ pub enum Cmd {
         prog: String,
         input: usize,
         columns: Updates,
-        time: Option<OuterTime>,
+        time: Option<HostTime>,
     },
     /// Atomically stage many rows, read into columns at the input's declared
     /// shapes, into one program input at the current epoch.
@@ -123,7 +124,9 @@ pub enum Cmd {
         prog: String,
         input: usize,
         columns: Updates,
+        time: Option<HostTime>,
     },
+    AdvanceWrite { prog: String, input: usize, lower: HostTime, upper: HostTime },
     /// Fill one program input from a source the server reads itself — a recipe
     /// (`random:…`, `iota:N`), a published trace, or a file of integer rows —
     /// each worker taking its shard, so no row crosses the wire.
@@ -160,7 +163,7 @@ pub enum Cmd {
 pub enum PreparedCommand {
     Server(ServerCommand),
     Plan { name: String, program: String, timings: bool },
-    Peek { name: String, key: Option<String>, format: ReadFormat },
+    Peek { name: String, key: Option<String>, format: ReadFormat, as_of: Option<HostTime> },
     Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
 }
@@ -206,6 +209,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
             bindings,
             program,
             explain,
+            root,
         } => {
             let mut program = catch_unwind(AssertUnwindSafe(|| {
                 interactive::lower::lower_tree(interactive::parse::pipe::parse(&program))
@@ -219,19 +223,22 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                     .map_err(panic_message)?;
             }
             catalog.record(&id_hint, &program);
-            ServerCommand::Install {
-                name: id_hint,
-                program,
+            match root {
+                Some((width, as_of)) => ServerCommand::InstallManual { name: id_hint, program, width, as_of },
+                None => ServerCommand::Install { name: id_hint, program },
             }
         }
         Cmd::Plan { name, program, timings } => return Ok(PreparedCommand::Plan { name, program, timings }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
-        Cmd::Peek { name, key, format } => return Ok(PreparedCommand::Peek { name, key, format }),
+        Cmd::Peek { name, key, format, as_of } => return Ok(PreparedCommand::Peek { name, key, format, as_of }),
         Cmd::Tail { name, format } => return Ok(PreparedCommand::Tail { name, format }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
-        Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
-        Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
+        Cmd::Feed { prog, input, columns, time: Some(time) }
+        | Cmd::FeedColumns { prog, input, columns, time: Some(time) } => ServerCommand::FeedAt { prog, input, columns, time },
+        Cmd::Feed { prog, input, columns, time: None } => ServerCommand::Feed { prog, input, columns, time: None },
+        Cmd::FeedColumns { prog, input, columns, time: None } => ServerCommand::FeedColumns { prog, input, columns },
+        Cmd::AdvanceWrite { prog, input, lower, upper } => ServerCommand::AdvanceWrite { prog, input, lower, upper },
         Cmd::Source { prog, input, source, diff } => ServerCommand::Load { prog, input, source, diff },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
@@ -331,7 +338,7 @@ pub struct LineParser {
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
     "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
-    "unbind",
+    "unbind", "advance_write",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -361,6 +368,7 @@ struct PendingLoad {
     id_hint: String,
     bindings: BTreeMap<String, String>,
     explain: Option<bool>,
+    root: Option<(usize, HostTime)>,
     body: String,
     /// Set once the body exceeds the size gate; the rest of the body is
     /// swallowed (not stored) and `end-load` reports this error, so an
@@ -372,6 +380,7 @@ struct PendingFeed {
     reqid: ReqId,
     prog: String,
     input: usize,
+    time: Option<HostTime>,
     /// The rows so far, read at the input's declared shapes; `None` for an input with none.
     rows: Option<FeedDecoder>,
     bytes: usize,
@@ -386,6 +395,7 @@ struct PendingFrame {
     prog: String,
     input: usize,
     nbytes: usize,
+    time: Option<HostTime>,
     /// The input's declared shapes, or why the frame will be refused: its bytes are read
     /// past (not kept) and the error reported in its place.
     shape: Result<RowShape, String>,
@@ -437,7 +447,7 @@ impl LineParser {
                 }
                 let columns = done.rows.expect("an unpoisoned feed has its input's shapes").finish();
                 let (prog, input) = (done.prog, done.input);
-                return Some((done.reqid, Ok(Cmd::FeedColumns { prog, input, columns })));
+                return Some((done.reqid, Ok(Cmd::FeedColumns { prog, input, columns, time: done.time })));
             }
 
             pending.bytes = pending.bytes.saturating_add(line.len() + 1);
@@ -485,6 +495,7 @@ impl LineParser {
                                 bindings: done.bindings,
                                 program: done.body,
                                 explain: done.explain,
+                                root: done.root,
                             }
                         }),
                     ));
@@ -537,6 +548,7 @@ impl LineParser {
                 id_hint,
                 bindings,
                 explain,
+                root,
             } => {
                 self.pending_load = Some(PendingLoad {
                     plan,
@@ -545,28 +557,29 @@ impl LineParser {
                     id_hint,
                     bindings,
                     explain,
+                    root,
                     body: String::new(),
                     poisoned: None,
                 });
                 None
             }
-            ParseOutcome::BeginFeed { prog, input } => {
+            ParseOutcome::BeginFeed { prog, input, time, error } => {
                 // A feed to an input with no declared shapes is read through to its end, then refused.
-                let (rows, poisoned) = match self.catalog.decoder(&prog, input) {
+                let (rows, poisoned) = match error.map_or_else(|| self.catalog.decoder(&prog, input), Err) {
                     Ok(rows) => (Some(rows), None),
                     Err(error) => (None, Some(format!("feed: {error}"))),
                 };
-                self.pending_feed = Some(PendingFeed { reqid, prog, input, rows, bytes: 0, poisoned });
+                self.pending_feed = Some(PendingFeed { reqid, prog, input, time, rows, bytes: 0, poisoned });
                 None
             }
-            ParseOutcome::BeginFrame { prog, input, nbytes } => {
+            ParseOutcome::BeginFrame { prog, input, nbytes, time } => {
                 let shape = if nbytes > self.max_feed_bytes {
                     Err(format!("feed: a frame of {nbytes} bytes exceeds {} bytes (DDIR_MAX_FEED_BYTES)", self.max_feed_bytes))
                 } else {
                     input.clone().and_then(|input| self.catalog.shape(&prog, input).map_err(|error| format!("feed: {error}")))
                 };
                 let input = input.unwrap_or_default();
-                self.pending_frame = Some(PendingFrame { reqid, prog, input, nbytes, shape });
+                self.pending_frame = Some(PendingFrame { reqid, prog, input, nbytes, time, shape });
                 None
             }
         }
@@ -596,7 +609,7 @@ impl LineParser {
             interactive::runtime::frame::decode_feed(payload, &shape, self.max_feed_bytes as u64).map_err(|error| format!("feed: {error}"))
         });
         let (prog, input) = (frame.prog, frame.input);
-        Some((frame.reqid, columns.map(|columns| Cmd::FeedColumns { prog, input, columns })))
+        Some((frame.reqid, columns.map(|columns| Cmd::FeedColumns { prog, input, columns, time: frame.time })))
     }
 }
 
@@ -609,15 +622,19 @@ enum ParseOutcome {
         id_hint: String,
         bindings: BTreeMap<String, String>,
         explain: Option<bool>,
+        root: Option<(usize, HostTime)>,
     },
     BeginFeed {
         prog: String,
         input: usize,
+        time: Option<HostTime>,
+        error: Option<String>,
     },
     BeginFrame {
         prog: String,
         input: Result<usize, String>,
         nbytes: usize,
+        time: Option<HostTime>,
     },
 }
 
@@ -629,6 +646,22 @@ fn read_format<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], ReadFormat) {
         [rest @ .., "as", "corgi"] => (rest, ReadFormat::Corgi),
         _ => (args, ReadFormat::Rows),
     }
+}
+
+/// Points use nonnegative integer coordinates without whitespace; scalar is width-one sugar.
+fn point(text: &str) -> Result<HostTime, String> {
+    let body = match text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(body) => body,
+        None if !text.contains(',') => text,
+        None => return Err(format!("a point with multiple coordinates needs brackets: {text:?}")),
+    };
+    let coords: Result<Vec<u64>, _> = body.split(',').map(str::parse).collect();
+    coords.map(|c| HostTime::new(c.into())).map_err(|_| format!("invalid point {text:?}"))
+}
+
+fn singleton(text: &str) -> Result<HostTime, &'static str> {
+    let body = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')).ok_or("expected singleton frontier")?;
+    point(body).map_err(|_| "expected singleton frontier")
 }
 
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
@@ -648,7 +681,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
-                    plan: true, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None,
+                    plan: true, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None, root: None,
                 },
             }
         },
@@ -669,6 +702,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             };
             let mut bindings = BTreeMap::new();
             let mut explain = None;
+            let (mut width, mut as_of, mut manual) = (None, None, false);
             for tok in options {
                 match *tok {
                     "explain" => { explain = Some(false); continue; }
@@ -681,10 +715,32 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                         tok
                     ));
                 };
+                match k {
+                    "width" => {
+                        if width.is_some() { return ParseOutcome::Err("duplicate width".into()); }
+                        width = match v.parse::<usize>() { Ok(n) if n > 0 => Some(n), _ => return ParseOutcome::Err("width must be positive".into()) };
+                        continue;
+                    }
+                    "as_of" => {
+                        if as_of.is_some() { return ParseOutcome::Err("duplicate as_of".into()); }
+                        as_of = match point(v) { Ok(p) => Some(p), Err(e) => return ParseOutcome::Err(e) };
+                        continue;
+                    }
+                    "mode" => {
+                        if manual || v != "manual" { return ParseOutcome::Err("mode must be manual and occur once".into()); }
+                        manual = true; continue;
+                    }
+                    _ => {}
+                }
                 if bindings.insert(k.to_string(), v.to_string()).is_some() {
                     return ParseOutcome::Err(format!("load: duplicate binding for {:?}", k));
                 }
             }
+            let root = match (width, as_of, manual) {
+                (None, None, false) => None,
+                (Some(w), Some(p), true) if p.len() <= w => Some((w, p)),
+                _ => return ParseOutcome::Err("manual load requires width=K as_of=p mode=manual, with point within width".into()),
+            };
             let id_hint = id_hint.to_string();
             match path {
                 // A file the server reads itself is not an upload, so the program-size
@@ -695,6 +751,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                         bindings,
                         program,
                         explain,
+                        root,
                     }),
                     Err(error) => ParseOutcome::Err(format!("load: cannot read {path:?}: {error}")),
                 },
@@ -704,10 +761,24 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     id_hint,
                     bindings,
                     explain,
+                    root,
                 },
             }
         }
         "feed" => {
+            // Strip the common point before recognizing the row/body/frame spelling.
+            let mut time = None;
+            let mut time_error = None;
+            let mut seen_time = false;
+            let mut filtered = Vec::new();
+            for arg in args {
+                if let Some(t) = arg.strip_prefix("time=") {
+                    if seen_time { time_error = Some("duplicate time".into()); }
+                    seen_time = true;
+                    match point(t) { Ok(p) => time = Some(p), Err(e) => time_error = Some(e) }
+                } else { filtered.push(*arg); }
+            }
+            let args = filtered.as_slice();
             if let [prog, input, "begin"] = args {
                 let input = match input.parse() {
                     Ok(input) => input,
@@ -720,6 +791,8 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 return ParseOutcome::BeginFeed {
                     prog: (*prog).to_string(),
                     input,
+                    time,
+                    error: time_error,
                 };
             }
             // Syntax: `feed <prog> <in#> frame <nbytes>`, then exactly `nbytes` bytes: a binary frame.
@@ -728,12 +801,15 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 let Ok(nbytes) = nbytes.parse() else {
                     return ParseOutcome::Err(format!("feed: <nbytes> must be a number, got {nbytes:?}"));
                 };
-                let input = input.parse().map_err(|_| format!("feed: <in#> must be a number, got {input:?}"));
-                return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input, nbytes };
+                let input = input.parse().map_err(|_| format!("feed: <in#> must be a number, got {input:?}"))
+                    .and_then(|input| time_error.map_or(Ok(input), Err));
+                return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input, nbytes, time };
             }
+            if let Some(error) = time_error { return ParseOutcome::Err(error); }
             // Syntax: `feed <prog> <in#> from <recipe-trace-or-file> [diff=<d>]` — the server
             // sources the rows.
             if let [prog, input, "from", source, rest @ ..] = args {
+                if time.is_some() { return ParseOutcome::Err("feed from source does not accept time".into()); }
                 let diff = match rest {
                     [] => Ok(1),
                     [arg] => arg
@@ -773,21 +849,10 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             };
             let key = args[2];
             let mut val = None;
-            let mut time = None;
             let mut diff: Diff = 1;
             for tok in &args[3..] {
                 if let Some(v) = tok.strip_prefix("val=") {
                     val = Some(v);
-                } else if let Some(t) = tok.strip_prefix("time=") {
-                    time = match t.parse() {
-                        Ok(t) => Some(t),
-                        Err(_) => {
-                            return ParseOutcome::Err(format!(
-                                "feed: time= must be a number, got {:?}",
-                                t
-                            ))
-                        }
-                    };
                 } else if let Some(d) = tok.strip_prefix("diff=") {
                     diff = match d.parse() {
                         Ok(d) => d,
@@ -835,12 +900,30 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             [] => ParseOutcome::Cmd(Cmd::List),
             _ => ParseOutcome::Err("list: takes no arguments".into()),
         },
+        "advance_write" => {
+            let [prog, input, lower, upper] = args else {
+                return ParseOutcome::Err("advance_write: expected PROGRAM INPUT lower={p} upper={p}".into());
+            };
+            let parsed = (input.parse(), lower.strip_prefix("lower=").ok_or("missing lower").and_then(singleton), upper.strip_prefix("upper=").ok_or("missing upper").and_then(singleton));
+            match parsed {
+                (Ok(input), Ok(lower), Ok(upper)) => ParseOutcome::Cmd(Cmd::AdvanceWrite { prog: (*prog).into(), input, lower, upper }),
+                _ => ParseOutcome::Err("advance_write requires an input number and singleton lower/upper frontiers".into()),
+            }
+        }
         "peek" => {
             let (args, format) = read_format(args);
-            match args {
-                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, format }),
-                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), format }),
-                _ => ParseOutcome::Err("peek: expected `<name> [key] [as columns|corgi]`".into()),
+            let mut as_of = None;
+            let mut positional = Vec::new();
+            for arg in args {
+                if let Some(p) = arg.strip_prefix("as_of=") {
+                    if as_of.is_some() { return ParseOutcome::Err("duplicate as_of".into()); }
+                    as_of = match point(p) { Ok(p) => Some(p), Err(e) => return ParseOutcome::Err(e) };
+                } else if *arg != "nowait" { positional.push(*arg); }
+            }
+            match positional.as_slice() {
+                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, format, as_of }),
+                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), format, as_of }),
+                _ => ParseOutcome::Err("peek: expected `<name> [key] [as_of=p] [nowait] [as columns|corgi]`".into()),
             }
         }
         "tail" => match read_format(args) {
@@ -880,7 +963,7 @@ mod tests {
             export "ones" = input 3 : ((int), (int));
         "#;
         let catalog = Catalog::default();
-        let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
+        let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None, root: None };
         prepare(load, &catalog).expect("the program lowers");
         LineParser::new(catalog)
     }
@@ -909,13 +992,22 @@ mod tests {
         assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
         assert_eq!(p.frame_bytes(), Some((bytes.len(), true)));
         match p.frame(&bytes) {
-            Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got }))) => {
+            Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got, time: None }))) => {
                 assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", 0));
                 assert_eq!(got, columns);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
         assert!(p.frame_bytes().is_none(), "the frame is complete");
+        assert!(p.feed(&format!("point feed world 0 frame {} time=[2,3]", bytes.len())).is_none());
+        assert!(matches!(p.frame(&bytes), Some((_, Ok(Cmd::FeedColumns { time: Some(t), .. }))) if t == point("[2,3]").unwrap()));
+        assert!(p.feed(&format!("bad feed world 0 frame {} time=bad", bytes.len())).is_none());
+        assert_eq!(p.frame_bytes(), Some((bytes.len(), false)));
+        assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
+        assert!(p.feed("bad_text feed world 0 time=bad begin").is_none());
+        assert!(p.feed("1,2").is_none());
+        assert!(matches!(p.feed("end-feed"), Some((_, Err(_)))));
+
         assert!(p.feed(&format!("r2 feed world 1 frame {}", bytes.len())).is_none());
         assert!(matches!(p.frame(&bytes), Some((_, Err(e))) if e.contains("shape")));
         assert!(p.feed(&format!("r3 feed world 0 frame {}", bytes.len())).is_none());
@@ -965,7 +1057,7 @@ mod tests {
         assert!(matches!(got[0].1, Ok(Cmd::List)));
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
-        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
+        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows, .. }) if name == "foo"));
     }
 
     #[test]
@@ -1022,6 +1114,7 @@ mod tests {
                 bindings,
                 program,
                 explain,
+                ..
             }) => {
                 assert_eq!(id_hint, "gen");
                 assert_eq!(
@@ -1071,7 +1164,7 @@ mod tests {
             &format!("r5 load p from {} explain\n", ddp.display()),
         ]);
         match &got[0].1 {
-            Ok(Cmd::Load { id_hint, bindings, program, explain }) => {
+            Ok(Cmd::Load { id_hint, bindings, program, explain, .. }) => {
                 assert_eq!(id_hint, "p");
                 assert_eq!(program, "export \"r\" = input 0;\n");
                 assert_eq!(*explain, Some(true));
@@ -1119,7 +1212,7 @@ mod tests {
         assert_eq!(got[1].0, "_2"); // tick 3
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
-        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
+        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows, .. }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
     }
@@ -1146,14 +1239,14 @@ mod tests {
         let Ok(Cmd::Feed { columns: wrapped, .. }) = &got[9].1 else { panic!("expected Feed, got {:?}", got[9].1) };
         match &got[0].1 {
             Ok(Cmd::Feed { prog, input, columns, time }) => {
-                assert_eq!((prog.as_str(), *input, *time), ("world", 0, None));
+                assert_eq!((prog.as_str(), *input, time.as_ref()), ("world", 0, None));
                 assert_eq!((&columns.keys, &columns.diffs), (&wrapped.keys, &vec![1]));
             }
             other => panic!("expected Feed, got {:?}", other),
         }
         match &got[1].1 {
             Ok(Cmd::Feed { time, columns, .. }) => {
-                assert_eq!(*time, Some(5));
+                assert_eq!(*time, Some(interactive::server::host_time(5)));
                 assert_eq!(columns.diffs, vec![-1]);
             }
             other => panic!("expected Feed, got {:?}", other),

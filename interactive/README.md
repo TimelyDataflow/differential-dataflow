@@ -326,6 +326,62 @@ For the full command vocabulary — `load`, `feed`, `tick`, `peek`, `tail`, and 
 [`examples/server/README.md`](examples/server/README.md), and `server/README.md` for the
 protocol and configuration.
 
+## Multitemporal programs
+
+`install_with_root(..., k, as_of)` gives a program `k` root time coordinates,
+followed by one coordinate per enclosing loop, outermost first. `install` chooses
+width 1. A `HostTime` is a point of nonnegative coordinates; omitted trailing
+coordinates are zero. A time is at or before a point `p` when every coordinate is
+at or before the corresponding coordinate of `p`.
+
+`feed_at` supplies updates at a point; `advance_input` advances one input's point
+frontier. `wait_for` waits for one export's frontier to reach a point, after its
+producers have advanced; reaching that point does not close the point itself.
+`snapshot_as_of` and `peek_as_of` accumulate updates at or before the named point.
+A read waits only on the inputs and imports its export depends on: a read at a point
+those have not closed is refused, and the refusal names each blocking input with its
+write frontier. Reads above width 1 must name a point; at width 1, `snapshot` and
+`peek` read the latest point those dependencies have closed. `as_of` is the import
+and read floor; `compact` advances the read floor and allows history to be discarded.
+Reads below it are refused.
+Importing into a wider program shares the trace, with zero extra coordinates;
+importing into a narrower one is refused. These are library calls: the client wire
+protocol does not yet carry widths or point/frontier commands.
+
+For operators that do not look at time, the rule is simple: the answer at a
+readable point `p` is the width-1 program run once on the inputs accumulated up to
+`p`. This covers `map`, `filter`, `flatmap`, joins, the reduce family (`distinct`,
+`count`, `min`, `collect`, and lambda reductions), `arrange`, concat, `negate`, and
+loops that reach a fixed point. This is the rule tested by the difftest's
+`multitemporal` oracle, being added in a companion change.
+
+Time-observing operators and host conveniences need their own rules. The test
+`independent_inputs_and_time_shapes` below is in [`tests/bitemporal.rs`](tests/bitemporal.rs).
+Open questions still need a rule or a test.
+
+| Operator or feature | Above width 1 today | Status and coverage |
+| --- | --- | --- |
+| `lift` | Pairs the value with the full positional tuple of `k + depth` coordinates, including zeros. | Defined and tested: `independent_inputs_and_time_shapes`. |
+| `lift_iter` | Appends the current loop's coordinate, or zero at the root. The discipline of only using it after leaving that loop is unchecked. | Defined and tested: `independent_inputs_and_time_shapes`; unrestricted use in feedback is an open question. |
+| `delay` | Takes exactly `k + depth` positional coordinates and advances by coordinatewise maximum; `0` leaves a coordinate unchanged. | Defined and tested: `independent_inputs_and_time_shapes`. |
+| `join_function` | Emits the lambda's rows and multiplies their diffs; times use the same `k + depth` tuple and maximum as `delay`, including unchanged coordinates at `0`. | Defined and tested through `delay` in `independent_inputs_and_time_shapes`; explicit row/diff cases in [`lift_delay::rows_are_as_expected`](tests/lift_delay.rs) use width 1. |
+| `half_join` | Releases a stream update once the opposite arrangement can gain nothing before it in lexicographic order, first coordinate first: strict `<` or inclusive `<=`. Keeps the stream's timestamp and carries the coordinatewise join as time data. A delta join can therefore stall: if its inputs advance only in later coordinates, it withholds output until coordinate 0 passes the pending updates on every input it reads. An ordinary `join` of the same inputs does not stall, and the answers a delta join does produce are correct. | Defined and tested: [`meets_what_precedes_in_the_total_order`](src/runtime/half_join/backend.rs). The bitemporal balances oracle does **not** cover delta joins; `independent_inputs_and_time_shapes` has only a small half-join check. The stall is open (see below). |
+| As-of drop pass | Compares the full `as_of` point, padded with loop zeros, dropping updates at that point on paths made dead by a strict half join. | Defined and tested at a zero width-2 floor: `independent_inputs_and_time_shapes`; [`a_nested_scope_compares_every_lane`](src/passes/as_of.rs) checks loop padding at width 1. |
+| Bindings | Both source and target must have width 1. | Refused; testing this width guard is an open question ([code](src/server/bind.rs)). |
+| Churning recipe loads | Loading a recipe with nonzero churn into a wider input is refused. | Refused; testing this width guard is an open question ([code](src/server/feed.rs)). |
+| Generated sources, e.g. `clock` | Width-1 sources driven by global `tick`, imported like any installed width-1 trace: a wider program sees them with zero extra coordinates. | Defined; not tested above width 1 ([code](src/server/sources.rs)). |
+| `tick` | Global `tick` advances only width-1 programs and sources. `tick_program` advances coordinate zero of one program; imports advance separately. | Defined and tested: [`bitemporal_balances_match_the_oracle`](tests/bitemporal.rs). |
+| Diagnostics (`diag.*`) | Width-1 streams fed at the global epoch, imported like any installed width-1 trace. | Defined; not tested above width 1 ([code](src/server/diagnostics.rs)). |
+| Compaction | Monotone single-point floors; readers/importers retain their own holds. Antichain compaction awaits the read- and write-frontier verbs. | Points defined and tested: `independent_inputs_and_time_shapes`; antichains are an open question. |
+
+Still open: delta joins that don't stall, by replacing the lexicographic order
+with one minted from frontier progress and broadcast to every half join; reading
+as of a frontier, queuing reads until their points close,
+read-frontier and write-frontier verbs, an audit verb for a key's history, named
+axes, and projection between widths. `wait_for_frontier` can already wait for an
+antichain, but does not provide those read/write verbs. Width `k = 0` is refused
+today; its meaning is also an open question.
+
 ## Differential testing
 
 `tests/difftest.rs` generates random lambda programs over random streams of inserts and

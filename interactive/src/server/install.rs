@@ -19,15 +19,22 @@ impl Server {
         name: &str,
         prog: &st::Program,
     ) -> Result<(), String> {
-        self.install_with_root(worker, name, prog, 1, self.import_as_of())
+        self.install_inner(worker, name, prog, 1, self.import_as_of(), false)
     }
 
     /// Install with `root_width` root coordinates and an explicit import/read floor.
     /// Wider imports are refused; narrower imports share their trace unchanged.
-    /// New inputs start at `as_of` (at the compatibility epoch for width 1).
+    /// New inputs start at `as_of`; progress and retention are manual at every width.
     pub fn install_with_root(
         &mut self, worker: &mut Worker, name: &str, prog: &st::Program,
         root_width: usize, as_of: HostTime,
+    ) -> Result<(), String> {
+        self.install_inner(worker, name, prog, root_width, as_of, true)
+    }
+
+    fn install_inner(
+        &mut self, worker: &mut Worker, name: &str, prog: &st::Program,
+        root_width: usize, as_of: HostTime, manual: bool,
     ) -> Result<(), String> {
         if root_width == 0 || as_of.len() > root_width {
             return Err("root width must be positive and contain the as-of point".into());
@@ -62,6 +69,9 @@ impl Server {
                 if let Some(output) = self.outputs.get(&key) {
                     if output.width > root_width {
                         return Err(format!("cannot import trace {key:?} of width {} into width {root_width}", output.width));
+                    }
+                    if !manual && self.programs[&output.owner].manual {
+                        return Err("legacy programs cannot import manual producers".into());
                     }
                     if !output.since.less_equal(&as_of) || !self.traces.get_mut(&key).unwrap().get_logical_compaction().less_equal(&as_of) {
                         return Err(format!("as-of {as_of:?} is before trace {key:?}'s compaction frontier"));
@@ -128,6 +138,7 @@ impl Server {
             })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
+        let mut dependencies: HashMap<_, _> = export_names.iter().cloned().zip(export_dependencies(&prog.root)).collect();
 
         let mut output_probes = HashMap::new();
         let root = &prog.root;
@@ -207,14 +218,23 @@ impl Server {
             self.shapes.insert(export_name, shape);
         }
         for (export_name, trace, tap) in published {
-            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });
+            let mut inputs = Vec::new();
+            let mut imports = Vec::new();
+            for index in dependencies.remove(&export_name).unwrap() {
+                match &root.imports[index].from {
+                    st::Source::Input(input) => inputs.push(*input),
+                    st::Source::Trace(trace) => imports.push(canonical_source_name(trace)),
+                    st::Source::Parent(_) => unreachable!("root import from a parent scope"),
+                }
+            }
+            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), inputs, imports, probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });
             if let Some(tap) = tap { self.taps.insert(export_name.clone(), tap); }
             self.traces.insert(export_name, trace);
         }
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
         }
-        let now = if root_width == 1 { as_of.join(&host_time(self.epoch)) } else { as_of.clone() };
+        let now = if !manual { as_of.join(&host_time(self.epoch)) } else { as_of.clone() };
         let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
         for (pos, mut handle) in inputs {
             handle.advance_to_point(&now);
@@ -228,6 +248,7 @@ impl Server {
                 exports: export_names,
                 dataflow_id,
                 root_width,
+                manual,
                 now,
                 origin: Origin::Program,
                 generators: HashMap::new(),
@@ -272,4 +293,39 @@ impl Server {
             .collect();
         Ok((shapes, exports))
     }
+}
+
+/// For each export, the import slots reachable backwards through the rendered scope.
+/// Summarize children first, then follow operators, child edges, and feedback bindings.
+/// Visiting each reference once per export closes cycles without including unrelated loops.
+fn export_dependencies(scope: &st::Scope) -> Vec<Vec<usize>> {
+    let children: Vec<_> = scope.items.iter().map(|item| match item {
+        st::Item::Sub(child) => export_dependencies(child),
+        st::Item::Op(_) => Vec::new(),
+    }).collect();
+    scope.exports.iter().map(|export| {
+        let mut pending = vec![export.value.clone()];
+        let mut seen = std::collections::HashSet::new();
+        let mut imports = Vec::new();
+        while let Some(reference) = pending.pop() {
+            if !seen.insert(reference.clone()) { continue; }
+            match reference {
+                st::Ref::Import(index) => imports.push(index),
+                st::Ref::Local(index) => {
+                    let st::Item::Op(node) = &scope.items[index] else { unreachable!("local reference to a scope") };
+                    pending.extend(node.refs().cloned());
+                }
+                st::Ref::Var(var) => pending.extend(scope.binds.iter().filter(|b| b.var == var).map(|b| b.value.clone())),
+                st::Ref::ChildExport(index, export) => {
+                    let st::Item::Sub(child) = &scope.items[index] else { unreachable!("child export of an operator") };
+                    for &import in &children[index][export] {
+                        let st::Source::Parent(reference) = &child.imports[import].from else { unreachable!("child import without a parent") };
+                        pending.push(reference.clone());
+                    }
+                }
+            }
+        }
+        imports.sort_unstable();
+        imports
+    }).collect()
 }

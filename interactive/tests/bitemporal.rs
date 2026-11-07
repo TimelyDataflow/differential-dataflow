@@ -196,8 +196,8 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             for point in points {
                 let expected = fed.expected(point);
                 for export in EXPORTS {
-                    // Reads conservatively require the whole program and its imports to close the point.
-                    if shared && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
+                    // Only the owner queries depend on the imported seed.
+                    if shared && export.starts_with("owner_") && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
                     let got: Rows = server.snapshot_as_of(worker, export, &at(point)).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     if !w0 { continue; }
@@ -206,9 +206,14 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 }
             }
         }
-        // A point compacted away is refused.
+        // Manual advances retain history until explicit compaction.
         let now = server.now("bank").unwrap().clone();
-        if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
+        if lane(&now, 0) >= 2 {
+            let old = at((lane(&now, 0) - 2, 0));
+            assert!(server.snapshot_as_of(worker, "balance", &old).is_ok());
+            server.compact("balance", &at((lane(&now, 0) - 1, 0))).unwrap();
+            assert!(server.snapshot_as_of(worker, "balance", &old).is_err());
+        }
         if shared {
             let narrow = lower::lower_tree(parse::pipe::parse(r#"export "bad" = import "balance";"#));
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
@@ -451,27 +456,21 @@ fn independent_inputs_and_time_shapes() {
                                + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))));
             "#));
             server.install_with_root(worker, "split", &program, 2, at((0, 0))).unwrap();
+            let reader = lower::lower_tree(parse::pipe::parse(r#"
+                export "left_copy" = import "left";
+                export "both" = (import "left") + (import "right");
+            "#));
+            server.install_with_root(worker, "reader", &reader, 2, at((0, 0))).unwrap();
+            let relay = lower::lower_tree(parse::pipe::parse(r#"export "relay" = (import "both") + (import "left_copy");"#));
+            server.install_with_root(worker, "relay", &relay, 2, at((0, 0))).unwrap();
             if worker.index() == 0 {
                 server.feed_at("split", 0, "7 val=1", &at((0, 0))).unwrap();
                 server.feed_at("split", 0, "8 val=1", &at((0, 5))).unwrap();
             }
             server.advance_input("split", 0, &at((1, 0))).unwrap();
             server.wait_for(worker, "left", &at((1, 0))).unwrap();
-            // Input 1 and the exports using it remain open at the minimum.
-            let error = server.snapshot(worker, "left").unwrap_err();
-            assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
-            assert_eq!(server.peek(worker, "left", None).unwrap_err(), error);
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
-            server.advance_input("split", 0, &at((5, 0))).unwrap();
-            let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
-            assert_eq!(error, format!("cannot advance input \"split\"/0 from frontier {:?} to requested target {:?}", at((5, 0)), at((3, 7))));
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
-            assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
-            assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
-            if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
-            server.advance_input("split", 1, &at((2, 0))).unwrap();
-            for export in ["left", "seen", "delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
             let left = server.snapshot_as_of(worker, "left", &at((0, u64::MAX))).unwrap();
+            assert_eq!(server.snapshot_as_of(worker, "left_copy", &at((0, u64::MAX))).unwrap().rows(), left.rows());
             let seen = server.snapshot_as_of(worker, "seen", &at((0, u64::MAX))).unwrap();
             let keyed = server.peek_as_of(worker, "left", Some("7"), &at((0, 0))).unwrap();
             if worker.index() == 0 {
@@ -480,13 +479,48 @@ fn independent_inputs_and_time_shapes() {
                 let rows: Rows = seen.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(sorted(rows), vec![(vec![7], vec![0, 0, 256, 256], 1), (vec![8], vec![0, 5, 256, 256], 1)]);
             }
+            // Input 1 and the exports using it remain open at the minimum.
+            for export in ["right", "delta", "both"] {
+                let error = server.snapshot_as_of(worker, export, &at((0, u64::MAX))).unwrap_err();
+                let path = if export == "both" { "import \"right\" -> " } else { "" };
+                assert_eq!(error, format!("trace {export:?} is not closed at [0,max]: {path}input 1 of program \"split\" is at write frontier {{[0,0]}}"));
+            }
+            assert_eq!(server.snapshot_as_of(worker, "left", &at((1, 0))).unwrap_err(),
+                "trace \"left\" is not closed at [1,0]: input 0 of program \"split\" is at write frontier {[1,0]}");
+            // Both inputs block, even though input 1 subsumes input 0 in the combined frontier.
+            assert_eq!(server.snapshot_as_of(worker, "delta", &at((1, 0))).unwrap_err(),
+                "trace \"delta\" is not closed at [1,0]:\n  - input 0 of program \"split\" is at write frontier {[1,0]}\n  - input 1 of program \"split\" is at write frontier {[0,0]}");
+            let error = server.snapshot(worker, "left").unwrap_err();
+            assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
+            assert_eq!(server.peek(worker, "left", None).unwrap_err(), error);
+            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
+            server.advance_input("split", 0, &at((5, 0))).unwrap();
+            let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
+            assert_eq!(error, "cannot advance input \"split\"/0 from frontier [5,0] to requested target [3,7]");
+            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
+            assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
+            assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
+            if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
+            server.advance_input("split", 1, &at((0, 3))).unwrap();
+            assert_eq!(server.snapshot_as_of(worker, "delta", &at((5, 3))).unwrap_err(),
+                "trace \"delta\" is not closed at [5,3]:\n  - input 0 of program \"split\" is at write frontier {[5,0]}\n  - input 1 of program \"split\" is at write frontier {[0,3]}");
+            assert_eq!(server.snapshot_as_of(worker, "both", &at((5, 3))).unwrap_err(),
+                "trace \"both\" is not closed at [5,3]:\n  - import \"left\" -> input 0 of program \"split\" is at write frontier {[5,0]}\n  - import \"right\" -> input 1 of program \"split\" is at write frontier {[0,3]}");
+            assert_eq!(server.snapshot_as_of(worker, "both", &at((5, 2))).unwrap_err(),
+                "trace \"both\" is not closed at [5,2]: import \"left\" -> input 0 of program \"split\" is at write frontier {[5,0]}");
+            // Preserve both import paths to a shared producer; omit the nonblocking right input.
+            assert_eq!(server.snapshot_as_of(worker, "relay", &at((5, 2))).unwrap_err(),
+                "trace \"relay\" is not closed at [5,2]:\n  - import \"both\" -> import \"left\" -> input 0 of program \"split\" is at write frontier {[5,0]}\n  - import \"left_copy\" -> import \"left\" -> input 0 of program \"split\" is at write frontier {[5,0]}");
+            assert!(server.advance_input("split", 1, &at((0, 0))).unwrap_err().contains("cannot feed at [0,0]: input \"split\"/1 has width 2 and frontier [0,3]"));
+            server.advance_input("split", 1, &at((2, 3))).unwrap();
+            for export in ["left", "seen", "delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
             let delta = server.snapshot_as_of(worker, "delta", &at((0, u64::MAX))).unwrap();
             if worker.index() == 0 {
                 let rows: Rows = delta.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(rows, vec![(vec![7], vec![1, 2, 0, 0], 1)]);
             }
             server.compact("left", &at((0, 3))).unwrap();
-            assert!(server.snapshot_as_of(worker, "left", &at((0, 2))).is_err());
+            assert_eq!(server.snapshot_as_of(worker, "left", &at((0, 2))).unwrap_err(), "point [0,2] is before trace \"left\"'s read floor [0,3]");
             assert!(server.compact("left", &at((0, 1))).is_err());
             let import = lower::lower_tree(parse::pipe::parse(r#"export "wide" = import "left" | lift;"#));
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
@@ -508,13 +542,20 @@ fn independent_inputs_and_time_shapes() {
                 server.advance_to(worker, &name, &at((3, 0))).unwrap();
                 let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };
                 let error = server.snapshot_as_of(worker, &name, &point).unwrap_err();
-                assert!(error.contains("not closed") && error.contains("input/import frontier"), "{error}");
+                let point_text = if width == 1 { "[2]" } else { "[2,max]" };
+                assert_eq!(error, format!("trace {name:?} is not closed at {point_text}: import \"lagging\" -> input 0 of program \"producer\" is at write frontier {{[0]}}"));
                 assert_eq!(server.peek_as_of(worker, &name, None, &point).unwrap_err(), error);
-                let default_error = server.snapshot(worker, &name).unwrap_err();
-                assert_eq!(server.peek(worker, &name, None).unwrap_err(), default_error);
-                // Loading a published trace calls snapshot_local, with the same read checks.
-                assert_eq!(server.load(worker, "split", 1, &name, 1).unwrap_err(), default_error);
-                if width == 1 { assert_eq!(default_error, error); }
+                // Width one reads its latest closed point (none yet); wider traces require a point.
+                if width == 1 {
+                    assert!(server.snapshot(worker, &name).unwrap().is_empty());
+                    assert!(server.peek(worker, &name, None).unwrap().is_empty());
+                } else {
+                    let default_error = server.snapshot(worker, &name).unwrap_err();
+                    assert_eq!(server.peek(worker, &name, None).unwrap_err(), default_error);
+                    assert!(default_error.contains("name a point"));
+                }
+                // The legacy trace-copy shorthand has no source as-of and is refused on manual targets.
+                assert!(server.load(worker, "split", 1, &name, 1).unwrap_err().contains("requires legacy mode"));
             }
         }).unwrap();
         for result in guards.join() { result.unwrap(); }

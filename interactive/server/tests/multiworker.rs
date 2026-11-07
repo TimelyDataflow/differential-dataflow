@@ -629,3 +629,44 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
     assert!(stages > 0, "{report}");
     assert!(report.contains(&format!("p ok planned \"preview\" ({stages} stages)")), "{report}");
 }
+
+/// Point commands stay collective, preserve old sessions, and isolate manual clocks.
+#[test]
+fn manual_points_and_legacy_ticks() {
+    let (server, mut writer, mut reader) = start_server(2);
+    let commands = [
+        "a load old begin\nexport \"old.out\" = input 0 : (int, ());\na end-load\n",
+        "b feed old 0 7\n",
+        "c tick 3\n",
+        "d load graph width=2 as_of=[0,0] mode=manual begin\nlet a = input 0 : (int, int);\nlet b = input 1 : (int, int);\nexport \"answer\" = a | join(b, (k, x, y) -> (k, (x,y)));\nd end-load\n",
+        "e feed graph 0 time=[0,1] begin\n1 val=10\ne end-feed\n",
+        "f feed graph 1 1 val=20 time=[0,1]\n",
+    ];
+    for command in commands { request(&mut writer, &mut reader, &command[..1], command); }
+    let error = framed(&mut writer, &mut reader, "g", "g peek answer as_of=[0,1]\n", &[]).unwrap_err();
+    assert!(error.contains("not closed"), "{error}");
+    request(&mut writer, &mut reader, "h", "h advance_write graph 0 lower={[0,0]} upper={[1,0]}\n");
+    let error = framed(&mut writer, &mut reader, "i", "i advance_write graph 0 lower={[0,0]} upper={[2,0]}\n", &[]).unwrap_err();
+    assert!(error.contains("frontier"), "{error}");
+    assert!(framed(&mut writer, &mut reader, "j", "j advance_write graph 1 upper={[1,0]}\n", &[]).is_err());
+    assert!(framed(&mut writer, &mut reader, "j2", "j2 advance_write graph 1 lower={0,1} upper={[1,0]}\n", &[]).is_err());
+    assert!(framed(&mut writer, &mut reader, "k", "k advance_write graph 0 lower={[1,0]} upper={[0,2]}\n", &[]).is_err());
+    request(&mut writer, &mut reader, "l", "l advance_write graph 1 lower={[0,0]} upper={[1,0]}\n");
+    let rows = request(&mut writer, &mut reader, "m", "m peek answer as_of=[0,1] as corgi\n");
+    assert_eq!(rows, ["diff=1 key=1 val=tuple(10,20)"]);
+    request(&mut writer, &mut reader, "n", "n tick 2\n");
+    assert_eq!(request(&mut writer, &mut reader, "o", "o peek answer as_of=[0,1] as corgi\n"), rows);
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek old.out as corgi\n"), ["diff=1 key=7 val=tuple()"]);
+    request(&mut writer, &mut reader, "q", "q load manual width=1 as_of=0 mode=manual begin\nexport \"manual.out\" = input 0 : (int, ());\nq end-load\n");
+    request(&mut writer, &mut reader, "r", "r feed manual 0 9 time=0\n");
+    request(&mut writer, &mut reader, "s", "s tick\n");
+    assert!(framed(&mut writer, &mut reader, "t", "t peek manual.out as_of=0\n", &[]).unwrap_err().contains("not closed"));
+    request(&mut writer, &mut reader, "u", "u advance_write manual 0 lower={0} upper={1}\n");
+    assert_eq!(request(&mut writer, &mut reader, "v", "v peek manual.out as_of=0 as corgi\n"), ["diff=1 key=9 val=tuple()"]);
+    assert!(framed(&mut writer, &mut reader, "w", "w load invalid begin\nexport \"invalid.out\" = import \"manual.out\";\nw end-load\n", &[]).unwrap_err().contains("legacy"));
+    assert!(framed(&mut writer, &mut reader, "y", "y tail manual.out\n", &[]).unwrap_err().contains("legacy"));
+    let list = request(&mut writer, &mut reader, "x", "x list\n");
+    assert!(list.iter().any(|l| l.contains("write_frontier={[1,0]}")));
+    assert!(list.iter().any(|l| l.contains("width=2 read_frontier={[0,0]} upper=")));
+    server.stop();
+}
