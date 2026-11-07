@@ -91,12 +91,6 @@ impl Server {
                 }
             }
         }
-        for e in &prog.root.exports {
-            let published = output_name(name, &e.name);
-            if self.is_published(&published) || generated.contains(&published) {
-                return Err(format!("output {:?} is already published; choose another program name or drop its producer", published));
-            }
-        }
         self.check_shapes(name, prog, root_width)?;
         // Validate the submitted program before any pass can remove an invalid binding.
         // Workers have the current provider shapes and as-of. A pass panic must return
@@ -132,6 +126,9 @@ impl Server {
                 st::Source::Trace(t) => Some(canonical_source_name(t)),
                 _ => None,
             })
+            .collect();
+        let input_names: HashMap<String, usize> = prog.root.imports.iter()
+            .filter_map(|imp| match imp.from { st::Source::Input(n) => Some((imp.name.clone(), n)), _ => None })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| output_name(name, &e.name)).collect();
 
@@ -231,6 +228,7 @@ impl Server {
             name.to_string(),
             Installed {
                 inputs: by_pos,
+                input_names,
                 imports: import_names,
                 exports: export_names,
                 dataflow_id,

@@ -61,6 +61,7 @@ impl Server {
             name.to_string(),
             Installed {
                 inputs,
+                input_names: HashMap::new(),
                 imports: Vec::new(),
                 exports: vec![name.to_string()],
                 dataflow_id,

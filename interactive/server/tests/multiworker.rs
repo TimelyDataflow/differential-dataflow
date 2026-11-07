@@ -630,6 +630,25 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
     assert!(report.contains(&format!("p ok planned \"preview\" ({stages} stages)")), "{report}");
 }
 
+/// A refused load of a program already installed does not redirect feeds to it: the workers
+/// resolve an input's name against the program installed.
+#[test]
+fn refused_loads_do_not_redirect_named_inputs() {
+    let (server, mut writer, mut reader) = start_server(2);
+    let program = |first: &str, second: &str| format!("let x = input {first:?} : ((int), ());\nlet y = input {second:?} : ((int), ());\noutput \"a\" = x;\noutput \"b\" = y;");
+    request(&mut writer, &mut reader, "l1", &format!("l1 load g begin\n{}\nl1 end-load\n", program("a", "b")));
+    let refused = framed(&mut writer, &mut reader, "l2", &format!("l2 load g begin\n{}\nl2 end-load\n", program("b", "a")), &[]);
+    assert!(matches!(&refused, Err(e) if e.contains("already installed")), "{refused:?}");
+    request(&mut writer, &mut reader, "f", "f feed g a 7\n");
+    assert!(matches!(framed(&mut writer, &mut reader, "u", "u bind g::a g nope\n", &[]), Err(e) if e.contains("no input named \"nope\"")));
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek g::a\n"), ["tuple(7)"]);
+    assert!(request(&mut writer, &mut reader, "q", "q peek g::b\n").is_empty());
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
 /// A load binds an input of its program to another program's output: the input reads the output,
 /// as an import does, and follows its changes.
 #[test]

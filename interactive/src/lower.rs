@@ -1067,6 +1067,15 @@ mod optimize_tests {
     }
 
     #[test]
+    fn input_names_do_not_read_as_positions() {
+        for name in ["1", "input1"] {
+            let text = format!("let a = input {name:?} : ((int), ()); output \"out\" = a;");
+            assert!(std::panic::catch_unwind(|| parse(&text)).is_err(), "{name:?} is accepted");
+        }
+        lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1x\" : ((int), ()); output \"out\" = a + b;"));
+    }
+
+    #[test]
     #[should_panic(expected = "cannot be named")]
     fn numbered_inputs_are_unnamed() {
         lower_tree(parse("let a = input 0 \"a\" : ((int), ()); output \"out\" = a;"));

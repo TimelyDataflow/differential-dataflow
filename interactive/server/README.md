@@ -47,9 +47,7 @@ Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
 The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. An input `<in>` of a program `<prog>` is its
-position or the name it is written with, as `rows` in `input "rows" : …`, and
-`<prog> <in>` may also be written `<prog>::<in>`. `load <name> from <path>` installs
+`peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
@@ -76,16 +74,11 @@ an inline pipe-syntax program:
     tick
 
 A load may bind its program's inputs and imports, as `load <name> from <path> <param>=<trace> ...`.
-A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by
-the name it imports. A bound input reads the trace as an import does, checked against the shape
-the input declares, and is no longer fed: `load reach from reach_import.ddp edges=prod::edges`
-reads `prod`'s output `edges` as `reach`'s input `edges`.
-A binding may also be spelled as a call, so
-`edges=random(seed=1,arity=2,range=8,count=12,churn=1)` binds
-`edges` to the same content-addressed source as the
-`random:...` form. Such a source is deterministic: it begins with a
-fixed-size window into an infinite hash-derived sequence and replaces
-`churn` rows on every tick.
+A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by the name it imports.
+A bound input reads the trace as an import does, checked against the shape the input declares, and is no longer fed.
+For example, `load reach from reach_import.ddp edges=prod::edges` reads `prod`'s output `edges` as `reach`'s input `edges`.
+A binding may also be spelled as a call, so `edges=random(seed=1,arity=2,range=8,count=12,churn=1)` binds `edges` to the same content-addressed source as the `random:...` form.
+Such a source is deterministic: it begins with a fixed-size window into an infinite hash-derived sequence and replaces `churn` rows on every tick.
 
 `plan <name> from <path>` prints the same four preparation stages as
 `ddir-plan`, using the server's currently published import shapes. The inline
@@ -156,13 +149,16 @@ state, not elapsed wall-clock time.
 
     feed <prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]
 
-pushes one update into a loaded program's positional input. The input declares
+pushes one update into an input of a loaded program. The input declares
 its shapes (`input 0 : ((int, int), ())`), and each value is read at them:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
 `inject(lane,payload)` for a sum. A whole key or value may drop its wrapper:
 `1,2` for a tuple of integers, and `_` or nothing for unit. The session reads
 the text into columns before the workers see it, and refuses text that is not
 of the input's shapes.
+
+An input `<in>` of a program `<prog>` is its position or the name it is written with, as `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
+The workers resolve the name against the program installed.
 
 For many updates to one target at the current epoch, frame them as one feed:
 
