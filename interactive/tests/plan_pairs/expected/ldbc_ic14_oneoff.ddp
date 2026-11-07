@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let weighted = import "ic14.s.weighted" : (int, (int, int));
+let weighted = import "ic14s::weighted" : (int, (int, int));
 let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
 dist: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
@@ -62,4 +62,4 @@ let answer_idx2 = answer_join | arrange;
 let answer = answer_idx2 | join(best_idx, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
 let answer_idx3 = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic14x1.answer" = answer_idx3;
+output "answer" = answer_idx3;

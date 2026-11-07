@@ -6,11 +6,11 @@
 -- person's tagged posts in a forum are reduced to their earliest.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, tag name, delta hours)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let root    = import "ldbc.message.root" : (int, int);              -- (message, root post of its thread)
-let tag_by_name = import "ldbc.tag.by_name" : (List(int), int);     -- (name, tag)
-let mtag_by_tag = import "ldbc.mtag.by_tag" : (int, int);           -- (tag, message)
-let member  = import "ldbc.member.by_forum" : (int, (int, int));    -- (forum, (person, joined))
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = import "graph::message.root" : (int, int);              -- (message, root post of its thread)
+let tag_by_name = import "graph::tag.by_name" : (List(int), int);     -- (name, tag)
+let mtag_by_tag = import "graph::mtag.by_tag" : (int, int);           -- (tag, message)
+let member  = import "graph::member.by_forum" : (int, (int, int));    -- (forum, (person, joined))
 
 -- The request's tagged messages: (rid, message, author, created, parent, forum), where a
 -- message's forum is its thread's (the root post's). Tag names are unique and
@@ -58,4 +58,4 @@ let ranked = counts | map(((rid, p1), n) -> (rid, (n neg, p1)))
                     | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, (neg, p1))) -> ((rid, rank), (p1, neg neg)));
 
-export "bi17.answer" = answer | arrange;
+output "answer" = answer | arrange;

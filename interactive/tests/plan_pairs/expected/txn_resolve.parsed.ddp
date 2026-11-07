@@ -1,4 +1,4 @@
-let store = import "store" : ((int), (int, int));
+let store = import "store::store" : ((int), (int, int));
 let intents = input 0 : ((int, int, int), (int));
 let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
 let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
@@ -24,5 +24,5 @@ let committed = wid + (wbad | negate);
 let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
-export "rollback" = rb;
-export "delta" = new_rows + (old_rows | negate);
+output "rollback" = rb;
+output "delta" = new_rows + (old_rows | negate);

@@ -3,13 +3,13 @@
 -- message of person2's, 1 for the reverse. The best pair per person1's city; top 100.
 
 let request = input 0 : ((int, List(int), List(int)), ());    -- (rid, country 1, country 2)
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let likes   = import "ldbc.likes.by_message" : (int, (int, int));     -- (message, (liker, created))
-let place   = import "ldbc.place" : (int, (List(int), List(int), int));
-let friend  = import "ldbc.friend" : (int, (int, int));             -- (person, (friend, since))
-let place_by_name   = import "ldbc.place.by_name"   : (List(int), int);
-let place_by_parent = import "ldbc.place.by_parent" : (int, int);
-let person_by_city  = import "ldbc.person.by_city"  : (int, int);
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let likes   = import "graph::likes.by_message" : (int, (int, int));     -- (message, (liker, created))
+let place   = import "graph::place" : (int, (List(int), List(int), int));
+let friend  = import "graph::friend" : (int, (int, int));             -- (person, (friend, since))
+let place_by_name   = import "graph::place.by_name"   : (List(int), int);
+let place_by_parent = import "graph::place.by_parent" : (int, int);
+let person_by_city  = import "graph::person.by_city"  : (int, int);
 
 -- Residents of country 1 with their city and its name; residents of country 2
 -- (country name -> country -> cities -> people).
@@ -54,4 +54,4 @@ let percity = scored | map(((rid, city, cname, p1, p2), s) -> ((rid, city), (s n
 let ranked  = percity | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((neg, p1, p2), cname))) -> ((rid, rank), (p1, p2, cname, neg neg)));
 
-export "bi14.answer" = answer | arrange;
+output "answer" = answer | arrange;

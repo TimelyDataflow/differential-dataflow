@@ -25,8 +25,8 @@ const COUNTER: &str = r#"
     let seed = input 0 : ((int), ());
     let feedback = input 1 : ((int), ());
     let state = seed + feedback;
-    export "count" = state;
-    export "next" = (state | map(((n), ()) -> (((n, 1) add), ()))) + (seed | negate);
+    output "count" = state;
+    output "next" = (state | map(((n), ()) -> (((n, 1) add), ()))) + (seed | negate);
 
 "#;
 
@@ -38,13 +38,13 @@ fn bind_advances_a_counter_without_a_client() {
         server
             .feed("counter", 0, "0", None)
             .unwrap();
-        server.bind(worker, "next", "counter", 1).unwrap();
+        server.bind(worker, "counter::next", "counter", 1).unwrap();
 
         // state(t) = f(state(t-1)) = state(t-1) + 1, one step per tick. After
         // N ticks the snapshot (which reads the closed past) shows N - 1.
         for expected in 0..5 {
             server.tick(worker);
-            let rows = server.snapshot(worker, "count").unwrap().rows();
+            let rows = server.snapshot(worker, "counter::count").unwrap().rows();
             assert_eq!(rows, vec![(tup(&[expected]), "tuple()".to_string(), 1)]);
         }
 
@@ -55,7 +55,7 @@ fn bind_advances_a_counter_without_a_client() {
             .unwrap();
         server.tick(worker);
         server.tick(worker);
-        let rows = server.snapshot(worker, "count").unwrap().rows();
+        let rows = server.snapshot(worker, "counter::count").unwrap().rows();
         assert_eq!(
             rows,
             vec![
@@ -74,15 +74,15 @@ fn bind_lifecycle_guards() {
 
         // Unknown pieces are rejected.
         assert!(server.bind(worker, "nope", "counter", 1).is_err());
-        assert!(server.bind(worker, "next", "nope", 1).is_err());
-        assert!(server.bind(worker, "next", "counter", 7).is_err());
+        assert!(server.bind(worker, "counter::next", "nope", 1).is_err());
+        assert!(server.bind(worker, "counter::next", "counter", 7).is_err());
 
-        server.bind(worker, "next", "counter", 1).unwrap();
+        server.bind(worker, "counter::next", "counter", 1).unwrap();
         // Identical duplicate is rejected; the binding is listed.
-        assert!(server.bind(worker, "next", "counter", 1).is_err());
+        assert!(server.bind(worker, "counter::next", "counter", 1).is_err());
         assert_eq!(
             server.binding_info(),
-            vec![("next".to_string(), "counter".to_string(), 1)]
+            vec![("counter::next".to_string(), "counter".to_string(), 1)]
         );
 
         // While bound, the program can be dropped from neither side: it is
@@ -90,8 +90,8 @@ fn bind_lifecycle_guards() {
         // target (explicit guard).
         assert!(server.drop_program(worker, "counter").is_err());
 
-        server.unbind(worker, "next", "counter", 1).unwrap();
-        assert!(server.unbind(worker, "next", "counter", 1).is_err());
+        server.unbind(worker, "counter::next", "counter", 1).unwrap();
+        assert!(server.unbind(worker, "counter::next", "counter", 1).is_err());
         server.drop_program(worker, "counter").unwrap();
     });
 }

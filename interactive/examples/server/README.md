@@ -2,7 +2,7 @@
 
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
-at a time; each may `import` traces other dataflows have `export`ed, so a
+at a time; each may `import` traces other dataflows `output`, so a
 consumer maintains a computation incrementally over a producer's output. It is
 the interpreter-driven successor to the old `dd_server` crate (which hot-loaded
 compiled `.so`s); here "install" means render a DDIR program, not `dlopen`.
@@ -15,7 +15,7 @@ and the configuration). The session scripts here are piped into its stdin.
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
-  The ones here are server-oriented (they use `import`/`export`); the programs
+  The ones here are server-oriented (they use `import`/`output`); the programs
   in `../programs/` read positional `input`s instead, which you fill with
   `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
@@ -43,15 +43,20 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 | command | effect |
 |---|---|
-| `load <name> from <file> [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
-| `feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `feed <prog> <in#> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
+| `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `feed <prog> <in> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
+| `feed <prog> <in> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
 | `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |
-| `bind <trace> <prog> <in#>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
+| `bind <trace> <prog> <in>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
 | `peek <trace> [key]` | print a trace's current contents (consolidated across workers), one `data` line per row |
 | `tail <trace>` / `stop <reqid>` | follow a trace's changes at every tick, until stopped |
 | `list` | show programs, traces (+ importer counts) and bindings |
+
+A program installed as `<name>` publishes each `output "x"` as the trace `<name>::x`, so two programs may name their outputs alike, and one file may be loaded several times under different names.
+Generated sources (`random:…`, `iota:N`, `clock`) belong to no program and keep their own names.
+
+An input `<in>` is its position or the name it is written with, as `edges` in `input "edges" : …`, and `<prog> <in>` may be written `<prog>::<in>`.
 
 A `<value>` is read at the shape its input declares, **written without spaces**:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(1,2,3)`, and
@@ -71,7 +76,7 @@ load scc from examples/programs/scc.ddp
 feed scc 0 from random:nodes=100000,edges=200000,churn=100
 tick          # the initial load: reported as one epoch's time
 tick 100      # 100 epochs of 100 replaced edges each, timed together
-peek result
+peek scc::result
 exit
 ```
 
@@ -88,8 +93,8 @@ serves the small inputs (roots, queries).
 optimization, treating every source without a declared shape as `arity` key
 fields with no value; the
 rewritten program has one extra input after its own — the query input, fed as
-`(key, val ++ q)` — and exports one `demand:inputN` trace per source, which
-you `peek`. `,debug` taps every demand collection with an inspect.
+`(key, val ++ q)` — and outputs one `demand:inputN` trace per source, which
+you `peek` as `<name>::demand:inputN`. `,debug` taps every demand collection with an inspect.
 
 ## Generated (named) sources
 
@@ -130,10 +135,10 @@ log-work form is left for later.)
 
 ## The programs
 
-- **`producer.ddp`** — republishes input 0 as the named trace `edges`
-  (keyed by source). A producer whose arrangement others import.
-- **`reach_import.ddp`** — `import "edges"` + roots on input 0, computes
-  reachability in an iterative scope, `export "result"`. A consumer of a shared
+- **`producer.ddp`** — republishes input 0 as the output `edges`
+  (keyed by source), published as `prod::edges` when it is installed as `prod`. A producer whose arrangement others import.
+- **`reach_import.ddp`** — input `edges`, bound at load as `edges=prod::edges`, and input `roots`; computes
+  reachability in an iterative scope, `output "result"`. A consumer of a shared
   trace.
 - **`echo.ddp`** — passes input straight to output via `inspect`; used to show
   values flowing in.
@@ -151,12 +156,12 @@ log-work form is left for later.)
 
 ## The sessions — what to look for
 
-- **`shared_trace.txt`** — the headline: `prod` publishes `edges`, `reach`
+- **`shared_trace.txt`** — the headline: `prod` publishes `prod::edges`, `reach`
   imports it. Feed edges/roots, `tick`, and watch `reach` update incrementally;
   add and retract an edge to see `+1`/`-1` changes propagate **across two
   separately-installed dataflows**.
 - **`drop.txt`** — the teardown gate: dropping `prod` is refused while `reach`
-  imports `edges`; drop the consumer first, then the producer drops cleanly and
+  reads `prod::edges`; drop the consumer first, then the producer drops cleanly and
   its name frees for reuse.
 - **`values.txt`** — structured ADT input (`inject`/`tuple`/`list`), an update
   **scheduled for a future logical time** (`time=3`, visible only once the

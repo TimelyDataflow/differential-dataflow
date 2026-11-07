@@ -81,7 +81,7 @@ spin: {
 }
 
 let final = spin::os | filter(((k, _, _), _) -> (k, 141) eq);
-export "result" = final | map(((_, r, _), _) -> ((), r))
+output "result" = final | map(((_, r, _), _) -> ((), r))
     | join(maxr, (_, r, m) -> ((), ((1, m) add, r) sub))
     | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part2);

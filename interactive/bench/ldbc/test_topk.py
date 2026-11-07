@@ -37,16 +37,16 @@ def program():
              for name,(order,limit,keys) in COMPILED.items()}
     for name, ranked in plans.items():
         name = 'compiled_'+name
-        exports.append(f'export "{name}" = {compiler.emit(ranked)} | arrange;')
+        exports.append(f'output "{name}" = {compiler.emit(ranked)} | arrange;')
     lines = [*compiler.lines, *exports, f'let values = {initial} '
              '| map((row, ()) -> (row.0, (row.1, row.2, row)));',
              'let baseline = values | collect | flatmap((_, vals) -> vals) '
              '| filter((_, (rank, _)) -> (rank, 20) lt);',
-             'export "baseline" = baseline | map((key, value) -> ((key, value.0), value.1)) | arrange;']
+             'output "baseline" = baseline | map((key, value) -> ((key, value.0), value.1)) | arrange;']
     for name, (buckets, hash_key) in VARIANTS.items():
         stages, last = pipeline('values', name, buckets, hash_key)
         lines.extend(stages)
-        lines.append(f'export "{name}" = {last} '
+        lines.append(f'output "{name}" = {last} '
                      '| map((key, value) -> ((key, value.0), value.1)) | arrange;')
     return '\n'.join(lines)
 
@@ -102,10 +102,10 @@ def check(server, output, workers):
             engine.commands([*commands, 'tick'])
             want = expected(state)
             for name in ('baseline', *VARIANTS):
-                frames, = engine.commands([f'peek {name} as corgi'])[1]
+                frames, = engine.commands([f'peek test::{name} as corgi'])[1]
                 checked(decode(frames), want, f'{workers} workers/{epoch}/{name}')
             for name, options in COMPILED.items():
-                frames, = engine.commands([f'peek compiled_{name} as corgi'])[1]
+                frames, = engine.commands([f'peek test::compiled_{name} as corgi'])[1]
                 checked(decode(frames), compiled_expected(state,*options),
                         f'{workers} workers/{epoch}/compiled_{name}')
     print(f'{workers} workers: collect, five lambda plans and six compiler cases match all five states', flush=True)

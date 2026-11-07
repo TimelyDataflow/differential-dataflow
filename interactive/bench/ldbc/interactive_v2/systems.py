@@ -216,14 +216,14 @@ class Ddir:
             target = read.plan
             if read.plan in self.oneoff:
                 target = f'{read.plan}x{self.rid}'
-                text = self.oneoff[read.plan].replace(f'export "{read.plan}.answer"', f'export "{target}.answer"')
+                text = self.oneoff[read.plan]
                 loads.append(f'load {target} begin\n{text}\n{{rid}} end-load')
             commands.append(Server.feed(target, 0, rows, 1, self.shapes[read.plan]))
             live.append((target, rows))
             rids.append(self.rid)
         commands.append('tick')
         plans = sorted({target for target, _ in live})
-        commands.extend(f'peek {p}.answer as corgi' for p in plans)
+        commands.extend(f'peek {p}::answer as corgi' for p in plans)
         t1 = time.perf_counter()
         if loads:
             self.server.commands(loads)

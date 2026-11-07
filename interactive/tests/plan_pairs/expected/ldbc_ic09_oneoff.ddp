@@ -1,12 +1,12 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "ldbc.friend" : (int, (int, int));
-let by_author = import "ic9.s.by_author" : (int, (int, int));
-let latest = import "ic9.s.latest" : (int, (int, int));
-let newest = import "ic9.s.newest" : (int, int);
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = import "graph::friend" : (int, (int, int));
+let by_author = import "ic9s::by_author" : (int, (int, int));
+let latest = import "ic9s::latest" : (int, (int, int));
+let newest = import "ic9s::newest" : (int, int);
 let hop1_map = request | map(((rid, who, max), ()) -> (who, (rid, who, max)));
 let hop1_idx = hop1_map | arrange;
 let person_idx = person | arrange;
@@ -47,4 +47,4 @@ let answer_idx2 = answer_join | arrange;
 let answer = answer_idx2 | join(person_idx, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
 let answer_idx3 = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic9x1.answer" = answer_idx3;
+output "answer" = answer_idx3;

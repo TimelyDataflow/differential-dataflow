@@ -15,20 +15,20 @@ fn a_rejected_install_leaves_no_generated_sources() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         let recipe = "random:nodes=8,edges=12";
-        server.install(worker, "first", &program(r#"export "taken" = input 0 : ((int), ());"#)).unwrap();
+        server.install(worker, "first", &program(r#"output "taken" = input 0 : ((int), ());"#)).unwrap();
 
-        // The recipe would be generated, but the export is taken.
-        let clash = program(&format!(r#"let e = import "{recipe}"; export "taken" = e;"#));
-        assert!(server.install(worker, "second", &clash).is_err());
+        // The recipe would be generated, but the program name is taken.
+        let clash = program(&format!(r#"let e = import "{recipe}"; output "taken" = e;"#));
+        assert!(server.install(worker, "first", &clash).is_err());
         assert!(server.snapshot(worker, recipe).is_err());
 
         // The recipe would be generated, but the other import is unknown.
-        let unknown = program(&format!(r#"let e = import "{recipe}"; let f = import "nope"; export "x" = e + f;"#));
+        let unknown = program(&format!(r#"let e = import "{recipe}"; let f = import "nope"; output "x" = e + f;"#));
         assert!(server.install(worker, "third", &unknown).is_err());
         assert!(server.snapshot(worker, recipe).is_err());
 
         // Accepted, the program installs the recipe as a source.
-        let fine = program(&format!(r#"let e = import "{recipe}"; export "fresh" = e;"#));
+        let fine = program(&format!(r#"let e = import "{recipe}"; output "fresh" = e;"#));
         server.install(worker, "fourth", &fine).unwrap();
         assert!(server.snapshot(worker, recipe).is_ok());
     });
@@ -57,7 +57,7 @@ fn unread_imports_are_validated_before_passes() {
 #[test]
 fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
     let text = r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
-        export "out" = a | lift | half_join(b, 1, (k, v, _) -> (k, v));"#;
+        output "out" = a | lift | half_join(b, 1, (k, v, _) -> (k, v));"#;
     let path = std::env::temp_dir().join(format!("ddir-as-of-{}.ddp", std::process::id()));
     std::fs::write(&path, text).unwrap();
     let emit = |args: &[&str]| {
@@ -82,8 +82,8 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
         server.tick(worker);
         for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", None).unwrap(); }
         server.tick(worker);
-        let original = server.snapshot(worker, "original").unwrap().rows();
+        let original = server.snapshot(worker, "original::original").unwrap().rows();
         assert_eq!(original, vec![("1".into(), "tuple(10,tuple(1))".into(), 1)]);
-        assert_eq!(server.snapshot(worker, "emitted").unwrap().rows(), original);
+        assert_eq!(server.snapshot(worker, "emitted::emitted").unwrap().rows(), original);
     });
 }

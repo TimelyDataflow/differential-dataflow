@@ -1,10 +1,10 @@
 let request = input 0 : ((int, int, int), ());
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "ldbc.friend"  : (int, (int, int));
-let by_author = import "ic2.s.by_author" : (int, (int, int));
-let latest = import "ic2.s.latest" : (int, (int, int));
-let newest = import "ic2.s.newest" : (int, int);
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "graph::friend"  : (int, (int, int));
+let by_author = import "ic2s::by_author" : (int, (int, int));
+let latest = import "ic2s::latest" : (int, (int, int));
+let newest = import "ic2s::newest" : (int, int);
 let friends = request | map(((rid, who, max), ()) -> (who, (rid, max)))
                       | join(friend, (_, req, (f, _)) -> (f, req));
 let ahead   = friends | join(newest, (f, (rid, max), neg) -> (f, (rid, max, neg neg)));
@@ -19,4 +19,4 @@ let answer  = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg ne
                   | join(message, (id, (rid, rank, created, f), (_, _, _, _, content, image, _, _, _, _, _, _, _)) ->
                          (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created)))
                   | join(person, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
-export "ic2.answer" = answer | arrange;
+output "answer" = answer | arrange;

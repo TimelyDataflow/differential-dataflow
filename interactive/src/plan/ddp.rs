@@ -8,7 +8,7 @@ use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 use crate::shapes::{self, ItemShapes, ScopeShapes};
 use super::{Form, Report};
-use crate::parse::{Expr, Stmt};
+use crate::parse::{Expr, InputRef, Stmt};
 
 mod parsed;
 
@@ -107,7 +107,7 @@ struct Printer<'a> {
 }
 
 fn identifier(text: &str) -> String {
-    let mut name: String = text.trim_start_matches("export ").chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    let mut name: String = text.trim_start_matches("output ").chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if name.is_empty() { name.push('x'); }
     if name.as_bytes()[0].is_ascii_digit() || crate::ir::KEYWORDS.contains(&name.as_str()) { name.insert_str(0, "x_"); }
     name
@@ -306,13 +306,20 @@ impl Printer<'_> {
         if depth == 0 && scope.imports.iter().any(|i| matches!(i.from, Source::Trace(_))) {
             writeln!(out, "-- Trace imports use provider arrangements; history advances to G = ({}, []).", self.as_of).unwrap();
         }
+        // Named inputs are written without positions, which the order they are written supplies.
+        let positions: Vec<usize> = scope.imports.iter().filter_map(|imp| match imp.from { Source::Input(n) => Some(n), _ => None }).collect();
+        let named = |imp: &crate::scope_ir::Import, n: usize| imp.name != format!("input{n}");
+        let unnumbered = positions.iter().enumerate().all(|(i, &n)| i == n)
+            && scope.imports.iter().any(|imp| matches!(imp.from, Source::Input(n) if named(imp, n)));
         let mut defined = BTreeSet::new();
         for (i, imp) in scope.imports.iter().enumerate() {
             let name = &names.imports[i];
             match &imp.from {
                 Source::Input(_) | Source::Trace(_) => {
                     let source = match &imp.from {
-                        Source::Input(n) => format!("input {n}"),
+                        Source::Input(n) if !unnumbered => format!("input {n}"),
+                        Source::Input(n) if named(imp, *n) => format!("input {}", quoted(&imp.name)?),
+                        Source::Input(_) => "input".to_string(),
                         Source::Trace(trace) => {
                             format!("import {}", quoted(trace)?)
                         }
@@ -372,7 +379,7 @@ impl Printer<'_> {
                 };
                 writeln!(out, "{indent}-- Renderer: {storage}.").unwrap();
                 let shape = export.shape.as_ref().map(|s| self.row(s).map(|s| format!(" : {s}"))).transpose()?.unwrap_or_default();
-                writeln!(out, "{indent}export {}{shape} = {value};", quoted(&export.name)?).unwrap();
+                writeln!(out, "{indent}output {}{shape} = {value};", quoted(&export.name)?).unwrap();
             } else if !local.contains("::") && !defined.contains(&local) {
                 writeln!(out, "{indent}let {local} = {value};").unwrap();
                 defined.insert(local);
@@ -498,6 +505,28 @@ mod tests {
         output
     }
 
+    /// Named inputs print without positions, in position order, and keep their names and positions,
+    /// also when the program reads them in another order.
+    #[test]
+    fn named_inputs_round_trip() {
+        let text = r#"
+            let a = input "first" : ((int), ());
+            let b = input : ((int), ());
+            let c = input "third" : ((int), ());
+            output "out" = c + b + a;
+        "#;
+        let inputs = |report: &Report| {
+            let mut inputs: Vec<_> = report.stages.last().unwrap().program.root.imports.iter()
+                .filter_map(|i| match i.from { Source::Input(n) => Some((n, i.name.clone())), _ => None }).collect();
+            inputs.sort();
+            inputs
+        };
+        let output = roundtrip(text);
+        assert!(output.contains(r#"input "first""#) && output.contains(r#"input "third""#), "{output}");
+        assert_eq!(inputs(&plan(text)), inputs(&plan(&output)), "{output}");
+        assert_eq!(inputs(&plan(text)), vec![(0, "first".to_string()), (1, "input1".to_string()), (2, "third".to_string())]);
+    }
+
     #[test]
     fn source_names_types_aliases_and_scope_paths() {
         roundtrip(r#"
@@ -509,7 +538,7 @@ mod tests {
             }
             let answer = outer::result;
             let alias = answer;
-            export "out" = alias;
+            output "out" = alias;
         "#);
     }
 
@@ -520,7 +549,7 @@ mod tests {
             let result_idx = x | map((k, v) -> (v, k));
             let intermediate = x | filter((k, _) -> (k, 0) gt);
             let result = intermediate | map((k, v) -> (k, v)) | join(result_idx, (k, x, y) -> (k, (x, y)));
-            export "out" = result;
+            output "out" = result;
         "#);
         assert!(output.contains("let result_idx ="));
         assert!(output.contains("| filter((k, _) -> (k, 0) gt)"));
@@ -530,7 +559,7 @@ mod tests {
     #[test]
     fn comparison_checks_edges_sharing_graphs_and_export_names() {
         let source = r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
-            let x = a | map((k, v) -> (k, (v, 1) add)); export "out" = x + b;"#;
+            let x = a | map((k, v) -> (k, (v, 1) add)); output "out" = x + b;"#;
         let a = plan(source);
         let renamed = plan(&source.replace("let a =", "let renamed =").replace("= a |", "= renamed |"));
         assert!(a.compare_final(&renamed).is_empty());
@@ -542,7 +571,7 @@ mod tests {
     #[test]
     fn unnamed_sum_imports_get_valid_declarations() {
         let source = |_: &str| Some((Shape::Sum(vec![Shape::Int, Shape::Unit]), Shape::Unit));
-        let before = super::super::report("export \"out\" = import \"sum\";", &source, &crate::passes::Config::all()).unwrap();
+        let before = super::super::report("output \"out\" = import \"sum\";", &source, &crate::passes::Config::all()).unwrap();
         let text = before.emit_ddp().unwrap().text;
         assert!(text.contains("type Sum0 = V0 int | V1;"));
         let after = super::super::report(&text, &source, &crate::passes::Config::all()).unwrap();
@@ -552,7 +581,7 @@ mod tests {
 
     #[test]
     fn incomplete_plans_are_not_emitted_as_executable_ddp() {
-        assert!(plan(r#"export "out" = import "missing" : (int, ());"#).emit_ddp().is_err());
+        assert!(plan(r#"output "out" = import "missing" : (int, ());"#).emit_ddp().is_err());
     }
 
     #[test]
@@ -564,8 +593,8 @@ mod tests {
             empty: {}
             nested: { let both = (a + b) + (a | negate); }
             let x = nested::both + (b | map((k, v) -> (v, k)));
-            export "all" = x | map((k, v) -> (v, k));
-            export "other" = a | value((_, v) -> (v, 1) add);
+            output "all" = x | map((k, v) -> (v, k));
+            output "other" = a | value((_, v) -> (v, 1) add);
         "#;
         let before = plan(source);
         let parsed = before.emit_ddp_at(DdpStage::Parsed).unwrap();
@@ -579,7 +608,7 @@ mod tests {
 
     #[test]
     fn graph_wins_over_stale_source_and_uses_declared_sums() {
-        let report = plan("type Member = User int | Group int; let x = input 0 : (int, Member); export \"out\" = x | map((k, v) -> (k inject Group, v));");
+        let report = plan("type Member = User int | Group int; let x = input 0 : (int, Member); output \"out\" = x | map((k, v) -> (k inject Group, v));");
         let mut printer = Printer { as_of: report.as_of, context: &report.context, types: report.context.types.clone(), counts: LambdaCounts::default() };
         let mut lambda = Lambda::new("let (k, v) = input in (k inject Group, v)".into(), &report.context.scope);
         lambda.src = "let (k, v) = input in (k, v)".into();
@@ -597,7 +626,7 @@ mod tests {
         assert!(before.compare_final(&plan(&output.text)).is_empty());
         assert_eq!(output.text, plan(&output.text).emit_ddp().unwrap().text);
         let before = plan(r#"let a = input 0 : (int, ()); let b = input 1 : (int, ());
-            export "out" = a | lift | half_join(b, 1, (k, x, _) -> (k, x));"#);
+            output "out" = a | lift | half_join(b, 1, (k, x, _) -> (k, x));"#);
         let output = before.emit_ddp().unwrap().text;
         assert!(output.contains("| lift | filter("), "{output}");
         assert!(!output.contains("Added by"));
@@ -615,9 +644,9 @@ mod tests {
                 let occupied = ::reads | map((k, v) -> (k, (v, 1) add));
                 let both = rk + occupied;
             }
-            export "out" = child::both;
-            export "tail" = tail;
-            export "occupied" = occupied;"#;
+            output "out" = child::both;
+            output "tail" = tail;
+            output "occupied" = occupied;"#;
         let output = roundtrip(text);
         assert!(output.contains("let rk = reads | map("), "{output}");
         assert!(output.contains("let reads_map = reads | map("), "{output}");
@@ -634,8 +663,8 @@ mod tests {
             let late = rows | filter((k, v) -> (k, v) lt);
             let between = rows | map((k, v) -> (k, v neg));
             child: { let pair = ::early | join(::late, (k, a, b) -> (k, (a, b))); }
-            export "out" = child::pair;
-            export "between" = between;"#;
+            output "out" = child::pair;
+            output "between" = between;"#;
         let printed = roundtrip(text);
         assert!(printed.find("let late =").unwrap() < printed.find("let pair =").unwrap(), "{printed}");
         assert!(printed.find("let pair =").unwrap() < printed.find("let between =").unwrap(), "{printed}");

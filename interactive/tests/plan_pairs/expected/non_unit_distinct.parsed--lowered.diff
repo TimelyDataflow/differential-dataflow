@@ -1,7 +1,7 @@
 --- parsed
 +++ lowered
 @@ -1 +1,8 @@
--export "out" = input 0 : (int, int) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
+-output "out" = input 0 : (int, int) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +-- Time lanes: epoch.
 +let input0 = input 0 : (int, int);
 +let out_map = input0 | map((k, v) -> ((k, v), ()));
@@ -9,4 +9,4 @@
 +let out_reduce = out_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +let out_map2 = out_reduce | map((kv, ()) -> kv);
 +-- Renderer: build an export arrangement.
-+export "out" = out_map2;
++output "out" = out_map2;

@@ -16,4 +16,4 @@ cc: {
 }
 
 -- the labels now identify components.
-export "parts" = cc::labels | map((_, label) -> (label, ()));
+output "parts" = cc::labels | map((_, label) -> (label, ()));

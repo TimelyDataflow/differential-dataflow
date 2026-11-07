@@ -4,4 +4,4 @@ let merged_map = rows | map(arg -> let _call0 = let input = arg in input in ((_c
 let merged = merged_map + merged_map;
 let out_map = merged | map(((a, _), ()) -> (a, ()));
 -- Renderer: build an export arrangement.
-export "out" = out_map;
+output "out" = out_map;

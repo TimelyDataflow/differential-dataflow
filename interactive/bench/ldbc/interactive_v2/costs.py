@@ -64,7 +64,7 @@ def main():
         empty = statistics.median(run(['tick']) for _ in range(50))
         for k, (plan, binding) in enumerate(reads):
             rows = sorted(requests(plan, sut.plans[plan]['parameters'], binding, 10**6 + k))
-            first[plan] += run([Server.feed(plan, 0, rows, 1, sut.shapes[plan]), 'tick', f'peek {plan}.answer as corgi']) - empty
+            first[plan] += run([Server.feed(plan, 0, rows, 1, sut.shapes[plan]), 'tick', f'peek {plan}::answer as corgi']) - empty
             second[plan] += run([Server.feed(plan, 0, rows, -1, sut.shapes[plan]), 'tick']) - empty
             timed[plan] += 1
         sut.server.close()

@@ -6,9 +6,9 @@
 -- relation (a private arrangement), not looked up.
 
 let request = input 0 : ((int, int, int), ());              -- (rid, person, max date)
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "ldbc.friend"  : (int, (int, int));      -- (person, (friend, since))
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = import "graph::friend"  : (int, (int, int));      -- (person, (friend, since))
 
 -- Every message, by author, in recency order (newest first, then smaller id).
 let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));
@@ -36,4 +36,4 @@ let answer  = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg ne
                          (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created)))
                   | join(person, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
 
-export "ic2.answer" = answer | arrange;
+output "answer" = answer | arrange;

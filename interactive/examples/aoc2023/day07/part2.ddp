@@ -49,7 +49,7 @@ let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> (id,
 let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 let above = ranks | join(bids, (id, n, bid) -> (id, (n, bid) mul));
 
-export "result" = above + bids
+output "result" = above + bids
     | map((_, x) -> ((), x)) | collect
     | map((_, xs) -> ((), xs fold_add))
     | arrange | inspect(part2);

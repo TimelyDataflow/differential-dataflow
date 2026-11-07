@@ -41,7 +41,7 @@ let gearvals = pairs
     | join(partvals, (_, gear, v) -> (gear, v));
 -- (gear, part value)
 
-export "result" = gearvals
+output "result" = gearvals
     | collect
     | filter((_, vs) -> (vs len, 2) eq)
     | map((_, vs) -> ((), ((0, vs) get, (1, vs) get) mul))

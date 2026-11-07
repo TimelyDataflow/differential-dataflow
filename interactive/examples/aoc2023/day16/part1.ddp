@@ -21,6 +21,6 @@ beam: {
     set l = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0), ()))) + next | distinct;
 }
 
-export "result" = beam::l | map(((r, c, _), _) -> ((r, c), ()))
+output "result" = beam::l | map(((r, c, _), _) -> ((r, c), ()))
     | join(cells, (rc, _, _) -> (rc, ())) | distinct
     | map(_ -> ((), ())) | count | arrange | inspect(part1);

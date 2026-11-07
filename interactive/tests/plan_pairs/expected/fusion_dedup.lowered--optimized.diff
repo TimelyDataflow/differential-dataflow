@@ -12,4 +12,4 @@
 +let right = left_map | filter((k, _) -> (k, 10) lt);
 +let out_rows = left + right + left;
  -- Renderer: build an export arrangement.
- export "out" = out_rows;
+ output "out" = out_rows;

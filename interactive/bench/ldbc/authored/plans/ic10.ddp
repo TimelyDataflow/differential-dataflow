@@ -5,12 +5,12 @@
 -- their city, every post keyed by its author, and interests keyed by (person, tag).
 
 let request  = input 0 : ((int, int, int), ());               -- (rid, person, month)
-let person   = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message  = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend   = import "ldbc.friend" : (int, (int, int));              -- (person, (friend, since))
-let place    = import "ldbc.place" : (int, (List(int), List(int), int));
-let tags_of  = import "ldbc.mtag.by_message" : (int, int);            -- (message, tag)
-let interest = import "ldbc.interest.by_person" : (int, int);         -- (person, tag)
+let person   = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = import "graph::friend" : (int, (int, int));              -- (person, (friend, since))
+let place    = import "graph::place" : (int, (List(int), List(int), int));
+let tags_of  = import "graph::mtag.by_message" : (int, int);            -- (message, tag)
+let interest = import "graph::interest.by_person" : (int, int);         -- (person, tag)
 
 -- Least hops to each person within two, keeping those at exactly two.
 let hop1   = request | map(((rid, who, month), ()) -> (who, (rid, who, month)))
@@ -51,4 +51,4 @@ let ranked = score | join(cands, ((rid, _, node), s, (first, last, gender, town)
                    | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 10) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 10) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 10) min in let before = (end, count) sub in let keep = (((10, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer = ranked | map((rid, (rank, ((_, node), (first, last, s, gender, town)))) -> ((rid, rank), (node, first, last, s, gender, town)));
 
-export "ic10.answer" = answer | arrange;
+output "answer" = answer | arrange;

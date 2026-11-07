@@ -201,7 +201,7 @@ mod tests {
             assert_eq!(running.graph(), printed.graph(), "{sugar:?}: {}", lambda.src);
             // The spelling emitted by ddir-plan is already valid DDP. Replanning it
             // must not add a mask to the output that was narrowed in the expression.
-            let text = format!("export \"out\" = input 0 : (int, (int, int)) | reduce(input -> {});", lambda.src);
+            let text = format!("output \"out\" = input 0 : (int, (int, int)) | reduce(input -> {});", lambda.src);
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(&text));
             crate::passes::optimize(&mut program);
             assert_eq!(crate::passes::projection::pushdown(&mut program, &|_| None).unwrap(), 0);

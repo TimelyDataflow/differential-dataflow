@@ -5,4 +5,4 @@ let left = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
 let right = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 10) lt);
 -- Identical complete chains do merge. Concat must keep both occurrences.
 let same = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
-export "out" = left + right + same;
+output "out" = left + right + same;

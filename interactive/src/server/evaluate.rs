@@ -36,7 +36,7 @@ pub fn evaluate(
             .root
             .exports
             .iter()
-            .map(|e| (e.name.clone(), server.snapshot(worker, &e.name).expect("evaluate: snapshot")))
+            .map(|e| (e.name.clone(), server.snapshot(worker, &output_name("evaluate", &e.name)).expect("evaluate: snapshot")))
             .collect()
     })
     .expect("evaluate: worker startup");

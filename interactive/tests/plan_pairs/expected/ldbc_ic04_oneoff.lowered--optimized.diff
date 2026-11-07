@@ -4,12 +4,12 @@
  -- Time lanes: epoch.
  -- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int, int), ());
--let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let friend = import "ldbc.friend" : (int, (int, int));
--let tag = import "ldbc.tag" : (int, (List(int), int));
--let mtag = import "ldbc.mtag.by_tag" : (int, int);
- let posts = import "ic4.s.posts" : (int, (int, int));
- let tags = import "ic4.s.tags" : (int, (int, List(int)));
+-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = import "graph::friend" : (int, (int, int));
+-let tag = import "graph::tag" : (int, (List(int), int));
+-let mtag = import "graph::mtag.by_tag" : (int, int);
+ let posts = import "ic4s::posts" : (int, (int, int));
+ let tags = import "ic4s::tags" : (int, (int, List(int)));
  let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
 @@ -17,9 +14,8 @@
  let seen_idx3 = seen_join2 | arrange;

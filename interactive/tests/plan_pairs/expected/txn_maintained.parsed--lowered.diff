@@ -70,10 +70,10 @@
 +let retire_neg = retire_map | negate;
 +let retire_rows = intents + retire_neg;
 +-- Renderer: build an export arrangement.
- export "rollback" = rb;
--export "state" = current | map((k, (_, v)) -> (k, (v)));
--export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);
+ output "rollback" = rb;
+-output "state" = current | map((k, (_, v)) -> (k, (v)));
+-output "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);
 +-- Renderer: build an export arrangement.
-+export "state" = state_map;
++output "state" = state_map;
 +-- Renderer: build an export arrangement.
-+export "retire" = retire_rows;
++output "retire" = retire_rows;

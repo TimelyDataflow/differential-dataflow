@@ -14,4 +14,4 @@ cc: {
 }
 
 -- the labels now name the components
-export "parts" = cc::labels | map((_, label) -> (label, ())) | arrange | inspect(total);
+output "parts" = cc::labels | map((_, label) -> (label, ())) | arrange | inspect(total);

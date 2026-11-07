@@ -1,11 +1,11 @@
-let person   = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message  = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend   = import "ldbc.friend" : (int, (int, int));
-let tag      = import "ldbc.tag" : (int, (List(int), int));
-let by_class = import "ldbc.tag.by_class" : (int, int);
-let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
-let classes  = import "ldbc.tagclass.by_name" : (List(int), int);
-let mtag     = import "ldbc.mtag.by_tag" : (int, int);
+let person   = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = import "graph::friend" : (int, (int, int));
+let tag      = import "graph::tag" : (int, (List(int), int));
+let by_class = import "graph::tag.by_class" : (int, int);
+let tagclass = import "graph::tagclass" : (int, (List(int), int));
+let classes  = import "graph::tagclass.by_name" : (List(int), int);
+let mtag     = import "graph::mtag.by_tag" : (int, int);
 let selves = tagclass | map((id, _) -> ((id, id), ()));
 below: {
     let step  = below | map(((low, high), ()) -> (high, low))
@@ -17,5 +17,5 @@ below: {
 let below_hl = below::below | map(((low, high), ()) -> (high, low));
 let reply   = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
                       | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
-export "ic12.s.below_hl" = below_hl | arrange;
-export "ic12.s.reply" = reply | arrange;
+output "below_hl" = below_hl | arrange;
+output "reply" = reply | arrange;

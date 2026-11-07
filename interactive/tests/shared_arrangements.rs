@@ -64,7 +64,7 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
             let mine = if worker.index() == 0 { batch.as_str() } else { "" };
             server.feed("p", 0, mine, None).unwrap();
             server.tick(worker);
-            let mut rows = server.snapshot(worker, "result").unwrap().rows();
+            let mut rows = server.snapshot(worker, "p::result").unwrap().rows();
             rows.sort();
             seen.push(rows);
         }
@@ -94,7 +94,7 @@ const REACH: &str = r#"
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = roots + proposals | distinct;
     }
-    export "result" = reach::reach;
+    output "result" = reach::reach;
 "#;
 
 #[test]
@@ -105,7 +105,7 @@ fn reach() {
 #[test]
 fn scc() {
     let src = std::fs::read_to_string(format!("{}/examples/programs/scc.ddp", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let src = src.replace(r#"export "result" = outer::scc | map(_ -> ((), ())) | arrange | inspect(total);"#, r#"export "result" = outer::scc;"#);
+    let src = src.replace(r#"output "result" = outer::scc | map(_ -> ((), ())) | arrange | inspect(total);"#, r#"output "result" = outer::scc;"#);
     let shared = src
         .replace("| map(((src, dst), ()) -> (src, dst));", "| map(((src, dst), ()) -> (src, dst)) | arrange;")
         .replace("let trans = edges | map((src, dst) -> (dst, src));", "let trans = edges | map((src, dst) -> (dst, src)) | arrange;")

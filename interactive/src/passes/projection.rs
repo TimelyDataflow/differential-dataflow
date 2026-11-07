@@ -983,7 +983,7 @@ mod tests {
     fn masking_and_reduce_fusion_reach_a_fixed_point() {
         let text = r#"let rows = input 0 : (int, int);
             let dead = rows | map((k,v) -> ((k,v),v)) | distinct;
-            export "out" = rows;"#;
+            output "out" = rows;"#;
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         let exports = shapes::infer(&program, &|_| None, 1).0.exports;
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
@@ -998,7 +998,7 @@ mod tests {
         let text = r#"let rows = input 0 : (int, int);
             s: { var x : (int, int); set x = rows | map((k,v) -> (k,v)); }
             let dead = rows | map((k,v) -> (v,k));
-            export "out" = rows;"#;
+            output "out" = rows;"#;
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         // The unrelated map can still be masked; violating the feedback declaration
         // would reject the whole candidate, including the unrelated field masks.
@@ -1047,8 +1047,8 @@ mod tests {
     #[test]
     fn reduction_expressions_conservatively_keep_input_values() {
         let source = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));\n";
-        let count = format!("{source}export \"out\" = x | count;\n");
-        let distinct = format!("{source}export \"out\" = x | distinct;\n");
+        let count = format!("{source}output \"out\" = x | count;\n");
+        let distinct = format!("{source}output \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
         let mut distinct = lower::lower_tree(parse::pipe::parse(&distinct));
         assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 0);
@@ -1059,7 +1059,7 @@ mod tests {
     fn an_unexported_inspect_still_reads_its_input() {
         let text = "let x = input 0 : (int, (int, int)) | map((k, v) -> (k, v));
                     let seen = x | inspect(seen);
-                    export \"out\" = x | count;";
+                    output \"out\" = x | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
     }
@@ -1067,7 +1067,7 @@ mod tests {
     #[test]
     fn count_keeps_its_grouping_key() {
         let text = "let x = input 0 : ((int, int), ()) | map((k, v) -> (k, v));
-                    export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
+                    output \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         // Count still groups by both key fields. Its reader projects the key.
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
@@ -1079,12 +1079,12 @@ mod tests {
                     let left = source | map((row, ()) -> (row, ()));
                     let merged = source + left;
                     let counted = source | count;
-                    export \"merged\" = merged | map((row, ()) -> (row.0, ()));
-                    export \"counts\" = counted | map(((a, _), n) -> (a, n));";
+                    output \"merged\" = merged | map((row, ()) -> (row.0, ()));
+                    output \"counts\" = counted | map(((a, _), n) -> (a, n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
         assert_eq!(program.root.labels, [
-            "merged", "counted", "counted", "export merged", "export counts",
+            "merged", "counted", "counted", "output merged", "output counts",
         ]);
         assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
         crate::passes::optimize(&mut program);
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(program.root.labels.len(), program.root.items.len());
         assert_eq!(program.root.labels, [
             "merged", "merged", "counted", "counted",
-            "export merged", "export counts",
+            "output merged", "output counts",
         ]);
     }
 
@@ -1102,14 +1102,12 @@ mod tests {
         use crate::server::Server;
         let text = "let x = input 0 : ((int, int), ())
                     | map((row, ()) -> (row, ()));
-                    export \"out\" = x | distinct
+                    output \"out\" = x | distinct
                     | map((row, ()) -> (row.0, ())) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 0);
-        original.root.exports[0].name = "before.out".into();
-        projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();
@@ -1120,8 +1118,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().rows(),
-                server.snapshot(worker, "after.out").unwrap().rows()
+                server.snapshot(worker, "before::out").unwrap().rows(),
+                server.snapshot(worker, "after::out").unwrap().rows()
             );
         });
     }
@@ -1133,7 +1131,7 @@ mod tests {
                     toy: {
                         set state = (initial) + (state | filter((row, ()) -> 0));
                     }
-                    export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
+                    output \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
         assert!(pushdown(&mut program, &|_| None).unwrap() >= 2);
@@ -1146,7 +1144,7 @@ mod tests {
     fn flatmap_reads_only_the_list_it_explodes() {
         let text = "let x = input 0 : (int, (List(int), List(int)))
                     | map((k, v) -> (k, v));
-                    export \"out\" = x | flatmap((k, v) -> v.0) | count;";
+                    output \"out\" = x | flatmap((k, v) -> v.0) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
     }
@@ -1155,7 +1153,7 @@ mod tests {
     fn lift_does_not_read_an_unused_value() {
         let text = "let x = input 0 : (int, (int, int))
                     | map((k, v) -> (k, v));
-                    export \"out\" = x | lift | map((k, (v, time)) -> (k, time));";
+                    output \"out\" = x | lift | map((k, (v, time)) -> (k, time));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
     }
@@ -1166,7 +1164,7 @@ mod tests {
                     | map(((k, x), ()) -> (k, x));
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
-                    export \"out\" = a | lift
+                    output \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
@@ -1182,14 +1180,12 @@ mod tests {
                     | map(((k, x), ()) -> (k, x));
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
-                    export \"out\" = a | lift
+                    output \"out\" = a | lift
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
         assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
-        original.root.exports[0].name = "before.out".into();
-        projected.root.exports[0].name = "after.out".into();
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();
@@ -1200,8 +1196,8 @@ mod tests {
             }
             server.tick(worker);
             assert_eq!(
-                server.snapshot(worker, "before.out").unwrap().rows(),
-                server.snapshot(worker, "after.out").unwrap().rows()
+                server.snapshot(worker, "before::out").unwrap().rows(),
+                server.snapshot(worker, "after::out").unwrap().rows()
             );
         });
     }

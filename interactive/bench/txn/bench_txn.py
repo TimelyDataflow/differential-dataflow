@@ -322,8 +322,8 @@ def apply_reference(
     return rollback
 
 
-def check_rollback(client: Client, expected: set[int]) -> float:
-    rows, observe_ms = client.peek("rollback")
+def check_rollback(client: Client, program: str, expected: set[int]) -> float:
+    rows, observe_ms = client.peek(f"{program}::rollback")
     actual = parse_rollback(rows)
     if actual != expected:
         missing = sorted(expected - actual)[:10]
@@ -344,15 +344,15 @@ def run_cycle(
     if mode == "maintained":
         submit_ms = client.feed("bank", transactions)
         resolve_ms = client.tick()
-        observe_ms = check_rollback(client, expected_rollback)
-        retire_submit_ms = client.feed_from("bank", "retire", -1)
+        observe_ms = check_rollback(client, "bank", expected_rollback)
+        retire_submit_ms = client.feed_from("bank", "bank::retire", -1)
         maintain_ms = client.tick()
     else:
         install_ms = client.load("res", resolver)
         submit_ms = client.feed("res", transactions)
         resolve_ms = client.tick()
-        observe_ms = check_rollback(client, expected_rollback)
-        retire_submit_ms = client.feed_from("store", "delta", 1)
+        observe_ms = check_rollback(client, "res", expected_rollback)
+        retire_submit_ms = client.feed_from("store", "res::delta", 1)
         drop_ms = client.drop("res")
     return Sample(
         attempts=len(transactions),
@@ -493,16 +493,16 @@ def main() -> None:
 
                     encode_ms = client.encode_ms / (args.warmup + args.rounds)
                     if mode == "maintained":
-                        rollback, _ = client.peek("rollback")
+                        rollback, _ = client.peek("bank::rollback")
                         if rollback:
                             raise RuntimeError("maintenance left rollback rows behind")
-                        retire, _ = client.peek("retire")
+                        retire, _ = client.peek("bank::retire")
                         if retire:
                             raise RuntimeError("maintenance left retire rows behind")
-                        actual_state, _ = client.peek("state")
+                        actual_state, _ = client.peek("bank::state")
                     else:
                         client.tick()  # apply the last cycle's store delta
-                        actual_state, _ = client.peek("store")
+                        actual_state, _ = client.peek("store::store")
                     if parse_state(actual_state) != state:
                         raise RuntimeError("final state differs from the serial reference")
 

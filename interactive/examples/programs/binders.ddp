@@ -9,4 +9,4 @@ let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, (a enlist, b enl
 let summed = rows
     | map((a, n) -> (a, n match (Node (xs -> (100, (xs, xs) cap_list) fold ((_, (ys, x)) -> ((0, ys) get, x) add)))));
 
-export "result" = summed | arrange | inspect(deep);
+output "result" = summed | arrange | inspect(deep);

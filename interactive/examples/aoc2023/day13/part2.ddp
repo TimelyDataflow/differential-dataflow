@@ -24,6 +24,6 @@ let cmis = v1 | join(cells, ((b, _, y), (a, x, s), s2) -> ((b, a), ((x, y) lt, (
     | filter((_, m) -> (m, 1) eq) | map((k, _) -> (k, ())) | count | filter((_, n) -> (n, 1) eq);
 let cscore = cmis | map(((_, a), _) -> ((), (a, 1) sub));
 
-export "result" = rscore + cscore
+output "result" = rscore + cscore
     | collect | map((_, xs) -> ((), xs fold_add))
     | arrange | inspect(part2);

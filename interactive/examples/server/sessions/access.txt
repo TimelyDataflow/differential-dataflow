@@ -26,19 +26,19 @@ end-feed
 
 # Apply the changes, then read every (member, doc) and its access.
 tick
-peek access
+peek demo::access
 
 # Input 2, `blocks`: block group 10 on doc 100. It reaches users 2 and 3 through
 # groups 10 and 11, even past user 3's own grant.
 feed demo 2 100 val=inject(1,10)
 tick
-peek access
+peek demo::access
 
 # Read one key: user 3 on doc 100. Nothing comes back while the block holds.
-peek access tuple(inject(0,3),100)
+peek demo::access tuple(inject(0,3),100)
 
 # Remove the block by retracting the same row, and read the key again.
 feed demo 2 100 val=inject(1,10) diff=-1
 tick
-peek access tuple(inject(0,3),100)
+peek demo::access tuple(inject(0,3),100)
 exit

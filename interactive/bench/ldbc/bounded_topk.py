@@ -16,7 +16,7 @@ def program(buckets, hash_key, query='ic9'):
         raise ValueError('this command supports IC2, IC5 and IC9')
     fn, schema, _ = QUERIES[query]
     plan = fn(Context(), R.source('request', schema))
-    return Compiler(imports=True, rank_buckets=buckets, rank_hash_key=hash_key).compile_many({query+'.answer': plan})
+    return Compiler(imports=True, rank_buckets=buckets, rank_hash_key=hash_key).compile_many({'answer': plan})
 
 
 def main():

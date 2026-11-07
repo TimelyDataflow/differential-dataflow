@@ -25,7 +25,7 @@ let maxc = cells | map(((_, c), _) -> ((), (1000000, c) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
 let corner = maxr | join(maxc, (_, a, b) -> ((), (a, b)));
 
-export "result" = dijk::mc | map(((r, c, _, _, _), h) -> ((), (r, c, h)))
+output "result" = dijk::mc | map(((r, c, _, _, _), h) -> ((), (r, c, h)))
     | join(corner, (_, (r, c, h), (mr, mc)) -> ((), ((r, mr) eq, (c, mc) eq, h)))
     | filter((_, (a, b, _)) -> (a, b) all) | map((_, (_, _, h)) -> ((), h)) | min
     | arrange | inspect(part1);

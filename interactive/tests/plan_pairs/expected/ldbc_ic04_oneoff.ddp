@@ -1,9 +1,9 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int, int), ());
-let friend = import "ldbc.friend" : (int, (int, int));
-let posts = import "ic4.s.posts" : (int, (int, int));
-let tags = import "ic4.s.tags" : (int, (int, List(int)));
+let friend = import "graph::friend" : (int, (int, int));
+let posts = import "ic4s::posts" : (int, (int, int));
+let tags = import "ic4s::tags" : (int, (int, List(int)));
 let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
 let seen_idx = seen_map | arrange;
 let friend_idx = friend | arrange;
@@ -32,4 +32,4 @@ let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -
 let answer = ranked | map((rid, (rank, (neg, name))) -> ((rid, rank), (name, neg neg)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic4x1.answer" = answer_idx;
+output "answer" = answer_idx;

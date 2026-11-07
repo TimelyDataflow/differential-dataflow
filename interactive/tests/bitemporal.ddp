@@ -15,7 +15,7 @@ reach: {
     set reach = roots + proposals | distinct;
 }
 
-export "balance" = balance;
-export "owner_total" = deposits | join(owners, (acct, (), owner) -> (owner, ())) | count;
-export "owner_min" = by_owner | min;
-export "reach" = reach::reach;
+output "balance" = balance;
+output "owner_total" = deposits | join(owners, (acct, (), owner) -> (owner, ())) | count;
+output "owner_min" = by_owner | min;
+output "reach" = reach::reach;

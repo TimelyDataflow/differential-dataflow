@@ -4,7 +4,7 @@
 -- with the group's writes (`cap_list`), keeps the latest write before the read,
 -- and emits the reads it contradicts. Same input, exports, and answers.
 
-let store = import "store" : ((int), (int, int));
+let store = import "store::store" : ((int), (int, int));
 let intents = input 0 : ((int, int, int), (int));
 
 let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
@@ -44,5 +44,5 @@ let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 
-export "rollback" = rb;
-export "delta" = new_rows + (old_rows | negate);
+output "rollback" = rb;
+output "delta" = new_rows + (old_rows | negate);

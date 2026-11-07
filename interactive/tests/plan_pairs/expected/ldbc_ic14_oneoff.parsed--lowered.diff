@@ -4,9 +4,9 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let pals = import "ldbc.friend.pair" : ((int, int), ());
- let weighted = import "ic14.s.weighted" : (int, (int, int));
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let pals = import "graph::friend.pair" : ((int, int), ());
+ let weighted = import "ic14s::weighted" : (int, (int, int));
  let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
  dist: {
 -    let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost))) | join(weighted, (_, (rid, cost), (next, w)) -> ((rid, next), (cost, w) add));
@@ -76,7 +76,7 @@
 +    set walk = walk_rows;
  }
 -let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path)) | join(targets, ((rid, node), path, ()) -> ((rid, node), path)) | join(best, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
--export "ic14x1.answer" = answer | arrange;
+-output "answer" = answer | arrange;
 +let answer_map = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path));
 +let answer_idx = answer_map | arrange;
 +let targets_idx2 = targets | arrange;
@@ -86,4 +86,4 @@
 +let answer = answer_idx2 | join(best_idx3, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
 +let answer_idx3 = answer | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic14x1.answer" = answer_idx3;
++output "answer" = answer_idx3;

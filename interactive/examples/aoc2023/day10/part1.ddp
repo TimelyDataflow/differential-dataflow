@@ -28,7 +28,7 @@ reach: {
     set r = (scell | map(((r, c), _) -> ((r, c), ()))) + next | distinct;
 }
 
-export "result" = reach::r
+output "result" = reach::r
     | map(_ -> ((), 1)) | collect
     | map((_, xs) -> ((), (((0, 0), xs) fold (((a, b), _) -> ((1, a) sub, (b, a) add)) .1)))
     | arrange | inspect(part1);

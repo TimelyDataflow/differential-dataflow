@@ -2,8 +2,8 @@
 
 A long-running Timely worker group hosts interpreted DDIR dataflows through a
 load-run-drop lifecycle. Programs share results by name — each may import
-collections that others export — and clients follow along over TCP, WebSocket,
-or stdin.
+collections that others output, a program installed as `p` publishing its
+`output "x"` as `p::x` — and clients follow along over TCP, WebSocket, or stdin.
 
 Run `cargo run -p ddir-server`, then connect a line-oriented client to TCP port
 7777. The same protocol is available
@@ -11,7 +11,7 @@ over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
 defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
 becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
 the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
-`peek diag.time_by_statement` reads time by program statement like any other
+`peek diag::time_by_statement` reads time by program statement like any other
 trace. `DDIR_WORKERS` selects the number of worker
 threads (default 1). `DDIR_PASSES` chooses the passes install runs on each program
 (default `all,-projection`; for example `none` or `all,-projection`, with names `dead-code`, `structural`,
@@ -52,14 +52,14 @@ a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
 the one after the program's own, its rows `(key, (val, q))`, and the demand
-sets are `peek`able exports. `feed <prog> <in#> from <source>` fills an input from a
+sets are `peek`able exports. `feed <prog> <in> from <source>` fills an input from a
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
 or `iota:N`, or a file of integer rows — with each worker taking its shard, so
 no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
 `tick`. The source may also be a published trace, read as its contents before
 the current epoch, each worker reading its own share of the arrangement, and
-`diff=<d>` scales every row: `feed bank 0 from retire diff=-1` deletes from an
-input the rows a program exports as no longer needed (see
+`diff=<d>` scales every row: `feed bank 0 from bank::retire diff=-1` deletes from an
+input the rows a program outputs as no longer needed (see
 [`bench/txn`](../bench/txn/README.md)). Unlike `bind`, this is one delivery of the
 trace's contents, not a standing mirror of its changes. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
@@ -68,17 +68,17 @@ an inline pipe-syntax program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
-    export "graph.edges" = edges;
+    output "edges" = edges;
     graph end-load
-    tail graph.edges
+    tail graph::edges
     tick
 
-A binding may also be spelled as a call, so
-`edges=random(seed=1,arity=2,range=8,count=12,churn=1)` redirects the local
-import named `edges` to the same content-addressed source as the
-`random:...` form. Such a source is deterministic: it begins with a
-fixed-size window into an infinite hash-derived sequence and replaces
-`churn` rows on every tick.
+A load may bind its program's inputs and imports, as `load <name> from <path> <param>=<trace> ...`.
+A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by the name it imports.
+A bound input reads the trace as an import does, checked against the shape the input declares, and is no longer fed.
+For example, `load reach from reach_import.ddp edges=prod::edges` reads `prod`'s output `edges` as `reach`'s input `edges`.
+A binding may also be spelled as a call, so `edges=random(seed=1,arity=2,range=8,count=12,churn=1)` binds `edges` to the same content-addressed source as the `random:...` form.
+Such a source is deterministic: it begins with a fixed-size window into an infinite hash-derived sequence and replaces `churn` rows on every tick.
 
 `plan <name> from <path>` prints the same four preparation stages as
 `ddir-plan`, using the server's currently published import shapes. The inline
@@ -107,7 +107,7 @@ By default, `peek` answers with one `data` line per consolidated row, written as
 `tuple(…)`, `list(…)`, `inject(lane,payload)`, integer, and float spelling as a
 text feed. Unit values omit `val=`, and a diff of 1 omits `diff=`. For example,
 `_5 data tuple(inject(0,3),100) val=inject(1,tuple())` is a row that can be
-copied into `feed <prog> <in#> tuple(inject(0,3),100) val=inject(1,tuple())`
+copied into `feed <prog> <in> tuple(inject(0,3),100) val=inject(1,tuple())`
 when the input has the same shape. A tail row's `time=` is also accepted by a
 single-row feed. The server refuses writes to a closed epoch, so when feeding a
 tail row later, remove or update its `time=`. To use several rows in
@@ -147,15 +147,18 @@ state, not elapsed wall-clock time.
 
 ## Writes: `feed`
 
-    feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]
+    feed <prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]
 
-pushes one update into a loaded program's positional input. The input declares
+pushes one update into an input of a loaded program. The input declares
 its shapes (`input 0 : ((int, int), ())`), and each value is read at them:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
 `inject(lane,payload)` for a sum. A whole key or value may drop its wrapper:
 `1,2` for a tuple of integers, and `_` or nothing for unit. The session reads
 the text into columns before the workers see it, and refuses text that is not
 of the input's shapes.
+
+An input `<in>` of a program `<prog>` is its position or the name it is written with, as `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
+The workers resolve the name against the program installed.
 
 For many updates to one target at the current epoch, frame them as one feed:
 
@@ -174,7 +177,7 @@ whole body, naming the row.
 
 A program that already has the updates as columns can skip the text:
 
-    feed <prog> <in#> frame <nbytes>
+    feed <prog> <in> frame <nbytes>
 
 is followed by exactly `nbytes` bytes, a `data` frame in the format `peek … as
 corgi` answers with, with no time lanes (`lanes` is 0): `rows | 0 | keys | vals |
@@ -218,7 +221,7 @@ a standing query whose answer follows later graph changes.
 
 ## Feedback: `bind`
 
-    bind <trace> <prog> <in#>        unbind <trace> <prog> <in#>
+    bind <trace> <prog> <in>        unbind <trace> <prog> <in>
 
 From then on, every `tick` delivers the trace's *changes* into that input at
 the next epoch, so the input mirrors the trace one epoch delayed. This is the

@@ -141,7 +141,7 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, level: Level, at:
             let value = shapes.of(&e.value);
             let (k, v) = match (value, &e.shape) {
                 (Some(c), Some((k, v))) if c.key != *k || c.val != *v => {
-                    pass.conflicts.push(format!("{at}: export `{}` is declared ({k}, {v}) but is ({}, {})", e.name, c.key, c.val));
+                    pass.conflicts.push(format!("{at}: output `{}` is declared ({k}, {v}) but is ({}, {})", e.name, c.key, c.val));
                     (c.key, c.val)
                 }
                 (Some(c), _) => (c.key, c.val),
@@ -372,7 +372,7 @@ mod tests {
             let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
             set reach = roots + proposals | distinct;
         }
-        export "result" = reach::reach | map(_ -> ((), ())) | arrange;
+        output "result" = reach::reach | map(_ -> ((), ())) | arrange;
     "#;
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
                 format!("set v{i} = {};", if i == 0 { "::x".into() } else { format!("v{}", i - 1) })
             }).collect();
             if reverse { bindings.reverse(); }
-            let text = format!("let x = input 0 : (int, int); s: {{ {} }} export \"out\" = s::v127;", bindings.join(" "));
+            let text = format!("let x = input 0 : (int, int); s: {{ {} }} output \"out\" = s::v127;", bindings.join(" "));
             let (shapes, problems) = shapes_of(&text);
             assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
             assert_eq!(shapes.exports[0], Some(CollShape::new(Shape::Int, Shape::Int, Level::root(1))));
@@ -410,19 +410,19 @@ mod tests {
     fn declared_variables_and_exports_are_checked() {
         let declared = REACH
             .replace("set reach =", "var reach : ((int), ());\n            set reach =")
-            .replace("export \"result\" =", "export \"result\" : ((), ()) =");
+            .replace("output \"result\" =", "output \"result\" : ((), ()) =");
         let (_, problems) = shapes_of(&declared);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
 
         let (_, problems) = shapes_of(&REACH.replace("set reach =", "var reach : ((int, int), ());\n            set reach ="));
         assert!(problems.conflicts.iter().any(|e| e.contains("variable `reach`")), "{problems:?}");
-        let (_, problems) = shapes_of(&REACH.replace("export \"result\" =", "export \"result\" : ((int), ()) ="));
-        assert!(problems.conflicts.iter().any(|e| e.contains("export `result`")), "{problems:?}");
+        let (_, problems) = shapes_of(&REACH.replace("output \"result\" =", "output \"result\" : ((int), ()) ="));
+        assert!(problems.conflicts.iter().any(|e| e.contains("output `result`")), "{problems:?}");
     }
 
     #[test]
     fn a_declared_export_supplies_an_unknown_shape() {
-        let (shapes, problems) = shapes_of(r#"export "out" : ((int), ()) = input 0;"#);
+        let (shapes, problems) = shapes_of(r#"output "out" : ((int), ()) = input 0;"#);
         assert!(problems.conflicts.is_empty(), "{problems:?}");
         let out = shapes.exports[0].clone().unwrap();
         assert_eq!((out.key, out.val), (Shape::Prod(vec![Shape::Int]), Shape::Unit));

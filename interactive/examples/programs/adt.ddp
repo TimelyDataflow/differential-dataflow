@@ -17,4 +17,4 @@ let tagged = edges
 
 let buckets = tagged | count;
 
-export "result" = buckets | arrange | inspect(adt);
+output "result" = buckets | arrange | inspect(adt);

@@ -13,7 +13,7 @@ fn linears(scope: &Scope) -> Vec<&[LinearOp]> {
 #[test]
 fn composition_discards_arithmetic_and_uses_graphs() {
     let mut p = program(r#"let x = input 0 : (int, int);
-        export "out" = x | map((k, v) -> (k, (v, 19) mul)) | map((k, _) -> (k, ()));
+        output "out" = x | map((k, v) -> (k, (v, 19) mul)) | map((k, _) -> (k, ()));
     "#);
     // A composed slot's diagnostic source is allowed to disagree with its graph.
     if let Item::Op(Node::Linear { ops, .. }) = &mut p.root.items[0] {
@@ -34,11 +34,11 @@ fn composition_discards_arithmetic_and_uses_graphs() {
 fn shared_edges_and_rejected_shapes_stay() {
     let p = optimized(r#"let x = input 0 : (int, int);
         let shared = x | map((k, v) -> (k, (v, 1) add));
-        export "first" = shared | map((k, v) -> (v, k));
-        export "second" = shared | map((k, v) -> (k, (v, 2) mul));
+        output "first" = shared | map((k, v) -> (v, k));
+        output "second" = shared | map((k, v) -> (k, (v, 2) mul));
     "#);
     assert!(p.root.names.iter().any(|(name, _)| name == "shared"));
-    let p = optimized(r#"export "bad" = input 0 : (int, int)
+    let p = optimized(r#"output "bad" = input 0 : (int, int)
         | map(((k, v), _) -> (k, v)) | map((k, _) -> (k, ()));
     "#);
     assert!(!crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
@@ -69,15 +69,15 @@ fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
         let observed = import "observed" : (int, int) | inspect(observed);
         let nested = import "nested" : (int, int);
         child: { let result = nested; }
-        export "out" = republished;
-        export "child" = child::result;
+        output "out" = republished;
+        output "child" = child::result;
     "#);
     assert!(dead_code::run(&mut p.root) > 0);
     assert!(p.root.imports.iter().any(|i| matches!(i.from, Source::Input(7))));
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
     assert_eq!(dead_code::run(&mut p.root), 0);
-    let report = crate::plan::report(r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
+    let report = crate::plan::report(r#"let dead = import "absent"; output "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
     assert!(report.unresolved.is_empty());
     assert!(report.emit_ddp().is_ok());
 }
@@ -92,7 +92,7 @@ fn dead_child_exports_remap_parent_and_sibling_readers() {
         }
         let unused = s::a;
         t: { set x = s::b; let observed = s::c | inspect(observed); }
-        export "out" = s::b;
+        output "out" = s::b;
     "#);
     assert!(dead_code::run(&mut p.root) > 0);
     let Item::Sub(s) = &p.root.items[0] else { panic!("expected s") };
@@ -109,8 +109,8 @@ fn dead_child_exports_remap_parent_and_sibling_readers() {
 #[test]
 fn identical_imports_merge_but_different_contracts_remain() {
     let mut p = program(r#"let rows = input 0 : (int, int);
-        s: { export "a" = rows; }
-        export "out" = rows;"#);
+        s: { output "a" = rows; }
+        output "out" = rows;"#);
     let mut duplicate = p.root.imports[0].clone();
     duplicate.name = "alias".into();
     p.root.imports.push(duplicate.clone());
@@ -131,7 +131,7 @@ fn identical_imports_merge_but_different_contracts_remain() {
 
 #[test]
 fn a_long_map_run_matches_pairwise_composition() {
-    let text = "let x = input 0 : (int, int); export \"out\" = x | map((k, v) -> (k, (v, 1) add));";
+    let text = "let x = input 0 : (int, int); output \"out\" = x | map((k, v) -> (k, (v, 1) add));";
     let p = crate::lower::lower_tree(crate::parse::pipe::parse(text));
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
     let LinearOp::Project(map) = &ops[0] else { panic!() };

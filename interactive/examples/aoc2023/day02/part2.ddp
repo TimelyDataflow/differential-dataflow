@@ -11,7 +11,7 @@ let power = maxg
     | join(maxr, (game, a, b) -> (game, (a, b) mul))
     | join(maxb, (game, a, b) -> (game, (a, b) mul));
 
-export "result" = power
+output "result" = power
     | map((_, p) -> ((), p)) | collect
     | value((_, ps) -> ps fold_add)
     | arrange | inspect(part2);

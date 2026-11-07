@@ -19,21 +19,21 @@ An authored plan is a drop-in replacement for the generated one:
   are `List(int)`.
 - **Graph.** Plans import the arrangements the suite's shared graph program publishes
   (`snb/indexes.py`), and join against them directly:
-  - **primary keys**, `ldbc.person`, `ldbc.message`, `ldbc.forum`, `ldbc.tag`,
-    `ldbc.tagclass`, `ldbc.place`, `ldbc.org`: `(id, (the other fields))`, in
+  - **primary keys**, `graph::person`, `graph::message`, `graph::forum`, `graph::tag`,
+    `graph::tagclass`, `graph::place`, `graph::org`: `(id, (the other fields))`, in
     `snb/data.py`'s field order;
   - **secondary indexes** from a foreign key to the id, such as
-    `ldbc.message.by_creator : (int, int)` (author, message) or `ldbc.person.by_city`;
+    `graph::message.by_creator : (int, int)` (author, message) or `graph::person.by_city`;
   - **relations without an id**, by the endpoint looked up from, such as
-    `ldbc.likes.by_message : (int, (int, int))` (message, (person, when));
-  - **derived**: `ldbc.friend` (person, (friend, since)), friendships in both
-    directions between people who exist; `ldbc.friend.pair` ((person, friend), ());
-    `ldbc.message.root` (message, root post) and `ldbc.message.by_root`.
+    `graph::likes.by_message : (int, (int, int))` (message, (person, when));
+  - **derived**: `graph::friend` (person, (friend, since)), friendships in both
+    directions between people who exist; `graph::friend.pair` ((person, friend), ());
+    `graph::message.root` (message, root post) and `graph::message.by_root`.
 
   Every query's server shares these, so a plan pays only for what it builds itself.
   A `map` or `filter` on an import makes a private copy; the plans do that only for
   parts kept for all requests, and each header says which.
-- **Answer.** `export "<query>.answer"` is arranged as `((rid, rank), (fields…))`,
+- **Answer.** `output "answer"`, read as `<query>::answer`, is arranged as `((rid, rank), (fields…))`,
   where rank is the 0-based position in the query's order and the fields are the
   query's outputs, in the order `finish(...)` lists them. One-field outputs are
   written `(n)`: parentheses make a one-field tuple.

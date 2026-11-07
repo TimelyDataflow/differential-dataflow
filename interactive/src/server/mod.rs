@@ -20,13 +20,13 @@
 //!
 //! # The two binding points
 //!
-//! The named-trace IR (`import "x"` / `export "y"`) flows through parse → lower
+//! The named-trace IR (`import "x"` / `output "y"`) flows through parse → lower
 //! → `scope_ir`. The server resolves both ends:
 //!
 //! - **`Source::Trace(name)`** — `import` the registered trace into the new
 //!   dataflow, as the producer's arrangement or as a root collection.
-//! - **`Export(name, _)`** — arrange the exported collection and register its
-//!   trace under `name`, so a later install can import it.
+//! - **`Export(name, _)`** — arrange the output collection and register its
+//!   trace under `<program>::<name>` ([`output_name`]), so a later install can import it.
 //!
 //! # Lifecycle
 //!
@@ -96,6 +96,15 @@ use self::bind::Binding;
 use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
 pub use self::sources::generated_shape;
 
+/// The name an installed program's output is published under: `<program>::<output>`. Every
+/// program has its own namespace, so two programs may name their outputs alike, and one program
+/// text may be installed several times under different names. Generated sources (`clock`,
+/// recipes such as `random:...`, and the `diag.*` sources) belong to no program and keep their
+/// own names.
+pub fn output_name(program: &str, output: &str) -> String {
+    format!("{program}::{output}")
+}
+
 /// A published export as its readers see it: a trace of corgi chunks.
 /// Its declared root width is available from [`Server::trace_width`].
 #[derive(Clone)]
@@ -143,34 +152,68 @@ fn fmt_shape((k, v): &RowShape) -> String {
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
+/// A program's input, as a client names it: by its position, or by the name it is written with
+/// (`input "edges"`, or `input<N>` for an unnamed input). Workers resolve a name against the
+/// program installed, so a client's view of the program cannot misdirect a feed.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum InputId {
+    Position(usize),
+    Name(String),
+}
+
+impl InputId {
+    /// Digits are a position, and anything else a name.
+    pub fn parse(text: &str) -> Self {
+        let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+        match text.parse() {
+            Ok(position) if digits => InputId::Position(position),
+            _ => InputId::Name(text.to_string()),
+        }
+    }
+
+    /// Whether `text` may name an input: an identifier, so that it never reads as a position, and
+    /// not `input<N>`, the name of an unnamed input.
+    pub fn is_name(text: &str) -> bool {
+        let mut chars = text.chars();
+        let identifier = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let unnamed = text.strip_prefix("input").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        identifier && !unnamed
+    }
+}
+
+impl From<usize> for InputId {
+    fn from(position: usize) -> Self { InputId::Position(position) }
+}
+
 /// Serializable so worker 0 can circulate it to every worker; the workers
 /// execute it without any further parsing.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
-    /// Update positional `input` of `prog` with one row, read into columns, at
+    /// Update `input` of `prog` with one row, read into columns, at
     /// `time` (default the current epoch when `None`).
     Feed {
         prog: String,
-        input: usize,
+        input: InputId,
         columns: Updates,
         time: Option<OuterTime>,
     },
-    /// Stage several rows, read into columns, into one positional input at the
+    /// Stage several rows, read into columns, into one input at the
     /// current epoch.
     FeedColumns {
         prog: String,
-        input: usize,
+        input: InputId,
         columns: Updates,
     },
-    /// Fill positional `input` of `prog` from `source` — a recipe name, a
+    /// Fill `input` of `prog` from `source` — a recipe name, a
     /// published trace, or a file path — at the current epoch, each row's
     /// multiplicity scaled by `diff`. Collective: every worker feeds its own
     /// shard of the rows (see [`Server::load`]).
     Load {
         prog: String,
-        input: usize,
+        input: InputId,
         source: String,
         diff: Diff,
     },
@@ -182,13 +225,13 @@ pub enum Command {
     Bind {
         trace: String,
         prog: String,
-        input: usize,
+        input: InputId,
     },
     /// Remove a binding installed by `Bind`.
     Unbind {
         trace: String,
         prog: String,
-        input: usize,
+        input: InputId,
     },
     /// Report the registry. The driver assembles it from [`Server::program_info`],
     /// [`Server::trace_info`] and [`Server::binding_info`].
@@ -201,6 +244,8 @@ pub enum Command {
 struct Installed {
     /// Positional input index -> handle.
     inputs: HashMap<usize, ServerInput>,
+    /// The positions of its inputs, by the names they are written with.
+    input_names: HashMap<String, usize>,
     /// Names of traces this program imports (for the importer refcount).
     imports: Vec<String>,
     /// Names of traces this program publishes (registry entries it owns).
@@ -357,6 +402,17 @@ impl Server {
     pub fn source_shape(&self, name: &str) -> Option<RowShape> {
         let key = canonical_source_name(name);
         self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
+    }
+
+    /// The position of `prog`'s `input`, resolving a name against the program installed.
+    pub fn input_position(&self, prog: &str, input: &InputId) -> Result<usize, String> {
+        match input {
+            InputId::Position(n) => Ok(*n),
+            InputId::Name(name) => {
+                let installed = self.programs.get(&canonical_source_name(prog)).ok_or_else(|| format!("no program {prog:?}"))?;
+                installed.input_names.get(name).copied().ok_or_else(|| format!("program {prog:?} has no input named {name:?}"))
+            }
+        }
     }
 
     /// Return registry state without coupling a caller to stdout formatting.

@@ -37,7 +37,7 @@ let first = findings | min | map((line, (_, d)) -> (line, d));
 let last  = findings | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map((line, (_, d)) -> (line, d));
 let calib = first | join(last, (line, f, l) -> (line, ((f, 10) mul, l) add));
 
-export "result" = calib
+output "result" = calib
     | map((_, v) -> ((), v)) | collect
     | value((_, vs) -> vs fold_add)
     | arrange | inspect(part2);

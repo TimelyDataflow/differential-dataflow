@@ -43,8 +43,8 @@ let state_map = current | map((k, (_, v)) -> (k, (v)));
 let retire_rows = current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate;
 let retire_rows2 = intents + retire_rows;
 -- Renderer: build an export arrangement.
-export "rollback" = rb;
+output "rollback" = rb;
 -- Renderer: build an export arrangement.
-export "state" = state_map;
+output "state" = state_map;
 -- Renderer: build an export arrangement.
-export "retire" = retire_rows2;
+output "retire" = retire_rows2;

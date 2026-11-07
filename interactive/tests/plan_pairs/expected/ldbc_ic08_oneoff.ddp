@@ -1,10 +1,10 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote = import "ldbc.message.by_creator" : (int, int);
-let replies = import "ldbc.message.by_parent" : (int, int);
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = import "graph::message.by_creator" : (int, int);
+let replies = import "graph::message.by_parent" : (int, int);
 let top_map = request | map(((rid, who), ()) -> (who, rid));
 let top_idx = top_map | arrange;
 let wrote_idx = wrote | arrange;
@@ -26,4 +26,4 @@ let person_idx = person | arrange;
 let answer = answer_idx2 | join(person_idx, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
 let answer_idx3 = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic8x1.answer" = answer_idx3;
+output "answer" = answer_idx3;

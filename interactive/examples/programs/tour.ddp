@@ -40,12 +40,12 @@ reach: {
     set reach = roots + proposals | distinct;
 }
 
-export "scored" = scored | arrange | inspect(total);
-export "floats" = floated | arrange | inspect(total);
-export "sums"   = tagged | arrange | inspect(total);
-export "folded" = folded | arrange | inspect(total);
-export "nested" = nested | arrange | inspect(nest);
-export "counts" = counted | arrange | inspect(total);
-export "least"  = least | arrange | inspect(total);
-export "uniq"   = uniq | arrange | inspect(total);
-export "reach"  = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);
+output "scored" = scored | arrange | inspect(total);
+output "floats" = floated | arrange | inspect(total);
+output "sums"   = tagged | arrange | inspect(total);
+output "folded" = folded | arrange | inspect(total);
+output "nested" = nested | arrange | inspect(nest);
+output "counts" = counted | arrange | inspect(total);
+output "least"  = least | arrange | inspect(total);
+output "uniq"   = uniq | arrange | inspect(total);
+output "reach"  = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);

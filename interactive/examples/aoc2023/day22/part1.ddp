@@ -37,5 +37,5 @@ let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, n) -> (n, 1
 
 let critical = sup | map(((lo, up), _) -> (up, lo)) | join(uniq2, (_, lo, ()) -> (lo, ())) | distinct;
 let total = lines | map(_ -> ((), ())) | count;   -- ALL lines, per the slt
-export "result" = total | join(critical | map(_ -> ((), ())) | count, (_, a, b) -> ((), (a, b) sub))
+output "result" = total | join(critical | map(_ -> ((), ())) | count, (_, a, b) -> ((), (a, b) sub))
     | arrange | inspect(part1);

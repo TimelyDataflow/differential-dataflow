@@ -8,7 +8,7 @@ fn alpha_renamed_maps_keep_the_first_text_and_label() {
     let mut p = program(r#"
         let x = input 0 : (int, int);
         let a = x | map((k, v) -> (v, k)); let b = x | map((p, q) -> (q, p));
-        export "a" = a; export "b" = b;
+        output "a" = a; output "b" = b;
     "#);
     let Item::Op(Node::Linear { ops, .. }) = &p.root.items[0] else { panic!() };
     let original = format!("{ops:?}");
@@ -34,12 +34,12 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
                 let out_{name} = inner_{name}::reach_{name};
                 let raw_{name} = {input} | map((k_{name}, v_{name}) -> (v_{name}, k_{name}));
             }}
-            export "{name}" = {name}::out_{name};
-            export "raw_{name}" = {name}::raw_{name};
+            output "{name}" = {name}::out_{name};
+            output "raw_{name}" = {name}::raw_{name};
         "#);
     }
     // A later child imports exports redirected from the duplicate child.
-    src += r#"reader: { let both = a::out_a + b::out_b; } export "both" = reader::both;"#;
+    src += r#"reader: { let both = a::out_a + b::out_b; } output "both" = reader::both;"#;
     let original = program(&src);
     let mut optimized = original.clone();
     interactive::passes::optimize(&mut optimized);
@@ -64,8 +64,8 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
                     server.tick(worker);
                 }
                 for export in &original.root.exports {
-                    let mut want = before.snapshot(worker, &export.name).unwrap().rows();
-                    let mut got = after.snapshot(worker, &export.name).unwrap().rows();
+                    let mut want = before.snapshot(worker, &format!("before::{}", export.name)).unwrap().rows();
+                    let mut got = after.snapshot(worker, &format!("after::{}", export.name)).unwrap().rows();
                     want.sort(); got.sort();
                     assert_eq!(got, want, "{}", export.name);
                 }

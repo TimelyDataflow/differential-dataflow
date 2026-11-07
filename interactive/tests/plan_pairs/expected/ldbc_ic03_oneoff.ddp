@@ -1,11 +1,11 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, List(int), List(int), int, int), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let friend = import "ldbc.friend" : (int, (int, int));
-let place = import "ldbc.place" : (int, (List(int), List(int), int));
-let by_name = import "ldbc.place.by_name" : (List(int), int);
-let sent_from = import "ic3.s.sent_from" : (int, (int, int));
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend = import "graph::friend" : (int, (int, int));
+let place = import "graph::place" : (int, (List(int), List(int), int));
+let by_name = import "graph::place.by_name" : (List(int), int);
+let sent_from = import "ic3s::sent_from" : (int, (int, int));
 let asked_map = request | map(((rid, who, x, y, start, days), ()) -> (x, (rid, who, y, start, (start, (days, 86400000) mul) add)));
 let asked_idx = asked_map | arrange;
 let by_name_idx = by_name | arrange;
@@ -59,4 +59,4 @@ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) 
 let answer = ranked | map((rid, (rank, ((_, node), (first, last, nx, ny)))) -> ((rid, rank), (node, first, last, nx, ny, (nx, ny) add)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic3x1.answer" = answer_idx;
+output "answer" = answer_idx;

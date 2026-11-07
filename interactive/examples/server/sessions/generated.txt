@@ -13,8 +13,8 @@ tick
 list
 # Its contents, and the two results computed over it.
 peek random:nodes=8,edges=12
-peek result
-peek edge_count
+peek reach::result
+peek counter::edge_count
 
 # Dropping both consumers reclaims the source too: it goes once nothing imports it.
 drop reach

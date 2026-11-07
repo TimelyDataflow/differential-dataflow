@@ -9,5 +9,5 @@
  let counts_reduce = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -let counts_idx = counts_reduce | arrange;
  -- Renderer: publish the existing arrangement.
--export "counts" = counts_idx;
-+export "counts" = counts_reduce;
+-output "counts" = counts_idx;
++output "counts" = counts_reduce;

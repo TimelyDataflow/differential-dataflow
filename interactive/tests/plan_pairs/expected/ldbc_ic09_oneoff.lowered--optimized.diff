@@ -37,4 +37,4 @@
 +let answer = answer_idx2 | join(person_idx, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
  let answer_idx3 = answer | arrange;
  -- Renderer: publish the existing arrangement.
- export "ic9x1.answer" = answer_idx3;
+ output "answer" = answer_idx3;

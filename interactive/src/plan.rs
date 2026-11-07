@@ -521,7 +521,7 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
     }
     for export in &scope.exports {
         if let Ref::Import(i) = &export.value {
-            readers[*i].push(format!("export {} ({})", quote(&export.name), if depth == 0 { "arrange/reuse" } else { "rows" }));
+            readers[*i].push(format!("output {} ({})", quote(&export.name), if depth == 0 { "arrange/reuse" } else { "rows" }));
         }
     }
     for (i, (source, form)) in sources.iter().enumerate() {
@@ -568,7 +568,7 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
         else { match form(&export.value, &imports, &forms) {
             Form::Arrangement => "publish existing arrangement", Form::Rows => "build export arrangement", Form::Unknown => "export storage not shown",
         }};
-        writeln!(out, "{indent}  export {} = {} : {}; renderer: {action}", quote(&export.name), names.of(&export.value), shape(shapes.exports[i].clone())).unwrap();
+        writeln!(out, "{indent}  output {} = {} : {}; renderer: {action}", quote(&export.name), names.of(&export.value), shape(shapes.exports[i].clone())).unwrap();
     }
     writeln!(out, "{indent}}}").unwrap();
 }
@@ -635,10 +635,10 @@ mod tests {
 
     #[test]
     fn providers_are_required_and_as_of_filters_are_visible() {
-        let provider = report(r#"export "rows" = input 0 : (int, int);"#, &|_| None, &Config::all()).unwrap();
+        let provider = report(r#"output "rows" = input 0 : (int, int);"#, &|_| None, &Config::all()).unwrap();
         let text = r#"
             let rows = import "rows" : (int, int);
-            export "out" = rows | lift | half_join(rows, 1, (k, v, w) -> (k, v));
+            output "out" = rows | lift | half_join(rows, 1, (k, v, w) -> (k, v));
         "#;
         let missing = report(text, &|_| None, &Config::all()).unwrap();
         assert_eq!(missing.unresolved, ["rows"]);

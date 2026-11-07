@@ -25,7 +25,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
 
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
-            "let rows = input 0 : ((int), ()); export \"rows\" = rows;",
+            "let rows = input 0 : ((int), ()); output \"rows\" = rows;",
         ));
         interactive::passes::optimize(&mut program);
         let mut server = Server::new();
@@ -33,7 +33,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
         let outcome = server.load(worker, "world", 0, &path, 1);
         server.tick(worker);
         let rows = server
-            .snapshot(worker, "rows")
+            .snapshot(worker, "world::rows")
             .unwrap().rows()
             .into_iter()
             .map(|(key, _, _)| key)
@@ -73,7 +73,7 @@ fn a_well_formed_file_is_fed_exactly_once_across_workers() {
 fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let install = |server: &mut Server, worker: &mut _, name: &str| {
-            let text = format!("let rows = input 0 : ((int), ()); export \"{name}.rows\" = rows;");
+            let text = format!("let rows = input 0 : ((int), ()); output \"rows\" = rows;");
             let mut program = lower::lower_tree(parse::pipe::parse(&text));
             interactive::passes::optimize(&mut program);
             server.install(worker, name, &program).unwrap();
@@ -86,13 +86,13 @@ fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
             server.feed("gone", 0, "2\n4\n6", None).unwrap();
         }
         server.tick(worker);
-        assert!(server.loads_from_trace("gone.rows"));
-        server.load(worker, "world", 0, "gone.rows", -1).unwrap();
+        assert!(server.loads_from_trace("gone::rows"));
+        server.load(worker, "world", 0, "gone::rows", -1).unwrap();
         server.tick(worker);
-        server.load(worker, "world", 0, "world.rows", 2).unwrap();
+        server.load(worker, "world", 0, "world::rows", 2).unwrap();
         server.tick(worker);
         server
-            .snapshot(worker, "world.rows")
+            .snapshot(worker, "world::rows")
             .unwrap()
             .rows()
             .into_iter()

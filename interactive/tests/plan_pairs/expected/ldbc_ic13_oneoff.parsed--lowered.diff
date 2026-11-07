@@ -4,7 +4,7 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let friend = import "ldbc.friend" : (int, (int, int));
+ let friend = import "graph::friend" : (int, (int, int));
 -let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ()))) + (request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ())));
 +let starts_map = request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ()));
 +let starts_map2 = request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ()));
@@ -66,7 +66,7 @@
  let asked = request | map(((rid, _, _), ()) -> (rid, ()));
 -let never = asked + (asked | join(best, (rid, (), _) -> (rid, ())) | negate);
 -let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
--export "ic13x1.answer" = answer | arrange;
+-output "answer" = answer | arrange;
 +let asked_idx = asked | arrange;
 +let never_join = asked_idx | join(best, (rid, (), _) -> (rid, ()));
 +let never_neg = never_join | negate;
@@ -76,4 +76,4 @@
 +let answer = answer_map + answer_map2;
 +let answer_idx = answer | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic13x1.answer" = answer_idx;
++output "answer" = answer_idx;

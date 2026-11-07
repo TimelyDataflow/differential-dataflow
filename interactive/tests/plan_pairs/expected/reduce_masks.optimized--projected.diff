@@ -22,20 +22,20 @@
 +let collected_reduce = values_idx | reduce(_ -> ((), 1) enlist);
  let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
  -- Renderer: build an export arrangement.
- export "out" = out_map;
+ output "out" = out_map;
 --- Renderer: build an export arrangement.
--export "minimum" = minimum_map;
+-output "minimum" = minimum_map;
 +-- Renderer: publish the existing arrangement.
-+export "minimum" = minimum_reduce;
++output "minimum" = minimum_reduce;
  -- Renderer: build an export arrangement.
- export "unique" = unique_map2;
+ output "unique" = unique_map2;
 --- Renderer: build an export arrangement.
--export "counted" = counted_map;
+-output "counted" = counted_map;
 --- Renderer: build an export arrangement.
--export "collected" = collected_map;
+-output "collected" = collected_map;
 +-- Renderer: publish the existing arrangement.
-+export "counted" = counted_reduce;
++output "counted" = counted_reduce;
 +-- Renderer: publish the existing arrangement.
-+export "collected" = collected_reduce;
++output "collected" = collected_reduce;
  -- Renderer: build an export arrangement.
- export "custom" = custom_map;
+ output "custom" = custom_map;

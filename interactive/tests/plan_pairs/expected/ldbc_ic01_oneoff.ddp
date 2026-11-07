@@ -1,14 +1,14 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, List(int)), ());
-let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let friend = import "ldbc.friend" : (int, (int, int));
-let place = import "ldbc.place" : (int, (List(int), List(int), int));
-let org = import "ldbc.org" : (int, (List(int), List(int), int));
-let study = import "ldbc.study.by_person" : (int, (int, int));
-let work = import "ldbc.work.by_person" : (int, (int, int));
-let email = import "ldbc.email.by_person" : (int, List(int));
-let language = import "ldbc.language.by_person" : (int, List(int));
+let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend = import "graph::friend" : (int, (int, int));
+let place = import "graph::place" : (int, (List(int), List(int), int));
+let org = import "graph::org" : (int, (List(int), List(int), int));
+let study = import "graph::study.by_person" : (int, (int, int));
+let work = import "graph::work.by_person" : (int, (int, int));
+let email = import "graph::email.by_person" : (int, List(int));
+let language = import "graph::language.by_person" : (int, List(int));
 let hop1_map = request | map(((rid, who, name), ()) -> (who, (rid, who, name)));
 let hop1_idx = hop1_map | arrange;
 let friend_idx = friend | arrange;
@@ -90,4 +90,4 @@ let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -
 let answer = ranked | map((rid, (rank, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w)))) -> ((rid, rank), (node, last, d, birthday, created, gender, browser, ip, e, l, town, s, w)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic1x1.answer" = answer_idx;
+output "answer" = answer_idx;

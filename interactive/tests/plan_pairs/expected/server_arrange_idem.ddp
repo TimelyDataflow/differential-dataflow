@@ -43,4 +43,4 @@ let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));
 let classes_idx = classes_map | arrange;
 let classes_inspect = classes_idx | inspect(classes);
 -- Renderer: build an export arrangement.
-export "classes" = classes_inspect;
+output "classes" = classes_inspect;

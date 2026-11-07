@@ -41,5 +41,5 @@ halve: {
     set st = (n | map((_, x) -> ((0, x, 0), ()))) + next | distinct;
 }
 
-export "result" = halve::st | filter(((i, _, _), _) -> (i, 40) eq) | map(((_, _, q), _) -> ((), (q, 1) add))
+output "result" = halve::st | filter(((i, _, _), _) -> (i, 40) eq) | map(((_, _, q), _) -> ((), (q, 1) add))
     | arrange | inspect(part2);

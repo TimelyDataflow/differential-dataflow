@@ -19,7 +19,7 @@ move: {
     set mv = parts + moved | distinct;
 }
 
-export "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)
+output "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)
     | map(((_, x, m, a, s), _) -> ((), (((x, m) add, a) add, s) add))
     | collect | map((_, vs) -> ((), vs fold_add))
     | arrange | inspect(part1);

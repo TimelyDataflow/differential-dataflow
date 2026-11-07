@@ -55,9 +55,9 @@ let wid  = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
-export "rollback" = rb;
-export "state" = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min | map((k, (_, v)) -> (k, (v)));
-export "log" = intents;
+output "rollback" = rb;
+output "state" = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min | map((k, (_, v)) -> (k, (v)));
+output "log" = intents;
 bank end-load
 
 # The five transactions from the post, all as blind appends:
@@ -84,8 +84,8 @@ feed bank 0 5,0,2 val=100
 tick
 
 # Expect: rollback = {4}; state alice=50, bob=100.
-peek rollback
-peek state
+peek bank::rollback
+peek bank::state
 
 # --- Asynchronous maintenance (any client, any time; output-invariant) ---
 # Remove the failed transaction, the read sets of committed transactions,
@@ -107,7 +107,7 @@ feed bank 0 3,0,2 val=80 diff=-1
 tick
 
 # The log is now just the two live writes -- and state is UNCHANGED.
-peek log
-peek state
-peek rollback
+peek bank::log
+peek bank::state
+peek bank::rollback
 exit

@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
 -- Trace imports use provider arrangements; history advances to G = (0, []).
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let tagclass = import "ldbc.tagclass" : (int, (List(int), int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tagclass = import "graph::tagclass" : (int, (List(int), int));
 let selves = tagclass | map((id, _) -> ((id, id), ()));
 below: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
@@ -20,6 +20,6 @@ let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> 
 let below_hl_idx = below_hl | arrange;
 let reply_idx = reply | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic12.s.below_hl" = below_hl_idx;
+output "below_hl" = below_hl_idx;
 -- Renderer: publish the existing arrangement.
-export "ic12.s.reply" = reply_idx;
+output "reply" = reply_idx;

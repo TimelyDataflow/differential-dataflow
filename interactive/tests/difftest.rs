@@ -192,7 +192,7 @@ impl Case {
     }
     fn exports(&self) -> Vec<String> {
         if let Some(raw) = &self.raw {
-            return raw.lines().filter_map(|l| l.trim().strip_prefix("export \"")?.split_once('"').map(|(n, _)| n.to_string())).collect();
+            return raw.lines().filter_map(|l| l.trim().strip_prefix("output \"")?.split_once('"').map(|(n, _)| n.to_string())).collect();
         }
         self.stmts.iter().filter_map(|s| match s { Stmt::Export { name, .. } => Some(name.clone()), _ => None }).collect()
     }
@@ -239,7 +239,7 @@ fn render_stmts(stmts: &[Stmt], delta: bool, indent: &str, out: &mut String) {
                 render_stmts(body, delta, &format!("{indent}    "), out);
                 writeln!(out, "{indent}}}").unwrap();
             }
-            Stmt::Export { name, value } => writeln!(out, "{indent}export \"{name}\" = {value};").unwrap(),
+            Stmt::Export { name, value } => writeln!(out, "{indent}output \"{name}\" = {value};").unwrap(),
         }
     }
 }
@@ -931,6 +931,10 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
     let binds = binds.to_vec();
     let epochs = case.epochs.clone();
     let exports = case.exports();
+    // Each output is published under the program that computes it, as `<program>::<output>`.
+    let published: BTreeMap<String, String> = programs.iter()
+        .flat_map(|(program, p, _)| p.root.exports.iter().map(move |e| (e.name.clone(), interactive::server::output_name(program, &e.name))))
+        .collect();
     let guards = timely::execute(timely::Config::process(workers), move |worker| -> Result<Vec<Exports>, String> {
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
@@ -978,14 +982,15 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
             let mut now = Exports::new();
             for name in &exports {
                 // Not installed (yet, or any more): an install starts its taps over.
-                if server.trace_shape(name).is_none() { tapped.remove(name); continue; }
-                let updates = server.snapshot(worker, name)?;
+                let full = published.get(name).map(String::as_str).unwrap_or(name);
+                if server.trace_shape(full).is_none() { tapped.remove(name); continue; }
+                let updates = server.snapshot(worker, full)?;
                 if worker.index() == 0 { round_trips(&updates).map_err(|why| format!("round trip of {name:?}: {why}"))?; }
                 if single {
                     // The changes taken so far sum to the contents, and a peek at a key is the
                     // contents at that key.
                     let taken = tapped.entry(name.clone()).or_default();
-                    taken.extend(server.take_changes(name).into_iter().map(|c| interactive::runtime::container::Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
+                    taken.extend(server.take_changes(full).into_iter().map(|c| interactive::runtime::container::Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
                     let shape = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
                     let summed = interactive::runtime::container::Updates::consolidate(taken.clone(), &shape);
                     if sorted(summed.clone().rows()) != sorted(updates.clone().rows()) {
@@ -993,7 +998,7 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
                     }
                     let rows = updates.clone().rows();
                     if let Some((key, _, _)) = rows.first().filter(|(k, _, _)| finite(k)) {
-                        let peeked = sorted(server.peek(worker, name, Some(key))?.rows());
+                        let peeked = sorted(server.peek(worker, full, Some(key))?.rows());
                         let want: Rows = sorted(rows.iter().filter(|(k, _, _)| k == key).cloned().collect());
                         if peeked != want { return Err(format!("round trip of {name:?}: peek at {key:?} gave {peeked:?}, not {want:?}")); }
                     }
@@ -1082,8 +1087,8 @@ fn split(case: &Case) -> Option<(String, String, bool, usize)> {
     render_stmts(before, false, "", &mut producer);
     let mut consumer = format!("{SUM_DECL}\n");
     for (name, _, _) in &named {
-        writeln!(producer, "export \"shared_{name}\" = {name};").unwrap();
-        writeln!(consumer, "let {name} = import \"shared_{name}\";").unwrap();
+        writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
+        writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
     }
     render_stmts(after, false, "", &mut consumer);
     Some((producer, consumer, rng.chance(50), late))
@@ -1101,8 +1106,8 @@ fn asof_programs(case: &Case, optimize: bool) -> Result<Vec<(String, Program, us
             }
             Stmt::Input { name, .. } => {
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
-                writeln!(producer, "export \"shared_{name}\" = {name};").unwrap();
-                writeln!(consumer, "let {name} = import \"shared_{name}\";").unwrap();
+                writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
+                writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
             }
             _ => render_stmts(std::slice::from_ref(stmt), true, "", &mut consumer),
         }
@@ -1120,9 +1125,9 @@ fn bound(case: &Case) -> Option<(String, String, Vec<(String, usize)>, usize)> {
     let mut consumer = format!("{SUM_DECL}\n");
     let mut binds = Vec::new();
     for (input, (name, key, val)) in named.iter().enumerate() {
-        writeln!(producer, "export \"shared_{name}\" = {name};").unwrap();
+        writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
         writeln!(consumer, "let {name} = input {input} : ({}, {});", key.text(), val.text()).unwrap();
-        binds.push((format!("shared_{name}"), input));
+        binds.push((format!("producer::shared_{name}"), input));
     }
     render_stmts(after, false, "", &mut consumer);
     Some((producer, consumer, binds, late))
@@ -1586,11 +1591,11 @@ outer: {
 let edges_idx = edges | arrange;
 let reduced = roots | distinct;
 reader: { let reduced_idx = ::reduced | arrange; }
-export "result" = left::reached;
-export "nested" = ::outer::right::reached;
-export "rows" = left::rows;
-export "edges" = edges_idx;
-export "roots" = reader::reduced_idx;
+output "result" = left::reached;
+output "nested" = ::outer::right::reached;
+output "rows" = left::rows;
+output "edges" = edges_idx;
+output "roots" = reader::reduced_idx;
 -- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
 -- epoch 0, input 1: 1 diff=1
 -- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1
@@ -1626,8 +1631,8 @@ outer: {
     }
     set again = inner::reached | filter((_, ()) -> 0);
 }
-export "result" = ::outer::inner::reached;
-export "invariant" = ::outer::inner::reduced;
+output "result" = ::outer::inner::reached;
+output "invariant" = ::outer::inner::reduced;
 -- epoch 0, input 0: 1 val=2 diff=1 | 2 val=3 diff=1 | 3 val=4 diff=1
 -- epoch 0, input 1: 1 diff=1
 -- epoch 1, input 0: 2 val=3 diff=-1 | 2 val=5 diff=1

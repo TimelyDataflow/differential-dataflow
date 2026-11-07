@@ -1,13 +1,9 @@
 --- parsed
 +++ lowered
-@@ -1,7 +1,19 @@
--let edges = import "edges";
--let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
+@@ -1,7 +1,17 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
-+let edges = import "edges" : ((int), (int));
-+let input0 = input 0 : ((int), ());
-+let roots = input0 | map((n, ()) -> (n, ()));
+ let edges = input "edges" : ((int), (int));
+ let roots = input "roots" : ((int), ());
  reach: {
 -    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
 -    set reach = roots + proposals | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
@@ -21,7 +17,7 @@
 +    let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set reach = reach_reduce;
  }
--export "result" = reach::reach | inspect(reach);
+-output "result" = reach::reach | inspect(reach);
 +let result_inspect = reach::reach | inspect(reach);
 +-- Renderer: build an export arrangement.
-+export "result" = result_inspect;
++output "result" = result_inspect;

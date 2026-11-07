@@ -31,4 +31,4 @@
 +let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
  let answer_idx = answer | arrange;
  -- Renderer: publish the existing arrangement.
- export "is7.answer" = answer_idx;
+ output "answer" = answer_idx;

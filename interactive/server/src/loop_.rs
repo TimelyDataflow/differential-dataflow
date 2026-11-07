@@ -81,7 +81,7 @@ impl Work {
                                 reqid: reqid.clone(),
                                 command: Ok(PreparedCommand::Server(ServerCommand::FeedColumns {
                                     prog: prog.clone(),
-                                    input,
+                                    input: input.clone(),
                                     columns: columns.select(&rows),
                                 })),
                                 connection_id,
@@ -300,18 +300,20 @@ fn dispatch(
             } => {
                 // An external row must enter the distributed collection once.
                 // Its dataflow exchanges will place it on the appropriate peer.
-                let result = if worker.index() == 0 {
-                    server.feed_columns(&prog, input, columns, time)
-                } else {
-                    Ok(())
-                };
-                result.map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch()))
+                server.input_position(&prog, &input).and_then(|input| {
+                    let result = if worker.index() == 0 {
+                        server.feed_columns(&prog, input, columns, time)
+                    } else {
+                        Ok(())
+                    };
+                    result.map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch()))
+                })
             }
             ServerCommand::FeedColumns {
                 prog,
                 input,
                 columns,
-            } => server.feed_columns(&prog, input, columns, None).map(|()| {
+            } => server.input_position(&prog, &input).and_then(|input| server.feed_columns(&prog, input, columns, None).map(|()| {
                 format!(
                     "fed {} rows to {:?} input {} at t={}",
                     logical_count.expect("distributed batch retains its logical row count"),
@@ -319,9 +321,9 @@ fn dispatch(
                     input,
                     server.epoch()
                 )
-            }),
+            })),
             // Collective: every worker sources its own shard.
-            ServerCommand::Load { prog, input, source, diff } => {
+            ServerCommand::Load { prog, input, source, diff } => server.input_position(&prog, &input).and_then(|input| {
                 let local = server.loads_from_trace(&source);
                 server.load(worker, &prog, input, &source, diff).map(|rows| {
                     if local {
@@ -330,13 +332,13 @@ fn dispatch(
                         format!("loaded {rows} rows into {prog:?} input {input}")
                     }
                 })
-            }
-            ServerCommand::Bind { trace, prog, input } => server
+            }),
+            ServerCommand::Bind { trace, prog, input } => server.input_position(&prog, &input).and_then(|input| server
                 .bind(worker, &trace, &prog, input)
-                .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),
-            ServerCommand::Unbind { trace, prog, input } => server
+                .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input))),
+            ServerCommand::Unbind { trace, prog, input } => server.input_position(&prog, &input).and_then(|input| server
                 .unbind(worker, &trace, &prog, input)
-                .map(|()| format!("unbound {:?} -> {:?} input {}", trace, prog, input)),
+                .map(|()| format!("unbound {:?} -> {:?} input {}", trace, prog, input))),
             ServerCommand::List => {
                 if let Some(response) = response.as_ref() {
                     for program in server.program_info() {

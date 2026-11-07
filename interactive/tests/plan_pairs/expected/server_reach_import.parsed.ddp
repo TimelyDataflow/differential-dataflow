@@ -1,7 +1,7 @@
-let edges = import "edges";
-let roots = input 0 : ((int), ()) | map((n, ()) -> (n, ()));
+let edges = input "edges" : ((int), (int));
+let roots = input "roots" : ((int), ());
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
     set reach = roots + proposals | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
-export "result" = reach::reach | inspect(reach);
+output "result" = reach::reach | inspect(reach);

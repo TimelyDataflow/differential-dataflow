@@ -452,7 +452,7 @@ pub(crate) fn render_program<'s>(
         let arranged = r.arrange().arranged;
         if let Some(logger) = &logger {
             let end = scope.worker().peek_identifier();
-            logger.log(crate::backend::LabelEvent { first, end, label: format!("export {}", export.name) });
+            logger.log(crate::backend::LabelEvent { first, end, label: format!("output {}", export.name) });
         }
         arranged
     }).collect();

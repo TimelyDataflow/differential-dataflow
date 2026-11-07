@@ -12,4 +12,4 @@ matching: {
     set removals = removals + by_a - props | arrange;
 }
 
-export "result" = matching::props | map(_ -> ((), ())) | arrange | inspect(total);
+output "result" = matching::props | map(_ -> ((), ())) | arrange | inspect(total);

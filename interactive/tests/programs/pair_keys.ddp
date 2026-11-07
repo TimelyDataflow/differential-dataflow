@@ -6,4 +6,4 @@ let left  = input 0 : ((int, int, int), ()) | map(((a, b, c), ()) -> ((a, b), c)
 let right = input 1 : ((int, int, int), ()) | map(((a, b, c), ()) -> ((a, b), c));
 let out = left | join(right, (k, l, r) -> (k, (l, r) add));
 
-export "result" = out | arrange | inspect(total);
+output "result" = out | arrange | inspect(total);

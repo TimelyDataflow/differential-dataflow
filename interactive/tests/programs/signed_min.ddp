@@ -2,4 +2,4 @@
 -- leaves. Min must sign-swizzle those leaves for sorting without decoding rows.
 let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
-export "minimum" = pairs | min;
+output "minimum" = pairs | min;

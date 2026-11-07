@@ -3,11 +3,11 @@
 @@ -1,13 +1,9 @@
  -- Time lanes: epoch.
  -- Trace imports use provider arrangements; history advances to G = (0, []).
--let person = import "ldbc.person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
--let friend = import "ldbc.friend" : (int, (int, int));
--let forum = import "ldbc.forum" : (int, (List(int), int, int));
- let member = import "ldbc.member.by_person" : (int, (int, int));
+-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let friend = import "graph::friend" : (int, (int, int));
+-let forum = import "graph::forum" : (int, (List(int), int, int));
+ let member = import "graph::member.by_person" : (int, (int, int));
 -let posted_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq);
 -let posted_map = posted_filter | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
 -let posted_idx = posted_map | arrange;
@@ -24,10 +24,10 @@
 -let first_idx2 = first | arrange;
  let lowest_idx2 = lowest | arrange;
  -- Renderer: publish the existing arrangement.
--export "ic5.s.posted" = posted_idx2;
-+export "ic5.s.posted" = posted;
+-output "posted" = posted_idx2;
++output "posted" = posted;
  -- Renderer: publish the existing arrangement.
--export "ic5.s.first" = first_idx2;
-+export "ic5.s.first" = first;
+-output "first" = first_idx2;
++output "first" = first;
  -- Renderer: publish the existing arrangement.
- export "ic5.s.lowest" = lowest_idx2;
+ output "lowest" = lowest_idx2;

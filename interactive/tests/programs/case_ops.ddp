@@ -18,6 +18,6 @@ let maybe = pairs
     | map((a, b) -> (a, (b, (b, 15) lt) branch Option map_variant None (_ -> ())))
     | map((a, m) -> (a, m match (None (_ -> 0), Some (x -> (x, 2) mul))));
 
-export "picked" = picked | arrange | inspect(total);
-export "sieved" = sieved | arrange | inspect(adt);
-export "maybe" = maybe | arrange | inspect(total);
+output "picked" = picked | arrange | inspect(total);
+output "sieved" = sieved | arrange | inspect(adt);
+output "maybe" = maybe | arrange | inspect(total);

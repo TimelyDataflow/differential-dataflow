@@ -18,5 +18,5 @@ chain: {
     set active = seeds + mapped + unmapped | distinct;
 }
 
-export "result" = chain::active | filter(((stage, _), _) -> (stage, 7) eq)
+output "result" = chain::active | filter(((stage, _), _) -> (stage, 7) eq)
     | map(((_, idx), _) -> ((), idx)) | min | arrange | inspect(part1);

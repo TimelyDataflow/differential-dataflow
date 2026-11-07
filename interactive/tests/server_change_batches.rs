@@ -11,9 +11,9 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
             type Three = A int | B int | C int;
             let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
-            export "plain" = pairs;
-            export "lists" = pairs | collect;
-            export "tagged" = pairs | map((a, b) -> (a, b inject C));
+            output "plain" = pairs;
+            output "lists" = pairs | collect;
+            output "tagged" = pairs | map((a, b) -> (a, b inject C));
 
         "#));
         interactive::passes::optimize(&mut program);
@@ -28,12 +28,12 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
             server.feed("taps", 0, &rows(shift, diff), None).unwrap();
             server.tick(worker);
             for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
-                let changes = server.take_changes(name);
+                let changes = server.take_changes(&format!("taps::{name}"));
                 assert!(!changes.is_empty(), "{name}, shift {shift}, diff {diff}");
                 assert!(changes.iter().all(|c| c.times.to_vec().iter().all(|t| *t == interactive::server::host_time(epoch))), "{name}: changes at another epoch than {epoch}");
                 taken.extend(changes.into_iter().map(|c| Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
-                assert!(server.take_changes(name).is_empty(), "{name}: changes taken twice");
-                let contents = server.snapshot(worker, name).unwrap();
+                assert!(server.take_changes(&format!("taps::{name}")).is_empty(), "{name}: changes taken twice");
+                let contents = server.snapshot(worker, &format!("taps::{name}")).unwrap();
                 let shape = (corgi::shape_of_value(&contents.keys), corgi::shape_of_value(&contents.vals));
                 assert_eq!(Updates::consolidate(taken.clone(), &shape), contents, "{name}, shift {shift}, diff {diff}");
             }

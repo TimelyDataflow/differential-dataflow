@@ -20,4 +20,4 @@ outer: {
     set again = again_filter;
 }
 -- Renderer: build an export arrangement.
-export "out" = ::outer::inner::reached;
+output "out" = ::outer::inner::reached;

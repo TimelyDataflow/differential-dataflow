@@ -8,4 +8,4 @@
 -let out_map = values | map((k, n) -> (k, n inject Entry::Number));
 +let out_map = rows | map((a, b) -> enum S0 = V0 () | V1 int | V2 (int, int) in (a, b match (0 (_ -> 0), 1 (a -> a), 2 ((a, b) -> (a, b) add)) inject S0::V1));
  -- Renderer: build an export arrangement.
- export "out" = out_map;
+ output "out" = out_map;

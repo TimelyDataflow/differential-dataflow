@@ -39,7 +39,7 @@ let active_runs = labels::label
 let part_numbers = maximal | map(((r, s, _, v), _) -> ((r, s), v)) | join(active_runs, (run, v, _) -> (run, v));
 -- ((row, start), value)
 
-export "result" = part_numbers
+output "result" = part_numbers
     | map((_, v) -> ((), v)) | collect
     | value((_, vs) -> vs fold_add)
     | arrange | inspect(part1);

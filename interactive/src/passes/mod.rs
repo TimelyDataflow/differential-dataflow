@@ -307,9 +307,9 @@ mod schedule_tests {
     #[test]
     fn provider_checks_follow_dead_import_cleanup() {
         for (text, expected_skip) in [
-            (r#"let dead = import "absent"; export "out" = input 0 : (int, ());"#, false),
-            (r#"export "out" = import "absent" : (int, ());"#, true),
-            (r#"export "out" : ((), ()) = input 0 : (int, ());"#, true),
+            (r#"let dead = import "absent"; output "out" = input 0 : (int, ());"#, false),
+            (r#"output "out" = import "absent" : (int, ());"#, true),
+            (r#"output "out" : ((), ()) = input 0 : (int, ());"#, true),
         ] {
             let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
             let mut optimized = String::new();

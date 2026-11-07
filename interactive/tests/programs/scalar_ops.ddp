@@ -8,5 +8,5 @@ let mapped = pairs
 
 let lengths = pairs | map((k, (a, _)) -> (k, a)) | collect | map((k, l) -> (k, l len));
 
-export "mapped" = mapped | arrange | inspect(total);
-export "lengths" = lengths | arrange | inspect(total);
+output "mapped" = mapped | arrange | inspect(total);
+output "lengths" = lengths | arrange | inspect(total);

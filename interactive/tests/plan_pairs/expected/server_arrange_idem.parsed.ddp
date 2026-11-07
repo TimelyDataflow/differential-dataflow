@@ -15,4 +15,4 @@ eqsat: {
     let prop = eq | join(edges, (_, l, n) -> (n, l));
     set eq = elems + prop | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 }
-export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);
+output "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

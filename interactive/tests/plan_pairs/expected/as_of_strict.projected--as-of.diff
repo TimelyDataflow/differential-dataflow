@@ -3,7 +3,7 @@
 @@ -1,7 +1,7 @@
  -- Time lanes: epoch.
  -- Trace imports use provider arrangements; history advances to G = (0, []).
- let rows = import "rows" : (int, int);
+ let rows = import "rows::rows" : (int, int);
 -let out_rows = rows | lift;
 +let out_rows = rows | lift | filter((_, (_, (t0))) -> (t0, 0) ne);
  let rows_idx = rows | arrange;

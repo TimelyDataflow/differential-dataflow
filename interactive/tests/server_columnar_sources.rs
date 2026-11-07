@@ -17,31 +17,31 @@ const SOURCES: &str = r#"
     let edges = import "random:nodes=20,edges=60,churn=7" | map(((src, dst), ()) -> (src, dst));
     let iota = import "iota:12";
     let clock = import "clock";
-    export "degrees" = edges | count;
-    export "small" = iota | filter(((n), ()) -> (n, 5) lt);
-    export "now" = clock;
+    output "degrees" = edges | count;
+    output "small" = iota | filter(((n), ()) -> (n, 5) lt);
+    output "now" = clock;
 "#;
 
 const LOADED: &str = r#"
     let triples = input 0 : ((int, int, int), ());
-    export "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
+    output "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
 "#;
 
 /// A fed input, read through another program's import.
 const LOOSE: &str = r#"
-    export "loose" = input 0 : ((int), ());
+    output "loose" = input 0 : ((int), ());
 "#;
 
 /// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
-    let l = import "loose" : ((int), ());
-    export "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
+    let l = import "undeclared::loose" : ((int), ());
+    output "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;
 
 /// An input bound to "doubled", so it mirrors it one tick behind.
 const MIRROR: &str = r#"
-    export "mirror" = input 0 : ((int), ());
+    output "mirror" = input 0 : ((int), ());
 "#;
 
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.
@@ -53,7 +53,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         install(&mut server, worker, "undeclared", LOOSE);
         install(&mut server, worker, "declaring", DECLARING);
         install(&mut server, worker, "mirror", MIRROR);
-        server.bind(worker, "doubled", "mirror", 0).unwrap();
+        server.bind(worker, "declaring::doubled", "mirror", 0).unwrap();
         server.load(worker, "loaded", 0, "random:nodes=5,edges=40,arity=3,churn=4", 1).unwrap();
         let mut seen = Vec::new();
         for epoch in 1..5i64 {
@@ -63,7 +63,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
                 }
             }
             server.tick(worker);
-            for name in [RANDOM, "iota:12", "clock", "degrees", "small", "now", "sums", "doubled", "mirror"] {
+            for name in [RANDOM, "iota:12", "clock", "sources::degrees", "sources::small", "sources::now", "loaded::sums", "declaring::doubled", "mirror::mirror"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());
             }
         }

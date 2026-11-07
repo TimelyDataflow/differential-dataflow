@@ -3,13 +3,13 @@
 -- from other zombies (likers created before the end date); top 100.
 
 let request = input 0 : ((int, List(int), int, int), ());    -- (rid, country, end, end month as year*12+month)
-let person  = import "ldbc.person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "ldbc.message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote   = import "ldbc.message.by_creator" : (int, int);          -- (person, message)
-let liked   = import "ldbc.likes.by_message"   : (int, (int, int));   -- (message, (liker, created))
-let place_by_name   = import "ldbc.place.by_name"   : (List(int), int);
-let place_by_parent = import "ldbc.place.by_parent" : (int, int);
-let person_by_city  = import "ldbc.person.by_city"  : (int, int);
+let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = import "graph::message.by_creator" : (int, int);          -- (person, message)
+let liked   = import "graph::likes.by_message"   : (int, (int, int));   -- (message, (liker, created))
+let place_by_name   = import "graph::place.by_name"   : (List(int), int);
+let place_by_parent = import "graph::place.by_parent" : (int, int);
+let person_by_city  = import "graph::person.by_city"  : (int, int);
 
 -- Candidates: residents (country name -> country -> cities -> people) created before
 -- the end, with their creation date and month.
@@ -52,4 +52,4 @@ let ranked  = totals | map(((rid, who), (t, z)) -> (rid, (((t, 0) gt, (z to_floa
                      | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 100) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 100) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 100) min in let before = (end, count) sub in let keep = (((100, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
 let answer  = ranked | map((rid, (rank, ((_, who), (z, t, score)))) -> ((rid, rank), (who, z, t, score)));
 
-export "bi13.answer" = answer | arrange;
+output "answer" = answer | arrange;

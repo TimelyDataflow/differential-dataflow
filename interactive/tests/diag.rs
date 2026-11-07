@@ -12,7 +12,7 @@ const PAIRS: &str = "
 let edges = input 0 : ((int, int), ());
 let forward = edges | map(((a, b), ()) -> (a, b));
 let pairs = forward | join(forward, (_, x, y) -> ((x, y), ()));
-export \"NAME\" = pairs | distinct;
+output \"NAME\" = pairs | distinct;
 ";
 
 fn program(src: &str) -> Program {
@@ -56,24 +56,24 @@ fn views_see_programs_and_state_stays_bounded() {
         let mut server = Server::new();
         server.set_diagnostics(std::rc::Rc::clone(&diagnostics));
         server.install(worker, "diag", &program(DIAG)).unwrap();
-        server.install(worker, "p", &program(&PAIRS.replace("NAME", "p.pairs"))).unwrap();
+        server.install(worker, "p", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
         server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", None).unwrap();
         server.tick(worker);
         server.tick(worker);
 
-        let time = view(&mut server, worker, "diag.time_by_statement");
+        let time = view(&mut server, worker, "diag::time_by_statement");
         assert!(time.iter().any(|(k, &ns)| k.contains("\"p\"") && k.contains("\"pairs\"") && ns > 0), "{time:#?}");
         assert!(time.keys().all(|k| !k.contains("\"diag\"")), "the diagnostics program is left out: {time:#?}");
-        let records = view(&mut server, worker, "diag.records_by_statement");
+        let records = view(&mut server, worker, "diag::records_by_statement");
         assert!(records.iter().any(|(k, &n)| k.contains("\"p\"") && n > 0), "{records:#?}");
-        let operators = view(&mut server, worker, "diag.operators_by_program");
+        let operators = view(&mut server, worker, "diag::operators_by_program");
         assert!(operators.get("\"p\"").is_some_and(|&n| n > 0), "{operators:#?}");
 
         // A program installed and dropped every epoch: its time still adds up, and nothing the
         // diagnostics hold grows with the number of installs.
         let mut held = Vec::new();
         for round in 0..30 {
-            server.install(worker, "q", &program(&PAIRS.replace("NAME", "q.pairs"))).unwrap();
+            server.install(worker, "q", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
             server.feed("q", 0, "1,2\n2,3", None).unwrap();
             server.tick(worker);
             server.drop_program(worker, "q").unwrap();
@@ -84,9 +84,9 @@ fn views_see_programs_and_state_stays_bounded() {
                 held.push((ops, triples, diag_records));
             }
         }
-        let by_program = view(&mut server, worker, "diag.time_by_program");
+        let by_program = view(&mut server, worker, "diag::time_by_program");
         assert!(by_program.get("\"q\"").is_some_and(|&ns| ns > 0), "q's time survives its drops: {by_program:#?}");
-        let live = view(&mut server, worker, "diag.operators_by_program");
+        let live = view(&mut server, worker, "diag::operators_by_program");
         assert!(!live.contains_key("\"q\""), "q has no live operators: {live:#?}");
         assert_eq!(held[0].0, held[1].0, "live operators after 10 and 30 cycles: {held:?}");
         assert_eq!(held[0].1, held[1].1, "retired triples after 10 and 30 cycles: {held:?}");

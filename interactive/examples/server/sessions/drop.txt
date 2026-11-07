@@ -1,14 +1,14 @@
 # Teardown / drop-gate demo.
-# `reach` imports the "edges" trace published by `prod`.
+# `reach` binds its input `edges` to the trace "prod::edges" that `prod` publishes.
 load prod from examples/server/programs/producer.ddp
-load reach from examples/server/programs/reach_import.ddp
+load reach from examples/server/programs/reach_import.ddp edges=prod::edges
 feed prod 0 1,2
 feed prod 0 2,3
-feed reach 0 1
+feed reach roots 1
 tick
 list
 
-# The gate: dropping `prod` is refused while `reach` still imports "edges".
+# The gate: dropping `prod` is refused while `reach` still reads "prod::edges".
 drop prod
 
 # Drop the consumer first; then the producer drops cleanly.

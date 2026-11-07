@@ -6,8 +6,10 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
-//! (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
+//! Sources: `input N : (key_shape, val_shape)` (positional input), `input : (key_shape, val_shape)`
+//! (the next position, in the order inputs are written; a program numbers all of its inputs or
+//! none), `input "name" : …` (the next position, and the name a client may feed or bind it by;
+//! no two inputs share a name, which is an identifier other than `input<N>`), `import "name"` (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
 //! scope path such as `a::b::f` or `::a::b::f`.
 //! A leading `::` reads the rest of the path in the root. Otherwise the first
 //! component names one visible scope: the current scope, an ancestor, or a child
@@ -61,10 +63,10 @@
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
 //! Statements: `let x = …;`, `set x = …;` (a feedback variable in a named
-//! scope), `name: { … }` (a nested scope), `export "name" = …;` (a
+//! scope), `name: { … }` (a nested scope), `output "name" = …;` (a
 //! program output, root scope only). An optional `var x;` or
 //! `var x : (key_shape, val_shape);` declares a feedback variable; the latter
-//! checks the shape inferred for its `set` value. An `export` may also declare
+//! checks the shape inferred for its `set` value. An `output` may also declare
 //! its shape. `type Name = V0 shape? | V1 shape? …;` declares a sum type, an
 //! enum of the program's lambdas (below); it emits no IR.
 //!
@@ -73,7 +75,7 @@
 //! may name other types declared anywhere in the program, including inside a scope. Types are
 //! global to the program and may appear in any order, but cannot be recursive.
 //!
-//! A collection's shape, as `input`, `import`, `var` and `export` declare it, is the pair
+//! A collection's shape, as `input`, `import`, `var` and `output` declare it, is the pair
 //! `(key_shape, val_shape)`: its root has exactly two fields, the key and the value, as a slot's
 //! input `(key, val)` does. `((int, int), ())` is a two-field key with a unit value, and
 //! `(int, int)` keys by the first int with the second as the value. The older `(key ; val)` is
@@ -115,7 +117,7 @@ use crate::ir::Lambda;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Let, Var, Set, Export, Type,
+    Let, Var, Set, Output, Type,
     Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
@@ -259,7 +261,7 @@ fn lex(input: &str) -> Vec<Token> {
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '=' => { chars.next(); tokens.push(Token::Eq); },
             '"' => {
-                // String literal: the quoted name in `import "..."` / `export "..." = ...`.
+                // String literal: the quoted name in `import "..."` / `output "..." = ...`.
                 // Names carry no escapes, so read verbatim up to the closing quote.
                 chars.next();
                 let mut s = String::new();
@@ -293,7 +295,7 @@ fn lex(input: &str) -> Vec<Token> {
 /// `crate::ir::KEYWORDS` lists the same names, for code below the parser.
 fn keyword(ident: &str) -> Option<Token> {
     Some(match ident {
-        "let" => Token::Let, "var" => Token::Var, "set" => Token::Set, "export" => Token::Export,
+        "let" => Token::Let, "var" => Token::Var, "set" => Token::Set, "output" => Token::Output,
         "type" => Token::Type,
         "input" => Token::Input, "import" => Token::Import,
         "map" => Token::Map,
@@ -317,11 +319,18 @@ struct Parser {
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
+    /// Inputs written without a position (`input : shape`) take positions in the order they are
+    /// written: this many so far. A program numbers all of its inputs or none of them.
+    unnumbered_inputs: usize,
+    /// Whether an input has been written with a position (`input N`).
+    numbered_inputs: bool,
+    /// The names inputs are given (`input "name"`): no two inputs share a name.
+    input_names: std::collections::HashSet<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), type_order: Vec::new(), scope: None }
+        Parser { tokens, pos: 0, types: Default::default(), type_order: Vec::new(), scope: None, unnumbered_inputs: 0, numbered_inputs: false, input_names: Default::default() }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
@@ -490,17 +499,17 @@ impl Parser {
                 Stmt::Var(n, s)
             },
             Token::Set => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Set(n, e) },
-            Token::Export => {
+            Token::Output => {
                 self.next();
                 let name = match self.next() {
                     Token::Str(s) => s,
-                    o => panic!("Expected string literal after `export`, got {:?}", o),
+                    o => panic!("Expected string literal after `output`, got {:?}", o),
                 };
                 let shape = self.declared_shape();
                 self.expect(&Token::Eq);
                 let e = self.parse_pipe_expr();
                 self.expect(&Token::Semi);
-                Stmt::Export(name, shape, e)
+                Stmt::Output(name, shape, e)
             },
             Token::Ident(_) => {
                 let n = self.parse_ident(); self.expect(&Token::Colon);
@@ -535,7 +544,27 @@ impl Parser {
 
     fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
-            Token::Input => { self.next(); let source = match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) }; self.source_shape(source) },
+            Token::Input => {
+                self.next();
+                let input = if let Token::Int(n) = *self.peek() {
+                    self.next();
+                    assert!(self.unnumbered_inputs == 0, "`input {n}` in a program whose other inputs have no positions; number all inputs or none");
+                    assert!(!matches!(self.peek(), Token::Str(_)), "`input {n}` cannot be named; a named input takes its position from the order inputs are written");
+                    self.numbered_inputs = true;
+                    InputRef::Numbered(n as usize)
+                } else {
+                    assert!(!self.numbered_inputs, "`input` without a position in a program whose other inputs have them; number all inputs or none");
+                    let name = if let Token::Str(name) = self.peek().clone() {
+                        self.next();
+                        assert!(crate::server::InputId::is_name(&name), "input name {name:?} must be an identifier other than `input<N>`, the name of an unnamed input");
+                        assert!(self.input_names.insert(name.clone()), "two inputs are named {name:?}");
+                        Some(name)
+                    } else { None };
+                    self.unnumbered_inputs += 1;
+                    InputRef::Next(self.unnumbered_inputs - 1, name)
+                };
+                self.source_shape(Expr::Input(input))
+            },
             Token::Import => { self.next(); let source = match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) }; self.source_shape(source) },
             Token::Ident(_) | Token::ColonColon => {
                 let root = *self.peek() == Token::ColonColon;
@@ -748,20 +777,20 @@ mod tests {
     #[test]
     fn types_resolve_after_uses_and_in_dependency_order() {
         let stmts = parse(r#"
-            export "out" = input 0 : (int, Inner)
+            output "out" = input 0 : (int, Inner)
                 | map((k, v) -> (k, v inject Outer::Wrap));
             type Outer = Wrap Inner | Empty;
             type Nested = Lane List(Option(Inner));
             type Inner = Leaf int;
         "#);
         assert_eq!(stmts.len(), 1);
-        assert!(matches!(&stmts[0], Stmt::Export(name, _, _) if name == "out"));
+        assert!(matches!(&stmts[0], Stmt::Output(name, _, _) if name == "out"));
     }
 
     #[test]
     fn a_type_inside_a_scope_is_visible_at_the_root() {
         let stmts = parse(r#"
-            export "out" = input 0 : (int, Member)
+            output "out" = input 0 : (int, Member)
                 | map((k, v) -> (k, v inject Group));
             inner: { type Member = User int; }
             type Group = Group Member;

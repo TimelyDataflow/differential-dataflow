@@ -128,7 +128,7 @@ You get to choose!
 
 ```
 -- Access spreads from `grants` through `groups`, except where `barred`.
-export "access" = sharing::allowed;
+output "access" = sharing::allowed;
 sharing: {
    var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
    set allowed = offered
@@ -198,11 +198,11 @@ We have not introduced any blocks yet.
 ```
 # Apply the changes, then read every (member, doc) and its access.
 tick
-peek access
+peek demo::access
 ```
 
 The `tick` advances all inputs to the next timestamp.
-The `peek` asks for the contents of `access`, in the row-oriented textual form.
+The `peek` asks for the contents of `demo::access`, the output `access` of the program we loaded as `demo`, in the row-oriented textual form.
 There is also a binary columnar version of `peek`, but it's also hard to read.
 ```
 _4 ok t=1 elapsed=446.33µs
@@ -227,7 +227,7 @@ Now let's add a block to mess things up a bit.
 # groups 10 and 11, even past user 3's own grant.
 feed demo 2 100 val=inject(1,10)
 tick
-peek access
+peek demo::access
 ```
 ```
 _7 ok t=2 elapsed=481.25µs
@@ -242,7 +242,7 @@ There are fewer rows now.
 
 ```
 # Read one key: user 3 on doc 100. Nothing comes back while the block holds.
-peek access tuple(inject(0,3),100)
+peek demo::access tuple(inject(0,3),100)
 ```
 ```
 _9 ok t=2
@@ -253,7 +253,7 @@ No row, but confirmation that the read is complete.
 # Remove the block by retracting the same row, and read the key again.
 feed demo 2 100 val=inject(1,10) diff=-1
 tick
-peek access tuple(inject(0,3),100)
+peek demo::access tuple(inject(0,3),100)
 exit
 ```
 Retract the block and confirm that everything works again.
@@ -347,10 +347,10 @@ I would not recommend relying on any of this yet.
 
 ## Plan without running
 
-`cargo run -p interactive --bin ddir-plan -- file.ddp [more.ddp ...]` prints
+`cargo run -p interactive --bin ddir-plan -- [name=]file.ddp [[name=]more.ddp ...]` prints
 lowering, optimization, projection, and as-of-drop stages. `--passes LIST` switches
 passes off as the server's `DDIR_PASSES` does; a switched-off stage is shown unchanged. Earlier files supply
-their inferred export shapes to later files. No dataflow or generated source is
+their inferred output shapes to later files, as `<name>::<output>`, where `name` is given or is the file's stem. No dataflow or generated source is
 installed. A missing provider is unresolved even if its import declares a shape;
 the tool prints the partial report and exits unsuccessfully.
 

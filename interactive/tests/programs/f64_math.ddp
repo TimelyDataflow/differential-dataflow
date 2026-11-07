@@ -38,10 +38,10 @@ let spread = xs | flatmap((_, (x, y)) -> (x call fabs call fsqrt enlist, y call 
 let scale = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let scaled = xs | join(scale, (k, (x, y), n) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
 
-export "unary"    = unary | arrange | inspect(total);
-export "binary"   = binary | arrange | inspect(total);
-export "compares" = compares | arrange | inspect(total);
-export "specials" = specials | arrange | inspect(total);
-export "big"      = big | arrange | inspect(total);
-export "spread"   = spread | arrange | inspect(total);
-export "scaled"   = scaled | arrange | inspect(total);
+output "unary"    = unary | arrange | inspect(total);
+output "binary"   = binary | arrange | inspect(total);
+output "compares" = compares | arrange | inspect(total);
+output "specials" = specials | arrange | inspect(total);
+output "big"      = big | arrange | inspect(total);
+output "spread"   = spread | arrange | inspect(total);
+output "scaled"   = scaled | arrange | inspect(total);

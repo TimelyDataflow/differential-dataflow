@@ -55,8 +55,8 @@ def split(plan):
                 or (plan in ('ic14',) and name_of(s) in ('answered', 'talks'))]
     oneoff = [s for s in body if s not in standing]
     p = plan[:2] + str(int(plan[2:]))
-    st = imports + standing + [f'export "{p}.s.{n}" = {n} | arrange;' for n in standing_names]
-    oo = request + imports + [f'let {n} = import "{p}.s.{n}" : {t};' for n, t in standing_names.items()] + oneoff + exports
+    st = imports + standing + [f'output "{n}" = {n} | arrange;' for n in standing_names]
+    oo = request + imports + [f'let {n} = import "{p}s::{n}" : {t};' for n, t in standing_names.items()] + oneoff + exports
     return '\n'.join(st) + '\n', '\n'.join(oo) + '\n'
 
 for plan in SPEC:

@@ -37,7 +37,7 @@ def compile_queries(names):
         buckets, hash_key = {'ic5': ((1024,32,1), 'identity'),
                              'ic9': ((1024,32,1), 'value')}.get(name, ((1,), 'value'))
         compiler = Compiler(imports=True, rank_buckets=buckets, rank_hash_key=hash_key)
-        program = compiler.compile_many({name + '.answer': plan})
+        program = compiler.compile_many({'answer': plan})
         result[name] = dict(plan=plan, sources=compiler.inputs, program=program,
                             parameters=schema, title=title,
                             ranking=dict(buckets=list(buckets),hash=hash_key))
@@ -85,7 +85,7 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                     reference(plans[name]['plan'], plans[name]['sources'],
                               {**current, 'request': active[name]}) if active[name] else [])
                 phase = 'empty' if not active[name] else 'maintained' if name in standing else 'read'
-                lines, = command(phase + ':' + name, lambda: [f'peek {name}.answer as corgi'])
+                lines, = command(phase + ':' + name, lambda: [f'peek {name}::answer as corgi'])
                 event = record['events'][-1]
                 actual = measure.decode_answer(lines, event)
                 if want is not None:

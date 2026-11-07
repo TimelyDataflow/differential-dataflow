@@ -24,8 +24,8 @@ PORT = 7981
 
 WORLD = """load world begin
 let claims = input 0 : ((int, int), (int, int));
-export "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
-export "claims" = claims;
+output "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
+output "claims" = claims;
 world end-load
 """
 
@@ -110,7 +110,7 @@ def main():
         b.expect("c3")
         b.send("t1 tick")
         b.expect("t1")
-        a.send("p1 peek owner as corgi")
+        a.send("p1 peek world::owner as corgi")
         _, _, frames = a.expect("p1")
         owned = {tuple(key): val for key, val, _ in decode(frames)}
         check(
@@ -125,10 +125,10 @@ def main():
         )
 
         # Sessions are trusted: B may bind into (and later drop) A's program.
-        b.send("b1 bind claims world 0")
+        b.send("b1 bind world::claims world 0")
         status, body, _ = b.expect("b1")
         check("B binds into A's world (trusted sessions)", status == "ok", body)
-        b.send("b2 unbind claims world 0")
+        b.send("b2 unbind world::claims world 0")
         status, body, _ = b.expect("b2")
         check("B unbinds it again", status == "ok", body)
 

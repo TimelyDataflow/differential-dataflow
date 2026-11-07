@@ -115,7 +115,7 @@ let gone_likes  = del_likes  | map(((p, x, _), ()) -> ((p, x), ())) | distinct;
         else:
             lines.append(f"let {name} = {name}_in;")
         if export_live:
-            lines.append(f'export "live.{name}" = {name} | arrange;')
+            lines.append(f'output "live.{name}" = {name} | arrange;')
     rest = [l for l in graph_program().splitlines() if not re.match(r'let \w+ = input \d+ :', l)]
     return '\n'.join(lines) + '\n' + '\n'.join(rest) + '\n'
 

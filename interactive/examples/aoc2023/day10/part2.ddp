@@ -55,4 +55,4 @@ let pipe = loop - isoS;
 -- set-minus needs an anti-join: bare `-` is multiset subtraction and lets
 -- non-enclosed pipe cells cancel unrelated enclosed cells in the count.
 let enc_on_pipe = enclosed | join(pipe, (rc, _, _) -> (rc, ()));
-export "result" = (enclosed - enc_on_pipe) | map(_ -> ((), ())) | count | arrange | inspect(part2);
+output "result" = (enclosed - enc_on_pipe) | map(_ -> ((), ())) | count | arrange | inspect(part2);

@@ -8,7 +8,7 @@ let bad   = sets
     | map(((game, _, _, _, _), _) -> (game, ())) | distinct;
 let good = games - bad;
 
-export "result" = good
+output "result" = good
     | map((game, _) -> ((), game)) | collect
     | value((_, gs) -> gs fold_add)
     | arrange | inspect(part1);

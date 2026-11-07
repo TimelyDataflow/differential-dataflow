@@ -24,4 +24,4 @@ insts: {
     set inst = cards + spawned | arrange;
 }
 
-export "result" = insts::inst | map(_ -> ((), ())) | count | arrange | inspect(part2);
+output "result" = insts::inst | map(_ -> ((), ())) | count | arrange | inspect(part2);

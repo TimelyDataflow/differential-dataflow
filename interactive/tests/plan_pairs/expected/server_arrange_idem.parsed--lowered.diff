@@ -65,9 +65,9 @@
 +    let eq_reduce = eq_idx5 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +    set eq = eq_reduce;
  }
--export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);
+-output "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);
 +let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));
 +let classes_idx = classes_map | arrange;
 +let classes_inspect = classes_idx | inspect(classes);
 +-- Renderer: build an export arrangement.
-+export "classes" = classes_inspect;
++output "classes" = classes_inspect;
