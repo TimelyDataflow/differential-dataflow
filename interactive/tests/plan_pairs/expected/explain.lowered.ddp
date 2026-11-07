@@ -97,4 +97,4 @@ explain: {
     set demand_set_0 = item_map45;
 }
 -- Renderer: build an export arrangement.
-export "demand:input0" = explain::demand_input0;
+output "demand:input0" = explain::demand_input0;

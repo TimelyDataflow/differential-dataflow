@@ -3,4 +3,4 @@
 let clock = import "clock" : ((int), ());
 let now_inspect = clock | inspect(clock);
 -- Renderer: build an export arrangement.
-export "now" = now_inspect;
+output "now" = now_inspect;

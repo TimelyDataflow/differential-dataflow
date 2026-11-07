@@ -20,4 +20,4 @@ let person_idx = person | arrange;
 let answer = answer_idx4 | join(person_idx, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (f, title, moderator, first, last)));
 let answer_idx5 = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "is6.answer" = answer_idx5;
+output "is6.answer" = answer_idx5;

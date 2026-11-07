@@ -17,11 +17,11 @@ let timed = time | join(placed, (_, (), place) -> (place, ()))
           + (retired | filter(((_, program, _, _), ()) -> (program, "diag") ne)
                      | map(((_, program, statement, _), ()) -> ((program, statement), ())));
 
-export "diag.time_by_statement" = timed | count;
-export "diag.time_by_program" = timed | map(((program, _), ()) -> (program, ())) | count;
+output "diag.time_by_statement" = timed | count;
+output "diag.time_by_program" = timed | map(((program, _), ()) -> (program, ())) | count;
 
 -- Updates the arrangements hold, by where they are.
-export "diag.records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
+output "diag.records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
 
 -- Live operators per program.
-export "diag.operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;
+output "diag.operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;

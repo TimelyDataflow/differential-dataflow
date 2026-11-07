@@ -53,11 +53,11 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
             r#"
             let x = input 0 : ((int, int, List(int)), ())
                 | map(((k, n, xs), ()) -> (k, (n, xs)));
-            export "keyed" = x;
-            export "minimum" = x | min;
-            export "collected" = x | collect;
-            export "counted" = x | count;
-            export "distinct" = x | distinct;
+            output "keyed" = x;
+            output "minimum" = x | min;
+            output "collected" = x | collect;
+            output "counted" = x | count;
+            output "distinct" = x | distinct;
         "#,
         ));
         interactive::passes::optimize(&mut program);
@@ -116,10 +116,10 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
             let x = input 0 : ((int, List(int)), ())
                 | map(((k, xs), ()) -> ((k, (k, 7) mul), xs));
-            export "keyed" = x;
-            export "minimum" = x | min;
-            export "collected" = x | collect;
-            export "counted" = x | count;
+            output "keyed" = x;
+            output "minimum" = x | min;
+            output "collected" = x | collect;
+            output "counted" = x | count;
         "#));
         interactive::passes::optimize(&mut program);
         let mut col = Server::new();
@@ -149,11 +149,11 @@ fn lambdas_reading_part_of_their_input_match_their_definitions() {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
             let x = input 0 : ((int, int, List(int)), ())
                 | map(((k, n, xs), ()) -> ((k, (k, 3) mul), (n, xs)));
-            export "keyed" = x;
-            export "lengths" = x | reduce((_, vals) -> (vals len, 1) enlist);
-            export "sums" = x | reduce((_, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);
-            export "firsts" = x | reduce((_, vals) -> vals map (((n, _), d) -> (n, d)));
-            export "sizes" = x | reduce((k, vals) -> (vals map (((_, xs), d) -> (xs len, d)), (k.1, 1) enlist) append);
+            output "keyed" = x;
+            output "lengths" = x | reduce((_, vals) -> (vals len, 1) enlist);
+            output "sums" = x | reduce((_, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);
+            output "firsts" = x | reduce((_, vals) -> vals map (((n, _), d) -> (n, d)));
+            output "sizes" = x | reduce((k, vals) -> (vals map (((_, xs), d) -> (xs len, d)), (k.1, 1) enlist) append);
         "#));
         interactive::passes::optimize(&mut program);
         let mut col = Server::new();
@@ -210,9 +210,9 @@ fn limited_reduces_see_each_keys_first_values() {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
             let x = input 0 : ((int, int, List(int)), ())
                 | map(((k, n, xs), ()) -> (k, (n, xs)));
-            export "first_two" = x | reduce(limit 2, (_, vals) -> vals);
-            export "how_many" = x | reduce(limit 2, (_, vals) -> (vals len, 1) enlist);
-            export "minimum" = x | min;
+            output "first_two" = x | reduce(limit 2, (_, vals) -> vals);
+            output "how_many" = x | reduce(limit 2, (_, vals) -> (vals len, 1) enlist);
+            output "minimum" = x | min;
         "#));
         interactive::passes::optimize(&mut program);
         let mut col = Server::new();

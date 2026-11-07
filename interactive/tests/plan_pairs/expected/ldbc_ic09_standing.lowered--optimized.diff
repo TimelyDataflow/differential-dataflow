@@ -17,10 +17,10 @@
  let latest_idx = latest | arrange;
 -let newest_idx2 = newest | arrange;
  -- Renderer: publish the existing arrangement.
--export "ic9.s.by_author" = by_author_idx2;
-+export "ic9.s.by_author" = by_author_idx;
+-output "ic9.s.by_author" = by_author_idx2;
++output "ic9.s.by_author" = by_author_idx;
  -- Renderer: publish the existing arrangement.
- export "ic9.s.latest" = latest_idx;
+ output "ic9.s.latest" = latest_idx;
  -- Renderer: publish the existing arrangement.
--export "ic9.s.newest" = newest_idx2;
-+export "ic9.s.newest" = newest;
+-output "ic9.s.newest" = newest_idx2;
++output "ic9.s.newest" = newest;

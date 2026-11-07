@@ -85,22 +85,22 @@ def graph_program():
         row = f'(({", ".join(b)}), ())'
         lines.append(f'let {name} = input {i} : ({shape(fields, schema)}, ());')
         if name in PRIMARY:
-            lines.append(f'export "ldbc.{name}" = {name} | map({row} -> ({b[0]}, ({", ".join(b[1:])}))) | arrange;')
+            lines.append(f'output "ldbc.{name}" = {name} | map({row} -> ({b[0]}, ({", ".join(b[1:])}))) | arrange;')
             for f in INDEXES[name]:
-                lines.append(f'export "ldbc.{name}.by_{f}" = {name} | map({row} -> ({b[fields.index(f)]}, {b[0]})) | arrange;')
+                lines.append(f'output "ldbc.{name}.by_{f}" = {name} | map({row} -> ({b[fields.index(f)]}, {b[0]})) | arrange;')
         else:
             for f in INDEXES[name]:
                 others = [b[j] for j, n in enumerate(fields) if n != f]
                 value = f'({", ".join(others)})' if len(others) > 1 else others[0]
-                lines.append(f'export "ldbc.{name}.by_{f}" = {name} | map({row} -> ({b[fields.index(f)]}, {value})) | arrange;')
+                lines.append(f'output "ldbc.{name}.by_{f}" = {name} | map({row} -> ({b[fields.index(f)]}, {value})) | arrange;')
     lines.append('''-- Friendships in both directions, between people who exist: (person, (friend, since)).
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
 let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
 let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t)))
                      | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct
                      | map(((a, b, t), ()) -> (a, (b, t)));
-export "ldbc.friend" = friends | arrange;
-export "ldbc.friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
+output "ldbc.friend" = friends | arrange;
+output "ldbc.friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
 -- Threads: every post is its own root; a comment's root is its parent's.
 let posts   = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq)
                       | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
@@ -111,6 +111,6 @@ thread: {
                         | join(replies, (_, root, child) -> ((child, root), ()));
     set thread = (posts + below) | distinct;
 }
-export "ldbc.message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
-export "ldbc.message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;''')
+output "ldbc.message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;
+output "ldbc.message.by_root" = thread::thread | map(((mid, root), ()) -> (root, mid)) | arrange;''')
     return '\n'.join(lines) + '\n'

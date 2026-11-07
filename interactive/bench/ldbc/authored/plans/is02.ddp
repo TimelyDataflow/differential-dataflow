@@ -29,4 +29,4 @@ let answer = top | map((rid, (rank, (_, (id, created, root)))) -> (id, (rid, ran
                  | join(person, (op, (rid, rank, id, body, created, root), (first, last, _, _, _, _, _, _, _, _, _)) ->
                         ((rid, rank), (id, body, created, root, op, first, last)));
 
-export "is2.answer" = answer | arrange;
+output "is2.answer" = answer | arrange;

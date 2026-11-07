@@ -55,9 +55,9 @@ let wid  = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
 let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
-export "rollback" = rb;
-export "state" = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min | map((k, (_, v)) -> (k, (v)));
-export "log" = intents;
+output "rollback" = rb;
+output "state" = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min | map((k, (_, v)) -> (k, (v)));
+output "log" = intents;
 bank end-load
 
 # The five transactions from the post, all as blind appends:

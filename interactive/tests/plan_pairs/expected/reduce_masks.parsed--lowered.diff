@@ -4,14 +4,14 @@
 +-- Time lanes: epoch.
  let rows = input 0 : ((int, int), ());
 -let counted = rows | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
--export "out" = counted | map(((a, _), n) -> (a, n));
+-output "out" = counted | map(((a, _), n) -> (a, n));
  let values = input 1 : (int, (int, int));
--export "minimum" = values | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist) | map((k, (_, v)) -> (k, ((), v)));
--export "unique" = values | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map((k, (_, v)) -> (k, ((), v)));
--export "counted" = values | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | map((k, _) -> (k, ()));
--export "collected" = values | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map((k, _) -> (k, ()));
+-output "minimum" = values | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist) | map((k, (_, v)) -> (k, ((), v)));
+-output "unique" = values | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map((k, (_, v)) -> (k, ((), v)));
+-output "counted" = values | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | map((k, _) -> (k, ()));
+-output "collected" = values | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map((k, _) -> (k, ()));
 -let custom = values | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
--export "custom" = custom | map((k, (_, v)) -> ((k, v), ()));
+-output "custom" = custom | map((k, (_, v)) -> ((k, v), ()));
 +let rows_idx = rows | arrange;
 +let counted = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +let values_idx = values | arrange;
@@ -33,14 +33,14 @@
 +let collected_map = collected_reduce | map((k, _) -> (k, ()));
 +let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
 +-- Renderer: build an export arrangement.
-+export "out" = out_map;
++output "out" = out_map;
 +-- Renderer: build an export arrangement.
-+export "minimum" = minimum_map;
++output "minimum" = minimum_map;
 +-- Renderer: build an export arrangement.
-+export "unique" = unique_map3;
++output "unique" = unique_map3;
 +-- Renderer: build an export arrangement.
-+export "counted" = counted_map;
++output "counted" = counted_map;
 +-- Renderer: build an export arrangement.
-+export "collected" = collected_map;
++output "collected" = collected_map;
 +-- Renderer: build an export arrangement.
-+export "custom" = custom_map;
++output "custom" = custom_map;

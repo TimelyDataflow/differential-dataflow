@@ -30,14 +30,14 @@ fn collapse() -> Config { Config { collapse_parent_arranges: true, ..Config::non
 
 #[test]
 fn siblings_share_and_late_parent_peer_moves_before_children() {
-    for peer in ["", "let parent_idx = x | arrange; export \"parent\" = parent_idx;"] {
+    for peer in ["", "let parent_idx = x | arrange; output \"parent\" = parent_idx;"] {
         let p = rewrite(&format!(r#"
             let x = input 0 : (int, int);
             left: {{ let idx = ::x | arrange; let rows = ::x + idx; }}
             right: {{ let idx = ::x | arrange; }}
             {peer}
-            export "left" = left::rows;
-            export "right" = right::idx;
+            output "left" = left::rows;
+            output "right" = right::idx;
         "#), hoist(), if peer.is_empty() { 1 } else { 2 });
         assert!(matches!(p.root.items[0], Item::Op(Node::Arrange(Ref::Import(0)))));
         // The invariant concat also moves, retaining its row and trace edges.
@@ -53,7 +53,7 @@ fn lone_arrangements_move_but_time_and_feedback_stay() {
     for child in [
         "child: { inner: { let idx = ::x | arrange; } let idx = inner::idx; }",
     ] {
-        let text = format!("let x = input 0 : (int, int); {child} export \"out\" = child::idx;");
+        let text = format!("let x = input 0 : (int, int); {child} output \"out\" = child::idx;");
         let after = rewrite(&text, hoist(), 0);
         assert!(matches!(after.root.items[0], Item::Op(Node::Arrange(Ref::Import(0)))));
         let Item::Sub(child) = &after.root.items[1] else { panic!() };
@@ -65,8 +65,8 @@ fn lone_arrangements_move_but_time_and_feedback_stay() {
             let x = input 0 : (int, int);
             let idx = x | arrange;
             child: {{ let idx = ::x | {op} | arrange; }}
-            export "root" = idx;
-            export "child" = child::idx;
+            output "root" = idx;
+            output "child" = child::idx;
         "#), hoist(), 0);
         let Item::Sub(child) = &p.root.items[1] else { panic!() };
         assert_eq!(child.items.len(), 2, "{op}");
@@ -75,8 +75,8 @@ fn lone_arrangements_move_but_time_and_feedback_stay() {
         let x = input 0 : (int, int);
         let idx = x | arrange;
         child: { var x : (int, int); let idx = x | arrange; set x = ::x; }
-        export "root" = idx;
-        export "child" = child::idx;
+        output "root" = idx;
+        output "child" = child::idx;
     "#, hoist(), 0);
 }
 
@@ -89,14 +89,14 @@ fn collapse_follows_arrangements_but_not_collection_boundaries() {
         rewrite(&format!(r#"
             {source}
             child: {{ let idx = ::x | arrange; inner: {{ let idx = child::idx | arrange; }} }}
-            export "out" = ::child::inner::idx;
+            output "out" = ::child::inner::idx;
         "#), collapse(), 2);
     }
     rewrite(r#"
         let x = input 0 : (int, ());
         producer: { let idx = ::x | arrange; }
         consumer: { let idx = producer::idx | arrange; }
-        export "out" = consumer::idx;
+        output "out" = consumer::idx;
     "#, collapse(), 0);
     rewrite(r#"
         outer: {
@@ -105,7 +105,7 @@ fn collapse_follows_arrangements_but_not_collection_boundaries() {
             inner: { let idx = outer::x | arrange; }
             set x = idx;
         }
-        export "out" = ::outer::inner::idx;
+        output "out" = ::outer::inner::idx;
     "#, collapse(), 0);
 }
 
@@ -113,7 +113,7 @@ fn collapse_follows_arrangements_but_not_collection_boundaries() {
 fn switches_and_unlabelled_ir() {
     let text = r#"let x = input 0 : (int, ()); let idx = x | arrange;
         child: { let same = ::idx | arrange; let shared = ::x | arrange; }
-        export "same" = child::same; export "shared" = child::shared;"#;
+        output "same" = child::same; output "shared" = child::shared;"#;
     let mut p = program(text);
     fn clear(scope: &mut Scope) {
         scope.labels.clear();
@@ -144,9 +144,9 @@ fn inspections_exports_and_feedback_stay() {
             let seen = mapped | inspect(keep_this_label);
             set looped = mapped;
         }
-        export "mapped" = child::mapped;
-        export "seen" = child::seen;
-        export "looped" = child::looped;
+        output "mapped" = child::mapped;
+        output "seen" = child::seen;
+        output "looped" = child::looped;
     "#, hoist(), 0);
     let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
     assert!(matches!(&child.items[0], Item::Op(Node::Inspect { label, input: Ref::Import(_) }) if label == "keep_this_label"));
@@ -170,9 +170,9 @@ fn batched_statements_keep_sibling_names_and_dependencies() {
             let c = a + b;
         }
         third: { let a = first::c | join(second::c, (k, a, b) -> (k, (a, b) add)); }
-        export "first" = first::c;
-        export "second" = second::c;
-        export "third" = third::a;
+        output "first" = first::c;
+        output "second" = second::c;
+        output "third" = third::a;
     "#, hoist(), 0);
     let names: Vec<_> = p.root.items.iter().enumerate().map(|(i, item)| match item {
         Item::Sub(child) => child.name.as_str(),
@@ -198,8 +198,8 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
             let reduced = joined | min;
             set x = ::rows;
         }
-        export "out" = outer::reduced;
-        export "inner" = ::outer::inner::idx;
+        output "out" = outer::reduced;
+        output "inner" = ::outer::inner::idx;
     "#, hoist(), 0);
     assert_eq!(p.root.items.len(), 2); // Only the arrange of imported rows escapes.
     let Item::Sub(outer) = &p.root.items[1] else { panic!() };
@@ -211,7 +211,7 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
         let x = input 0 : (int, int);
         let timed = x | map((k, v) -> (k, (v, (0, 0))));
         child: { let out = ::timed | half_join(::x, 0, (k, l, r) -> (k, l)); }
-        export "out" = child::out;
+        output "out" = child::out;
     "#, hoist(), 0);
     let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
     assert!(matches!(child.items[0], Item::Op(Node::HalfJoin { .. })));
@@ -224,7 +224,7 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
                 let timed = mapped | lift;
                 set again = ::x;
             }}
-            export "out" = child::timed;
+            output "out" = child::timed;
         "#), Config::all(), removed);
         let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
         assert_eq!(child.items.len(), 1);

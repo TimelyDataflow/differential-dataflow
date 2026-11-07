@@ -56,4 +56,4 @@ let answer = walk::walk | map(((rid, node, path), ()) -> ((rid, node), path))
                         | join(targets, ((rid, node), path, ()) -> ((rid, node), path))
                         | join(best, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
 
-export "ic14.answer" = answer | arrange;
+output "ic14.answer" = answer | arrange;

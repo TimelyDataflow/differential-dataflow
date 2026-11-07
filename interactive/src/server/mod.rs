@@ -20,7 +20,7 @@
 //!
 //! # The two binding points
 //!
-//! The named-trace IR (`import "x"` / `export "y"`) flows through parse → lower
+//! The named-trace IR (`import "x"` / `output "y"`) flows through parse → lower
 //! → `scope_ir`. The server resolves both ends:
 //!
 //! - **`Source::Trace(name)`** — `import` the registered trace into the new

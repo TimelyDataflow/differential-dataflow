@@ -24,10 +24,10 @@
 -let first_idx2 = first | arrange;
  let lowest_idx2 = lowest | arrange;
  -- Renderer: publish the existing arrangement.
--export "ic5.s.posted" = posted_idx2;
-+export "ic5.s.posted" = posted;
+-output "ic5.s.posted" = posted_idx2;
++output "ic5.s.posted" = posted;
  -- Renderer: publish the existing arrangement.
--export "ic5.s.first" = first_idx2;
-+export "ic5.s.first" = first;
+-output "ic5.s.first" = first_idx2;
++output "ic5.s.first" = first;
  -- Renderer: publish the existing arrangement.
- export "ic5.s.lowest" = lowest_idx2;
+ output "ic5.s.lowest" = lowest_idx2;

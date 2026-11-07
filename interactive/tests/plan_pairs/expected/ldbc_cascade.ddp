@@ -286,78 +286,78 @@ let ldbc_message_root_idx = ldbc_message_root_map | arrange;
 let ldbc_message_by_root_map = thread::thread | map(((mid, root), ()) -> (root, mid));
 let ldbc_message_by_root_idx = ldbc_message_by_root_map | arrange;
 -- Renderer: publish the existing arrangement.
-export "ldbc.person" = ldbc_person_idx;
+output "ldbc.person" = ldbc_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.person.by_city" = ldbc_person_by_city_idx;
+output "ldbc.person.by_city" = ldbc_person_by_city_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message" = ldbc_message_idx;
+output "ldbc.message" = ldbc_message_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message.by_creator" = ldbc_message_by_creator_idx;
+output "ldbc.message.by_creator" = ldbc_message_by_creator_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message.by_parent" = ldbc_message_by_parent_idx;
+output "ldbc.message.by_parent" = ldbc_message_by_parent_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message.by_forum" = ldbc_message_by_forum_idx;
+output "ldbc.message.by_forum" = ldbc_message_by_forum_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.forum" = ldbc_forum_idx;
+output "ldbc.forum" = ldbc_forum_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.forum.by_moderator" = ldbc_forum_by_moderator_idx;
+output "ldbc.forum.by_moderator" = ldbc_forum_by_moderator_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.knows.by_src" = ldbc_knows_by_src_idx;
+output "ldbc.knows.by_src" = ldbc_knows_by_src_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.member.by_forum" = ldbc_member_by_forum_idx;
+output "ldbc.member.by_forum" = ldbc_member_by_forum_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.member.by_person" = ldbc_member_by_person_idx;
+output "ldbc.member.by_person" = ldbc_member_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tag" = ldbc_tag_idx;
+output "ldbc.tag" = ldbc_tag_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tag.by_name" = ldbc_tag_by_name_idx;
+output "ldbc.tag.by_name" = ldbc_tag_by_name_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tag.by_class" = ldbc_tag_by_class_idx;
+output "ldbc.tag.by_class" = ldbc_tag_by_class_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tagclass" = ldbc_tagclass_idx;
+output "ldbc.tagclass" = ldbc_tagclass_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tagclass.by_name" = ldbc_tagclass_by_name_idx;
+output "ldbc.tagclass.by_name" = ldbc_tagclass_by_name_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.tagclass.by_parent" = ldbc_tagclass_by_parent_idx;
+output "ldbc.tagclass.by_parent" = ldbc_tagclass_by_parent_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.place" = ldbc_place_idx;
+output "ldbc.place" = ldbc_place_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.place.by_name" = ldbc_place_by_name_idx;
+output "ldbc.place.by_name" = ldbc_place_by_name_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.place.by_parent" = ldbc_place_by_parent_idx;
+output "ldbc.place.by_parent" = ldbc_place_by_parent_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.org" = ldbc_org_idx;
+output "ldbc.org" = ldbc_org_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.org.by_name" = ldbc_org_by_name_idx;
+output "ldbc.org.by_name" = ldbc_org_by_name_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.interest.by_person" = ldbc_interest_by_person_idx;
+output "ldbc.interest.by_person" = ldbc_interest_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.interest.by_tag" = ldbc_interest_by_tag_idx;
+output "ldbc.interest.by_tag" = ldbc_interest_by_tag_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.mtag.by_message" = ldbc_mtag_by_message_idx;
+output "ldbc.mtag.by_message" = ldbc_mtag_by_message_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.mtag.by_tag" = ldbc_mtag_by_tag_idx;
+output "ldbc.mtag.by_tag" = ldbc_mtag_by_tag_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.ftag.by_forum" = ldbc_ftag_by_forum_idx;
+output "ldbc.ftag.by_forum" = ldbc_ftag_by_forum_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.likes.by_person" = ldbc_likes_by_person_idx;
+output "ldbc.likes.by_person" = ldbc_likes_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.likes.by_message" = ldbc_likes_by_message_idx;
+output "ldbc.likes.by_message" = ldbc_likes_by_message_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.study.by_person" = ldbc_study_by_person_idx;
+output "ldbc.study.by_person" = ldbc_study_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.work.by_person" = ldbc_work_by_person_idx;
+output "ldbc.work.by_person" = ldbc_work_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.work.by_org" = ldbc_work_by_org_idx;
+output "ldbc.work.by_org" = ldbc_work_by_org_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.email.by_person" = ldbc_email_by_person_idx;
+output "ldbc.email.by_person" = ldbc_email_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.language.by_person" = ldbc_language_by_person_idx;
+output "ldbc.language.by_person" = ldbc_language_by_person_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.friend" = friends_idx3;
+output "ldbc.friend" = friends_idx3;
 -- Renderer: publish the existing arrangement.
-export "ldbc.friend.pair" = ldbc_friend_pair_idx;
+output "ldbc.friend.pair" = ldbc_friend_pair_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message.root" = ldbc_message_root_idx;
+output "ldbc.message.root" = ldbc_message_root_idx;
 -- Renderer: publish the existing arrangement.
-export "ldbc.message.by_root" = ldbc_message_by_root_idx;
+output "ldbc.message.by_root" = ldbc_message_by_root_idx;

@@ -5,7 +5,7 @@ const PROGRAM: &str = r#"
     let x = input 0 : (int, ());
     let y = x | map((k, v) -> ((k, 1) add, v));
     let z = y | map((k, v) -> ((k, 2) add, v));
-    export "out" = z;
+    output "out" = z;
 "#;
 
 #[test]

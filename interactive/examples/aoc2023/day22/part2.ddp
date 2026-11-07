@@ -49,4 +49,4 @@ trans: {
     set st = seed + full | distinct;
 }
 
-export "result" = trans::st | map(_ -> ((), ())) | count | arrange | inspect(part2);
+output "result" = trans::st | map(_ -> ((), ())) | count | arrange | inspect(part2);

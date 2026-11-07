@@ -301,10 +301,10 @@ fn reviewed_plan_pairs() {
         }
         let mut text = fs::read_to_string(root.join(case.input)).unwrap();
         if let Some(name) = case.request {
-            let original = format!("export \"{name}.answer\"");
+            let original = format!("output \"{name}.answer\"");
             assert_eq!(text.matches(&original).count(), 1, "{}: request export changed", case.name);
             // The replacement in interactive_v2/systems.py, with request id fixed to 1.
-            text = text.replace(&original, &format!("export \"{name}x1.answer\""));
+            text = text.replace(&original, &format!("output \"{name}x1.answer\""));
         }
         let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
         let report = if case.explain {
@@ -378,7 +378,7 @@ fn all_pass_subsets() {
             }
             let mut text = fs::read_to_string(root.join(case.input)).unwrap();
             if let Some(name) = case.request {
-                text = text.replace(&format!("export \"{name}.answer\""), &format!("export \"{name}x1.answer\""));
+                text = text.replace(&format!("output \"{name}.answer\""), &format!("output \"{name}x1.answer\""));
             }
             let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
             let report = if case.explain {

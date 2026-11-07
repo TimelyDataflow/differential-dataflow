@@ -221,7 +221,7 @@ mod tests {
         let (prog, inserted) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            export "r" = ((a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
+            output "r" = ((a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
                         + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)))));
         "#);
         assert_eq!(inserted, 1);
@@ -241,7 +241,7 @@ mod tests {
             let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, x)) | half_join(c, 0, (k, x, z) -> (k, x));
             let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, x)) | half_join(c, 0, (k, x, z) -> (k, x));
             let ca = c | lift | half_join(a, 1, (k, z, x) -> (k, x)) | half_join(b, 1, (k, x, y) -> (k, x));
-            export "r" = ab + ba + ca;
+            output "r" = ab + ba + ca;
         "#);
         assert_eq!(inserted, 2, "every path but `a`'s, which is non-strict throughout");
     }
@@ -250,7 +250,7 @@ mod tests {
     fn a_shared_lift_filters_only_the_edge_to_its_strict_reader() {
         let (prog, inserted) = rewrite(r#"
             let p = import "p";
-            export "r" = ((p | lift | half_join(p, 0, (k, x, y) -> (k, (x, y))))
+            output "r" = ((p | lift | half_join(p, 0, (k, x, y) -> (k, (x, y))))
                         + (p | lift | half_join(p, 1, (k, x, y) -> (k, (x, y)))));
         "#);
         assert_eq!(inserted, 1);
@@ -268,8 +268,8 @@ mod tests {
         let (prog, inserted) = rewrite(r#"
             let p = import "p";
             let lifted = p | lift | filter((k, _) -> (k, k) eq) | negate;
-            export "strict" = lifted | half_join(p, 1, (k, x, y) -> (k, (x, y)));
-            export "live" = lifted;
+            output "strict" = lifted | half_join(p, 1, (k, x, y) -> (k, (x, y)));
+            output "live" = lifted;
         "#);
         assert_eq!(inserted, 1);
         let [(filtered, _)] = filters(&prog.root)[..] else { panic!("one edge filter") };
@@ -288,8 +288,8 @@ mod tests {
             let a = import "a";
             let b = import "b";
             let la = a | lift;
-            export "r" = la | half_join(b, 1, (k, x, y) -> (k, (x, y)));
-            export "lifted" = la;
+            output "r" = la | half_join(b, 1, (k, x, y) -> (k, (x, y)));
+            output "lifted" = la;
         "#);
         assert_eq!(inserted, 1, "the edge to the strict half join is filtered");
         let lifted = prog.root.exports.iter().find(|e| e.name == "lifted").unwrap();
@@ -299,13 +299,13 @@ mod tests {
         let (_, live) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            export "r" = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
+            output "r" = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
         "#);
         assert_eq!(live, 0, "a non-strict path is live at the as-of time");
         let (_, moved) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            export "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1, (k, x, y) -> (k, (x, y)));
+            output "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1, (k, x, y) -> (k, (x, y)));
         "#);
         assert_eq!(moved, 0, "a delay between the lift and the strict half join can move the time");
     }
@@ -319,7 +319,7 @@ mod tests {
                 let r = a | lift | half_join(b, 1, (k, x, y) -> (k, x)) | map((k, (x, _)) -> (k, x));
                 set x = (r + x) | distinct;
             }
-            export "r" = s::x;
+            output "r" = s::x;
         "#);
         assert_eq!(inserted, 1);
         let Item::Sub(child) = prog.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };

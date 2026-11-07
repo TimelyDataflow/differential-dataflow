@@ -28,7 +28,7 @@ let rolled = cnt | map(((c, b, _), n) -> (((b, n) add, c), ()));    -- (newr, c)
 
 let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
-export "result" = rolled | map(((r, _), _) -> ((), r))
+output "result" = rolled | map(((r, _), _) -> ((), r))
     | join(maxr, (_, r, m) -> ((), ((1, m) add, r) sub))
     | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part1);

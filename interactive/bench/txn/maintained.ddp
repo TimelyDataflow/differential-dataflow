@@ -51,7 +51,7 @@ let committed = wid + (wbad | negate);
 -- ((k), (-wid, v)): each key's latest committed write.
 let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
 
-export "rollback" = rb;
-export "state" = current | map((k, (_, v)) -> (k, (v)));
+output "rollback" = rb;
+output "state" = current | map((k, (_, v)) -> (k, (v)));
 -- Reads, rejected writes, and superseded writes: everything but the store.
-export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);
+output "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);

@@ -10,4 +10,4 @@ let ranked = request | map(((rid, who), ()) -> (who, rid))
                      | collect | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
 
-export "is3.answer" = answer | arrange;
+output "is3.answer" = answer | arrange;

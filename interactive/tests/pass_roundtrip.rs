@@ -7,7 +7,7 @@ const REPROS: [(&str, &str); 7] = [
     ("F1",
     r#"let rows = input 0 : (int, ());
         s: { set x = rows; }
-        export "out" = rows;
+        output "out" = rows;
         let unused = s::x;"#),
     ("F2",
     r#"let rows = input 0 : (int, int);
@@ -16,16 +16,16 @@ const REPROS: [(&str, &str); 7] = [
             set x = (rows + step) | min;
         }
         let dead = rows | map((k,v) -> (v,k));
-        export "out" = rows;"#),
+        output "out" = rows;"#),
     ("F3",
     r#"let rows = input 0 : (int, int);
         let dead = rows | map((k,v) -> ((k,v),v)) | distinct;
-        export "out" = rows;"#),
+        output "out" = rows;"#),
     ("F4",
     r#"let rows = input 0 : (int, int);
         let alias = rows | map((k,v) -> (k,v));
         s: { let both = rows + alias; }
-        export "out" = s::both;"#),
+        output "out" = s::both;"#),
     ("hoisted statements, exported aliases, and nested feedback",
     r#"let rows = input 0 : (int, int);
         outer: {
@@ -37,21 +37,21 @@ const REPROS: [(&str, &str); 7] = [
             }
             set x = inner::reduced;
         }
-        export "out" = outer::x;
-        export "invariant" = ::outer::inner::reduced;"#),
+        output "out" = outer::x;
+        output "invariant" = ::outer::inner::reduced;"#),
     ("local arrangements survive ancestor reuse without structural cleanup (seed 20864)",
     r#"let rows = input 0 : (int, int);
         let twice = rows | arrange | arrange;
         let joined = rows | join(twice, (k, l, r) -> (k, l));
         child: { let idx = ::rows | arrange; var x : (int, int); set x = idx; }
-        export "root" = joined;
-        export "child" = child::x;"#),
+        output "root" = joined;
+        output "child" = child::x;"#),
     ("F3 after structural cleanup (seed 16619)",
     r#"let rows = input 0 : ((int, int), ());
         let both = rows + rows;
         let reduced = both | min;
         let dead = reduced + reduced;
-        export "out" = rows;"#),
+        output "out" = rows;"#),
 ];
 
 fn roundtrip(first: plan::Report, config: Config, context: &str) {
@@ -74,7 +74,7 @@ fn minimized_findings_roundtrip_with_every_pass_subset() {
             let report = plan::report(text, &|_| None, &config).unwrap();
             roundtrip(report, config, &format!("{finding}: {names}"));
         }
-        let text = r#"let rows = input 0 : (int,int); export "out" = rows | arrange;"#;
+        let text = r#"let rows = input 0 : (int,int); output "out" = rows | arrange;"#;
         let program = lower::lower_tree(parse::pipe::parse(text));
         let report = plan::report_program(explain::explain(&program), &|_| None, &config).unwrap();
         roundtrip(report, config, &format!("F4 explanation: {names}"));
@@ -86,7 +86,7 @@ fn variable_declarations_remain_distinct_from_inferred_shapes() {
     for declaration in ["", "var x : (int, int);"] {
         let text = format!(r#"let rows = input 0 : (int, int);
             s: {{ {declaration} set x = rows | map((k,v) -> (k,v)); }}
-            export "out" = rows;"#);
+            output "out" = rows;"#);
         let config = Config::parse("none,projection").unwrap();
         let report = plan::report(&text, &|_| None, &config).unwrap();
         let printed = report.emit_ddp().unwrap().text;

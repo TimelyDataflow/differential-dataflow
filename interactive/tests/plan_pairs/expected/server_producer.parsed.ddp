@@ -1,1 +1,1 @@
-export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
+output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));

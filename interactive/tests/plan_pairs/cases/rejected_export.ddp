@@ -1,2 +1,2 @@
 -- A deliberate invalid contract: the source has an integer key, not unit.
-export "out" : ((), ()) = input 0 : (int, ());
+output "out" : ((), ()) = input 0 : (int, ());

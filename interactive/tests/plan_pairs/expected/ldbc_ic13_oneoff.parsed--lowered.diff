@@ -66,7 +66,7 @@
  let asked = request | map(((rid, _, _), ()) -> (rid, ()));
 -let never = asked + (asked | join(best, (rid, (), _) -> (rid, ())) | negate);
 -let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
--export "ic13x1.answer" = answer | arrange;
+-output "ic13x1.answer" = answer | arrange;
 +let asked_idx = asked | arrange;
 +let never_join = asked_idx | join(best, (rid, (), _) -> (rid, ()));
 +let never_neg = never_join | negate;
@@ -76,4 +76,4 @@
 +let answer = answer_map + answer_map2;
 +let answer_idx = answer | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic13x1.answer" = answer_idx;
++output "ic13x1.answer" = answer_idx;

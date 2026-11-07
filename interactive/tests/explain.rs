@@ -49,7 +49,7 @@ const SCC_ROW: &str = r#"
             | map((dst, (src, _, _)) -> (dst, (src)));
         set trim = trim_bwd - edges;
     }
-    export "result" = outer::scc;
+    output "result" = outer::scc;
 "#;
 
 /// Transitive closure, with the closure's pairs as the result.
@@ -64,7 +64,7 @@ const TC_ROW: &str = r#"
             | map((a, b) -> (b, a))
             | join(edges, (_, a, c) -> (a, c));
     }
-    export "result" = outer::tc;
+    output "result" = outer::tc;
 "#;
 
 /// Reachability from roots (two inputs), the reached set as the result.
@@ -75,7 +75,7 @@ const REACH_ROW: &str = r#"
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = roots + proposals | distinct;
     }
-    export "result" = reach::reach;
+    output "result" = reach::reach;
 "#;
 
 fn lowered(src: &str) -> Program {
@@ -371,7 +371,7 @@ fn report_demand_excess() {
 /// needs.
 const INDEG_ROW: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
-    export "result" = edges | map((_, dst) -> (dst, ())) | count;
+    output "result" = edges | map((_, dst) -> (dst, ())) | count;
 "#;
 
 /// A declared input the program never reads: no demand reaches it, so its demand set binds only
@@ -382,7 +382,7 @@ fn unread_input_explanations_sufficient() {
     const UNREAD: &str = r#"
         let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
         let unread = input 1 : ((int, int), ());
-        export "result" = edges;
+        output "result" = edges;
     "#;
     let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12), vec![]]);
     assert!(!sizes.is_empty());
@@ -400,8 +400,8 @@ fn unread_loop_explanations_sufficient() {
             let step = x | join(edges, (_, (), dst) -> (dst, ()));
             set x = (roots + step) | distinct;
         }
-        export "result" = edges;
-        export "reach" = reach::x;
+        output "result" = edges;
+        output "reach" = reach::x;
     "#;
     let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12)]);
     assert!(!sizes.is_empty());
@@ -425,7 +425,7 @@ fn sibling_scope_explanations_sufficient() {
             let step = y | join(edges, (_, (), dst) -> (dst, ()));
             set y = (reached + step) | distinct;
         }
-        export "result" = again::y;
+        output "result" = again::y;
     "#;
     let sizes = assert_all_rows_sufficient(SIBLINGS, &[gen_edges(10, 12)]);
     assert!(!sizes.is_empty());
@@ -444,7 +444,7 @@ fn flatmap_of_a_parent_explanations_sufficient() {
             let step = x | join(hops, (_, (), (dst)) -> ((dst), ()));
             set x = (roots + step) | distinct;
         }
-        export "result" = reach::x;
+        output "result" = reach::x;
     "#;
     let sizes = assert_all_rows_sufficient(PARENT, &[gen_edges(10, 12)]);
     assert!(!sizes.is_empty());
@@ -460,7 +460,7 @@ fn negated_fanout_explanations_sufficient() {
         let i0 = input 0 : ((int, int), ());
         let r2 = i0 | negate | map(((a, b), ()) -> (b, b));
         let r3 = r2 | map((x, y) -> (y, x));
-        export "result" = r3 | join(r2, (k, l, r) -> (k, (l, r)));
+        output "result" = r3 | join(r2, (k, l, r) -> (k, (l, r)));
     "#;
     let sizes = assert_all_rows_sufficient(NEGATED, &[vec![(row(&[3, 0]), row(&[]))]]);
     assert!(!sizes.is_empty());
@@ -476,7 +476,7 @@ fn min_then_count_explanations_sufficient() {
     const MIN_COUNT: &str = r#"
         let i0 = input 0 : (int, int);
         s: { let step = x | join(i0, (k, l, e) -> (e, l)); set x = (i0 + step) | min; }
-        export "result" = s::x | map((k, l) -> ((l), ())) | count;
+        output "result" = s::x | map((k, l) -> ((l), ())) | count;
     "#;
     let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(int(2), int(4)), (int(4), int(1))]]);
     assert!(!sizes.is_empty());
@@ -493,7 +493,7 @@ fn restricted_rows_keep_their_counts() {
         let i0 = input 0 : (int, int);
         let counts = i0 | count;
         let r = (counts - i0) | min;
-        export "result" = r;
+        output "result" = r;
     "#;
     let inputs = vec![vec![(int(0), int(4)), (int(0), int(4)), (int(0), int(2))]];
     let sizes = assert_all_rows_sufficient(COUNT_MIN, &inputs);
@@ -541,7 +541,7 @@ fn count_duplicate_inputs_sufficient() {
 fn reduce_lambda_explanations_sufficient_small() {
     const SUM_ROW: &str = r#"
         let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
-        export "result" = edges | map((src, dst) -> (dst, src))
+        output "result" = edges | map((src, dst) -> (dst, src))
             | reduce((_, vals) -> (((0, vals) fold ((acc, ((v), d)) -> (acc, (v, d) mul) add)), 1) enlist);
     "#;
     let sizes = assert_all_rows_sufficient(SUM_ROW, &[gen_edges(20, 22)]);
@@ -589,7 +589,7 @@ fn fuzz_explanations_sufficient() {
 /// op that used to `panic!` in explain.
 const FLATMAP_ROW: &str = r#"
     let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), ((a enlist, b enlist) append)));
-    export "result" = rows | flatmap((_, (l)) -> l);
+    output "result" = rows | flatmap((_, (l)) -> l);
 "#;
 
 #[test]
@@ -608,7 +608,7 @@ const LAMBDAS: &str = r#"
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = roots + proposals | distinct;
     }
-    export "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
+    output "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
 "#;
 
 #[test]
@@ -630,7 +630,7 @@ const SCALARS: &str = r#"
     inner: {
         set low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
     }
-    export "result" = inner::low | join(counted, (k, l, c) -> (k, (l, c)));
+    output "result" = inner::low | join(counted, (k, l, c) -> (k, (l, c)));
 "#;
 
 fn scalar_pairs() -> Vec<(Row, Row)> {
@@ -649,7 +649,7 @@ fn scalar_explanations_sufficient_small() {
 /// confirms the existing path handles a `List`-valued reducer output.
 const COLLECT_ROW: &str = r#"
     let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
-    export "result" = rows | collect;
+    output "result" = rows | collect;
 "#;
 
 #[test]
@@ -674,7 +674,7 @@ const REACH_DELAY: &str = r#"
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = seeds + proposals | distinct;
     }
-    export "result" = reach::reach;
+    output "result" = reach::reach;
 "#;
 
 #[test]
@@ -691,7 +691,7 @@ const MIN_LOOP: &str = r#"
         let labels = proposals + nodes | min;
         set proposals = labels | join(edges, (_, label, dst) -> (dst, label));
     }
-    export "result" = outer::labels;
+    output "result" = outer::labels;
 "#;
 
 #[test]
@@ -717,7 +717,7 @@ const SCC_ONE_SCOPE: &str = r#"
             | map((dst, (src, _, _)) -> (dst, (src)));
         set trim = trim_fwd | filter(((n), _) -> (n, 1000000) gt);
     }
-    export "result" = outer::scc;
+    output "result" = outer::scc;
 "#;
 
 /// The same program with `set trim = trim_fwd - edges`.
@@ -737,7 +737,7 @@ const SCC_ONE_SCOPE_NEGATED: &str = r#"
             | map((dst, (src, _, _)) -> (dst, (src)));
         set trim = trim_fwd - edges;
     }
-    export "result" = outer::scc;
+    output "result" = outer::scc;
 "#;
 
 #[test]

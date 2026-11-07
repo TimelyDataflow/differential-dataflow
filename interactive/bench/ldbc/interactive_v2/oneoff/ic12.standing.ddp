@@ -17,5 +17,5 @@ below: {
 let below_hl = below::below | map(((low, high), ()) -> (high, low));
 let reply   = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
                       | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
-export "ic12.s.below_hl" = below_hl | arrange;
-export "ic12.s.reply" = reply | arrange;
+output "ic12.s.below_hl" = below_hl | arrange;
+output "ic12.s.reply" = reply | arrange;

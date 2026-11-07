@@ -5,4 +5,4 @@ let out_idx = out_map | arrange;
 let out_reduce = out_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 let out_map2 = out_reduce | map((kv, ()) -> kv);
 -- Renderer: build an export arrangement.
-export "out" = out_map2;
+output "out" = out_map2;

@@ -874,10 +874,10 @@ mod tests {
     fn world() -> LineParser {
         let program = r#"
             type T = A int | B int | C (int, int);
-            export "pairs" = input 0 : ((int, int), ());
-            export "both" = input 1 : ((int, int), (int, int));
-            export "tagged" = input 2 : ((), T);
-            export "ones" = input 3 : ((int), (int));
+            output "pairs" = input 0 : ((int, int), ());
+            output "both" = input 1 : ((int, int), (int, int));
+            output "tagged" = input 2 : ((), T);
+            output "ones" = input 3 : ((int), (int));
         "#;
         let catalog = Catalog::default();
         let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
@@ -972,7 +972,7 @@ mod tests {
     fn plan_is_read_only_and_uses_load_framing() {
         let mut p = LineParser::with_cap(256);
         let got = feed_all(&mut p, &[
-            "r0 plan preview begin", "export \"out\" = input 0 : (int, ());", "r0 end-plan",
+            "r0 plan preview begin", "output \"out\" = input 0 : (int, ());", "r0 end-plan",
         ]);
         let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
         assert_eq!(name, "preview");
@@ -983,7 +983,7 @@ mod tests {
         assert!(matches!(p.feed("plan p from /nonexistent/plan.ddp"), Some((_, Err(e))) if e.starts_with("plan: cannot read")));
         let mut p = LineParser::with_cap(8);
         assert!(p.feed("plan p begin").is_none());
-        assert!(p.feed("export \"out\" = input 0;").is_none());
+        assert!(p.feed("output \"out\" = input 0;").is_none());
         assert!(matches!(p.feed("p end-plan"), Some((_, Err(e))) if e.starts_with("plan: program body exceeds")));
         assert!(matches!(p.feed("list"), Some((_, Ok(Cmd::List)))));
     }
@@ -992,7 +992,7 @@ mod tests {
     fn plan_timings_survive_framing_and_preparation() {
         let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &[
-            "r0 plan preview --timings begin", "export \"out\" = input 0 : (int, ());", "r0 end-plan",
+            "r0 plan preview --timings begin", "output \"out\" = input 0 : (int, ());", "r0 end-plan",
         ]);
         let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
         assert!(*timings);
@@ -1011,7 +1011,7 @@ mod tests {
             &[
                 "r0 load gen edges=random(seed=1) begin",
                 "let edges = import \"edges/v1\";",
-                "export \"reach\" = edges;",
+                "output \"reach\" = edges;",
                 "r0 end-load",
             ],
         );
@@ -1029,7 +1029,7 @@ mod tests {
                     Some("random(seed=1)")
                 );
                 assert!(program.contains("import \"edges/v1\""));
-                assert!(program.contains("export \"reach\""));
+                assert!(program.contains("output \"reach\""));
                 assert!(explain.is_none());
             }
             _ => panic!("expected Load, got {:?}", got[0].1),
@@ -1041,7 +1041,7 @@ mod tests {
         let mut p = LineParser::new(Catalog::default());
         assert!(p.feed("r0 load world begin").is_none());
         assert!(p.feed("let rows = input 0;").is_none());
-        assert!(p.feed("export \"rows\" = rows;").is_none());
+        assert!(p.feed("output \"rows\" = rows;").is_none());
         let (_, parsed) = p.feed("r0 end-load").expect("load is complete");
         let prepared = prepare(parsed.expect("protocol parse succeeds"), &Catalog::default())
             .expect("DDIR parsing and lowering succeed");
@@ -1059,9 +1059,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ddir-load-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ddp = dir.join("p.ddp");
-        std::fs::write(&ddp, "export \"r\" = input 0;\n").unwrap();
+        std::fs::write(&ddp, "output \"r\" = input 0;\n").unwrap();
         let ddp2 = dir.join("q.ddp");
-        std::fs::write(&ddp2, "export \"s\" = input 0;\n").unwrap();
+        std::fs::write(&ddp2, "output \"s\" = input 0;\n").unwrap();
         let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &[
             &format!("r1 load p from {} explain=debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
@@ -1073,7 +1073,7 @@ mod tests {
         match &got[0].1 {
             Ok(Cmd::Load { id_hint, bindings, program, explain }) => {
                 assert_eq!(id_hint, "p");
-                assert_eq!(program, "export \"r\" = input 0;\n");
+                assert_eq!(program, "output \"r\" = input 0;\n");
                 assert_eq!(*explain, Some(true));
                 assert_eq!(bindings.get("e").map(String::as_str), Some("random(seed=1,arity=2,range=8,count=12)"));
             }

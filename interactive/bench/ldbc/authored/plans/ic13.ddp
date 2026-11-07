@@ -38,4 +38,4 @@ let asked  = request | map(((rid, _, _), ()) -> (rid, ()));
 let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
 let answer = (best | map((rid, d) -> ((rid, 0), (d)))) + (never | map((rid, ()) -> ((rid, 0), (-1))));
 
-export "ic13.answer" = answer | arrange;
+output "ic13.answer" = answer | arrange;

@@ -213,7 +213,7 @@ pub struct Scope {
     pub vars: Vec<Var>,
     pub items: Vec<Item>,
     /// For each item, the name of the statement it was lowered from: the `let`, `set`, or
-    /// `export` whose expression built it, or a child scope's name. Diagnostics only. Empty
+    /// `output` whose expression built it, or a child scope's name. Diagnostics only. Empty
     /// for a scope built without them; a reader uses it only when it has one entry per item.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
@@ -340,7 +340,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
         println!("{}bind v{} = {};", pad2, b.var, fmt_ref(&b.value));
     }
     for e in &s.exports {
-        println!("{}export {:?} = {};", pad2, e.name, fmt_ref(&e.value));
+        println!("{}output {:?} = {};", pad2, e.name, fmt_ref(&e.value));
     }
 }
 

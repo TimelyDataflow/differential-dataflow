@@ -10,7 +10,7 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
     let text = r#"
         let rows = input 0 : ((int, int, int), ()) | map(((k, neg_wid, v), ()) -> (k, (neg_wid, v)));
         let best = rows | min;
-        export "answer" = best | map((k, (_, v)) -> (k, ((), v)));
+        output "answer" = best | map((k, (_, v)) -> (k, ((), v)));
     "#;
     let mut original = lower::lower_tree(parse::pipe::parse(text));
     interactive::passes::optimize(&mut original);
@@ -54,7 +54,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
     let text = r#"
         let rows = input 0 : ((int, int, int), ()) | map(((k, a, b), ()) -> (k, (a, b)));
         let reduced = rows | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
-        export "answer" = reduced | map((k, (_, b)) -> ((k, b), ()));
+        output "answer" = reduced | map((k, (_, b)) -> ((k, b), ()));
     "#;
     let mut original = lower::lower_tree(parse::pipe::parse(text));
     interactive::passes::optimize(&mut original);
@@ -86,12 +86,12 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
 fn fusion_requires_one_reader_an_unchanged_key_and_a_value_projection() {
     for (map, extra, fused) in [
         ("(k, (a, b)) -> (k, (b, a, b))", "", true),
-        ("(k, (a, b)) -> (k, b)", "export \"also\" = best;", false),
+        ("(k, (a, b)) -> (k, b)", "output \"also\" = best;", false),
         ("(k, (a, b)) -> (b, a)", "", false),
         ("(k, (a, b)) -> (k, (b, 1) add)", "", false),
         ("(k, (a, b)) -> (k, (k, b))", "", false),
     ] {
-        let text = format!("let rows = input 0 : (int, (int, int)); let best = rows | min; export \"out\" = best | map({map}); {extra}");
+        let text = format!("let rows = input 0 : (int, (int, int)); let best = rows | min; output \"out\" = best | map({map}); {extra}");
         let mut program = lower::lower_tree(parse::pipe::parse(&text));
         interactive::passes::optimize(&mut program);
         projection::pushdown(&mut program, &|_| None).unwrap();

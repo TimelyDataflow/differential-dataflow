@@ -52,8 +52,8 @@ const PROGRAM: &str = r#"
             | map((dst, (src, _, _)) -> (dst, src));
         set trim = trim_bwd - edges;
     }
-    export "scc" = outer::scc;
-    export "degrees" = outer::degrees;
+    output "scc" = outer::scc;
+    output "degrees" = outer::degrees;
 "#;
 
 const EXPORTS: [&str; 2] = ["scc", "degrees"];
@@ -155,7 +155,7 @@ struct Checks {
 fn run(steps: Vec<Step>, workers: usize) -> Checks {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
-        let allow = lower::lower_tree(parse::pipe::parse(r#"export "allowed" = input 0 : (int, ());"#));
+        let allow = lower::lower_tree(parse::pipe::parse(r#"output "allowed" = input 0 : (int, ());"#));
         let program = lower::lower_tree(parse::pipe::parse(PROGRAM));
         server.install(worker, "allow", &allow).unwrap();
         server.install_with_root(worker, "graph", &program, 3, at([0, 0, 0])).unwrap();

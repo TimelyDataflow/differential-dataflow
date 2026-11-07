@@ -66,4 +66,4 @@ let asked  = request | map(((rid, _, _, _, _), ()) -> (rid, ()));
 let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
 let answer = (best | map((rid, c) -> ((rid, 0), (c)))) + (never | map((rid, ()) -> ((rid, 0), (-1 to_float))));
 
-export "bi15.answer" = answer | arrange;
+output "bi15.answer" = answer | arrange;

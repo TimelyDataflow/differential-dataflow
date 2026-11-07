@@ -70,7 +70,7 @@ fn collect_scopes(body: &[Stmt], path: &[String], visible: &mut HashMap<String, 
     for stmt in body {
         let name = match stmt {
             Stmt::Let(n, _) | Stmt::Set(n, _) | Stmt::Scope(n, _) => n,
-            Stmt::Var(..) | Stmt::Export(..) => continue,
+            Stmt::Var(..) | Stmt::Output(..) => continue,
         };
         // Duplicate and conflicting definitions are reported while lowering.
         all.insert(name.clone());
@@ -204,7 +204,7 @@ fn resolve_body(body: &mut [Stmt], here: &[String], scopes: &HashMap<Vec<String>
     for stmt in body {
         match stmt {
             Stmt::Let(name, expr) => resolve_expr(expr, here, Some(name), scopes, plan),
-            Stmt::Set(_, expr) | Stmt::Export(_, _, expr) => resolve_expr(expr, here, None, scopes, plan),
+            Stmt::Set(_, expr) | Stmt::Output(_, _, expr) => resolve_expr(expr, here, None, scopes, plan),
             Stmt::Var(..) => {},
             Stmt::Scope(name, nested) => {
                 let mut address = here.to_vec();
@@ -263,7 +263,7 @@ fn collect_body_free_names(body: &[Stmt], out: &mut BTreeSet<RefName>) {
     for stmt in body {
         match stmt {
             Stmt::Let(n, _) | Stmt::Var(n, _) | Stmt::Set(n, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
-            Stmt::Export(_, _, _) => {},
+            Stmt::Output(_, _, _) => {},
         }
     }
     let mut inner = BTreeSet::new();
@@ -281,7 +281,7 @@ fn collect_body_free_names(body: &[Stmt], out: &mut BTreeSet<RefName>) {
 fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Export(_, _, e) => expr_free_names(e, out),
+            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Output(_, _, e) => expr_free_names(e, out),
             Stmt::Var(_, _) => {},
             Stmt::Scope(_, b) => collect_body_free_names(b, out),
         }
@@ -477,7 +477,7 @@ fn lower_scope_tree(
                 sets.push((n, e));
             },
             Stmt::Scope(n, b)=> { assert!(child_bodies.insert(n.clone(), b.as_slice()).is_none(), "scope `{n}` defined twice"); order.push((ItemKind::Scope, n.clone())); },
-            Stmt::Export(n, s, e) => { export_stmts.push((n.as_str(), s, e)); },
+            Stmt::Output(n, s, e) => { export_stmts.push((n.as_str(), s, e)); },
         }
     }
 
@@ -586,12 +586,12 @@ fn lower_scope_tree(
         binds.push(st::Bind { var: var_id[*name], value: r });
     }
 
-    // Exports: the root takes its `export` statements; a child surrenders the
+    // Exports: the root takes its `output` statements; a child surrenders the
     // fields its parent asked for.
     let mut exports: Vec<st::Export> = Vec::new();
     if is_root {
         for (name, shape, e) in &export_stmts {
-            s.statement = format!("export {name}");
+            s.statement = format!("output {name}");
             let r = s.lower_expr(e);
             exports.push(st::Export { name: (*name).to_string(), value: r, shape: (*shape).clone() });
         }
@@ -632,10 +632,10 @@ mod tree_tests {
         let producer = "min";
         let text = format!(r#"
             let rows = input 0 : (int, ()) | {producer};
-            export "join" = rows | join(rows, (k, _, _) -> (k, ()));
-            export "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
-            export "reduce" = rows | min;
-            export "distinct" = rows | distinct;
+            output "join" = rows | join(rows, (k, _, _) -> (k, ()));
+            output "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
+            output "reduce" = rows | min;
+            output "distinct" = rows | distinct;
         "#);
         let program = lower_tree(parse(&text));
         assert_eq!(program.root.items.iter().filter(|item| matches!(item, st::Item::Op(st::Node::Arrange(_)))).count(), 1, "{producer}");
@@ -651,10 +651,10 @@ mod tree_tests {
     fn arranges_consumers_of_whole_record_distinct() {
         let program = lower_tree(parse(r#"
             let rows = input 0 : (int, int) | distinct;
-            export "join" = rows | join(rows, (k, a, _) -> (k, a));
-            export "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
-            export "reduce" = rows | min;
-            export "distinct" = rows | distinct;
+            output "join" = rows | join(rows, (k, a, _) -> (k, a));
+            output "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
+            output "reduce" = rows | min;
+            output "distinct" = rows | distinct;
         "#));
         for item in &program.root.items {
             let inputs = match item {
@@ -672,9 +672,9 @@ mod tree_tests {
         let program = lower_tree(parse(r#"
             let rows = input 0 : (int, ()) | arrange | arrange;
             inner: { let reduced = rows | min; }
-            export "local" = rows | min | arrange;
-            export "child" = inner::reduced | min;
-            export "trace" = import "trace" : (int, ()) | min;
+            output "local" = rows | min | arrange;
+            output "child" = inner::reduced | min;
+            output "trace" = import "trace" : (int, ()) | min;
         "#));
         let arranges: Vec<_> = program.root.items.iter().filter_map(|item| match item {
             st::Item::Op(st::Node::Arrange(input)) => Some(input),
@@ -697,7 +697,7 @@ mod tree_tests {
                 set b = seed + from_inner;\n\
                 var b;\n\
             }\n\
-            export \"out\" = outer::a;";
+            output \"out\" = outer::a;";
         let program = lower_tree(parse(src));
         let outer = subs(&program.root)[0];
         let inner = subs(outer)[0];
@@ -736,7 +736,7 @@ mod tree_tests {
                 let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));\n\
                 set reach = roots + proposals | distinct;\n\
             }\n\
-            export \"result\" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);";
+            output \"result\" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);";
         let prog = lower_tree(parse(src));
 
         // root: two Input imports, one child (reach), one export.
@@ -771,7 +771,7 @@ mod tree_tests {
                 }\n\
                 let y = inner::x;\n\
             }\n\
-            export \"result\" = outer::y;";
+            output \"result\" = outer::y;";
         let prog = lower_tree(parse(src));
         assert_eq!(subs(&prog.root).len(), 1);              // outer
         let outer = subs(&prog.root)[0];
@@ -803,7 +803,7 @@ mod tree_tests {
     fn grandchild_reads_uncle_export_through_parent() {
         let src = "let source = input 0; uncle: { let value = source; } \
             parent: { child: { let result = uncle::value; } let result = child::result; } \
-            export \"out\" = parent::result;";
+            output \"out\" = parent::result;";
         let prog = lower_tree(parse(src));
         let uncle = child(&prog.root, "uncle");
         let parent = child(&prog.root, "parent");
@@ -822,14 +822,14 @@ mod tree_tests {
             X: { let value = source0; } \
             outer: { X: { let value = source1; } \
                 inner: { let picked = X::value; } let result = inner::picked; } \
-            export \"out\" = outer::result;";
+            output \"out\" = outer::result;";
         lower_tree(parse(src));
     }
 
     #[test]
     fn var_body_reads_sibling_var() {
         let src = "let source = input 0; first: { set result = second::value; } \
-            second: { set value = source; } export \"out\" = first::result;";
+            second: { set value = source; } output \"out\" = first::result;";
         let prog = lower_tree(parse(src));
         let first = child(&prog.root, "first");
         assert!(matches!(first.imports.iter().find(|i| i.name == "::second::value").unwrap().from,
@@ -841,7 +841,7 @@ mod tree_tests {
     fn local_binding_does_not_hide_outer_scope_qualifier() {
         let src = "let source = input 0; X: { let value = source; } \
             middle: { let X = source; let result = X::value; } \
-            export \"out\" = middle::result;";
+            output \"out\" = middle::result;";
         let prog = lower_tree(parse(src));
         let middle = child(&prog.root, "middle");
         assert!(middle.imports.iter().any(|i| i.name == "::X::value"
@@ -878,7 +878,7 @@ mod tree_tests {
     #[test]
     fn root_path_descends_three_scopes() {
         let src = "let source = input 0; a: { b: { c: { let value = source; } } } \
-            export \"out\" = ::a::b::c::value;";
+            output \"out\" = ::a::b::c::value;";
         let prog = lower_tree(parse(src));
         assert_eq!(child(child(child(&prog.root, "a"), "b"), "c").exports[0].name, "value");
         assert!(matches!(prog.root.exports[0].value, Ref::ChildExport(..)));
@@ -888,7 +888,7 @@ mod tree_tests {
     fn grandchild_reads_uncles_child() {
         let src = "let source = input 0; uncle: { branch: { let value = source; } } \
             parent: { child: { let result = uncle::branch::value; } let result = child::result; } \
-            export \"out\" = parent::result;";
+            output \"out\" = parent::result;";
         let prog = lower_tree(parse(src));
         let parent = child(&prog.root, "parent");
         let grandchild = child(parent, "child");
@@ -902,7 +902,7 @@ mod tree_tests {
     fn enclosing_scope_reads_the_rest_inside_it() {
         let src = "let source = input 0; outer: { fwd: { let labels = source; } \
             bwd: { let result = outer::fwd::labels; } let result = bwd::result; } \
-            export \"out\" = outer::result;";
+            output \"out\" = outer::result;";
         let prog = lower_tree(parse(src));
         let outer = child(&prog.root, "outer");
         let bwd = child(outer, "bwd");
@@ -915,7 +915,7 @@ mod tree_tests {
         let src = "let source = input 0; outer: { fwd: { let labels = source; } \
             bwd: { let result = outer::fwd::labels; } let result = bwd::result; } \
             other: { let result = ::outer::fwd::labels; } \
-            export \"out\" = outer::result + other::result;";
+            output \"out\" = outer::result + other::result;";
         let prog = lower_tree(parse(src));
         assert_eq!(child(child(&prog.root, "outer"), "fwd").exports.len(), 1);
         assert!(child(&prog.root, "other").imports.iter().any(|i| i.name == "::outer::fwd::labels"));
@@ -931,7 +931,7 @@ mod tree_tests {
     fn disjoint_subtrees_can_reuse_scope_name() {
         let src = "let source = input 0; left: { shared: { let value = source; } \
             let result = shared::value; } right: { shared: { let value = source; } \
-            let result = shared::value; } export \"out\" = left::result + right::result;";
+            let result = shared::value; } output \"out\" = left::result + right::result;";
         let prog = lower_tree(parse(src));
         assert_eq!(child(child(&prog.root, "left"), "shared").exports[0].name, "value");
         assert_eq!(child(child(&prog.root, "right"), "shared").exports[0].name, "value");
@@ -939,32 +939,32 @@ mod tree_tests {
 
     #[test]
     fn root_is_available_as_a_child_scope_name() {
-        let prog = lower_tree(parse("let source = input 0; root: { let value = source; } export \"out\" = root::value;"));
+        let prog = lower_tree(parse("let source = input 0; root: { let value = source; } output \"out\" = root::value;"));
         assert_eq!(child(&prog.root, "root").exports[0].name, "value");
     }
 
     #[test]
     #[should_panic(expected = "path `unknown::value` has unknown anchor `unknown` from scope `root`")]
     fn unknown_anchor_names_path_and_scope() {
-        lower_tree(parse("export \"out\" = unknown::value;"));
+        lower_tree(parse("output \"out\" = unknown::value;"));
     }
 
     #[test]
     #[should_panic(expected = "path `a::missing::value` has unknown child scope `missing` in `a`")]
     fn unknown_child_names_path_and_scope() {
-        lower_tree(parse("a: { let value = input 0; } export \"out\" = a::missing::value;"));
+        lower_tree(parse("a: { let value = input 0; } output \"out\" = a::missing::value;"));
     }
 
     #[test]
     #[should_panic(expected = "path `a::value::field` needs a scope at `value` in `a`, but it is a binding")]
     fn binding_cannot_be_path_scope() {
-        lower_tree(parse("a: { let value = input 0; } export \"out\" = a::value::field;"));
+        lower_tree(parse("a: { let value = input 0; } output \"out\" = a::value::field;"));
     }
 
     #[test]
     #[should_panic(expected = "path `a::b` needs a binding at `b` in `a`, but it is a scope")]
     fn scope_cannot_be_path_field() {
-        lower_tree(parse("a: { b: { let value = input 0; } } export \"out\" = a::b;"));
+        lower_tree(parse("a: { b: { let value = input 0; } } output \"out\" = a::b;"));
     }
 }
 
@@ -980,7 +980,7 @@ mod optimize_tests {
 
     #[test]
     fn fuses_linear_chains() {
-        let src = "let a = input 0 | map(((a, b), ()) -> (a, b)) | filter((a, b) -> (a, b) ne) | negate;\nexport \"result\" = a;";
+        let src = "let a = input 0 | map(((a, b), ()) -> (a, b)) | filter((a, b) -> (a, b) ne) | negate;\noutput \"result\" = a;";
         let mut p = lower_tree(parse(src));
         assert_eq!(p.op_count(), 3); // three single-op Linears
         crate::passes::optimize(&mut p);
@@ -999,7 +999,7 @@ mod optimize_tests {
             let b = input 0 | map(((a, b), ()) -> (b, a));\n\
             let j1 = a | join(b, (_, x, y) -> (x, y));\n\
             let j2 = a | join(b, (_, x, y) -> (y, x));\n\
-            export \"result\" = j1 + j2;";
+            output \"result\" = j1 + j2;";
         let mut p = lower_tree(parse(src));
         crate::passes::optimize(&mut p);
         let arranges = ops(&p.root).iter().filter(|n| matches!(n, Node::Arrange(_))).count();
@@ -1012,7 +1012,7 @@ mod optimize_tests {
         let src = "\
             let a = input 0 | map(((a, b), ()) -> (a, b)) | distinct;\n\
             let b = input 0 | map(((a, b), ()) -> (a, b));\n\
-            export \"result\" = a | join(b, (_, x, _) -> (x, ()));";
+            output \"result\" = a | join(b, (_, x, _) -> (x, ()));";
         let mut p = lower_tree(parse(src));
         crate::passes::optimize(&mut p);
         // No Arrange may target a Reduce item.
@@ -1032,7 +1032,7 @@ mod optimize_tests {
             s: {\n\
                 set x = (e + x) | map((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
             }\n\
-            export \"result\" = s::x;";
+            output \"result\" = s::x;";
         let mut p = lower_tree(parse(src));
         crate::passes::optimize(&mut p);
         let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };

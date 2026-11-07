@@ -14,13 +14,13 @@ fn program(src: &str) -> Program {
 
 fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
+const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
 
 #[test]
 fn later_types_are_available_to_shapes_and_qualified_variants() {
     timely::execute_directly(|worker| {
         let src = r#"
-            export "out" = input 0 : (int, Inner)
+            output "out" = input 0 : (int, Inner)
                 | map((k, v) -> (k, v inject Outer::Wrap));
             type Outer = Wrap Inner;
             type Other = Wrap int;
@@ -38,10 +38,10 @@ fn exports_publish_their_shapes() {
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
         assert_eq!(server.trace_shape("edges"), Some((ints(1), ints(1))));
         // An undeclared import takes the shape its trace is published at.
-        server.install(worker, "consumer", &program(r#"export "flipped" = import "edges" | map(((src), (dst)) -> ((dst), (src, 0)));"#)).unwrap();
+        server.install(worker, "consumer", &program(r#"output "flipped" = import "edges" | map(((src), (dst)) -> ((dst), (src, 0)));"#)).unwrap();
         assert_eq!(server.trace_shape("flipped"), Some((ints(1), ints(2))));
         // An input must declare its shape.
-        let err = server.install(worker, "loose", &program(r#"export "loose" = input 0;"#)).unwrap_err();
+        let err = server.install(worker, "loose", &program(r#"output "loose" = input 0;"#)).unwrap_err();
         assert!(err.contains("without declaring its shape"), "{err}");
         // Dropping a producer forgets its shapes.
         server.drop_program(worker, "consumer").unwrap();
@@ -54,8 +54,8 @@ fn a_declared_import_must_match_its_trace() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "agrees", &program(r#"export "a" = import "edges" : ((int), (int));"#)).unwrap();
-        let err = server.install(worker, "disagrees", &program(r#"export "b" = import "edges" : ((int, int), ());"#)).unwrap_err();
+        server.install(worker, "agrees", &program(r#"output "a" = import "edges" : ((int), (int));"#)).unwrap();
+        let err = server.install(worker, "disagrees", &program(r#"output "b" = import "edges" : ((int, int), ());"#)).unwrap_err();
         assert!(err.contains("published as"), "{err}");
         assert!(server.snapshot(worker, "b").is_err(), "a rejected program publishes nothing");
     });
@@ -66,12 +66,12 @@ fn conflicting_shapes_reject_the_install() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         // Join keys of different shapes.
-        let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); export "j" = a | join(b, (k, _, _) -> (k, ()));"#;
+        let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); output "j" = a | join(b, (k, _, _) -> (k, ()));"#;
         let err = server.install(worker, "join", &program(join)).unwrap_err();
         assert!(err.contains("join keys"), "{err}");
         // A field of an integer, through an import whose shape is published.
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        let err = server.install(worker, "proj", &program(r#"export "p" = import "edges" | map(((src), _) -> ((src .1), ()));"#
+        let err = server.install(worker, "proj", &program(r#"output "p" = import "edges" | map(((src), _) -> ((src .1), ()));"#
 )).unwrap_err();
         assert!(err.contains("conflicting shapes"), "{err}");
         assert!(server.snapshot(worker, "p").is_err());
@@ -82,10 +82,10 @@ fn conflicting_shapes_reject_the_install() {
 fn generated_sources_have_shapes() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
-        let src = r#"let r = import "random:nodes=8,edges=12,arity=3"; let i = import "iota:4"; let c = import "clock"; export "out" = r + i + c;"#;
+        let src = r#"let r = import "random:nodes=8,edges=12,arity=3"; let i = import "iota:4"; let c = import "clock"; output "out" = r + i + c;"#;
         let err = server.install(worker, "mixed", &program(src)).unwrap_err();
         assert!(err.contains("concat"), "{err}");
-        let src = r#"export "out" = import "iota:4" + import "clock";"#;
+        let src = r#"output "out" = import "iota:4" + import "clock";"#;
         server.install(worker, "fine", &program(src)).unwrap();
         assert_eq!(server.trace_shape("iota:4"), Some((ints(1), Shape::Unit)));
         assert_eq!(server.trace_shape("clock"), Some((ints(1), Shape::Unit)));
@@ -98,7 +98,7 @@ fn bindings_and_recipe_loads_must_match_declared_inputs() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "target", &program(r#"export "t" = input 0 : ((int, int), ());"#)).unwrap();
+        server.install(worker, "target", &program(r#"output "t" = input 0 : ((int, int), ());"#)).unwrap();
         let err = server.bind(worker, "edges", "target", 0).unwrap_err();
         assert!(err.contains("published as"), "{err}");
         let err = server.load(worker, "target", 0, "random:nodes=8,edges=12,arity=3", 1).unwrap_err();
@@ -112,11 +112,11 @@ fn declared_exports_publish_their_shapes() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         // An export may declare the shape it is inferred to have.
-        server.install(worker, "declared", &program(r#"export "d" : ((int), ()) = input 0 : ((int), ());"#)).unwrap();
+        server.install(worker, "declared", &program(r#"output "d" : ((int), ()) = input 0 : ((int), ());"#)).unwrap();
         assert_eq!(server.trace_shape("d"), Some((ints(1), Shape::Unit)));
         // A declaration that disagrees with the inferred shape rejects the install.
-        let err = server.install(worker, "wrong", &program(&PRODUCER.replace("export \"edges\" =", "export \"w\" : ((int), ()) ="))).unwrap_err();
-        assert!(err.contains("export `w`"), "{err}");
+        let err = server.install(worker, "wrong", &program(&PRODUCER.replace("output \"edges\" =", "output \"w\" : ((int), ()) ="))).unwrap_err();
+        assert!(err.contains("output `w`"), "{err}");
     });
 }
 
@@ -126,7 +126,7 @@ fn declared_exports_publish_their_shapes() {
 fn collections_without_a_shape_reject_the_install() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
-        let alone = r#"s: { set v = v | distinct; } export "out" = s::v;"#;
+        let alone = r#"s: { set v = v | distinct; } output "out" = s::v;"#;
         let err = server.install(worker, "alone", &program(alone)).unwrap_err();
         assert!(err.contains("variable `v` has no shape"), "{err}");
         let declared = alone.replace("set v =", "var v : ((int), ());\nset v =");
@@ -175,7 +175,7 @@ fn dead_imports_release_provider_dependencies_but_exports_keep_them() {
         server.feed("unused", 7, "1", None).unwrap();
         server.drop_program(worker, "producer").unwrap();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "contract", &program(r#"export "contract" = import "edges";"#)).unwrap();
+        server.install(worker, "contract", &program(r#"output "contract" = import "edges";"#)).unwrap();
         assert!(server.drop_program(worker, "producer").unwrap_err().contains("live importer"));
         server.drop_program(worker, "contract").unwrap();
         server.drop_program(worker, "producer").unwrap();

@@ -1,1 +1,1 @@
-export "now" = import "clock" | inspect(clock);
+output "now" = import "clock" | inspect(clock);

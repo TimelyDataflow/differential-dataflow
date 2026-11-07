@@ -5,7 +5,7 @@
  let rows = input 0 : ((int, int), ());
  let left = rows | map((row, ()) -> (row, ()));
  let merged = rows + left;
--export "out" = merged | map(((a, _), ()) -> (a, ()));
+-output "out" = merged | map(((a, _), ()) -> (a, ()));
 +let out_map = merged | map(((a, _), ()) -> (a, ()));
 +-- Renderer: build an export arrangement.
-+export "out" = out_map;
++output "out" = out_map;

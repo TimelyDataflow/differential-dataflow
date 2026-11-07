@@ -44,5 +44,5 @@ ranges: {
     set active = seeds + mapped + holes_bounded + holes_tail | distinct;
 }
 
-export "result" = ranges::active | filter(((stage, _, _), _) -> (stage, 7) eq)
+output "result" = ranges::active | filter(((stage, _, _), _) -> (stage, 7) eq)
     | map(((_, s, _), _) -> ((), s)) | min | arrange | inspect(part2);

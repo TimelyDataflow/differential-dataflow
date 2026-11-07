@@ -38,4 +38,4 @@ sharing: {
     set allowed = allowed_reduce;
 }
 -- Renderer: build an export arrangement.
-export "access" = sharing::allowed;
+output "access" = sharing::allowed;

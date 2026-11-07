@@ -3,8 +3,8 @@ let input0 = input 0 : ((int), ());
 let input1 = input 1 : ((int), ());
 let input2 = input 2 : ((int, int), ());
 -- Renderer: build an export arrangement.
-export "clock" = input0;
+output "clock" = input0;
 -- Renderer: build an export arrangement.
-export "iota:12" = input1;
+output "iota:12" = input1;
 -- Renderer: build an export arrangement.
-export "random:nodes=8,edges=12" = input2;
+output "random:nodes=8,edges=12" = input2;

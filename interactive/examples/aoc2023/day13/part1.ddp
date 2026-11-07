@@ -33,6 +33,6 @@ let cviol = s2 | join(clines, ((b, y), (a, x, lx), ly) -> ((b, a), ((x, y) lt, (
 let cvalid = ccand - cviol;
 let cscore = cvalid | map(((_, a), _) -> ((), (a, 1) sub));
 
-export "result" = rscore + cscore
+output "result" = rscore + cscore
     | collect | map((_, xs) -> ((), xs fold_add))
     | arrange | inspect(part1);

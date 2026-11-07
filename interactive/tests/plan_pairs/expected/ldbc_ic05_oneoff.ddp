@@ -60,4 +60,4 @@ let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) 
 let answer = ranked | map((rid, (rank, ((neg, _), title))) -> ((rid, rank), (title, neg neg)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic5x1.answer" = answer_idx;
+output "ic5x1.answer" = answer_idx;

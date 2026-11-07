@@ -16,7 +16,7 @@ fn unread_operators_and_recursive_scopes_are_removed() {
             let unread = step | arrange;
             set r = (::x + step) | distinct;
         }
-        export "out" = used;
+        output "out" = used;
     "#);
     let mut optimized = original.clone();
     interactive::passes::optimize(&mut optimized);
@@ -81,7 +81,7 @@ fn dead_code_switch_controls_pruning_before_fusion() {
         let prefix = x | map((k, v) -> (k, (v, 1) add));
         let dead = prefix | filter((_, v) -> (v, 0) gt);
         lost: { let dead = ::absent | map((k, v) -> (v, k)); }
-        export "out" = prefix | map((k, v) -> (v, k));
+        output "out" = prefix | map((k, v) -> (v, k));
     "#);
     let off = Config::parse("none,structural").unwrap();
     let on = Config::parse("none,structural,dead-code").unwrap();

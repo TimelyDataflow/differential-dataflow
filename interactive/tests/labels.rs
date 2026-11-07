@@ -16,8 +16,8 @@ reach: {
     let step = reach | join(edges, (k, (), b) -> (b, ()));
     set reach = (edges | map((a, _) -> (a, ()))) + step | distinct;
 }
-export \"counts\" = counts | map((k, n) -> (k, n));
-export \"reach\" = reach::reach;
+output \"counts\" = counts | map((k, n) -> (k, n));
+output \"reach\" = reach::reach;
 ";
 
 fn program() -> Program {
@@ -45,7 +45,7 @@ fn every_item_is_labelled_after_optimize() {
     assert!(labelled("pairs").iter().any(|i| matches!(i, Item::Op(Node::Join { .. }))));
     assert!(labelled("counts").iter().any(|i| matches!(i, Item::Op(Node::Reduce { .. }))));
     // The export's identity map is gone; its declared export still names the count.
-    assert!(labelled("export counts").is_empty());
+    assert!(labelled("output counts").is_empty());
     assert!(p.root.exports.iter().any(|e| e.name == "counts"));
     let Some(Item::Sub(reach)) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))) else { panic!("no child scope") };
     assert!(reach.labels.iter().any(|l| l == "step"));
@@ -68,7 +68,7 @@ fn rendering_logs_the_operators_of_each_label() {
         events
     });
     let labels: Vec<&str> = events.iter().map(|(_, _, l)| l.as_str()).collect();
-    for wanted in ["pairs", "counts", "step", "reach", "export counts"] {
+    for wanted in ["pairs", "counts", "step", "reach", "output counts"] {
         assert!(labels.contains(&wanted), "{wanted:?} not among {labels:?}");
     }
     for (first, end, label) in &events {

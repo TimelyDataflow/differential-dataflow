@@ -6,15 +6,15 @@ use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
     let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
-    export "lift" = pairs | lift;
-    export "epoch" = pairs | delay((_, b) -> (b)) | lift;
-    export "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);
+    output "lift" = pairs | lift;
+    output "epoch" = pairs | delay((_, b) -> (b)) | lift;
+    output "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);
     stepped: {
         set at = pairs | delay((_, b) -> (0, b)) | lift;
         set below = pairs | delay((_, b) -> (0, (0, b) sub)) | lift;
     }
-    export "delay" = stepped::at;
-    export "negative" = stepped::below;
+    output "delay" = stepped::at;
+    output "negative" = stepped::below;
 "#;
 
 const NAMES: [&str; 5] = ["lift", "epoch", "join_function", "delay", "negative"];
@@ -91,9 +91,9 @@ fn rows_are_as_expected() {
 fn ill_shaped_times_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
-            (r#"export "a" = input 0 : ((int, int), ()) | delay((_, _) -> (0, 0));"#, "join_function"),
-            (r#"let i = input 0 : ((int, int), ()); s: { set a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
-            (r#"export "a" = input 0 : ((int, int), ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
+            (r#"output "a" = input 0 : ((int, int), ()) | delay((_, _) -> (0, 0));"#, "join_function"),
+            (r#"let i = input 0 : ((int, int), ()); s: { set a = i | delay((_, _) -> (0)); } output "a" = s::a;"#, "join_function"),
+            (r#"output "a" = input 0 : ((int, int), ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
             interactive::passes::optimize(&mut program);

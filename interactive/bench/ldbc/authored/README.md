@@ -33,7 +33,7 @@ An authored plan is a drop-in replacement for the generated one:
   Every query's server shares these, so a plan pays only for what it builds itself.
   A `map` or `filter` on an import makes a private copy; the plans do that only for
   parts kept for all requests, and each header says which.
-- **Answer.** `export "<query>.answer"` is arranged as `((rid, rank), (fields…))`,
+- **Answer.** `output "<query>.answer"` is arranged as `((rid, rank), (fields…))`,
   where rank is the 0-based position in the query's order and the fields are the
   query's outputs, in the order `finish(...)` lists them. One-field outputs are
   written `(n)`: parentheses make a one-field tuple.

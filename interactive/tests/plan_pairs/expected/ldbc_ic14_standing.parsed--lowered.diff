@@ -23,7 +23,7 @@
 +let weighted_join = weighted_reduce | join(pals_idx, (pair, n, ()) -> (pair, n));
 +let weighted = weighted_join | map(((a, b), n) -> (a, (b, (((0, n), (1, 40) range) fold (((acc, n), k) ->
                             ((acc, ((((k, (k, 1) sub) mul, 1) add, n) gt, 1, 0) select) add, n)) .0, 1) add)));
--export "ic14.s.weighted" = weighted | arrange;
+-output "ic14.s.weighted" = weighted | arrange;
 +let weighted_idx = weighted | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic14.s.weighted" = weighted_idx;
++output "ic14.s.weighted" = weighted_idx;

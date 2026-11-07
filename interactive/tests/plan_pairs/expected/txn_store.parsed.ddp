@@ -1,2 +1,2 @@
 let store = input 0 : ((int), (int, int));
-export "store" = store;
+output "store" = store;

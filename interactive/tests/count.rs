@@ -8,10 +8,10 @@ const PROGRAM: &str = r#"
     let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
     let shifted = pairs | map((a, (b)) -> (a, ((b, 1) add)));
 
-    export "positive" = pairs | count;
-    export "negative" = pairs | negate | count;
-    export "mixed" = (pairs + pairs - shifted - shifted - shifted) | count;
-    export "cancel" = (pairs - shifted) | count;
+    output "positive" = pairs | count;
+    output "negative" = pairs | negate | count;
+    output "mixed" = (pairs + pairs - shifted - shifted - shifted) | count;
+    output "cancel" = (pairs - shifted) | count;
 "#;
 
 #[test]

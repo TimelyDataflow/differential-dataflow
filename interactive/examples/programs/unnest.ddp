@@ -11,4 +11,4 @@ let exploded = rows | flatmap((_, l) -> l);
 let regrouped = exploded | collect;
 -- (a, [ (0,a), (1,b), (2,a+b) ])  -- value-sorted => position order
 
-export "result" = regrouped | arrange | inspect(nest);
+output "result" = regrouped | arrange | inspect(nest);

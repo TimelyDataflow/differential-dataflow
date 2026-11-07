@@ -7,4 +7,4 @@ let answer  = request | map(((rid, m), ()) -> (m, rid))
                       | join(message, (_, rid, (_, created, _, _, text, image, _, _, _, _, _, _, _)) ->
                              ((rid, 0), (created, ((text len, 0) gt, text, image) select)));
 
-export "is4.answer" = answer | arrange;
+output "is4.answer" = answer | arrange;

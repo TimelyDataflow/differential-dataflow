@@ -47,4 +47,4 @@ let ranked = groups | map(((rid, year, kind, cat), (n, s)) -> (rid, (year, kind,
 let answer = ranked | map((rid, (rank, ((neg_year, kind, cat), (n, s, all)))) -> ((rid, rank),
                  (neg_year neg, kind, cat, n, (s to_float, n to_float) div, s, ((n, 100) mul to_float, all to_float) div)));
 
-export "bi1.answer" = answer | arrange;
+output "bi1.answer" = answer | arrange;

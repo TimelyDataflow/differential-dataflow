@@ -2,9 +2,9 @@
 +++ lowered
 @@ -1,4 +1,13 @@
 -let rows = input 0 : (int, (int, int)) | map((k, v) -> (k, v));
--export "first" = rows | map((k, (a, _)) -> (k, a));
--export "second" = rows | map((k, (_, b)) -> (k, b));
--export "counts" = rows | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-output "first" = rows | map((k, (a, _)) -> (k, a));
+-output "second" = rows | map((k, (_, b)) -> (k, b));
+-output "counts" = rows | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +-- Time lanes: epoch.
 +let input0 = input 0 : (int, (int, int));
 +let rows = input0 | map((k, v) -> (k, v));
@@ -13,8 +13,8 @@
 +let rows_idx = rows | arrange;
 +let counts_reduce = rows_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +-- Renderer: build an export arrangement.
-+export "first" = first_map;
++output "first" = first_map;
 +-- Renderer: build an export arrangement.
-+export "second" = second_map;
++output "second" = second_map;
 +-- Renderer: publish the existing arrangement.
-+export "counts" = counts_reduce;
++output "counts" = counts_reduce;

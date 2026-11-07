@@ -147,7 +147,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
         let program = lower::lower_tree(parse::pipe::parse(&text));
         let mut server = Server::new();
         if shared {
-            let seed = lower::lower_tree(parse::pipe::parse(r#"export "seed_owners" = input 0 : ((int), (int));"#));
+            let seed = lower::lower_tree(parse::pipe::parse(r#"output "seed_owners" = input 0 : ((int), (int));"#));
             server.install(worker, "seed", &seed).unwrap();
         }
         server.install_with_root(worker, "bank", &program, 2, at((0, 0))).unwrap();
@@ -210,7 +210,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
         let now = server.now("bank").unwrap().clone();
         if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
-            let narrow = lower::lower_tree(parse::pipe::parse(r#"export "bad" = import "balance";"#));
+            let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "balance";"#));
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
             assert!(server.trace_width("bad").is_none());
             assert_eq!(server.trace_width("seed_owners"), Some(1));
@@ -444,10 +444,10 @@ fn independent_inputs_and_time_shapes() {
                     let seen = a | delay((_, v) -> (0, 0, (256, v call bit_length) mul)) | lift_iter | lift
                         | map((k, ((v, iter), (s, e, i))) -> (k, (s, e, i, iter)));
                 }
-                export "left" = a;
-                export "right" = b;
-                export "seen" = s::seen;
-                export "delta" = (a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
+                output "left" = a;
+                output "right" = b;
+                output "seen" = s::seen;
+                output "delta" = (a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
                                + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))));
             "#));
             server.install_with_root(worker, "split", &program, 2, at((0, 0))).unwrap();
@@ -488,7 +488,7 @@ fn independent_inputs_and_time_shapes() {
             server.compact("left", &at((0, 3))).unwrap();
             assert!(server.snapshot_as_of(worker, "left", &at((0, 2))).is_err());
             assert!(server.compact("left", &at((0, 1))).is_err());
-            let import = lower::lower_tree(parse::pipe::parse(r#"export "wide" = import "left" | lift;"#));
+            let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "left" | lift;"#));
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
             server.wait_for(worker, "wide", &at((2, 0))).unwrap();
@@ -499,11 +499,11 @@ fn independent_inputs_and_time_shapes() {
             }
 
             // A consumer advance cannot close points held open by a width-one import.
-            let producer = lower::lower_tree(parse::pipe::parse(r#"export "lagging" = input 0 : (int, int);"#));
+            let producer = lower::lower_tree(parse::pipe::parse(r#"output "lagging" = input 0 : (int, int);"#));
             server.install(worker, "producer", &producer).unwrap();
             for width in [1, 2] {
                 let name = format!("consumer{width}");
-                let consumer = lower::lower_tree(parse::pipe::parse(&format!("export \"{name}\" = import \"lagging\";")));
+                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = import \"lagging\";")));
                 server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
                 server.advance_to(worker, &name, &at((3, 0))).unwrap();
                 let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };

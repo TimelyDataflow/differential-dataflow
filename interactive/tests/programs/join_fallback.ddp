@@ -7,4 +7,4 @@ let left = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let right = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let out = left | join(right, (k, l, r) -> (k, ((l, r) add inject L match (L (s -> s)), r)));
 
-export "result" = out | arrange | inspect(total);
+output "result" = out | arrange | inspect(total);

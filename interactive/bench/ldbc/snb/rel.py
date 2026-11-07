@@ -440,5 +440,5 @@ class Compiler:
             name = self.emit(root)
             refs = {n:f'row.{i}' for i,n in enumerate(root.fields)}
             values = [refs[n] for n in root.fields if n not in ('rid','rank')]
-            exports.append(f'export "{export}" = {name} | map((row, ()) -> (({refs["rid"]}, {refs["rank"]}), {product(values)})) | arrange;')
+            exports.append(f'output "{export}" = {name} | map((row, ()) -> (({refs["rid"]}, {refs["rank"]}), {product(values)})) | arrange;')
         return '\n\n'.join([*self.lines,*exports])+'\n'

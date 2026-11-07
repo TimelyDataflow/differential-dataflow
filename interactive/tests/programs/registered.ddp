@@ -28,10 +28,10 @@ let doubled = cells | map((n, ()) -> (n, n call double));
 -- A join whose projection calls a registered function on both sides.
 let joined = cells | join(described, (n, (), ((m), _)) -> (n, (n, m) call blend));
 
-export "cells" = cells | arrange | inspect(total);
-export "blended" = blended | arrange | inspect(total);
-export "described" = described | arrange | inspect(total);
-export "big" = big | arrange | inspect(total);
-export "joined" = joined | arrange | inspect(total);
-export "sevens" = sevens | arrange | inspect(total);
-export "doubled" = doubled | arrange | inspect(total);
+output "cells" = cells | arrange | inspect(total);
+output "blended" = blended | arrange | inspect(total);
+output "described" = described | arrange | inspect(total);
+output "big" = big | arrange | inspect(total);
+output "joined" = joined | arrange | inspect(total);
+output "sevens" = sevens | arrange | inspect(total);
+output "doubled" = doubled | arrange | inspect(total);

@@ -51,4 +51,4 @@ eqsat: {
     set eq = elems + prop | min;
 }
 
-export "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);
+output "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);

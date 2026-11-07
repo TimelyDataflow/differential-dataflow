@@ -7,4 +7,4 @@ let answer  = request | map(((rid, who), ()) -> (who, rid))
                       | join(person, (_, rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _)) ->
                              ((rid, 0), (first, last, birthday, ip, browser, city, gender, created)));
 
-export "is1.answer" = answer | arrange;
+output "is1.answer" = answer | arrange;

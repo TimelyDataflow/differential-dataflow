@@ -10,4 +10,4 @@
 +let strict_join = lifted_filter | half_join(rows_idx, 1, (k, v, _) -> (k, v));
  let inclusive_join = lifted | half_join(rows_idx, 0, (k, v, _) -> (k, v));
  -- Renderer: build an export arrangement.
- export "strict" = strict_join;
+ output "strict" = strict_join;

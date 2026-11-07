@@ -58,4 +58,4 @@ let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -
 let answer = ranked | map((rid, (rank, ((_, node), (first, last, s, gender, town)))) -> ((rid, rank), (node, first, last, s, gender, town)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic10x1.answer" = answer_idx;
+output "ic10x1.answer" = answer_idx;

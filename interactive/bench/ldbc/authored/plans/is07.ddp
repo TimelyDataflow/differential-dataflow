@@ -27,4 +27,4 @@ let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, 
                     | collect | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 
-export "is7.answer" = answer | arrange;
+output "is7.answer" = answer | arrange;

@@ -18,7 +18,7 @@ let wins = cands::c
     | map(((t, _, _), ()) -> (t, ())) | count;
 -- (time, n_wins)
 
-export "result" = wins
+output "result" = wins
     | map((_, n) -> ((), n)) | collect
     | map((_, ns) -> ((), ((1, ns) fold ((acc, n) -> (acc, n) mul))))
     | arrange | inspect(part1);

@@ -38,7 +38,7 @@ flow: {
         + b1 + b2 | arrange;
 }
 
-export "result" = flow::reg | filter(((st, _, _, _, _, _, _, _, _, _), _) -> (st, -1) eq)
+output "result" = flow::reg | filter(((st, _, _, _, _, _, _, _, _, _), _) -> (st, -1) eq)
     | map(((_, _, xl, xh, ml, mh, al, ah, sl, sh), _) ->
         let wx = ((1, xh) add, xl) sub in
         let wm = ((1, mh) add, ml) sub in

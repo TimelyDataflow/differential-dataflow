@@ -128,7 +128,7 @@ You get to choose!
 
 ```
 -- Access spreads from `grants` through `groups`, except where `barred`.
-export "access" = sharing::allowed;
+output "access" = sharing::allowed;
 sharing: {
    var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
    set allowed = offered

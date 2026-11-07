@@ -24,8 +24,8 @@ PORT = 7981
 
 WORLD = """load world begin
 let claims = input 0 : ((int, int), (int, int));
-export "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
-export "claims" = claims;
+output "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
+output "claims" = claims;
 world end-load
 """
 

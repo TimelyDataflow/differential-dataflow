@@ -117,7 +117,7 @@
 +let ranked_idx = ranked_map | arrange;
 +let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
  let answer = ranked | map((rid, (rank, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w)))) -> ((rid, rank), (node, last, d, birthday, created, gender, browser, ip, e, l, town, s, w)));
--export "ic1x1.answer" = answer | arrange;
+-output "ic1x1.answer" = answer | arrange;
 +let answer_idx = answer | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic1x1.answer" = answer_idx;
++output "ic1x1.answer" = answer_idx;

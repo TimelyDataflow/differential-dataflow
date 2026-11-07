@@ -6,7 +6,7 @@
 -let left = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
 -let right = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 10) lt);
 -let same = rows | map((k, v) -> (k, (v, 1) add)) | filter((k, _) -> (k, 0) gt);
--export "out" = left + right + same;
+-output "out" = left + right + same;
 +let left_map = rows | map((k, v) -> (k, (v, 1) add));
 +let left = left_map | filter((k, _) -> (k, 0) gt);
 +let right_map = rows | map((k, v) -> (k, (v, 1) add));
@@ -15,4 +15,4 @@
 +let same = same_map | filter((k, _) -> (k, 0) gt);
 +let out_rows = left + right + same;
 +-- Renderer: build an export arrangement.
-+export "out" = out_rows;
++output "out" = out_rows;

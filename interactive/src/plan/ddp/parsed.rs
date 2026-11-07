@@ -15,9 +15,9 @@ impl Printer<'_> {
                     let shape = self.declaration(shape.as_ref())?;
                     writeln!(out, "{indent}var {name}{shape};").unwrap();
                 }
-                Stmt::Export(name, shape, expr) => {
+                Stmt::Output(name, shape, expr) => {
                     let shape = self.declaration(shape.as_ref())?;
-                    writeln!(out, "{indent}export {}{shape} = {};", quoted(name)?, self.expression(expr)?).unwrap();
+                    writeln!(out, "{indent}output {}{shape} = {};", quoted(name)?, self.expression(expr)?).unwrap();
                 }
                 Stmt::Scope(name, body) => {
                     writeln!(out, "{indent}{name}: {{").unwrap();

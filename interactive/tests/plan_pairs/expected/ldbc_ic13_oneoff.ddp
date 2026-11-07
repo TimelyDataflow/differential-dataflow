@@ -52,4 +52,4 @@ let answer_map2 = never | map((rid, ()) -> ((rid, 0), (-1)));
 let answer = answer_map + answer_map2;
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic13x1.answer" = answer_idx;
+output "ic13x1.answer" = answer_idx;

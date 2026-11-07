@@ -20,6 +20,6 @@ let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> 
 let below_hl_idx = below_hl | arrange;
 let reply_idx = reply | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic12.s.below_hl" = below_hl_idx;
+output "ic12.s.below_hl" = below_hl_idx;
 -- Renderer: publish the existing arrangement.
-export "ic12.s.reply" = reply_idx;
+output "ic12.s.reply" = reply_idx;

@@ -8,7 +8,7 @@ use interactive::{lower, parse};
 
 type Snapshot = Vec<(String, String, i64)>;
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));"#;
+const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));"#;
 
 /// A consumer of `edges`, its exports suffixed by `tag`.
 fn consumer(tag: &str) -> String {
@@ -20,10 +20,10 @@ fn consumer(tag: &str) -> String {
             let step = reach | join(edges, (_, _, dst) -> (dst, ()));
             set reach = roots + step | distinct;
         }}
-        export "hop{tag}" = roots | join(edges, (n, _, dst) -> (dst, n));
-        export "degree{tag}" = edges | count;
-        export "reach{tag}" = r::reach;
-        export "flipped{tag}" = edges | map((src, dst) -> (dst, src));
+        output "hop{tag}" = roots | join(edges, (n, _, dst) -> (dst, n));
+        output "degree{tag}" = edges | count;
+        output "reach{tag}" = r::reach;
+        output "flipped{tag}" = edges | map((src, dst) -> (dst, src));
 
         "#
     )

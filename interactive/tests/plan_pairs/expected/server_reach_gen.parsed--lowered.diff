@@ -22,7 +22,7 @@
 +    let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +    set reach = reach_reduce;
  }
--export "result" = reach::reach | inspect(reach);
+-output "result" = reach::reach | inspect(reach);
 +let result_inspect = reach::reach | inspect(reach);
 +-- Renderer: build an export arrangement.
-+export "result" = result_inspect;
++output "result" = result_inspect;

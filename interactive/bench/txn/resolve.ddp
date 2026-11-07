@@ -56,5 +56,5 @@ let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
 let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
 let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 
-export "rollback" = rb;
-export "delta" = new_rows + (old_rows | negate);
+output "rollback" = rb;
+output "delta" = new_rows + (old_rows | negate);

@@ -18,5 +18,5 @@ let replied = selected | map(((rid, m, creator), ()) -> (m, (rid, creator)))
 let totals = (own + liked + replied) | collect
     | map((k, vs) -> (k, ((0, 0, 0), vs) fold (((a0, a1, a2), (x0, x1, x2)) -> ((a0, x0) add, (a1, x1) add, (a2, x2) add))));
 let scores = totals | map(((rid, creator), t) -> let (m, r, l) = t in (rid, (((m, (2, r) mul) add, (10, l) mul) add neg, creator, t)));
-export "bi5.answer" = scores | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 100) lt)
+output "bi5.answer" = scores | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 100) lt)
     | map((rid, (pos, (score, creator, (m, r, l)))) -> ((rid, pos), (creator, r, l, m, score neg)));

@@ -170,7 +170,7 @@ fn assert_commands_replay() {
         &mut writer,
         &mut reader,
         "r0",
-        "r0 load world begin\nlet rows = input 0 : ((int), (int));\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
+        "r0 load world begin\nlet rows = input 0 : ((int), (int));\noutput \"rows\" = rows;\noutput \"minimum\" = rows | min;\nr0 end-load\n",
     );
     request(
         &mut writer,
@@ -232,7 +232,7 @@ fn assert_commands_replay() {
         &mut writer,
         &mut reader,
         "r10",
-        "r10 load counted begin\nlet rows = input 0 : ((int), ());\nexport \"counted\" = rows;\nr10 end-load\n",
+        "r10 load counted begin\nlet rows = input 0 : ((int), ());\noutput \"counted\" = rows;\nr10 end-load\n",
     );
     request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
@@ -259,7 +259,7 @@ fn peek_rows_feed_another_program() {
     let (server, mut writer, mut reader) = start_server(4);
     let declaration = "let rows = input 0 : ((Option(int), List(Option(int))), Option(int));";
     for (id, program, export) in [("a", "first", "original"), ("b", "second", "copied")] {
-        request(&mut writer, &mut reader, id, &format!("{id} load {program} begin\n{declaration}\nexport \"{export}\" = rows;\n{id} end-load\n"));
+        request(&mut writer, &mut reader, id, &format!("{id} load {program} begin\n{declaration}\noutput \"{export}\" = rows;\n{id} end-load\n"));
     }
     request(&mut writer, &mut reader, "f", "f feed first 0 begin\ntuple(inject(0,tuple()),list(inject(1,3))) val=inject(1,8)\ntuple(inject(1,-2),list()) val=inject(0,tuple())\nf end-feed\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
@@ -278,7 +278,7 @@ fn peek_rows_feed_another_program() {
 #[test]
 fn text_tail_rows_keep_epochs_and_retractions() {
     let (server, mut writer, mut reader) = start_server(1);
-    request(&mut writer, &mut reader, "l", "l load source begin\nlet rows = input 0 : ((int), ());\nexport \"changes\" = rows;\nl end-load\n");
+    request(&mut writer, &mut reader, "l", "l load source begin\nlet rows = input 0 : ((int), ());\noutput \"changes\" = rows;\nl end-load\n");
     request(&mut writer, &mut reader, "w", "w tail changes\n");
     request(&mut writer, &mut reader, "c", "c tail changes as columns\n");
     request(&mut writer, &mut reader, "f", "f feed source 0 tuple(7)\n");
@@ -305,8 +305,8 @@ fn text_tail_rows_keep_epochs_and_retractions() {
 
 fn assert_typed_sources() {
     let (server, mut writer, mut reader) = start_server(4);
-    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))), ());\nexport \"typed.rows\" = rows | arrange;\ng end-load\n");
-    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))), ());\nexport \"typed.copy\" = rows;\nq end-load\n");
+    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))), ());\noutput \"typed.rows\" = rows | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))), ());\noutput \"typed.copy\" = rows;\nq end-load\n");
     // Neither a first empty list nor a never-populated sum lane can supply
     // its encoding by example. Both the producer and imported trace use the
     // declared shape, without sentinel rows or altered data.
@@ -337,7 +337,7 @@ fn assert_shared_import_requests(workers: usize) {
         &mut writer,
         &mut reader,
         "g",
-        "g load graph begin\nlet e = input 0 : ((int), (int));\nexport \"edges\" = e | arrange;\ng end-load\n",
+        "g load graph begin\nlet e = input 0 : ((int), (int));\noutput \"edges\" = e | arrange;\ng end-load\n",
     );
     for name in ["a", "b"] {
         request(
@@ -345,7 +345,7 @@ fn assert_shared_import_requests(workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
+                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"edges\";\noutput \"{name}.answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
 \n{name} end-load\n"
             ),
         );
@@ -465,7 +465,7 @@ fn assert_tail_frames_sum_to_peeks(workers: usize) {
     use interactive::runtime::frame;
     use std::collections::BTreeMap;
     let (server, mut writer, mut reader) = start_server(workers);
-    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)), Option(int));\nexport \"rows\" = rows | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)), Option(int));\noutput \"rows\" = rows | arrange;\ng end-load\n");
     request(&mut writer, &mut reader, "f", "f feed graph 0 begin\ntuple(1,list(2,3)) val=inject(1,7)\ntuple(2,list()) val=inject(0,tuple())\nf end-feed\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
     let mut frames = Vec::new();
@@ -526,7 +526,7 @@ fn framed(writer: &mut TcpStream, reader: &mut BufReader<TcpStream>, reqid: &str
 
 /// The shapes an input declares as `declaration`, say `((int), ())`.
 fn declared(declaration: &str) -> interactive::server::RowShape {
-    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&format!("export \"x\" = input 0 : {declaration};")));
+    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&format!("output \"x\" = input 0 : {declaration};")));
     program.root.imports[0].shape.clone().expect("a declared input")
 }
 
@@ -545,7 +545,7 @@ fn feed_frame(shape: &interactive::server::RowShape, rows: &[(&str, Option<&str>
 /// on past each.
 fn assert_framed_feeds(workers: usize) {
     let (server, mut writer, mut reader) = start_server(workers);
-    request(&mut writer, &mut reader, "r0", "r0 load fed begin\nlet rows = input 0 : ((int, List(int)), (int));\nexport \"fed\" = rows;\nr0 end-load\n");
+    request(&mut writer, &mut reader, "r0", "r0 load fed begin\nlet rows = input 0 : ((int, List(int)), (int));\noutput \"fed\" = rows;\nr0 end-load\n");
     let shape = declared("((int, List(int)), (int))");
     let rows: Vec<(String, Option<String>, i64)> = (0..10).map(|i| (format!("tuple({i},list({}))", "7,".repeat(i as usize).trim_end_matches(',')), Some(format!("tuple({})", 300 * i - 1000)), i + 1)).collect();
     let rows: Vec<(&str, Option<&str>, i64)> = rows.iter().map(|(k, v, d)| (k.as_str(), v.as_deref(), *d)).collect();
@@ -554,7 +554,7 @@ fn assert_framed_feeds(workers: usize) {
     request(&mut writer, &mut reader, "r2", "r2 tick\n");
     let fed = request(&mut writer, &mut reader, "r3", "r3 peek fed as corgi\n");
     // The same rows fed as text, to another program, are the reference.
-    request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)), (int));\nexport \"text\" = rows;\nr4 end-load\n");
+    request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)), (int));\noutput \"text\" = rows;\nr4 end-load\n");
     let body: String = rows.iter().map(|(k, v, d)| format!("{k} val={} diff={d}\n", v.unwrap())).collect();
     request(&mut writer, &mut reader, "r5", &format!("r5 feed text 0 begin\n{body}r5 end-feed\n"));
     request(&mut writer, &mut reader, "r6", "r6 tick\n");
@@ -595,9 +595,9 @@ fn framed_feeds_on_three_workers() {
 #[test]
 fn planning_reads_live_exports_without_installing() {
     let (server, mut writer, mut reader) = start_server(2);
-    request(&mut writer, &mut reader, "r0", "r0 load provider begin\nexport \"rows\" = input 0 : (int, int);\nr0 end-load\n");
+    request(&mut writer, &mut reader, "r0", "r0 load provider begin\noutput \"rows\" = input 0 : (int, int);\nr0 end-load\n");
     let before = request(&mut writer, &mut reader, "before", "before list\n");
-    let command = "p plan preview begin\nexport \"out\" = import \"rows\" | distinct;\np end-plan\n";
+    let command = "p plan preview begin\noutput \"out\" = import \"rows\" | distinct;\np end-plan\n";
     let plan = request(&mut writer, &mut reader, "p", command);
     assert!(plan.iter().any(|line| line.contains("reduce(")));
     assert!(!plan.iter().any(|line| line.contains("Unresolved import")));
@@ -617,7 +617,7 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
         .env("DDIR_PROJECTION", "1").env_remove("DDIR_PASSES")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"p plan preview begin\nexport \"out\" = import \"diag.time\";\np end-plan\nexit\n").unwrap();
+    child.stdin.take().unwrap().write_all(b"p plan preview begin\noutput \"out\" = import \"diag.time\";\np end-plan\nexit\n").unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let warning = String::from_utf8(output.stderr).unwrap();

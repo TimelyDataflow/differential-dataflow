@@ -15,4 +15,4 @@ let paths = pairs | map(((rid, p, q), ()) -> ((rid, q), p))
 let counts = paths | join(pairs, ((rid, _, _), _, _) -> (rid, ())) | count;
 let zero = request | map(((rid, _, _, _), ()) -> (rid, 0));
 let missing = zero - (zero | join(counts, (rid, _, _) -> (rid, 0)));
-export "bi11.answer" = (counts + missing) | map((rid, n) -> ((rid, 0), (n)));
+output "bi11.answer" = (counts + missing) | map((rid, n) -> ((rid, 0), (n)));

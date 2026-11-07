@@ -72,6 +72,6 @@ pub(super) const CASES: &[Case] = &[
     Case::new("as_of_strict", "tests/plan_pairs/cases/as_of_strict.ddp", &["rows"]),
     Case::new("as_of_shared", "tests/plan_pairs/cases/as_of_shared.ddp", &["rows"]),
     Case::new("explain", "tests/plan_pairs/cases/explain.ddp", &[]).explain(),
-    Case::new("rejected_export", "tests/plan_pairs/cases/rejected_export.ddp", &[]).problem("export `out`"),
+    Case::new("rejected_export", "tests/plan_pairs/cases/rejected_export.ddp", &[]).problem("output `out`"),
     Case::new("registered", "tests/plan_pairs/cases/registered.ddp", &[]).functions("plan_pair_identity(int) -> int; pure identity"),
 ];

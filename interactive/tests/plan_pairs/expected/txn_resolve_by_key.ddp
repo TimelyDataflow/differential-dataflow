@@ -45,6 +45,6 @@ let old_rows = latest | join(store_idx, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 let delta_neg = old_rows | negate;
 let delta_rows = new_rows + delta_neg;
 -- Renderer: build an export arrangement.
-export "rollback" = rb;
+output "rollback" = rb;
 -- Renderer: build an export arrangement.
-export "delta" = delta_rows;
+output "delta" = delta_rows;

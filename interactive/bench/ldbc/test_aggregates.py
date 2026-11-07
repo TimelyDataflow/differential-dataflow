@@ -22,7 +22,7 @@ def program():
     source = R.source('rows', {'group':'int', 'identity':'int', 'weight':'int', 'second':'int'})
     compiler = Compiler()
     plans = {name:source.group(keys, **aggs) for name,(keys,aggs) in AGGREGATES.items()}
-    exports = [f'export "{name}" = {compiler.emit(plan)} | arrange;' for name,plan in plans.items()]
+    exports = [f'output "{name}" = {compiler.emit(plan)} | arrange;' for name,plan in plans.items()]
     return '\n'.join([*compiler.lines, *exports])
 
 

@@ -9,6 +9,6 @@ let people = person | map((id, (first, last, gender, _, _, _, _, home, bmonth, b
 let posts  = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)
                      | map((id, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, id));
 let likes  = interest | map((p, t) -> ((p, t), ()));
-export "ic10.s.people" = people | arrange;
-export "ic10.s.posts" = posts | arrange;
-export "ic10.s.likes" = likes | arrange;
+output "ic10.s.people" = people | arrange;
+output "ic10.s.posts" = posts | arrange;
+output "ic10.s.likes" = likes | arrange;

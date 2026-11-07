@@ -1,1 +1,1 @@
-incomplete plan: unresolved imports []; problems ["root: export `out` is declared ((), ()) but is (Int, ())"]
+incomplete plan: unresolved imports []; problems ["root: output `out` is declared ((), ()) but is (Int, ())"]

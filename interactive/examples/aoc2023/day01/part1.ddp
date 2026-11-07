@@ -12,7 +12,7 @@ let last  = digits | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map((
 let calib = first | join(last, (line, f, l) -> (line, ((f, 10) mul, l) add));
 -- (line, value)
 
-export "result" = calib
+output "result" = calib
     | map((_, v) -> ((), v)) | collect
     | value((_, vs) -> vs fold_add)
     | arrange | inspect(part1);

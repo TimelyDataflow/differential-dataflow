@@ -35,4 +35,4 @@ let none    = request | map(((rid, _, _, _), ()) -> (rid, ()));
 let zero    = none - (none | join(counted, (rid, (), _) -> (rid, ())));
 let answer  = (counted | map((rid, n) -> ((rid, 0), (n)))) + (zero | map((rid, ()) -> ((rid, 0), (0))));
 
-export "bi11.answer" = answer | arrange;
+output "bi11.answer" = answer | arrange;

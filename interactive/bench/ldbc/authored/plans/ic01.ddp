@@ -60,4 +60,4 @@ let ranked = with4 | map(((rid, node), ((d, (last, gender, birthday, created, ip
 let answer = ranked | map((rid, (rank, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w)))) ->
                           ((rid, rank), (node, last, d, birthday, created, gender, browser, ip, e, l, town, s, w)));
 
-export "ic1.answer" = answer | arrange;
+output "ic1.answer" = answer | arrange;

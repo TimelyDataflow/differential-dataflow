@@ -9,4 +9,4 @@ outer: {
     }
     set again = inner::reached | filter((k, ()) -> 0);
 }
-export "out" = outer::inner::reached;
+output "out" = outer::inner::reached;

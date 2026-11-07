@@ -8,4 +8,4 @@
 +let merged = rows + rows;
  let out_map = merged | map(((a, _), ()) -> (a, ()));
  -- Renderer: build an export arrangement.
- export "out" = out_map;
+ output "out" = out_map;

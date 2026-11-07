@@ -3,4 +3,4 @@ let rows = input 0 : (int, ());
 let arranged = rows | arrange;
 let counts_reduce = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -- Renderer: publish the existing arrangement.
-export "counts" = counts_reduce;
+output "counts" = counts_reduce;

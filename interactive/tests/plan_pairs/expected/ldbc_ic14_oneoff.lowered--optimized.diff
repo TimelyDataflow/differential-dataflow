@@ -74,4 +74,4 @@
 +let answer = answer_idx2 | join(best_idx, ((rid, _), path, cost) -> ((rid, 0), (path, cost)));
  let answer_idx3 = answer | arrange;
  -- Renderer: publish the existing arrangement.
- export "ic14x1.answer" = answer_idx3;
+ output "ic14x1.answer" = answer_idx3;

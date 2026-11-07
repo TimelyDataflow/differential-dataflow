@@ -30,6 +30,6 @@ let contrib = gs | join(gs, (_, (r1, c1), (r2, c2)) -> ((),
         ((c1, c2) lt, (c2, c1) sub, (c1, c2) sub) select) add,
        0) select));
 
-export "result" = contrib
+output "result" = contrib
     | collect | map((_, ds) -> ((), ds fold_add))
     | arrange | inspect(part2);

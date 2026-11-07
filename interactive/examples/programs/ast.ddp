@@ -34,4 +34,4 @@ let tagged = exploded
 
 let buckets = tagged | min;
 
-export "result" = buckets | arrange;
+output "result" = buckets | arrange;

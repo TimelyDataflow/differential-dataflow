@@ -37,16 +37,16 @@ def program():
              for name,(order,limit,keys) in COMPILED.items()}
     for name, ranked in plans.items():
         name = 'compiled_'+name
-        exports.append(f'export "{name}" = {compiler.emit(ranked)} | arrange;')
+        exports.append(f'output "{name}" = {compiler.emit(ranked)} | arrange;')
     lines = [*compiler.lines, *exports, f'let values = {initial} '
              '| map((row, ()) -> (row.0, (row.1, row.2, row)));',
              'let baseline = values | collect | flatmap((_, vals) -> vals) '
              '| filter((_, (rank, _)) -> (rank, 20) lt);',
-             'export "baseline" = baseline | map((key, value) -> ((key, value.0), value.1)) | arrange;']
+             'output "baseline" = baseline | map((key, value) -> ((key, value.0), value.1)) | arrange;']
     for name, (buckets, hash_key) in VARIANTS.items():
         stages, last = pipeline('values', name, buckets, hash_key)
         lines.extend(stages)
-        lines.append(f'export "{name}" = {last} '
+        lines.append(f'output "{name}" = {last} '
                      '| map((key, value) -> ((key, value.0), value.1)) | arrange;')
     return '\n'.join(lines)
 

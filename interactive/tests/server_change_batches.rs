@@ -11,9 +11,9 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
             type Three = A int | B int | C int;
             let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
-            export "plain" = pairs;
-            export "lists" = pairs | collect;
-            export "tagged" = pairs | map((a, b) -> (a, b inject C));
+            output "plain" = pairs;
+            output "lists" = pairs | collect;
+            output "tagged" = pairs | map((a, b) -> (a, b inject C));
 
         "#));
         interactive::passes::optimize(&mut program);

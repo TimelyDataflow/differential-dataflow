@@ -12,7 +12,7 @@ const PAIRS: &str = "
 let edges = input 0 : ((int, int), ());
 let forward = edges | map(((a, b), ()) -> (a, b));
 let pairs = forward | join(forward, (_, x, y) -> ((x, y), ()));
-export \"NAME\" = pairs | distinct;
+output \"NAME\" = pairs | distinct;
 ";
 
 fn program(src: &str) -> Program {

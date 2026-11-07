@@ -13,4 +13,4 @@ let top     = request | map(((rid, who), ()) -> (who, rid))
 let answer  = top | map((rid, (rank, ((neg, id), who))) -> (id, (rid, rank, neg neg, who)))
                   | join(message, (id, (rid, rank, created, who), (_, _, _, _, content, _, _, _, _, _, _, _, _)) -> (who, (rid, rank, id, content, created)))
                   | join(person, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
-export "ic8.answer" = answer | arrange;
+output "ic8.answer" = answer | arrange;

@@ -8,4 +8,4 @@ let known = reply | map(((who, op), row) -> (who, (op, row))) | join(friend, (wh
 let marked = (known | map(((who, _), row) -> (who, (row, 1)))) + (reply + (known | negate) | map(((who, _), row) -> (who, (row, 0))));
 let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k)))) | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
-export "is7.answer" = answer | arrange;
+output "is7.answer" = answer | arrange;

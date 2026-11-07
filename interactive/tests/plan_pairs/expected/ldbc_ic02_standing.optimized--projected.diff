@@ -12,9 +12,9 @@
  let newest = newest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -let latest_idx = latest | arrange;
  -- Renderer: publish the existing arrangement.
- export "ic2.s.by_author" = by_author_idx;
+ output "ic2.s.by_author" = by_author_idx;
  -- Renderer: publish the existing arrangement.
--export "ic2.s.latest" = latest_idx;
-+export "ic2.s.latest" = latest;
+-output "ic2.s.latest" = latest_idx;
++output "ic2.s.latest" = latest;
  -- Renderer: publish the existing arrangement.
- export "ic2.s.newest" = newest;
+ output "ic2.s.newest" = newest;

@@ -64,7 +64,7 @@
 +let delta_neg = old_rows | negate;
 +let delta_rows = new_rows + delta_neg;
 +-- Renderer: build an export arrangement.
- export "rollback" = rb;
--export "delta" = new_rows + (old_rows | negate);
+ output "rollback" = rb;
+-output "delta" = new_rows + (old_rows | negate);
 +-- Renderer: build an export arrangement.
-+export "delta" = delta_rows;
++output "delta" = delta_rows;

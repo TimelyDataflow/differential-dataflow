@@ -29,4 +29,4 @@ let ranked   = marked | map(((rid, liker, when, m, body, age), fresh) -> (liker,
 let answer   = ranked | map((rid, (rank, ((neg, liker), (first, last, m, body, minutes, fresh)))) ->
                             ((rid, rank), (liker, first, last, neg neg, m, body, minutes, fresh)));
 
-export "ic7.answer" = answer | arrange;
+output "ic7.answer" = answer | arrange;

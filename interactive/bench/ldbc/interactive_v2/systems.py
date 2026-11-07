@@ -216,7 +216,7 @@ class Ddir:
             target = read.plan
             if read.plan in self.oneoff:
                 target = f'{read.plan}x{self.rid}'
-                text = self.oneoff[read.plan].replace(f'export "{read.plan}.answer"', f'export "{target}.answer"')
+                text = self.oneoff[read.plan].replace(f'output "{read.plan}.answer"', f'output "{target}.answer"')
                 loads.append(f'load {target} begin\n{text}\n{{rid}} end-load')
             commands.append(Server.feed(target, 0, rows, 1, self.shapes[read.plan]))
             live.append((target, rows))

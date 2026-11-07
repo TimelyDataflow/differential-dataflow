@@ -25,4 +25,4 @@ let answer  = top | map((rid, (rank, ((neg, id), f))) -> (id, (rid, rank, neg ne
                   | join(message, (id, (rid, rank, created, f), (_, _, _, _, content, image, _, _, _, _, _, _, _)) ->
                          (f, (rid, rank, id, ((content len, 0) gt, content, image) select, created)))
                   | join(person, (f, (rid, rank, id, body, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (f, first, last, id, body, created)));
-export "ic9.answer" = answer | arrange;
+output "ic9.answer" = answer | arrange;

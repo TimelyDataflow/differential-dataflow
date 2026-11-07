@@ -41,4 +41,4 @@ let ranked = ends | join(best, (rid, (source, node, cost), least) -> (rid, (sour
                   | collect | flatmap((_, entries) -> entries);
 let answer = ranked | map((rid, (rank, ((source, node), cost))) -> ((rid, rank), (source, node, cost)));
 
-export "bi19.answer" = answer | arrange;
+output "bi19.answer" = answer | arrange;

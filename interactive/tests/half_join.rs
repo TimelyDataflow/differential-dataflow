@@ -12,8 +12,8 @@ const PROGRAM: &str = r#"
     -- before it, so every pair meets once, at the later of its two times.
     let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
     let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)));
-    export "delta" = (ab + ba) | delay((_, (_, t)) -> t) | map((k, (xy, _)) -> (k, xy));
-    export "join" = a | join(b, (k, x, y) -> (k, (x, y)));
+    output "delta" = (ab + ba) | delay((_, (_, t)) -> t) | map((k, (xy, _)) -> (k, xy));
+    output "join" = a | join(b, (k, x, y) -> (k, (x, y)));
 
     -- Reachability from `a`'s keys along `b`'s edges, joining by each method.
     let roots = a | map((k, _) -> (k, ()));
@@ -27,8 +27,8 @@ const PROGRAM: &str = r#"
         let step = (fwd + rev) | delay((_, (_, t)) -> t) | map((n, _) -> (n, ()));
         set reach = roots + step | distinct;
     }
-    export "reach_join" = joined::reach;
-    export "reach_delta" = halved::reach;
+    output "reach_join" = joined::reach;
+    output "reach_delta" = halved::reach;
 "#;
 
 const TICKS: u64 = 24;

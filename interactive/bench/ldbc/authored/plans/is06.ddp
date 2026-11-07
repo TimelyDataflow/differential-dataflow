@@ -14,4 +14,4 @@ let answer  = request | map(((rid, m), ()) -> (m, rid))
                       | join(person, (moderator, (rid, f, title), (first, last, _, _, _, _, _, _, _, _, _)) ->
                              ((rid, 0), (f, title, moderator, first, last)));
 
-export "is6.answer" = answer | arrange;
+output "is6.answer" = answer | arrange;

@@ -27,13 +27,13 @@
  }
  let below_hl = below::below | map(((low, high), ()) -> (high, low));
 -let reply = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
--export "ic12.s.below_hl" = below_hl | arrange;
--export "ic12.s.reply" = reply | arrange;
+-output "ic12.s.below_hl" = below_hl | arrange;
+-output "ic12.s.reply" = reply | arrange;
 +let reply_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq);
 +let reply = reply_filter | map((id, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (who, (id, parent)));
 +let below_hl_idx = below_hl | arrange;
 +let reply_idx = reply | arrange;
 +-- Renderer: publish the existing arrangement.
-+export "ic12.s.below_hl" = below_hl_idx;
++output "ic12.s.below_hl" = below_hl_idx;
 +-- Renderer: publish the existing arrangement.
-+export "ic12.s.reply" = reply_idx;
++output "ic12.s.reply" = reply_idx;

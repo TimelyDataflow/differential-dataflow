@@ -14,8 +14,8 @@ let people_idx2 = people | arrange;
 let posts_idx = posts | arrange;
 let likes_idx = likes | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic10.s.people" = people_idx2;
+output "ic10.s.people" = people_idx2;
 -- Renderer: publish the existing arrangement.
-export "ic10.s.posts" = posts_idx;
+output "ic10.s.posts" = posts_idx;
 -- Renderer: publish the existing arrangement.
-export "ic10.s.likes" = likes_idx;
+output "ic10.s.likes" = likes_idx;

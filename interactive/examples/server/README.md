@@ -2,7 +2,7 @@
 
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
-at a time; each may `import` traces other dataflows have `export`ed, so a
+at a time; each may `import` traces other dataflows `output`, so a
 consumer maintains a computation incrementally over a producer's output. It is
 the interpreter-driven successor to the old `dd_server` crate (which hot-loaded
 compiled `.so`s); here "install" means render a DDIR program, not `dlopen`.
@@ -15,7 +15,7 @@ and the configuration). The session scripts here are piped into its stdin.
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
-  The ones here are server-oriented (they use `import`/`export`); the programs
+  The ones here are server-oriented (they use `import`/`output`); the programs
   in `../programs/` read positional `input`s instead, which you fill with
   `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
@@ -133,7 +133,7 @@ log-work form is left for later.)
 - **`producer.ddp`** — republishes input 0 as the named trace `edges`
   (keyed by source). A producer whose arrangement others import.
 - **`reach_import.ddp`** — `import "edges"` + roots on input 0, computes
-  reachability in an iterative scope, `export "result"`. A consumer of a shared
+  reachability in an iterative scope, `output "result"`. A consumer of a shared
   trace.
 - **`echo.ddp`** — passes input straight to output via `inspect`; used to show
   values flowing in.

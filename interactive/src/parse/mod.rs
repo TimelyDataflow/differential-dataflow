@@ -75,7 +75,7 @@ pub enum Stmt {
     /// Feedback binding: `set name = expr;`.
     Set(String, Expr),
     Scope(String, Vec<Stmt>),
-    /// `export "name" = expr;` — registers a named output in the program, with
+    /// `output "name" = expr;` — registers a named output in the program, with
     /// an optional declared shape as for `var`. Only valid at the root scope.
-    Export(String, Option<crate::scope_ir::RowShape>, Expr),
+    Output(String, Option<crate::scope_ir::RowShape>, Expr),
 }

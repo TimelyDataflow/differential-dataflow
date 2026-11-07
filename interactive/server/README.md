@@ -68,7 +68,7 @@ an inline pipe-syntax program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
-    export "graph.edges" = edges;
+    output "graph.edges" = edges;
     graph end-load
     tail graph.edges
     tick

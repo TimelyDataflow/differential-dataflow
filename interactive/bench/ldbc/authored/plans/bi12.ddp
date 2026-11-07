@@ -32,4 +32,4 @@ let ranked  = people | map(((rid, n), p) -> (rid, (p neg, n neg)))
                      | collect | flatmap((_, entries) -> entries);
 let answer  = ranked | map((rid, (rank, (np, nn))) -> ((rid, rank), (nn neg, np neg)));
 
-export "bi12.answer" = answer | arrange;
+output "bi12.answer" = answer | arrange;

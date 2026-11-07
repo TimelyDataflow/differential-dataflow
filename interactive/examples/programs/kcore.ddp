@@ -25,4 +25,4 @@ peel: {
 }
 
 let core_edges = symm + peel::removals;
-export "result" = core_edges | map((n, _) -> (n, ())) | count | inspect(kcore_degrees);
+output "result" = core_edges | map((n, _) -> (n, ())) | count | inspect(kcore_degrees);

@@ -26,10 +26,10 @@
  -- Renderer: build an export arrangement.
 @@ -26,7 +22,7 @@
  -- Renderer: build an export arrangement.
- export "minimum" = minimum_map;
+ output "minimum" = minimum_map;
  -- Renderer: build an export arrangement.
--export "unique" = unique_map3;
-+export "unique" = unique_map2;
+-output "unique" = unique_map3;
++output "unique" = unique_map2;
  -- Renderer: build an export arrangement.
- export "counted" = counted_map;
+ output "counted" = counted_map;
  -- Renderer: build an export arrangement.

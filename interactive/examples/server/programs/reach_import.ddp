@@ -10,4 +10,4 @@ reach: {
     set reach = roots + proposals | distinct;
 }
 
-export "result" = reach::reach | inspect(reach);
+output "result" = reach::reach | inspect(reach);

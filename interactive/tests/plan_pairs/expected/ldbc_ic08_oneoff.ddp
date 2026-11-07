@@ -26,4 +26,4 @@ let person_idx = person | arrange;
 let answer = answer_idx2 | join(person_idx, (who, (rid, rank, id, content, created), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (who, first, last, created, id, content)));
 let answer_idx3 = answer | arrange;
 -- Renderer: publish the existing arrangement.
-export "ic8x1.answer" = answer_idx3;
+output "ic8x1.answer" = answer_idx3;

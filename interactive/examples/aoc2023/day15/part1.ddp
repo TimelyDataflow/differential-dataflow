@@ -20,7 +20,7 @@ hash: {
     set st = (lens | map((r, _) -> ((r, 0, 0), ()))) + next | distinct;
 }
 
-export "result" = hash::st | map(((r, i, h), _) -> (r, (i, h)))
+output "result" = hash::st | map(((r, i, h), _) -> (r, (i, h)))
     | join(lens, (r, (i, h), n) -> (r, (i, h, n))) | filter((_, (i, _, n)) -> (i, n) eq)
     | map((_, (_, h, _)) -> ((), h)) | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part1);

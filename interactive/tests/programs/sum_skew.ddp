@@ -10,4 +10,4 @@ let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let onlyRare   = pairs | map((a, b) -> (a, b inject Rare));
 let onlyCommon = pairs | map((a, b) -> (a, b inject Common));
 
-export "result" = (onlyRare + onlyCommon) | arrange | inspect(total);
+output "result" = (onlyRare + onlyCommon) | arrange | inspect(total);

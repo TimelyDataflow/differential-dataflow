@@ -17,31 +17,31 @@ const SOURCES: &str = r#"
     let edges = import "random:nodes=20,edges=60,churn=7" | map(((src, dst), ()) -> (src, dst));
     let iota = import "iota:12";
     let clock = import "clock";
-    export "degrees" = edges | count;
-    export "small" = iota | filter(((n), ()) -> (n, 5) lt);
-    export "now" = clock;
+    output "degrees" = edges | count;
+    output "small" = iota | filter(((n), ()) -> (n, 5) lt);
+    output "now" = clock;
 "#;
 
 const LOADED: &str = r#"
     let triples = input 0 : ((int, int, int), ());
-    export "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
+    output "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
 "#;
 
 /// A fed input, read through another program's import.
 const LOOSE: &str = r#"
-    export "loose" = input 0 : ((int), ());
+    output "loose" = input 0 : ((int), ());
 "#;
 
 /// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
     let l = import "loose" : ((int), ());
-    export "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
+    output "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;
 
 /// An input bound to "doubled", so it mirrors it one tick behind.
 const MIRROR: &str = r#"
-    export "mirror" = input 0 : ((int), ());
+    output "mirror" = input 0 : ((int), ());
 "#;
 
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.

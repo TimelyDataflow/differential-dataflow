@@ -1,1 +1,1 @@
-export "out" : ((), ()) = input 0 : (int, ());
+output "out" : ((), ()) = input 0 : (int, ());
