@@ -44,6 +44,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 | command | effect |
 |---|---|
 | `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `data <name> : (<key>, <val>)` | make a named collection of that shape, fed as `feed <name> …` and read as the trace `<name>`, until dropped |
 | `feed <prog> <in> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
 | `feed <prog> <in> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
 | `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |

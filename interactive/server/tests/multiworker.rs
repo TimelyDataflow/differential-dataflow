@@ -649,6 +649,29 @@ fn refused_loads_do_not_redirect_named_inputs() {
     server.stop();
 }
 
+/// A named collection is fed and read by its name, shares its namespace with programs, and drops.
+#[test]
+fn data_is_fed_and_read_by_name() {
+    let (server, mut writer, mut reader) = start_server(2);
+    request(&mut writer, &mut reader, "d", "d data edges : ((int), (int))\n");
+    request(&mut writer, &mut reader, "f", "f feed edges 1 val=2\n");
+    request(&mut writer, &mut reader, "b", "b feed edges begin\n2 val=3\n3 val=4\nb end-feed\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek edges\n"), ["tuple(1) val=tuple(2)", "tuple(2) val=tuple(3)", "tuple(3) val=tuple(4)"]);
+    request(&mut writer, &mut reader, "r", "r feed edges 2 val=3 diff=-1\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek edges 2\n"), Vec::<String>::new());
+    let taken = framed(&mut writer, &mut reader, "l", "l load edges begin\noutput \"x\" = input 0 : ((int), ());\nl end-load\n", &[]);
+    assert!(matches!(&taken, Err(e) if e.contains("already installed")), "{taken:?}");
+    let taken = framed(&mut writer, &mut reader, "e", "e data edges : ((int), ())\n", &[]);
+    assert!(matches!(&taken, Err(e) if e.contains("already taken")), "{taken:?}");
+    request(&mut writer, &mut reader, "x", "x drop edges\n");
+    assert!(framed(&mut writer, &mut reader, "q", "q peek edges\n", &[]).is_err());
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
 /// A load binds an input of its program to another program's output: the input reads the output,
 /// as an import does, and follows its changes.
 #[test]

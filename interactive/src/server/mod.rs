@@ -144,6 +144,8 @@ enum Origin {
     Clock,
     /// A `diag.*` source, fed from the server's own logging at each `tick` (see [`crate::diag`]).
     Diagnostics,
+    /// A named collection that clients feed, standing alone: see [`Server::data`].
+    Data,
 }
 
 fn fmt_shape((k, v): &RowShape) -> String {
@@ -192,6 +194,8 @@ impl From<usize> for InputId {
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
+    /// Make the named collection `name`, of shape `shape`: see [`Server::data`].
+    Data { name: String, shape: RowShape },
     /// Update `input` of `prog` with one row, read into columns, at
     /// `time` (default the current epoch when `None`).
     Feed {
@@ -433,6 +437,7 @@ impl Server {
                         Origin::Generated => "generated",
                         Origin::Clock => "clock",
                         Origin::Diagnostics => "diagnostics",
+                        Origin::Data => "data",
                     },
                 }
             })
@@ -504,7 +509,7 @@ impl Server {
             .programs
             .iter()
             .filter(|(source, program)| {
-                program.origin != Origin::Program
+                !matches!(program.origin, Origin::Program | Origin::Data)
                     && self.importers.get(*source).copied().unwrap_or(0) == 0
             })
             .map(|(source, _)| source.clone())

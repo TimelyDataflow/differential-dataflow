@@ -76,6 +76,9 @@ pub type ConnectionId = u64;
 
 #[derive(Debug)]
 pub enum Cmd {
+    /// Make a named collection that clients feed: `data <name> : (<key>, <val>)`. The shape is
+    /// read as a program declares one, and is checked as the command is prepared.
+    Data { name: String, shape: String },
     /// Install a dataflow.
     /// `id_hint` — the client-chosen name the dataflow is installed under.
     /// `bindings` — `name -> binding`, where the name is a root input's (as written,
@@ -176,14 +179,26 @@ pub enum PreparedCommand {
 #[derive(Clone, Default)]
 pub struct Catalog(Arc<Mutex<HashMap<String, Inputs>>>);
 
-/// One program's inputs: each position's declared shape, and the positions of named inputs.
+/// One program's inputs: each position's declared shape, and the positions of named inputs. A
+/// named collection (`data`) has one input, at position 0, which a feed names by the collection.
 #[derive(Default)]
 struct Inputs {
     shapes: HashMap<usize, RowShape>,
     names: HashMap<String, usize>,
+    data: bool,
 }
 
 impl Catalog {
+    fn record_data(&self, name: &str, shape: &RowShape) {
+        let inputs = Inputs { shapes: HashMap::from([(0, shape.clone())]), names: HashMap::new(), data: true };
+        self.0.lock().unwrap().insert(name.to_string(), inputs);
+    }
+
+    /// Whether `name` is a named collection, fed as `feed <name> …` with no input.
+    fn is_data(&self, name: &str) -> bool {
+        self.0.lock().unwrap().get(name).is_some_and(|inputs| inputs.data)
+    }
+
     fn record(&self, name: &str, program: &Program) {
         let mut inputs = Inputs::default();
         for import in &program.root.imports {
@@ -240,6 +255,12 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 name: id_hint,
                 program,
             }
+        }
+        Cmd::Data { name, shape } => {
+            let shape = catch_unwind(AssertUnwindSafe(|| interactive::parse::pipe::parse_row_shape(&shape)))
+                .map_err(|panic| format!("data: {}", panic_message(panic)))?;
+            catalog.record_data(&name, &shape);
+            ServerCommand::Data { name, shape }
         }
         Cmd::Plan { name, program, timings } => return Ok(PreparedCommand::Plan { name, program, timings }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
@@ -348,7 +369,7 @@ pub struct LineParser {
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
     "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
-    "unbind",
+    "unbind", "data",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -725,11 +746,16 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
         }
         "feed" => {
             // An input is `<prog> <in>` or `<prog>::<in>`, and `<in>` is its position or its name.
+            // A named collection is its own input, the one at position 0.
             let joined: Vec<&str>;
             let args = match args.split_first() {
                 Some((first, rest)) if first.contains("::") => {
                     let (prog, input) = first.split_once("::").unwrap();
                     joined = [prog, input].into_iter().chain(rest.iter().copied()).collect();
+                    &joined[..]
+                }
+                Some((first, rest)) if catalog.is_data(first) => {
+                    joined = [*first, "0"].into_iter().chain(rest.iter().copied()).collect();
                     &joined[..]
                 }
                 _ => args,
@@ -830,6 +856,10 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 ParseOutcome::Cmd(Cmd::Unbind { trace, prog, input })
             }
         }
+        "data" => match args {
+            [name, ":", shape @ ..] if !shape.is_empty() => ParseOutcome::Cmd(Cmd::Data { name: (*name).to_string(), shape: shape.join(" ") }),
+            _ => ParseOutcome::Err("data: expected `<name> : (<key>, <val>)`".into()),
+        },
         "drop" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Drop { name: (*name).to_string() }),
             _ => ParseOutcome::Err("drop: expected `<name>`".into()),
@@ -1309,6 +1339,23 @@ mod tests {
         assert!(matches!(&got[3].1, Err(e) if e.contains("no input named \"e\"")), "{:?}", got[3]);
         assert!(matches!(&got[4].1, Ok(Cmd::Bind { trace, prog, input }) if trace == "g::reach" && prog == "g" && named(input, "roots")), "{:?}", got[4]);
         assert!(matches!(&got[5].1, Ok(Cmd::Unbind { input, .. }) if named(input, "roots")), "{:?}", got[5]);
+    }
+
+    /// `data <name> : <shape>` makes a named collection, which a feed names alone: its rows are read
+    /// at its shape, into its one input.
+    #[test]
+    fn data_is_fed_by_its_name() {
+        let catalog = Catalog::default();
+        let mut p = LineParser::new(catalog.clone());
+        let got = feed_all(&mut p, &["r0 data edges : ((int), (int))", "r1 data bad : (int)", "r2 data edges ((int), (int))"]);
+        let Ok(command @ Cmd::Data { .. }) = got.into_iter().next().unwrap().1 else { panic!("a data command") };
+        assert!(matches!(prepare(command, &catalog), Ok(PreparedCommand::Server(ServerCommand::Data { ref name, .. })) if name == "edges"));
+        let bad = Cmd::Data { name: "bad".into(), shape: "(int)".into() };
+        assert!(matches!(prepare(bad, &catalog), Err(e) if e.contains("a collection shape is (key, value)")));
+        let got = feed_all(&mut p, &["r3 feed edges 1 val=2", "r4 feed edges 1 val=nope", "r5 data edges ((int), (int))"]);
+        assert!(matches!(&got[0].1, Ok(Cmd::Feed { prog, input: InputId::Position(0), columns, .. }) if prog == "edges" && columns.len() == 1), "{:?}", got[0]);
+        assert!(got[1].1.is_err(), "a row is read at the collection's shape");
+        assert!(matches!(&got[2].1, Err(e) if e.contains("expected `<name> : (<key>, <val>)`")), "{:?}", got[2]);
     }
 
     /// A load binds an input to a published trace: the input becomes an import of it, and is no

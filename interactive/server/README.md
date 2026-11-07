@@ -46,7 +46,7 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
+The useful commands are `load`, `data`, `drop`, `list`, `feed`, `bind`, `unbind`,
 `peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
@@ -144,6 +144,17 @@ do not cause it, and an idle server has no deadline to service. A future
 queue-driven commit policy can seal an epoch as soon as the preceding epoch
 retires and intents are waiting; that decision should come from logical queue
 state, not elapsed wall-clock time.
+
+## Named collections: `data`
+
+    data <name> : (<key>, <val>)
+
+makes a collection that stands alone, with no program around it.
+Clients feed it by its name, as `feed edges 1 val=2`, in every form `feed` takes, and read it as the trace `<name>`, with `peek` and `tail`.
+Its shape is written as a program declares an input's, using only the built-in shapes.
+Its name is an identifier, and shares one namespace with programs: neither may take the other's name.
+It lasts until `drop <name>`, which is refused while a program reads it.
+It is held in memory only.
 
 ## Writes: `feed`
 
