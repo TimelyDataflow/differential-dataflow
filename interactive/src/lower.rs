@@ -1068,11 +1068,14 @@ mod optimize_tests {
 
     #[test]
     fn input_names_do_not_read_as_positions() {
-        for name in ["1", "input1"] {
+        for name in ["1", "+1", "input1", "a b", "a=b", "g::a", ""] {
             let text = format!("let a = input {name:?} : ((int), ()); output \"out\" = a;");
             assert!(std::panic::catch_unwind(|| parse(&text)).is_err(), "{name:?} is accepted");
         }
         lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1x\" : ((int), ()); output \"out\" = a + b;"));
+        use crate::server::InputId;
+        assert_eq!(InputId::parse("1"), InputId::Position(1));
+        for text in ["+1", "1x", "input1"] { assert_eq!(InputId::parse(text), InputId::Name(text.into())); }
     }
 
     #[test]

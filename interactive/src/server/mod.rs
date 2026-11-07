@@ -162,9 +162,23 @@ pub enum InputId {
 }
 
 impl InputId {
-    /// A number is a position, and anything else a name.
+    /// Digits are a position, and anything else a name.
     pub fn parse(text: &str) -> Self {
-        text.parse().map_or_else(|_| InputId::Name(text.to_string()), InputId::Position)
+        let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+        match text.parse() {
+            Ok(position) if digits => InputId::Position(position),
+            _ => InputId::Name(text.to_string()),
+        }
+    }
+
+    /// Whether `text` may name an input: an identifier, so that it never reads as a position, and
+    /// not `input<N>`, the name of an unnamed input.
+    pub fn is_name(text: &str) -> bool {
+        let mut chars = text.chars();
+        let identifier = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let unnamed = text.strip_prefix("input").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        identifier && !unnamed
     }
 }
 

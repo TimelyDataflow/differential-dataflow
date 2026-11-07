@@ -9,7 +9,7 @@
 //! Sources: `input N : (key_shape, val_shape)` (positional input), `input : (key_shape, val_shape)`
 //! (the next position, in the order inputs are written; a program numbers all of its inputs or
 //! none), `input "name" : …` (the next position, and the name a client may feed or bind it by;
-//! no two inputs share a name, which has no `::` and is neither a number nor `input<N>`), `import "name"` (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
+//! no two inputs share a name, which is an identifier other than `input<N>`), `import "name"` (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
 //! scope path such as `a::b::f` or `::a::b::f`.
 //! A leading `::` reads the rest of the path in the root. Otherwise the first
 //! component names one visible scope: the current scope, an ancestor, or a child
@@ -556,10 +556,7 @@ impl Parser {
                     assert!(!self.numbered_inputs, "`input` without a position in a program whose other inputs have them; number all inputs or none");
                     let name = if let Token::Str(name) = self.peek().clone() {
                         self.next();
-                        assert!(!name.is_empty() && !name.contains("::"), "input name {name:?} must be nonempty and without `::`, which separates a program from its input");
-                        // Clients address an input by position or by name, and an unnamed input is `input<N>`.
-                        let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
-                        assert!(!digits(&name) && !name.strip_prefix("input").is_some_and(digits), "input name {name:?} reads as a position, or as an unnamed input's `input<N>`");
+                        assert!(crate::server::InputId::is_name(&name), "input name {name:?} must be an identifier other than `input<N>`, the name of an unnamed input");
                         assert!(self.input_names.insert(name.clone()), "two inputs are named {name:?}");
                         Some(name)
                     } else { None };
