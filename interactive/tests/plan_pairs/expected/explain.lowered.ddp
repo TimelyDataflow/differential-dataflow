@@ -1,6 +1,6 @@
 -- Time lanes: epoch.
-let input0 = input 0 : (int, int);
-let query = input 1 : (int, (int, int));
+let input0 = input : (int, int);
+let query = input "query" : (int, (int, int));
 let item_map = input0 | map((src, dst) -> (dst, ()));
 let item_idx = item_map | arrange;
 let item_reduce = item_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

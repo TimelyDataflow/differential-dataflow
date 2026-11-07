@@ -44,10 +44,10 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 | command | effect |
 |---|---|
 | `load <name> from <file> [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
-| `feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `feed <prog> <in#> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
+| `feed <prog> <in> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
+| `feed <prog> <in> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
 | `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |
-| `bind <trace> <prog> <in#>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
+| `bind <trace> <prog> <in>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
 | `peek <trace> [key]` | print a trace's current contents (consolidated across workers), one `data` line per row |
 | `tail <trace>` / `stop <reqid>` | follow a trace's changes at every tick, until stopped |
@@ -55,6 +55,8 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 A program installed as `<name>` publishes each `output "x"` as the trace `<name>::x`, so two programs may name their outputs alike, and one file may be loaded several times under different names.
 Generated sources (`random:…`, `iota:N`, `clock`) belong to no program and keep their own names.
+
+An input `<in>` is its position or the name it is written with, as `edges` in `input "edges" : …`, and `<prog> <in>` may be written `<prog>::<in>`.
 
 A `<value>` is read at the shape its input declares, **written without spaces**:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(1,2,3)`, and

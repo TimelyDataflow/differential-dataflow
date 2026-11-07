@@ -8,7 +8,7 @@ use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 use crate::shapes::{self, ItemShapes, ScopeShapes};
 use super::{Form, Report};
-use crate::parse::{Expr, Stmt};
+use crate::parse::{Expr, InputRef, Stmt};
 
 mod parsed;
 
@@ -306,13 +306,20 @@ impl Printer<'_> {
         if depth == 0 && scope.imports.iter().any(|i| matches!(i.from, Source::Trace(_))) {
             writeln!(out, "-- Trace imports use provider arrangements; history advances to G = ({}, []).", self.as_of).unwrap();
         }
+        // Named inputs are written without positions, which the order they are written supplies.
+        let positions: Vec<usize> = scope.imports.iter().filter_map(|imp| match imp.from { Source::Input(n) => Some(n), _ => None }).collect();
+        let named = |imp: &crate::scope_ir::Import, n: usize| imp.name != format!("input{n}");
+        let unnumbered = positions.iter().enumerate().all(|(i, &n)| i == n)
+            && scope.imports.iter().any(|imp| matches!(imp.from, Source::Input(n) if named(imp, n)));
         let mut defined = BTreeSet::new();
         for (i, imp) in scope.imports.iter().enumerate() {
             let name = &names.imports[i];
             match &imp.from {
                 Source::Input(_) | Source::Trace(_) => {
                     let source = match &imp.from {
-                        Source::Input(n) => format!("input {n}"),
+                        Source::Input(n) if !unnumbered => format!("input {n}"),
+                        Source::Input(n) if named(imp, *n) => format!("input {}", quoted(&imp.name)?),
+                        Source::Input(_) => "input".to_string(),
                         Source::Trace(trace) => {
                             format!("import {}", quoted(trace)?)
                         }
@@ -496,6 +503,28 @@ mod tests {
         assert!(before.compare_final(&after).is_empty(), "{:?}\n{output}", before.compare_final(&after));
         assert_eq!(output, after.emit_ddp().unwrap().text);
         output
+    }
+
+    /// Named inputs print without positions, in position order, and keep their names and positions,
+    /// also when the program reads them in another order.
+    #[test]
+    fn named_inputs_round_trip() {
+        let text = r#"
+            let a = input "first" : ((int), ());
+            let b = input : ((int), ());
+            let c = input "third" : ((int), ());
+            output "out" = c + b + a;
+        "#;
+        let inputs = |report: &Report| {
+            let mut inputs: Vec<_> = report.stages.last().unwrap().program.root.imports.iter()
+                .filter_map(|i| match i.from { Source::Input(n) => Some((n, i.name.clone())), _ => None }).collect();
+            inputs.sort();
+            inputs
+        };
+        let output = roundtrip(text);
+        assert!(output.contains(r#"input "first""#) && output.contains(r#"input "third""#), "{output}");
+        assert_eq!(inputs(&plan(text)), inputs(&plan(&output)), "{output}");
+        assert_eq!(inputs(&plan(text)), vec![(0, "first".to_string()), (1, "input1".to_string()), (2, "third".to_string())]);
     }
 
     #[test]

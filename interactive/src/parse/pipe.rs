@@ -6,8 +6,10 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N : (key_shape, val_shape)` (positional input), `import "name"`
-//! (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
+//! Sources: `input N : (key_shape, val_shape)` (positional input), `input : (key_shape, val_shape)`
+//! (the next position, in the order inputs are written; a program numbers all of its inputs or
+//! none), `input "name" : …` (the next position, and the name a client may feed or bind it by;
+//! no two inputs share a name, which has no `::`), `import "name"` (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
 //! scope path such as `a::b::f` or `::a::b::f`.
 //! A leading `::` reads the rest of the path in the root. Otherwise the first
 //! component names one visible scope: the current scope, an ancestor, or a child
@@ -317,11 +319,18 @@ struct Parser {
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
+    /// Inputs written without a position (`input : shape`) take positions in the order they are
+    /// written: this many so far. A program numbers all of its inputs or none of them.
+    unnumbered_inputs: usize,
+    /// Whether an input has been written with a position (`input N`).
+    numbered_inputs: bool,
+    /// The names inputs are given (`input "name"`): no two inputs share a name.
+    input_names: std::collections::HashSet<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), type_order: Vec::new(), scope: None }
+        Parser { tokens, pos: 0, types: Default::default(), type_order: Vec::new(), scope: None, unnumbered_inputs: 0, numbered_inputs: false, input_names: Default::default() }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
@@ -535,7 +544,27 @@ impl Parser {
 
     fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
-            Token::Input => { self.next(); let source = match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) }; self.source_shape(source) },
+            Token::Input => {
+                self.next();
+                let input = if let Token::Int(n) = *self.peek() {
+                    self.next();
+                    assert!(self.unnumbered_inputs == 0, "`input {n}` in a program whose other inputs have no positions; number all inputs or none");
+                    assert!(!matches!(self.peek(), Token::Str(_)), "`input {n}` cannot be named; a named input takes its position from the order inputs are written");
+                    self.numbered_inputs = true;
+                    InputRef::Numbered(n as usize)
+                } else {
+                    assert!(!self.numbered_inputs, "`input` without a position in a program whose other inputs have them; number all inputs or none");
+                    let name = if let Token::Str(name) = self.peek().clone() {
+                        self.next();
+                        assert!(!name.is_empty() && !name.contains("::"), "input name {name:?} must be nonempty and without `::`, which separates a program from its input");
+                        assert!(self.input_names.insert(name.clone()), "two inputs are named {name:?}");
+                        Some(name)
+                    } else { None };
+                    self.unnumbered_inputs += 1;
+                    InputRef::Next(self.unnumbered_inputs - 1, name)
+                };
+                self.source_shape(Expr::Input(input))
+            },
             Token::Import => { self.next(); let source = match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) }; self.source_shape(source) },
             Token::Ident(_) | Token::ColonColon => {
                 let root = *self.peek() == Token::ColonColon;

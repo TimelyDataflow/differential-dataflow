@@ -47,12 +47,14 @@ Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
 The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
+`peek`, `tail`, `stop`, `tick`, and `exit`. An input `<in>` of a program `<prog>` is its
+position or the name it is written with, as `rows` in `input "rows" : …`, and
+`<prog> <in>` may also be written `<prog>::<in>`. `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
 the one after the program's own, its rows `(key, (val, q))`, and the demand
-sets are `peek`able exports. `feed <prog> <in#> from <source>` fills an input from a
+sets are `peek`able exports. `feed <prog> <in> from <source>` fills an input from a
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
 or `iota:N`, or a file of integer rows — with each worker taking its shard, so
 no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
@@ -107,7 +109,7 @@ By default, `peek` answers with one `data` line per consolidated row, written as
 `tuple(…)`, `list(…)`, `inject(lane,payload)`, integer, and float spelling as a
 text feed. Unit values omit `val=`, and a diff of 1 omits `diff=`. For example,
 `_5 data tuple(inject(0,3),100) val=inject(1,tuple())` is a row that can be
-copied into `feed <prog> <in#> tuple(inject(0,3),100) val=inject(1,tuple())`
+copied into `feed <prog> <in> tuple(inject(0,3),100) val=inject(1,tuple())`
 when the input has the same shape. A tail row's `time=` is also accepted by a
 single-row feed. The server refuses writes to a closed epoch, so when feeding a
 tail row later, remove or update its `time=`. To use several rows in
@@ -147,7 +149,7 @@ state, not elapsed wall-clock time.
 
 ## Writes: `feed`
 
-    feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]
+    feed <prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]
 
 pushes one update into a loaded program's positional input. The input declares
 its shapes (`input 0 : ((int, int), ())`), and each value is read at them:
@@ -174,7 +176,7 @@ whole body, naming the row.
 
 A program that already has the updates as columns can skip the text:
 
-    feed <prog> <in#> frame <nbytes>
+    feed <prog> <in> frame <nbytes>
 
 is followed by exactly `nbytes` bytes, a `data` frame in the format `peek … as
 corgi` answers with, with no time lanes (`lanes` is 0): `rows | 0 | keys | vals |
@@ -218,7 +220,7 @@ a standing query whose answer follows later graph changes.
 
 ## Feedback: `bind`
 
-    bind <trace> <prog> <in#>        unbind <trace> <prog> <in#>
+    bind <trace> <prog> <in>        unbind <trace> <prog> <in>
 
 From then on, every `tick` delivers the trace's *changes* into that input at
 the next epoch, so the input mirrors the trace one epoch delayed. This is the

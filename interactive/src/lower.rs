@@ -196,7 +196,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             resolve_expr(r, here, item, scopes, plan);
         }
         Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
-        Expr::Input(_) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
+        Expr::Input(..) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
     }
 }
 
@@ -242,7 +242,7 @@ fn dependency_names(free: BTreeSet<RefName>, defined: &BTreeSet<&str>, self_name
 /// Names this expression refers to that the surrounding scope must resolve.
 fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
     match expr {
-        Expr::Input(_) | Expr::Import(_) => {},
+        Expr::Input(..) | Expr::Import(_) => {},
         Expr::Name(n) => { out.insert(RefName::Plain(n.clone())); },
         Expr::ResolvedPath { .. } => {},
         Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
@@ -344,11 +344,13 @@ impl ScopeLower {
         if is_arranged(&input, &self.items) { input }
         else { self.push(st::Node::Arrange(input)) }
     }
-    fn input_ref(&mut self, n: usize) -> st::Ref {
+    /// Input `n`, named as written (`input "name"`), or `input{n}` if it is unnamed.
+    fn input_ref(&mut self, n: usize, name: Option<&str>) -> st::Ref {
         assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", n);
         if let Some(&i) = self.input_import.get(&n) { return st::Ref::Import(i); }
         let i = self.imports.len();
-        self.imports.push(st::Import { name: format!("input{}", n), from: st::Source::Input(n), shape: None });
+        let name = name.map_or_else(|| format!("input{n}"), str::to_string);
+        self.imports.push(st::Import { name, from: st::Source::Input(n), shape: None });
         self.input_import.insert(n, i);
         st::Ref::Import(i)
     }
@@ -362,7 +364,7 @@ impl ScopeLower {
     }
     fn lower_expr(&mut self, e: &Expr) -> st::Ref {
         match e {
-            Expr::Input(n) => self.input_ref(*n),
+            Expr::Input(input) => self.input_ref(input.position(), input.name()),
             Expr::Import(name) => self.trace_ref(name),
             Expr::TypedSource(source, key, val) => {
                 let r = self.lower_expr(source);
@@ -1038,5 +1040,35 @@ mod optimize_tests {
         let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
         let linears: Vec<usize> = ops(child).iter().filter_map(|n| match n { Node::Linear { ops, .. } => Some(ops.len()), _ => None }).collect();
         assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");
+    }
+
+    /// Inputs without positions take them in the order they are written, and an input is named as
+    /// written; others keep `input{n}`, whatever `let` they are bound to.
+    #[test]
+    fn inputs_take_positions_and_names() {
+        let p = lower_tree(parse("let e = input \"edges\" : ((int), (int));\nlet roots = input : ((int), ());\noutput \"out\" = roots | join(e, (_, (), d) -> (d, ()));"));
+        let named: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
+        assert!(named.contains(&("edges", st::Source::Input(0))), "{named:?}");
+        assert!(named.contains(&("input1", st::Source::Input(1))), "{named:?}");
+        let p = lower_tree(parse("let rows = input 3 : ((int), ());\noutput \"out\" = rows + input 3;"));
+        assert_eq!((p.root.imports[0].name.as_str(), &p.root.imports[0].from), ("input3", &st::Source::Input(3)));
+    }
+
+    #[test]
+    #[should_panic(expected = "two inputs are named")]
+    fn inputs_have_distinct_names() {
+        lower_tree(parse("let a = input \"x\" : ((int), ()); let b = input \"x\" : ((int), ()); output \"out\" = a + b;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "number all inputs or none")]
+    fn inputs_are_numbered_all_or_none() {
+        lower_tree(parse("let a = input 0 : ((int), ()); let b = input : ((int), ()); output \"out\" = a + b;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot be named")]
+    fn numbered_inputs_are_unnamed() {
+        lower_tree(parse("let a = input 0 \"a\" : ((int), ()); output \"out\" = a;"));
     }
 }

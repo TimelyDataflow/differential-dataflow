@@ -8,10 +8,10 @@
 //!   - `end` — terminator of a `tail` stream, once it is stopped
 //!
 //! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
-//! DDIR through `end-load`, while `feed <prog> <in#> begin` accepts row updates
+//! DDIR through `end-load`, while `feed <prog> <in> begin` accepts row updates
 //! through `end-feed` and becomes one non-interleavable server command.
 //!
-//! `feed <prog> <in#> frame <nbytes>` is followed by exactly `nbytes` bytes: the
+//! `feed <prog> <in> frame <nbytes>` is followed by exactly `nbytes` bytes: the
 //! updates as columns, in the binary frame format `peek … as corgi` answers with
 //! (`interactive::runtime::frame`), with no time lanes. On WebSocket the header
 //! line and its bytes are one binary message.
@@ -127,7 +127,7 @@ pub enum Cmd {
     /// Fill one program input from a source the server reads itself — a recipe
     /// (`random:…`, `iota:N`), a published trace, or a file of integer rows —
     /// each worker taking its shard, so no row crosses the wire.
-    /// `feed <prog> <in#> from <source> [diff=<d>]`.
+    /// `feed <prog> <in> from <source> [diff=<d>]`.
     Source {
         prog: String,
         input: usize,
@@ -165,28 +165,47 @@ pub enum PreparedCommand {
     Stop { tail_reqid: ReqId },
 }
 
-/// The declared shapes of loaded programs' inputs, by program name, shared by every session so
-/// that a feed is read into columns before it reaches the workers. A `load` records its program's
-/// shapes as it is prepared, replacing any earlier program's of that name; nothing is forgotten,
-/// as a feed to a program that is not installed is refused by the workers, which check the
-/// shapes again.
+/// The declared shapes of loaded programs' inputs, and their names, by program name, shared by
+/// every session so that a feed is read into columns before it reaches the workers. A `load`
+/// records its program's inputs as it is prepared, replacing any earlier program's of that name;
+/// nothing is forgotten, as a feed to a program that is not installed is refused by the workers,
+/// which check the shapes again.
 #[derive(Clone, Default)]
-pub struct Catalog(Arc<Mutex<HashMap<String, HashMap<usize, RowShape>>>>);
+pub struct Catalog(Arc<Mutex<HashMap<String, Inputs>>>);
+
+/// One program's inputs: each position's declared shape, and the positions of named inputs.
+#[derive(Default)]
+struct Inputs {
+    shapes: HashMap<usize, RowShape>,
+    names: HashMap<String, usize>,
+}
 
 impl Catalog {
     fn record(&self, name: &str, program: &Program) {
-        let inputs = program.root.imports.iter().filter_map(|import| match (&import.from, &import.shape) {
-            (Source::Input(n), Some(shape)) => Some((*n, shape.clone())),
-            _ => None,
-        });
-        self.0.lock().unwrap().insert(name.to_string(), inputs.collect());
+        let mut inputs = Inputs::default();
+        for import in &program.root.imports {
+            if let Source::Input(n) = &import.from {
+                if let Some(shape) = &import.shape { inputs.shapes.insert(*n, shape.clone()); }
+                inputs.names.insert(import.name.clone(), *n);
+            }
+        }
+        self.0.lock().unwrap().insert(name.to_string(), inputs);
+    }
+
+    /// The position of `prog`'s input `input`: a number is a position, and anything else names an
+    /// input by the name it is written with, as `input "edges"`.
+    fn position(&self, prog: &str, input: &str) -> Result<usize, String> {
+        if let Ok(n) = input.parse() { return Ok(n); }
+        let programs = self.0.lock().unwrap();
+        let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
+        inputs.names.get(input).copied().ok_or_else(|| format!("program {prog:?} has no input named {input:?}"))
     }
 
     /// The declared shapes of `prog`'s `input`.
     fn shape(&self, prog: &str, input: usize) -> Result<RowShape, String> {
         let programs = self.0.lock().unwrap();
         let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        inputs.get(&input).cloned().ok_or_else(|| format!("program {prog:?} has no input {input}"))
+        inputs.shapes.get(&input).cloned().ok_or_else(|| format!("program {prog:?} has no input {input}"))
     }
 
     /// A reader of rows for `prog`'s `input`, at its declared shapes.
@@ -708,30 +727,33 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             }
         }
         "feed" => {
+            // An input is `<prog> <in>` or `<prog>::<in>`, and `<in>` is its position or its name.
+            let joined: Vec<&str>;
+            let args = match args.split_first() {
+                Some((first, rest)) if first.contains("::") => {
+                    let (prog, input) = first.split_once("::").unwrap();
+                    joined = [prog, input].into_iter().chain(rest.iter().copied()).collect();
+                    &joined[..]
+                }
+                _ => args,
+            };
+            let position = |prog: &str, input: &str| catalog.position(prog, input).map_err(|e| format!("feed: {e}"));
             if let [prog, input, "begin"] = args {
-                let input = match input.parse() {
-                    Ok(input) => input,
-                    Err(_) => {
-                        return ParseOutcome::Err(format!(
-                            "feed: <in#> must be a number, got {input:?}"
-                        ))
-                    }
-                };
-                return ParseOutcome::BeginFeed {
-                    prog: (*prog).to_string(),
-                    input,
+                return match position(prog, input) {
+                    Ok(input) => ParseOutcome::BeginFeed { prog: (*prog).to_string(), input },
+                    Err(error) => ParseOutcome::Err(error),
                 };
             }
-            // Syntax: `feed <prog> <in#> frame <nbytes>`, then exactly `nbytes` bytes: a binary frame.
-            // A bad `<in#>` still has its bytes read past; a bad `<nbytes>` leaves none to find.
+            // Syntax: `feed <prog> <in> frame <nbytes>`, then exactly `nbytes` bytes: a binary frame.
+            // A bad `<in>` still has its bytes read past; a bad `<nbytes>` leaves none to find.
             if let [prog, input, "frame", nbytes] = args {
                 let Ok(nbytes) = nbytes.parse() else {
                     return ParseOutcome::Err(format!("feed: <nbytes> must be a number, got {nbytes:?}"));
                 };
-                let input = input.parse().map_err(|_| format!("feed: <in#> must be a number, got {input:?}"));
+                let input = position(prog, input);
                 return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input, nbytes };
             }
-            // Syntax: `feed <prog> <in#> from <recipe-trace-or-file> [diff=<d>]` — the server
+            // Syntax: `feed <prog> <in> from <recipe-trace-or-file> [diff=<d>]` — the server
             // sources the rows.
             if let [prog, input, "from", source, rest @ ..] = args {
                 let diff = match rest {
@@ -740,36 +762,30 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                         .strip_prefix("diff=")
                         .and_then(|d| d.parse().ok())
                         .ok_or_else(|| format!("feed: expected diff=<integer>, got {arg:?}")),
-                    _ => Err("feed: expected `<prog> <in#> from <source> [diff=<d>]`".to_string()),
+                    _ => Err("feed: expected `<prog> <in> from <source> [diff=<d>]`".to_string()),
                 };
-                return match (input.parse(), diff) {
+                return match (position(prog, input), diff) {
                     (Ok(input), Ok(diff)) => ParseOutcome::Cmd(Cmd::Source {
                         prog: (*prog).to_string(),
                         input,
                         source: (*source).to_string(),
                         diff,
                     }),
-                    (Err(_), _) => ParseOutcome::Err(format!("feed: <in#> must be a number, got {input:?}")),
-                    (_, Err(error)) => ParseOutcome::Err(error),
+                    (Err(error), _) | (_, Err(error)) => ParseOutcome::Err(error),
                 };
             }
-            // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
+            // Syntax: `feed <prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]`
             // A `<v>`/`<key>` is a value of the input's declared shape, written
             // without spaces (see `interactive::runtime::feed`).
             if args.len() < 3 {
                 return ParseOutcome::Err(
-                    "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
+                    "feed: expected `<prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
                 );
             }
             let prog = args[0].to_string();
-            let input: usize = match args[1].parse() {
+            let input: usize = match position(&prog, args[1]) {
                 Ok(n) => n,
-                Err(_) => {
-                    return ParseOutcome::Err(format!(
-                        "feed: <in#> must be a number, got {:?}",
-                        args[1]
-                    ))
-                }
+                Err(error) => return ParseOutcome::Err(error),
             };
             let key = args[2];
             let mut val = None;
@@ -811,22 +827,25 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             }
             ParseOutcome::Cmd(Cmd::Feed { prog, input, columns: row.finish(), time })
         }
-        "bind" | "unbind" => match args {
-            [trace, prog, input] => match input.parse::<usize>() {
+        "bind" | "unbind" => {
+            // The input is `<prog> <in>` or `<prog>::<in>`, and `<in>` is its position or its name.
+            let (trace, prog, input) = match args {
+                [trace, prog, input] => (*trace, *prog, *input),
+                [trace, target] if target.contains("::") => { let (prog, input) = target.split_once("::").unwrap(); (*trace, prog, input) }
+                _ => return ParseOutcome::Err(format!("{cmd}: expected `<trace> <prog> <in>` or `<trace> <prog>::<in>`")),
+            };
+            match catalog.position(prog, input) {
                 Ok(input) => {
-                    let (trace, prog) = ((*trace).to_string(), (*prog).to_string());
+                    let (trace, prog) = (trace.to_string(), prog.to_string());
                     if cmd == "bind" {
                         ParseOutcome::Cmd(Cmd::Bind { trace, prog, input })
                     } else {
                         ParseOutcome::Cmd(Cmd::Unbind { trace, prog, input })
                     }
                 }
-                Err(_) => {
-                    ParseOutcome::Err(format!("{}: <in#> must be a number, got {:?}", cmd, input))
-                }
-            },
-            _ => ParseOutcome::Err(format!("{}: expected `<trace> <prog> <in#>`", cmd)),
-        },
+                Err(error) => ParseOutcome::Err(format!("{cmd}: {error}")),
+            }
+        }
         "drop" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Drop { name: (*name).to_string() }),
             _ => ParseOutcome::Err("drop: expected `<name>`".into()),
@@ -1286,5 +1305,23 @@ mod tests {
         assert!(matches!(got[0].1, Ok(Cmd::Drop { ref name }) if name == "3"));
         assert!(matches!(got[1].1, Ok(Cmd::Drop { ref name }) if name == "my_reach"));
         assert!(matches!(got[2].1, Err(_)));
+    }
+
+    /// An input is fed or bound by its position or by the name it is written with, not by the
+    /// `let` it is bound to, and the program and the input may be written apart or as `<prog>::<in>`.
+    #[test]
+    fn inputs_are_fed_by_name() {
+        let catalog = Catalog::default();
+        let program = "let e = input \"edges\" : ((int), (int));\nlet r = input \"roots\" : ((int), ());\noutput \"reach\" = r | join(e, (_, (), d) -> (d, ()));";
+        let load = Cmd::Load { id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
+        prepare(load, &catalog).expect("the program lowers");
+        let mut p = LineParser::new(catalog);
+        let got = feed_all(&mut p, &["r0 feed g roots 1", "r1 feed g::edges 1 val=2", "r2 feed g 1 1", "r3 feed g::e 1", "r4 bind g::reach g::roots", "r5 unbind g::reach g roots"]);
+        assert!(matches!(&got[0].1, Ok(Cmd::Feed { prog, input: 1, .. }) if prog == "g"), "{:?}", got[0]);
+        assert!(matches!(&got[1].1, Ok(Cmd::Feed { prog, input: 0, .. }) if prog == "g"), "{:?}", got[1]);
+        assert!(matches!(&got[2].1, Ok(Cmd::Feed { input: 1, .. })), "{:?}", got[2]);
+        assert!(matches!(&got[3].1, Err(e) if e.contains("no input named \"e\"")), "{:?}", got[3]);
+        assert!(matches!(&got[4].1, Ok(Cmd::Bind { trace, prog, input: 1 }) if trace == "g::reach" && prog == "g"), "{:?}", got[4]);
+        assert!(matches!(&got[5].1, Ok(Cmd::Unbind { input: 1, .. })), "{:?}", got[5]);
     }
 }

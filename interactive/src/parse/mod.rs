@@ -25,9 +25,23 @@ pub enum Reducer {
     Expr(Lambda, Option<usize>),
 }
 
+/// An input, by the position it is written with or the next position in the order inputs are written.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum InputRef {
+    /// `input N`.
+    Numbered(usize),
+    /// `input` or `input "name"`: the next position, and the name a client may feed or bind it by.
+    Next(usize, Option<String>),
+}
+
+impl InputRef {
+    pub fn position(&self) -> usize { match self { InputRef::Numbered(n) | InputRef::Next(n, _) => *n } }
+    pub fn name(&self) -> Option<&str> { match self { InputRef::Numbered(_) => None, InputRef::Next(_, name) => name.as_deref() } }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
-    Input(usize),
+    Input(InputRef),
     /// Shape ascription on an external source: `input N : (key_shape, val_shape)`.
     /// The same syntax follows `import "name"` for independently installed consumers.
     TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
