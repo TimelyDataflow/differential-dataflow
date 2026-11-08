@@ -39,7 +39,7 @@ where
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
-    reduce_with_tactic(trace, name, CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+    reduce_with_tactic(trace, name, true, CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
 }
 /// The conventional cursor-based [`ReduceTactic`].
 ///
