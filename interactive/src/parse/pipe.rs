@@ -103,6 +103,10 @@
 //!   otherwise follow the total order (`fmin` of `-0.0` and `0.0` is `-0.0`). `feq fne flt fle fgt
 //!   fge` are IEEE comparisons giving Int 0/1: NaN compares false (`fne` true) and `-0.0` equals
 //!   `0.0`, where corgi's own `eq lt …` use the total order.
+//! - The language has no words for the non-finite floats. A float literal that overflows `f64`
+//!   is an infinity, so `1e999` is +inf and `-1e999` is -inf, and `(0.0, 0.0) div` is NaN, with the
+//!   bits `0x7ff8000000000000` that corgi's float arithmetic gives every computed NaN. The lambda
+//!   printer writes them this way. A NaN carrying other bits can come only from data.
 //! - `n call bit_length` is Int -> Int: `64 - (n as u64).leading_zeros()`, so zero gives 0
 //!   and a negative integer gives 64.
 //! - The program's `type` declarations are corgi enums of the same
