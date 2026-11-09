@@ -456,7 +456,8 @@ fn collect_ddp(root: &Path, dir: &Path, found: &mut Vec<String>) {
     }
 }
 
-/// Plan one example against `source` with every pass on. Reports why it does not plan cleanly.
+/// Plan one example against `source` with every pass on. Reports why it does not plan cleanly,
+/// including any scalar whose compiled graph disagrees with its source.
 fn plan_example(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
     let report = plan::report(text, source, &Config::all())?;
     if !report.unresolved.is_empty() { return Err(format!("unresolved imports {:?}", report.unresolved)); }
@@ -465,6 +466,13 @@ fn plan_example(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result
     }
     let printed = report.emit_ddp_at(DdpStage::AsOf)?;
     if printed.lambdas.graph_changed != 0 { return Err(format!("{} printed scalar graphs changed", printed.lambdas.graph_changed)); }
+    // The same check as `ddir-plan --check-lambdas`. Only a mismatch fails: unchecked lambdas and
+    // graph fallbacks are reported in the text but do not gate.
+    let checked = report.print_with(plan::PrintOptions { check_lambdas: true, ..Default::default() });
+    if checked.lambdas.failed != 0 {
+        let failing: Vec<_> = checked.text.lines().filter(|line| line.starts_with("Lambda check FAILED")).collect();
+        return Err(format!("{} lambdas fail their check: {failing:?}", checked.lambdas.failed));
+    }
     Ok(report)
 }
 
