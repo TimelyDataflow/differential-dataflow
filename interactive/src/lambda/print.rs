@@ -340,8 +340,21 @@ fn bin(op: BinOp) -> &'static str { match op { BinOp::Add => "add", BinOp::Sub =
 fn bits(op: BitOp) -> &'static str { match op { BitOp::AddB64 => "add_b64", BitOp::SubB64 => "sub_b64", BitOp::MulB64 => "mul_b64", BitOp::And => "and", BitOp::Or => "or", BitOp::Xor => "xor" } }
 fn pred(op: Pred) -> &'static str { match op { Pred::Eq => "eq", Pred::Ne => "ne", Pred::Lt => "lt", Pred::Le => "le", Pred::Gt => "gt", Pred::Ge => "ge" } }
 fn red(op: Red) -> &'static str { match op { Red::Add => "add", Red::Mul => "mul", Red::Min => "min", Red::Max => "max", Red::All => "all", Red::Any => "any" } }
+/// The bits of the NaN that corgi's float arithmetic returns, whatever the operands' payload.
+const CANONICAL_NAN: u64 = 0x7ff8_0000_0000_0000;
+
+/// Spell a float so that parsing the text gives back exactly the bits of `x`, or say why not.
+/// Infinities are literals that overflow `f64`, which the lexer parses as Rust does: `1e999` and
+/// `-1e999`. The language has no NaN literal, so the canonical NaN is the one `0.0 / 0.0`
+/// computes, which corgi's float arithmetic returns with its sign and payload cleared. A NaN with
+/// other bits can come only from data, never from a program text, so it has no spelling.
 fn float(x: f64) -> Result<String, String> {
-    if !x.is_finite() { return Err(format!("float bits 0x{:016x} have no literal spelling", x.to_bits())); }
+    if x == f64::INFINITY { return Ok("1e999".into()); }
+    if x == f64::NEG_INFINITY { return Ok("-1e999".into()); }
+    if x.is_nan() {
+        return if x.to_bits() == CANONICAL_NAN { Ok("(0.0, 0.0) div".into()) }
+            else { Err(format!("float bits 0x{:016x} have no literal spelling", x.to_bits())) };
+    }
     let mut s = x.to_string();
     if !s.contains(['.', 'e', 'E']) { s += ".0"; }
     Ok(s)
@@ -620,12 +633,36 @@ mod tests {
         let mut b = Builder::default(); let x = b.input();
         let out = b.add(CmpOp::RelImm(Pred::Gt, Scalar::Float(super::super::float_key(f64::INFINITY))), vec![x]);
         let printed = print(&graph_lambda(b.finish(out)), Some(&Shape::Float), true);
+        assert!(!printed.fallback, "{}", printed.text);
+        assert!(printed.text.contains("1e999") && printed.text.contains(" gt"), "{}", printed.text);
+        assert!(matches!(printed.check, Check::Exact | Check::Sampled));
+        // A NaN with a payload only data can carry has no spelling.
+        let mut b = Builder::default(); let x = b.input();
+        let odd = f64::from_bits(0x7ff8_0000_0000_1234);
+        let out = b.add(CmpOp::RelImm(Pred::Gt, Scalar::Float(super::super::float_key(odd))), vec![x]);
+        let printed = print(&graph_lambda(b.finish(out)), Some(&Shape::Float), true);
         assert!(printed.fallback);
-        assert!(printed.text.contains("0x7ff0000000000000"));
-        assert!(printed.text.contains(" gt"));
+        assert!(printed.text.contains("0x7ff8000000001234"), "{}", printed.text);
         let unknown = print(&l, None, true);
         assert!(unknown.fallback);
         assert!(matches!(unknown.check, Check::Unchecked(_)));
+    }
+
+    /// Parsing the spelling of a non-finite float gives back its bits, alone and as an immediate
+    /// operand. Only the canonical NaN has a spelling.
+    #[test]
+    fn non_finite_floats_round_trip() {
+        for x in [f64::INFINITY, f64::NEG_INFINITY, f64::from_bits(CANONICAL_NAN)] {
+            let text = float(x).unwrap();
+            let lambda = Lambda::new(text.clone(), &super::super::base_scope());
+            let value = corgi::eval_graph(lambda.graph().unwrap(), Value::f64(vec![0.0]));
+            assert_eq!(value.as_f64("test").unwrap()[0].to_bits(), x.to_bits(), "{text}");
+            checked(&format!("(input, {text}) max"), Shape::Float);
+            checked(&format!("({text}, input) lt"), Shape::Float);
+        }
+        for bits in [0xfff8_0000_0000_0000u64, 0x7ff8_0000_0000_0001, 0x7ff0_0000_0000_0001] {
+            assert!(float(f64::from_bits(bits)).is_err(), "{bits:#x}");
+        }
     }
 
     #[test]
