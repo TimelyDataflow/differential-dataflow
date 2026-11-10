@@ -259,6 +259,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer, limit } => {
+                        let input = input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"));
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
                         Rendered::Arrangement(B::reduce(a, reducer, *limit, shape_of(input)))
                     },

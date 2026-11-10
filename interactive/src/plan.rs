@@ -405,7 +405,7 @@ fn node(node: &Node, names: &Names) -> String {
         Node::Arrange(input) => format!("{} | arrange", names.of(input)),
         Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), source_lambda(projection)),
         Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), source_lambda(projection)),
-        Node::Reduce { input, reducer: r, limit } => format!("{} | {}", names.of(input), reducer(r, *limit)),
+        Node::Reduce { input, reducer: r, limit } => format!("{} | {}", names.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))), reducer(r, *limit)),
         Node::Inspect { input, label } => format!("{} | inspect({})", names.of(input), quote(label)),
     }
 }
@@ -446,8 +446,8 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
             format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), slots.lambda(projection, input, &format!("{at}/half_join")))
         }
         Node::Reduce { input, reducer: Reducer::Expr(l), limit } => {
-            let input_shape = shapes.of(input).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
-            format!("{} | reduce({}{})", names.of(input), ddp::limit_text(*limit), slots.lambda(l, input_shape, &format!("{at}/reduce")))
+            let input_shape = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
+            format!("{} | reduce({}{})", names.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))), ddp::limit_text(*limit), slots.lambda(l, input_shape, &format!("{at}/reduce")))
         }
         _ => self::node(node, names)
     }
@@ -483,7 +483,7 @@ fn reads(node: &Node) -> Vec<(&Ref, &'static str)> {
         Node::Arrange(input) => vec![(input, "arrange/reuse")],
         Node::Join { left, right, .. } => vec![(left, "index"), (right, "index")],
         Node::HalfJoin { stream, arrangement, .. } => vec![(stream, "rows"), (arrangement, "index")],
-        Node::Reduce { input, .. } => vec![(input, "index")],
+        Node::Reduce { input, .. } => input.refs().map(|r| (r, "index")).collect(),
     }
 }
 

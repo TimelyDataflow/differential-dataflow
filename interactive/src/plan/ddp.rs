@@ -423,11 +423,11 @@ impl Printer<'_> {
             Node::Reduce { input, reducer, limit } => {
                 let word = match reducer {
                     Reducer::Expr(l) => {
-                        let input = shapes.of(input).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
+                        let input = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
                         format!("reduce({}{})", limit_text(*limit), self.lambda(l, input)?)
                     }
                 };
-                format!("{} | {word}", names.of(input))
+                format!("{} | {word}", names.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))))
             }
             Node::Inspect { input, label } => {
                 if identifier(label) != *label { return Err(format!("inspect label {label:?} is not a DDP identifier")); }

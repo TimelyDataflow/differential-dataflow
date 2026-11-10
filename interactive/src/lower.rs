@@ -425,7 +425,7 @@ impl ScopeLower {
                     self.distinct.push(self.items.len());
                     r
                 } else { self.arrange(r) };
-                self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
+                self.push(st::Node::Reduce { input: st::ReduceInput::single(a), reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
@@ -681,7 +681,7 @@ mod tree_tests {
             let inputs = match item {
                 st::Item::Op(st::Node::Join { left, right, .. }) => vec![left, right],
                 st::Item::Op(st::Node::HalfJoin { arrangement, .. }) => vec![arrangement],
-                st::Item::Op(st::Node::Reduce { input, .. }) => vec![input],
+                st::Item::Op(st::Node::Reduce { input, .. }) => input.refs().collect(),
                 _ => Vec::new(),
             };
             for input in inputs { assert!(is_arranged(input, &program.root.items, &program.root.imports, &[]), "{item:?}"); }
@@ -695,7 +695,7 @@ mod tree_tests {
             output "o" = x | min;
         "#));
         assert!(!program.root.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Arrange(_)))));
-        assert!(program.root.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Reduce { input: Ref::Import(_), .. }))));
+        assert!(program.root.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Reduce { input, .. }) if matches!(input.as_single(), Some(Ref::Import(_))))));
     }
 
     #[test]
@@ -738,7 +738,7 @@ mod tree_tests {
         assert!(arranges.iter().any(|input| matches!(input, Ref::ChildExport(..))));
         let inner = child(&program.root, "inner");
         // The arranged parent item is entered as an arrangement, so the child reads it as is.
-        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Reduce { input: Ref::Import(_), .. })));
+        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Reduce { input, .. }) if matches!(input.as_single(), Some(Ref::Import(_)))));
         assert!(!inner.items.iter().any(|item| matches!(item, st::Item::Op(st::Node::Arrange(_)))));
     }
 

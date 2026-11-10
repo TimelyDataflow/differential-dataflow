@@ -64,7 +64,8 @@ fn analyze(scope: &Scope, exports: Option<&[bool]>) -> Live {
                 if !live.items[i] { continue; }
                 match node {
                     Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => live.mark(input),
+                    | Node::Inspect { input, .. } => live.mark(input),
+                    Node::Reduce { input, .. } => for r in input.refs() { live.mark(r); },
                     Node::Join { left, right, .. } => { live.mark(left); live.mark(right); }
                     Node::HalfJoin { stream, arrangement, .. } => { live.mark(stream); live.mark(arrangement); }
                     Node::Concat(refs) => for r in refs { live.mark(r); },

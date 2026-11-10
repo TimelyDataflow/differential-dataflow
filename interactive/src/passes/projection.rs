@@ -563,8 +563,8 @@ fn build_scope(
                         )?;
                     }
                     Node::Reduce { input, .. } => {
-                        let input = plan.at(input)?;
-                        builder.opaque(&output, &[input]);
+                        let inputs = input.refs().map(|r| plan.at(r)).collect::<Result<Vec<_>, _>>()?;
+                        builder.opaque(&output, &inputs);
                     }
                     Node::Inspect { input, .. } => {
                         // Inspection is observable even if its collection has
@@ -764,7 +764,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             (Item::Op(Node::Reduce { input, reducer, .. }), PlannedItem::Op { output, .. }) => {
                 if needs_mask(&output.shape.1, &output.val, live) {
                     let value = mask_part("input", &output.shape.1, &output.val, live);
-                    let shape = &plan.at(input).expect("reduce input").shape;
+                    let shape = &plan.at(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))).expect("reduce input").shape;
                     *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"), &shape.0, &shape.1);
                     masked += output.val.iter().filter(|&&id| !live[id]).count();
                 }
@@ -778,8 +778,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             Item::Op(node) => match node {
                 Node::Linear { input, .. }
                 | Node::Arrange(input)
-                | Node::Reduce { input, .. }
                 | Node::Inspect { input, .. } => remap_ref(input, &remap),
+                Node::Reduce { input, .. } => input.for_each_ref(|r| remap_ref(r, &remap)),
                 Node::Join { left, right, .. } => {
                     remap_ref(left, &remap);
                     remap_ref(right, &remap);
@@ -882,7 +882,7 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, level: Level) -
         }
         if projections.is_empty() { continue; }
         let Item::Op(Node::Reduce { input, reducer, .. }) = &mut scope.items[j] else { unreachable!() };
-        let Some(shape) = shapes.of(input) else { continue };
+        let Some(shape) = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))) else { continue };
         for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
         changed += projections.len();
         let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };

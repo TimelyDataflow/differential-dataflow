@@ -35,7 +35,7 @@
 //! imports targeting the same definition are the same entity, so facts
 //! learned at a definition propagate to every importer along its edges.
 
-use crate::ir::{Lambda, LinearOp, Reducer};
+use crate::ir::{Diff, Lambda, LinearOp, Reducer};
 
 type ItemId = usize; // index into `Scope::items`
 type ImportId = usize; // index into `Scope::imports`
@@ -127,26 +127,78 @@ pub enum Node {
     HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
     /// `reducer`'s lambda over each key and its values. With `limit = Some(k)` it is handed only
     /// the key's first `k` values of non-zero net, in value order, whatever their sums.
-    Reduce { input: Ref, reducer: Reducer, limit: Option<usize> },
+    ///
+    /// `input` names one or more arranged inputs, see [`ReduceInput`]. A `Grouped` input has no
+    /// limit.
+    Reduce { input: ReduceInput, reducer: Reducer, limit: Option<usize> },
     Inspect { input: Ref, label: String },
+}
+
+/// The inputs of a `Reduce`, all arranged and all of one key shape.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ReduceInput {
+    /// The signed union of the inputs: each key's values are the consolidated sum of every input's
+    /// updates, each multiplied by its input's sign, as if the inputs were concatenated (negative
+    /// ones negated) and arranged. All inputs share one row shape and every sign is `1` or `-1`.
+    /// `Merged([(x, 1)])` is the plain reduce of `x`.
+    Merged(Vec<(Ref, Diff)>),
+    /// Cogroup: the reducer is handed each key's values one list per input, `(key, (vals_0, ..,
+    /// vals_{n-1}))`, each `vals_i` input `i`'s consolidated `(val, diff)` list in value order,
+    /// empty where the input holds nothing at the key. Equal values of different inputs never
+    /// merge. Inputs share a key shape. Their value shapes may differ.
+    Grouped(Vec<Ref>),
+}
+
+impl ReduceInput {
+    /// The plain reduce of `r`.
+    pub fn single(r: Ref) -> Self { ReduceInput::Merged(vec![(r, 1)]) }
+    /// The input of a plain reduce, `Merged([(r, 1)])`.
+    pub fn as_single(&self) -> Option<&Ref> {
+        match self { ReduceInput::Merged(v) if v.len() == 1 && v[0].1 == 1 => Some(&v[0].0), _ => None }
+    }
+    /// As [`Self::as_single`], mutably.
+    pub fn as_single_mut(&mut self) -> Option<&mut Ref> {
+        match self { ReduceInput::Merged(v) if v.len() == 1 && v[0].1 == 1 => Some(&mut v[0].0), _ => None }
+    }
+    /// The first input, which fixes the key shape, and for `Merged` the row shape.
+    pub fn first(&self) -> &Ref {
+        match self { ReduceInput::Merged(v) => &v[0].0, ReduceInput::Grouped(v) => &v[0] }
+    }
+    /// Every input, in order.
+    pub fn refs(&self) -> impl Iterator<Item = &Ref> {
+        let (merged, grouped): (&[(Ref, Diff)], &[Ref]) = match self {
+            ReduceInput::Merged(v) => (v, &[]),
+            ReduceInput::Grouped(v) => (&[], v),
+        };
+        merged.iter().map(|(r, _)| r).chain(grouped)
+    }
+    /// Applies `f` to every input, in order.
+    pub fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        match self {
+            ReduceInput::Merged(v) => for (r, _) in v { f(r) },
+            ReduceInput::Grouped(v) => for r in v { f(r) },
+        }
+    }
 }
 
 impl Node {
     pub(crate) fn refs(&self) -> impl Iterator<Item = &Ref> {
-        let (first, second, rest): (_, _, &[_]) = match self {
+        let (first, second, rest, reduce): (_, _, &[_], _) = match self {
             Self::Linear { input, .. } | Self::Arrange(input)
-            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => (Some(input), None, &[]),
-            Self::Join { left, right, .. } => (Some(left), Some(right), &[]),
-            Self::HalfJoin { stream, arrangement, .. } => (Some(stream), Some(arrangement), &[]),
-            Self::Concat(refs) => (None, None, refs),
+            | Self::Inspect { input, .. } => (Some(input), None, &[], None),
+            Self::Reduce { input, .. } => (None, None, &[], Some(input)),
+            Self::Join { left, right, .. } => (Some(left), Some(right), &[], None),
+            Self::HalfJoin { stream, arrangement, .. } => (Some(stream), Some(arrangement), &[], None),
+            Self::Concat(refs) => (None, None, refs, None),
         };
-        first.into_iter().chain(second).chain(rest)
+        first.into_iter().chain(second).chain(rest).chain(reduce.into_iter().flat_map(ReduceInput::refs))
     }
 
     pub(crate) fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
         match self {
+            Self::Reduce { input, .. } => input.for_each_ref(f),
             Self::Linear { input, .. } | Self::Arrange(input)
-            | Self::Reduce { input, .. } | Self::Inspect { input, .. } => f(input),
+            | Self::Inspect { input, .. } => f(input),
             Self::Join { left, right, .. } => { f(left); f(right); }
             Self::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); }
             Self::Concat(refs) => for r in refs { f(r); },
@@ -325,7 +377,13 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
-                    Node::Reduce { input, reducer, limit } => format!("{} | {:?} limit={limit:?}", fmt_ref(input), reducer),
+                    Node::Reduce { input, reducer, limit } => {
+                        let inputs = match input {
+                            ReduceInput::Merged(v) => v.iter().map(|(r, s)| format!("{}{}", if *s < 0 { "-" } else { "" }, fmt_ref(r))).collect::<Vec<_>>().join(" + "),
+                            ReduceInput::Grouped(v) => format!("cogroup({})", v.iter().map(fmt_ref).collect::<Vec<_>>().join(", ")),
+                        };
+                        format!("{} | {:?} limit={limit:?}", inputs, reducer)
+                    }
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };
                 println!("{}n{} = {};", pad2, i, desc);
@@ -391,5 +449,12 @@ mod tests {
         assert!(matches!(prog.root.exports[0].value, Ref::ChildExport(0, 0)));
         assert!(matches!(prog.root.imports[0].from, Source::Input(0)));
         assert!(matches!(reach.binds[0].value, Ref::Local(1)));
+    }
+
+    #[test]
+    fn reduce_input_single_round_trips() {
+        assert_eq!(ReduceInput::single(Ref::Local(3)).as_single(), Some(&Ref::Local(3)));
+        assert_eq!(ReduceInput::Merged(vec![(Ref::Local(3), -1)]).as_single(), None);
+        assert_eq!(ReduceInput::Grouped(vec![Ref::Local(1), Ref::Local(2)]).refs().count(), 2);
     }
 }

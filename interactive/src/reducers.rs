@@ -2,6 +2,7 @@
 //! `vals` is nonempty, ordered, and holds `(value, nonzero diff)` pairs.
 
 use crate::ir::{Lambda, Reducer};
+use crate::scope_ir::ReduceInput;
 use crate::lambda::Projection;
 
 /// Distinct after its input has been keyed by the whole record.
@@ -33,7 +34,10 @@ pub(crate) fn expand_distinct(
         let distinct = sites.peek() == Some(&i);
         if distinct { sites.next(); }
         let by_record = distinct && match &item {
-            Item::Op(Node::Reduce { input, .. }) => !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit),
+            Item::Op(Node::Reduce { input, .. }) => {
+                let input = input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"));
+                !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit)
+            }
             _ => false,
         };
         match &mut item {
@@ -68,7 +72,7 @@ pub(crate) fn expand_distinct(
             match &mut node {
                 Node::Join { left, right, .. } => { arrange(left); arrange(right); }
                 Node::HalfJoin { arrangement, .. } => arrange(arrangement),
-                Node::Reduce { input, .. } => arrange(input),
+                Node::Reduce { input, .. } => input.for_each_ref(&mut arrange),
                 _ => {}
             }
             let r = Ref::Local(items.len());
@@ -78,13 +82,14 @@ pub(crate) fn expand_distinct(
         };
         if distinct {
             let Item::Op(Node::Reduce { input, .. }) = item else { unreachable!() };
+            let input = input.as_single().cloned().unwrap_or_else(|| unimplemented!("reduce over several inputs"));
             let input = if by_record {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, v) = input in ((k, v), ())".into(), &corgi::Scope::default()))] })
             } else { input };
             // Both paths now have unit values: either they were known to be unit,
             // or the map above keyed the collection by its whole record.
             let reducer = Reducer::Expr(unit_distinct());
-            let output = push(Node::Reduce { input, reducer, limit: None });
+            let output = push(Node::Reduce { input: ReduceInput::single(input), reducer, limit: None });
             if by_record {
                 push(Node::Linear { input: output, ops: vec![LinearOp::Project(Lambda::new("let (kv, ()) = input in kv".into(), &corgi::Scope::default()))] });
             }

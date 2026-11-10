@@ -71,7 +71,8 @@ pub(super) fn use_counts(scope: &Scope, dead: &[bool]) -> Vec<usize> {
         match item {
             Item::Op(node) => match node {
                 Node::Linear { input, .. } | Node::Arrange(input)
-                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
+                | Node::Inspect { input, .. } => tally(input),
+                Node::Reduce { input, .. } => input.refs().for_each(&mut tally),
                 Node::Join { left, right, .. } => { tally(left); tally(right); },
                 Node::HalfJoin { stream, arrangement, .. } => { tally(stream); tally(arrangement); },
                 Node::Concat(refs) => for r in refs { tally(r); },

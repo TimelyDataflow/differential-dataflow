@@ -343,7 +343,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
             }
         }
         st::Node::Reduce { input, reducer, .. } => {
-            let c = shapes.of(input)?;
+            let c = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")))?;
             let Reducer::Expr(lambda) = reducer;
             let v = match reduce_shape(lambda, &c.key, &c.val) {
                 Ok(v) => v,
