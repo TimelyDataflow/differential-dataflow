@@ -201,14 +201,17 @@ None of this is built.
 4. **Width and clocks.** A follower must have its clock's width, so a follower's width could be taken from its clock instead of stated.
 5. **What a root's register holds.** Perhaps the list of the root manifest's spans, or the hash of a blob that holds it.
 6. **Whether DDIR's own times should be ints.** Ledger times are ints and DDIR's are unsigned. They match in structure, and the question is put off.
-7. **Transactions across manifests, skipping resolution for deterministic ledgers, and commits across independent roots** are deferred or ruled out for now; see the design notes.
+7. **Transactions across manifests, skipping resolution for deterministic ledgers, and commits across independent roots** are deferred or ruled out for now.
 
 ## Where the code stands
+
+This is a model, and not yet an implementation.
+The programs state the rules and check them, and a driver takes, from outside, the actions a durable server would take itself.
+Nothing here makes a DDIR program's inputs or outputs durable.
 
 * **The model runs.** `model/ledger.ddp` is the state, the write frontier and the invariants.
   `server/demo/ledger_views.txt` shows the write frontiers under a two-level clock tree, and then breaks each invariant once.
 * **The rules run.** `model/resolve.ddp` resolves one round as described above.
-  `server/demo/ledger_rounds.txt` runs three rounds on the stock server.
 * **They are checked against each other.** `tests/ledgers.rs` runs rounds of the rules, and after each has the model derive the indexes from the manifest alone; they must agree, and every invariant must hold.
 * **Many sessions can feed one resolver.** `server/demo/ledger_resolver.py` has nine client sessions and a tenth that pumps the rounds.
 * **Rounds can be made durable, and recovered.** `bench/ledger/fabric.py` writes each round's change to the manifest as a blob and swaps a root file.
@@ -223,3 +226,33 @@ What the server does not do itself, and a driver does from outside:
 * rebuild its state from a manifest when it starts;
 * pump the rounds, and assign transaction keys;
 * read a ledger's batches from blobs, or write them: every batch so far is empty.
+
+## What comes next
+
+None of this is agreed in detail; it is where the work stood on 10 November 2026.
+The aim is a server whose programs read and write ledgers, reached in pieces that can each be tried.
+
+1. **The server pilots the rounds.**
+   It runs a round, writes the round's change as a blob, swaps the root, and only then reports outcomes.
+   This is `bench/ledger/fabric.py` moved into the server, with requests still arriving from outside.
+2. **A trace's changes become spans with data.**
+   Each tick, a program's output is written as a batch and appended to a ledger.
+   Open: which outputs are ledgers and which stay in memory; whether a writer reconciles with what a ledger already holds; what a writer does when its append is rejected.
+   An easy start: an output is a ledger only when asked, a tick commits all of a server's ledgers in one transaction, and a rejected writer stops.
+3. **An input is filled from a ledger, and follows it.**
+   This is where one server computes on another's output.
+   Open: epochs are per server, so a reader's times are not the writer's.
+   Servers that share a clock could share a timeline.
+4. **A writer restarts onto a ledger that already has spans.**
+   It must find where the ledger stands, rebuild its state from its input ledgers, and either resume from the frontier or write the difference.
+   The open questions of item 2 come due here.
+
+These are hard to judge apart.
+One way to proceed is to build 2 to 4 once, roughly, as something to throw away, and to decide what to land from what it shows.
+
+Two findings from measuring bear on any implementation, and `bench/ledger/README.md` has the detail.
+
+* Loading the rules afresh each round costs about 6 ms.
+  A program kept parsed, optimized and checked would save most of that.
+  A dataflow kept standing for the rules is not an obvious fix: it would hold the rules' own arrangements across rounds, and retract each round's requests in the next.
+* About half of the workers' time in a round is merging the standing indexes, loading the programs, and waiting, and not the rules.

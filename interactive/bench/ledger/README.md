@@ -80,6 +80,24 @@ Pipelined, in ms.
   Without it, compute would pass commit between 1,200 and 5,000 spans a round.
 - **Resolving costs about 1.3 µs a span** at 50,000 a round, summed over the round's wall time.
 
+### Where the workers' time goes
+
+From a sampling profile at 18,000 appends a round, as shares of the four workers' wall time.
+
+| What | Share |
+| --- | ---: |
+| Merging the standing arrangements, at each tick | 24% |
+| Join operators | 13% |
+| Reduce operators, of which the rules' own lambda is 5 | 12% |
+| Arrange operators, which sort each round's rows into batches | 10% |
+| Map and filter, exchange, progress tracking | 7% |
+| Installing the two programs | 13% |
+| Idle, waiting on another worker or on the driver | 15% |
+| Feed, read out, drop | 4% |
+
+Merging, installing and idling are half of it.
+A merge writes its key and value columns three times: after merging, after compacting times, and when settling.
+
 ### Round sizes near a power of two
 
 Avoid them when measuring.

@@ -25,6 +25,12 @@
 --   spans_add         ((id), (seqno, lower, upper, since, batch))   to be made durable
 --   own_delta, registered_add, follows_add                      the changes to the three indexes
 --   taken             ((tx), (actions))                         the requests this round decided
+--
+-- Two idioms recur below, each for a reason in the lambda language.
+--   `(context, sum) cap_sum match (...)`: a match arm does not see variables bound outside it,
+--   so what an arm needs is passed in beside the sum.
+--   `let none = [] : List(..) in none map (..)`: there is no constant for an empty list whose
+--   elements hold a sum, so one is made by mapping over an empty list that holds none.
 
 type Batch = Empty | Inline List(int) | Blob List(int);
 type Clock = Free | Follows (int, int);

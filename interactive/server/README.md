@@ -260,7 +260,6 @@ fronting proxy if a deployment ever needs one.
 Ledgers, as [`../model.md`](../model.md) describes them, run as ordinary programs on this server:
 
     ./target/release/ddir_server < interactive/server/demo/ledger_views.txt    # the state, its views, its invariants
-    ./target/release/ddir_server < interactive/server/demo/ledger_rounds.txt   # three rounds of transactions
     python3 interactive/server/demo/ledger_resolver.py   # nine sessions feed one resolver, a tenth pumps it
 
 [`../bench/ledger`](../bench/ledger/README.md) makes such rounds durable, and measures them.

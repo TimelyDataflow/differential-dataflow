@@ -1,6 +1,6 @@
 //! Shared frontier operations over `List(List(int))` antichains of product times.
 //! Comparisons ignore order, duplicates, and dominated points.
-//! Normalize, join, and meet return sorted minimal antichains, retaining the input time width.
+//! Normalize and join return sorted minimal antichains, retaining the input time width.
 //! Points of different widths may meet in one row: a missing trailing coordinate is the minimum, as in `PointStamp`.
 //! No well-shaped input is an error, so a request with ragged times cannot stop a dataflow.
 //! Results have the widest width seen in their row; an empty frontier has no width witness.
@@ -17,10 +17,10 @@ use super::Function;
 type Time = PointStamp<i64, 2>;
 type Frontier = Antichain<Time>;
 
-pub(super) const NAMES: [&str; 6] = ["frontier_le", "frontier_lt", "frontier_eq", "frontier_join", "frontier_meet", "frontier_normalize"];
+pub(super) const NAMES: [&str; 4] = ["frontier_le", "frontier_lt", "frontier_join", "frontier_normalize"];
 
 #[derive(Clone, Copy)]
-enum Operation { Le, Lt, Eq, Join, Meet, Normalize }
+enum Operation { Le, Lt, Join, Normalize }
 
 struct Kernel {
     name: &'static str,
@@ -33,15 +33,15 @@ pub(super) fn functions() -> &'static [Function] {
     static FUNCTIONS: OnceLock<Vec<Function>> = OnceLock::new();
     FUNCTIONS.get_or_init(|| {
         let frontier = Shape::List(Box::new(Shape::List(Box::new(Shape::Int))));
-        NAMES.into_iter().zip([Operation::Le, Operation::Lt, Operation::Eq, Operation::Join, Operation::Meet, Operation::Normalize])
+        NAMES.into_iter().zip([Operation::Le, Operation::Lt, Operation::Join, Operation::Normalize])
             .map(|(name, operation)| {
                 let input = match operation {
                     Operation::Normalize => frontier.clone(),
                     _ => Shape::Prod(vec![frontier.clone(), frontier.clone()]),
                 };
                 let output = match operation {
-                    Operation::Le | Operation::Lt | Operation::Eq => Shape::Int,
-                    Operation::Join | Operation::Meet | Operation::Normalize => frontier.clone(),
+                    Operation::Le | Operation::Lt => Shape::Int,
+                    Operation::Join | Operation::Normalize => frontier.clone(),
                 };
                 Arc::new(Kernel { name, operation, input, output }) as Function
             }).collect()
@@ -149,20 +149,18 @@ impl HostKernel for Kernel {
                 _ => None,
             };
             let frontier = match self.operation {
-                Operation::Le | Operation::Lt | Operation::Eq => {
+                Operation::Le | Operation::Lt => {
                     let right = right.as_ref().unwrap();
                     let le = left.less_equal(right);
                     let comparison = match self.operation {
                         Operation::Le => le,
                         Operation::Lt => le && !right.less_equal(&left),
-                        Operation::Eq => le && right.less_equal(&left),
                         _ => unreachable!(),
                     };
                     comparisons.push(i64::from(comparison));
                     continue;
                 }
                 Operation::Join => left.antichain().join(&right.as_ref().unwrap().antichain()),
-                Operation::Meet => left.antichain().meet(&right.as_ref().unwrap().antichain()),
                 Operation::Normalize => left.antichain(),
             };
             let mut times = frontier.elements().to_vec();
@@ -175,8 +173,8 @@ impl HostKernel for Kernel {
             frontier_ends.push(time_ends.len());
         }
         Ok(match self.operation {
-            Operation::Le | Operation::Lt | Operation::Eq => Value::int(comparisons),
-            Operation::Join | Operation::Meet | Operation::Normalize => Value::List(frontier_ends.into(), Box::new(
+            Operation::Le | Operation::Lt => Value::int(comparisons),
+            Operation::Join | Operation::Normalize => Value::List(frontier_ends.into(), Box::new(
                 Value::List(time_ends.into(), Box::new(Value::int(coordinates))))),
         })
     }
@@ -225,22 +223,18 @@ mod tests {
         ];
         let args = Value::Prod(vec![column(&left), column(&right)]);
         assert_eq!(evaluate("frontier_le", args.clone()).unwrap(), Value::int([1, 0, 1, 1]));
-        assert_eq!(evaluate("frontier_lt", args.clone()).unwrap(), Value::int([0, 0, 0, 1]));
-        assert_eq!(evaluate("frontier_eq", args).unwrap(), Value::int([1, 0, 1, 0]));
+        assert_eq!(evaluate("frontier_lt", args).unwrap(), Value::int([0, 0, 0, 1]));
     }
 
     #[test]
     fn lattice_operations_normalize_and_preserve_width() {
         let left = vec![vec![0, 2], vec![2, 0]];
         let right = vec![vec![1, 1]];
-        assert_eq!(evaluate("frontier_join", pair(left.clone(), right.clone())).unwrap(),
+        assert_eq!(evaluate("frontier_join", pair(left.clone(), right)).unwrap(),
                    column(&[vec![vec![1, 2], vec![2, 1]]]));
-        assert_eq!(evaluate("frontier_meet", pair(left.clone(), right)).unwrap(),
-                   column(&[vec![vec![0, 2], vec![1, 1], vec![2, 0]]]));
-        assert_eq!(evaluate("frontier_join", pair(left.clone(), vec![])).unwrap(), column(&[vec![]]));
-        assert_eq!(evaluate("frontier_meet", pair(vec![], left.clone())).unwrap(), column(&[left]));
+        assert_eq!(evaluate("frontier_join", pair(left, vec![])).unwrap(), column(&[vec![]]));
         let padded = vec![vec![0, i64::MIN], vec![0, i64::MIN]];
-        assert_eq!(evaluate("frontier_meet", pair(padded, vec![])).unwrap(), column(&[vec![vec![0, i64::MIN]]]));
+        assert_eq!(evaluate("frontier_normalize", column(&[padded])).unwrap(), column(&[vec![vec![0, i64::MIN]]]));
     }
 
     #[test]
@@ -249,9 +243,7 @@ mod tests {
         let args = pair(vec![vec![0]], vec![vec![0, 0]]);
         assert_eq!(evaluate("frontier_le", args.clone()).unwrap(), Value::int([1]));
         assert_eq!(evaluate("frontier_lt", args.clone()).unwrap(), Value::int([1]));
-        assert_eq!(evaluate("frontier_eq", args.clone()).unwrap(), Value::int([0]));
-        assert_eq!(evaluate("frontier_join", args.clone()).unwrap(), column(&[vec![vec![0, 0]]]));
-        assert_eq!(evaluate("frontier_meet", args).unwrap(), column(&[vec![vec![0, i64::MIN]]]));
+        assert_eq!(evaluate("frontier_join", args).unwrap(), column(&[vec![vec![0, 0]]]));
         // Results take the widest width in their row, here from a dominated point.
         let input = column(&[vec![vec![0, 0], vec![1]]]);
         assert_eq!(evaluate("frontier_normalize", input).unwrap(), column(&[vec![vec![0, 0], vec![1, i64::MIN]]]));
@@ -278,7 +270,6 @@ mod tests {
         let mut right = Vec::new();
         let mut expected_le = Vec::new();
         let mut expected_lt = Vec::new();
-        let mut expected_eq = Vec::new();
         let mut normalized = Vec::new();
         for width in [0, 1, 2, 5] {
             let zero = vec![0; width];
@@ -303,7 +294,6 @@ mod tests {
                     let upper = antichain(b);
                     expected_le.push(i64::from(PartialOrder::less_equal(&lower, &upper)));
                     expected_lt.push(i64::from(PartialOrder::less_than(&lower, &upper)));
-                    expected_eq.push(i64::from(lower == upper));
                     let mut points = lower.elements().to_vec();
                     points.sort();
                     normalized.push(points.iter().map(|point| {
@@ -316,8 +306,7 @@ mod tests {
         }
         let args = Value::Prod(vec![column(&left), column(&right)]);
         assert_eq!(evaluate("frontier_le", args.clone()).unwrap(), Value::int(expected_le));
-        assert_eq!(evaluate("frontier_lt", args.clone()).unwrap(), Value::int(expected_lt));
-        assert_eq!(evaluate("frontier_eq", args).unwrap(), Value::int(expected_eq));
+        assert_eq!(evaluate("frontier_lt", args).unwrap(), Value::int(expected_lt));
         assert_eq!(evaluate("frontier_normalize", column(&left)).unwrap(), column(&normalized));
     }
 }

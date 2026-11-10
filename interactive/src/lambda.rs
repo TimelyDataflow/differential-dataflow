@@ -447,9 +447,11 @@ pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<corgi::
     }
 }
 
-/// The scope every DDIR program's lambdas start from: the Float and frontier functions, `bit_length`, and the built-in sums `Option` and `Result`.
-/// A word's input is its argument, or the tuple of its arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`.
-/// The sums leave their payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its payload's shape, and `branch`, `map_variant` and `match` read only their tags.
+/// The scope every DDIR program's lambdas start from: the Float and frontier functions, `bit_length`, and the
+/// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
+/// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
+/// payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its
+/// payload's shape, and `branch`, `map_variant` and `match` read only their tags.
 pub(crate) fn base_scope() -> corgi::Scope {
     static BASE: std::sync::OnceLock<corgi::Scope> = std::sync::OnceLock::new();
     BASE.get_or_init(|| {
