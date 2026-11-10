@@ -496,8 +496,7 @@ fn assert_printed_replans(src: &str, config: &interactive::passes::Config, expec
     let first = plan::report(src, &import_source, config).unwrap_or_else(|e| panic!("{src}: {e}"));
     let text = first.emit_ddp_at(DdpStage::Optimized).unwrap_or_else(|e| panic!("{src}: {e}")).text;
     assert!(text.contains(expect), "{src}: expected `{expect}` in\n{text}");
-    let config = interactive::passes::Config::none();
-    let second = plan::report(&text, &import_source, &config).unwrap_or_else(|e| panic!("{src}: printed text does not replan: {e}\n{text}"));
+    let second = plan::report(&text, &import_source, &interactive::passes::Config::none()).unwrap_or_else(|e| panic!("{src}: printed text does not replan: {e}\n{text}"));
     assert!(second.stages.iter().all(|s| s.problems.is_empty()), "{src}: {text}");
     assert_eq!(first.compare_final(&second), Vec::<String>::new(), "{src}: {text}");
     assert_eq!(second.emit_ddp_at(DdpStage::Optimized).unwrap().text, text, "{src}");
