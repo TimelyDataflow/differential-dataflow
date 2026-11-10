@@ -2,8 +2,8 @@
 
 This states what a ledger is, what may change a set of ledgers, and what any implementation must guarantee.
 It is a draft, written from the design notes of 9 and 10 November 2026.
-The DDIR in it is excerpted from [`model/ledger.ddp`](model/ledger.ddp), which runs on the server.
-The rules it describes are [`model/resolve.ddp`](model/resolve.ddp), and [`tests/ledgers.rs`](tests/ledgers.rs) checks each against the other.
+The DDIR in it is excerpted from [`ledger.ddp`](ledger.ddp), which runs on the server.
+The rules it describes are [`resolve.ddp`](resolve.ddp), and [`tests/ledgers.rs`](../../tests/ledgers.rs) checks each against the other.
 
 ## Ledgers
 
@@ -88,7 +88,7 @@ An implementation need not: it may compute the write frontier only for the ledge
 ## Invariants
 
 These hold of every reachable state.
-Each is a view in `model/ledger.ddp` that must be empty.
+Each is a view in `ledger.ddp` that must be empty.
 
 1. **malformed.** A span's lower is strictly before its upper.
 2. **orphaned.** Every span belongs to a registered ledger.
@@ -209,14 +209,14 @@ This is a model, and not yet an implementation.
 The programs state the rules and check them, and a driver takes, from outside, the actions a durable server would take itself.
 Nothing here makes a DDIR program's inputs or outputs durable.
 
-* **The model runs.** `model/ledger.ddp` is the state, the write frontier and the invariants.
-  `server/demo/ledger_views.txt` shows the write frontiers under a two-level clock tree, and then breaks each invariant once.
-* **The rules run.** `model/resolve.ddp` resolves one round as described above.
+* **The model runs.** `ledger.ddp` is the state, the write frontier and the invariants.
+  `views.txt` shows the write frontiers under a two-level clock tree, and then breaks each invariant once.
+* **The rules run.** `resolve.ddp` resolves one round as described above.
 * **They are checked against each other.** `tests/ledgers.rs` runs rounds of the rules, and after each has the model derive the indexes from the manifest alone; they must agree, and every invariant must hold.
-* **Many sessions can feed one resolver.** `server/demo/ledger_resolver.py` has nine client sessions and a tenth that pumps the rounds.
-* **Rounds can be made durable, and recovered.** `bench/ledger/fabric.py` writes each round's change to the manifest as a blob and swaps a root file.
+* **Many sessions can feed one resolver.** `resolver.py` has nine client sessions and a tenth that pumps the rounds.
+* **Rounds can be made durable, and recovered.** `fabric.py` writes each round's change to the manifest as a blob and swaps a root file.
   With `--check` it kills the server, rebuilds the manifest from the log, derives the indexes with the model, and checks the invariants.
-  Its measurements are in `bench/ledger/README.md`.
+  Its measurements are in `MEASUREMENTS.md`.
 * **Frontier comparisons never fail.** They take times of different widths, reading a missing coordinate as before every int, so a ragged request cannot stop a server.
   The rules reject such requests before comparing them.
 
@@ -234,7 +234,7 @@ The aim is a server whose programs read and write ledgers, reached in pieces tha
 
 1. **The server pilots the rounds.**
    It runs a round, writes the round's change as a blob, swaps the root, and only then reports outcomes.
-   This is `bench/ledger/fabric.py` moved into the server, with requests still arriving from outside.
+   This is `fabric.py` moved into the server, with requests still arriving from outside.
 2. **A trace's changes become spans with data.**
    Each tick, a program's output is written as a batch and appended to a ledger.
    Open: which outputs are ledgers and which stay in memory; whether a writer reconciles with what a ledger already holds; what a writer does when its append is rejected.
@@ -250,7 +250,7 @@ The aim is a server whose programs read and write ledgers, reached in pieces tha
 These are hard to judge apart.
 One way to proceed is to build 2 to 4 once, roughly, as something to throw away, and to decide what to land from what it shows.
 
-Two findings from measuring bear on any implementation, and `bench/ledger/README.md` has the detail.
+Two findings from measuring bear on any implementation, and `MEASUREMENTS.md` has the detail.
 
 * Loading the rules afresh each round costs about 6 ms.
   A program kept parsed, optimized and checked would save most of that.

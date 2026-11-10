@@ -4,7 +4,7 @@
 The server runs three kinds of program, all `.ddp`:
   state     state.ddp, standing: the manifest (registrations and spans) and the three indexes the rules read
   gen       requests.ddp, one per round: shapes flat columns of ints into requests
-  res       ../../model/resolve.ddp, one per round: the rules, bound to `state` and `gen`
+  res       resolve.ddp, one per round: the rules, bound to `state` and `gen`
 
 A round, driven from here:
   1. load `gen` and `res`, and feed the round's requests to `gen` as binary frames
@@ -17,12 +17,12 @@ thread while the next round resolves, and rounds that queue behind a commit are 
 
 The durable log is a chain of blobs, each naming the one before it, with a root file naming the last.
 `--check` kills the server, rebuilds the manifest from the log on a fresh one, derives the indexes
-from it with ../../model/ledger.ddp, checks that model's invariants, and compares what it rebuilt.
+from it with ledger.ddp, checks that model's invariants, and compares what it rebuilt.
 
 Every ledger here has one time coordinate, and every batch is empty: there is no client data yet.
 
   cargo build --release -p ddir-server
-  python3 interactive/bench/ledger/fabric.py --dir /tmp/fabric --ledgers 100000 --clocks 1 --spans 0,2560 --check
+  python3 interactive/examples/ledger/fabric.py --dir /tmp/fabric --ledgers 100000 --clocks 1 --spans 0,5000 --check
 """
 
 from __future__ import annotations
@@ -45,11 +45,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-sys.path.insert(0, str(HERE.parent / "ldbc"))
+sys.path.insert(0, str(ROOT / "interactive" / "bench" / "ldbc"))
 from client import decode, encode_frame  # noqa: E402  (the binary frame encoder and decoder)
 
 FLAT = (("prod", ["int"]), ("prod", ["int"] * 5))
-RULES = "interactive/model/resolve.ddp"
+RULES = f"{HERE.relative_to(ROOT)}/resolve.ddp"
 BIND = "input0=state::own input1=gen::requests input2=state::registered input3=state::follows"
 INVARIANTS = ["malformed", "orphaned", "forked", "skipped", "early", "unclocked", "mismatched"]
 
@@ -347,7 +347,7 @@ class Fabric:
             for target, frame in record:
                 s.feed(f"state {target}", frame)
         s.ask("tick")
-        s.ask("load check from interactive/model/ledger.ddp input0=state::registrations input1=state::spans")
+        s.ask(f"load check from {HERE.relative_to(ROOT)}/ledger.ddp input0=state::registrations input1=state::spans")
         s.ask("tick")
         broken = {name: rows_in(s.frames(f"check::{name}")) for name in INVARIANTS}
         for target, name in enumerate(("own", "registered", "follows")):

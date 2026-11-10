@@ -4,11 +4,11 @@
 Nothing here is durable, and no client has data: every batch is empty. The point is the plumbing.
 
 Standing programs on one server:
-  state     the manifest and the indexes the rules read (interactive/bench/ledger/state.ddp)
+  state     the manifest and the indexes the rules read (state.ddp)
   intake    the transaction requests clients have fed and no round has yet taken
   outcomes  every transaction's result, for clients to read
 
-A pump session runs rounds: load the rules (interactive/model/resolve.ddp) against those programs, tick,
+A pump session runs rounds: load the rules (resolve.ddp) against those programs, tick,
 feed the conclusions into `state` and the results into `outcomes`, retract the taken requests from
 `intake`, drop the rules, tick.
 
@@ -19,7 +19,7 @@ Client sessions, each on its own connection, feed requests into `intake` and pol
   straggler   appends slowly to a follower, learning from rejections where the clock has moved it to
 
 Run from the repository root, after `cargo build --release -p ddir-server`:
-  python3 interactive/server/demo/ledger_resolver.py
+  python3 interactive/examples/ledger/resolver.py
 """
 import os, re, socket, subprocess, sys, threading, time
 
@@ -46,7 +46,7 @@ output "requests" = requests;
 output "results" = results;
 """,
 }
-RULES = ("load res from interactive/model/resolve.ddp input0=state::own input1=intake::requests "
+RULES = ("load res from interactive/examples/ledger/resolve.ddp input0=state::own input1=intake::requests "
          "input2=state::registered input3=state::follows")
 
 
@@ -183,7 +183,7 @@ def main():
                               stderr=open(os.environ["LEDGER_DEMO_LOG"], "w") if "LEDGER_DEMO_LOG" in os.environ else subprocess.DEVNULL)
     try:
         setup = Session("setup")
-        setup.ask("load state from interactive/bench/ledger/state.ddp")
+        setup.ask("load state from interactive/examples/ledger/state.ddp")
         for name, text in PROGRAMS.items():
             setup.ask(f"load {name} begin\n{text}{name} end-load")
         setup.ask("tick")
@@ -216,7 +216,7 @@ def main():
         s = done[OWNERS + CONTENDERS + 1]
         check("the straggler's follower holds its 10 appends", current.get("5,7") == (10, s.final), f"own upper {s.final}")
         # The model's own account of the manifest must agree with the indexes, and find nothing wrong with it.
-        setup.ask("load check from interactive/model/ledger.ddp input0=state::registrations input1=state::spans")
+        setup.ask("load check from interactive/examples/ledger/ledger.ddp input0=state::registrations input1=state::spans")
         setup.ask("tick")
         check("the model's view of the manifest matches the resolver's index",
               sorted(setup.ask("peek check::own")) == sorted(setup.ask("peek state::own")))

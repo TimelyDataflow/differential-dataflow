@@ -1,11 +1,11 @@
-# The state of a set of ledgers and its derived views (see interactive/model/ledger.ddp and interactive/model.md).
+# The state of a set of ledgers and its derived views (see ledger.ddp and model.md, beside this file).
 #
 # First a valid state: the write frontiers under a two-level clock tree, and every invariant view empty.
 # Then one row that breaks each invariant, and the views that report it.
 #
-#   ./target/release/ddir_server < interactive/server/demo/ledger_views.txt
+#   ./target/release/ddir_server < interactive/examples/ledger/views.txt
 
-load ledgers from interactive/model/ledger.ddp
+load ledgers from interactive/examples/ledger/ledger.ddp
 # Ledgers 1 and 2 follow clock 9; clock 9 follows clock 8; ledger 3 is free. All have width 1 and start at [0].
 feed ledgers 0 begin
 tuple(tuple(0,1)) val=tuple(list(1,2),1,list(list(0)),inject(1,tuple(0,9)))

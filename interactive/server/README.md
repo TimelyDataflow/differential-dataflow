@@ -257,13 +257,6 @@ fronting proxy if a deployment ever needs one.
     ./target/release/ddir_server < interactive/server/demo/txn.txt
     python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP
 
-Ledgers, as [`../model.md`](../model.md) describes them, run as ordinary programs on this server:
-
-    ./target/release/ddir_server < interactive/server/demo/ledger_views.txt    # the state, its views, its invariants
-    python3 interactive/server/demo/ledger_resolver.py   # nine sessions feed one resolver, a tenth pumps it
-
-[`../bench/ledger`](../bench/ledger/README.md) makes such rounds durable, and measures them.
-
 ## Benchmarking
 
 The [LDBC-derived workload](../bench/ldbc/README.md) runs parameterized interactive

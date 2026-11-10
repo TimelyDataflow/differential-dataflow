@@ -1,6 +1,6 @@
 -- What a resolver keeps resident, each as an arrangement others can read.
 --
--- The manifest, which is the record: registrations and spans, as in ../../model/ledger.ddp.
+-- The manifest, which is the record: registrations and spans, as in ledger.ddp.
 -- Three indexes derived from it, which the rules read: each ledger's version and own upper,
 -- its width and start, and the clock it follows.
 -- A driver feeds each round's conclusions into all five; after a restart it feeds the manifest

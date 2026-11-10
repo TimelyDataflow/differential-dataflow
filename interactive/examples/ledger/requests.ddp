@@ -1,4 +1,4 @@
--- Shape flat rows of ints into the requests the rules take (see ../../model/resolve.ddp).
+-- Shape flat rows of ints into the requests the rules take (see resolve.ddp).
 -- A driver can then send its requests as plain columns of ints, and the shaping is done here.
 -- Every ledger made this way has one time coordinate, starts at [0], and has an empty shape;
 -- every append has an empty batch.

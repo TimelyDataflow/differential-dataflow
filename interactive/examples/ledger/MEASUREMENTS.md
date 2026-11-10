@@ -1,40 +1,7 @@
-# Ledger rounds, resolved by DDIR and made durable
+# Ledger rounds: measurements
 
-`fabric.py` runs rounds of ledger transactions on a stock `ddir_server`, and makes each round durable.
-The rules are [`../../model/resolve.ddp`](../../model/resolve.ddp), and the model they implement is [`../../model.md`](../../model.md).
-Everything the server runs is `.ddp`; the driver feeds requests, reads conclusions, writes them to disk, and pumps.
-
-## How a round goes
-
-Three kinds of program run on the server.
-
-- `state`, from [`state.ddp`](state.ddp), stands for the whole run: the manifest, and the three indexes the rules read.
-- `gen`, from [`requests.ddp`](requests.ddp), lives for one round: it shapes flat columns of ints into requests.
-- `res`, the rules, lives for one round, bound to `state` and `gen`.
-
-The driver then does five things.
-
-1. It loads `gen` and `res`, and feeds the round's requests to `gen` as binary frames.
-2. It ticks, and the rules decide every request.
-3. It reads the round's change to the manifest, as binary frames.
-4. It feeds the rules' conclusions into `state`, drops `gen` and `res`, and ticks.
-5. It writes the frames as one blob, flushes, swaps the root file, and flushes again.
-
-A round's outcomes count as reported when step 5 returns.
-In `pipelined` mode step 5 runs on another thread while the next round resolves, and rounds that queue behind a commit share the next one.
-The log is a chain of blobs, each naming the one before, and a root file naming the last.
-
-## Run it
-
-```sh
-cargo build --release -p ddir-server
-python3 interactive/bench/ledger/fabric.py --dir /tmp/fabric --ledgers 100000 --clocks 1 --spans 0,5000 --check
-```
-
-`--check` kills the server afterwards and starts another.
-It feeds the log into the new server's manifest, derives the indexes from the manifest with [`../../model/ledger.ddp`](../../model/ledger.ddp), and checks that model's invariants.
-What it rebuilt must equal what the first server held, and one more round must resolve on it.
-Every round of every run also checks that exactly the expected number of actions committed.
+These are results from [`fabric.py`](fabric.py), the driver that makes each round durable.
+[`README.md`](README.md) says how a round goes and how to run it.
 
 ## Recorded results
 

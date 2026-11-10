@@ -1,4 +1,4 @@
-//! The ledger rules (`model/resolve.ddp`) and the ledger model (`model/ledger.ddp`), on one small history.
+//! The ledger rules (`examples/ledger/resolve.ddp`) and the ledger model (`examples/ledger/ledger.ddp`), on one small history.
 //!
 //! Each round runs the rules on the indexes the rounds before it left, and checks every outcome.
 //! After each round the model derives the same indexes from the manifest alone, and they must agree;
@@ -84,8 +84,8 @@ const INVALID: &str = "inject(3,tuple())";
 
 #[test]
 fn rounds_follow_the_model() {
-    let rules = program(include_str!("../model/resolve.ddp"));
-    let model = program(include_str!("../model/ledger.ddp"));
+    let rules = program(include_str!("../examples/ledger/resolve.ddp"));
+    let model = program(include_str!("../examples/ledger/ledger.ddp"));
     for workers in [1, 2] {
         let mut state = State::default();
 
@@ -158,8 +158,8 @@ fn rounds_follow_the_model() {
 /// though neither order of running them whole would commit both: an advance lands after its round's appends.
 #[test]
 fn a_clock_advance_lands_after_its_round() {
-    let rules = program(include_str!("../model/resolve.ddp"));
-    let model = program(include_str!("../model/ledger.ddp"));
+    let rules = program(include_str!("../examples/ledger/resolve.ddp"));
+    let model = program(include_str!("../examples/ledger/ledger.ddp"));
     let mut state = State::default();
     let created = |outcomes: BTreeMap<i64, String>| assert!(outcomes.values().all(|outcome| outcome == COMMITTED));
     created(round(&rules, &mut state, &[(0, format!("{},{}", create(8, 1, &[0], None), create(9, 1, &[0], None)))], 2));

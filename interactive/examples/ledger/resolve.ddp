@@ -1,4 +1,4 @@
--- The transaction rules of the ledger model, for one round (see ../model.md).
+-- The transaction rules of the ledger model, for one round (see model.md).
 --
 -- A round takes the requests waiting, in the order of their keys, and decides each.
 -- A transaction is a list of actions that all take effect or none do.
