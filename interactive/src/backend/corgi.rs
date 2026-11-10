@@ -17,6 +17,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::join::join_with_tactic;
 use differential_dataflow::operators::reduce::reduce_with_tactic;
+use differential_dataflow::operators::co_reduce::co_reduce_with_tactic;
 use differential_dataflow::trace::Span;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
@@ -386,6 +387,21 @@ impl Backend for CorgiBackend {
         let Arr { arranged, since } = a;
         let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
         Arr::built(reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduce", ProxyReduceTactic::new(backend).with_key_batch_size(256)))
+    }
+
+    fn reduce_many<'s>(inputs: Vec<Self::Arr<'s>>, signs: Option<Vec<Diff>>, reducer: &Reducer, limit: Option<usize>, shapes: Vec<st::RowShape>) -> Self::Arr<'s> {
+        // The backend reads each input's batches tagged by input, and a merged reduce reads their
+        // diffs times the input's sign.
+        let backend = match signs {
+            Some(signs) => CorgiReduceBackend::new(reducer.clone(), limit, shapes[0].clone()).with_signs(signs),
+            None => unimplemented!("a grouped reduce"),
+        };
+        // As for the join, the inputs are read as of the join of their times. Every program time
+        // is at or beyond each import's time, so this reads each input as the unary reduce would.
+        let since = inputs.iter().map(|a| a.since.clone()).reduce(|a, b| differential_dataflow::lattice::Lattice::join(&a, &b)).expect("a reduce has an input");
+        let backend = BackendFrontier::new(backend, Antichain::from_elem(since));
+        let arranged = inputs.into_iter().map(|a| a.arranged).collect();
+        Arr::built(co_reduce_with_tactic::<_, CTrace, _>(arranged, "CorgiReduceMany", ProxyReduceTactic::new(backend).with_key_batch_size(256)))
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {

@@ -54,6 +54,10 @@ pub(crate) trait Backend {
     fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: Level, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::Reduce`; `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, limit: Option<usize>, shape: st::RowShape) -> Self::Arr<'s>;
+    /// A reduce over several arrangements, without arranging their union. See
+    /// `scope_ir::ReduceInput`. `signs` holds each input's sign for a merged reduce and is `None`
+    /// for a grouped one. `shapes` are the inputs' row shapes.
+    fn reduce_many<'s>(inputs: Vec<Self::Arr<'s>>, signs: Option<Vec<crate::ir::Diff>>, reducer: &Reducer, limit: Option<usize>, shapes: Vec<st::RowShape>) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
 }
 
@@ -258,24 +262,20 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
                         Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement))))
                     },
-                    st::Node::Reduce { input, reducer, limit } => match (input.as_single(), input) {
-                        (Some(input), _) => {
+                    st::Node::Reduce { input, reducer, limit } => match input.as_single() {
+                        Some(input) => {
                             let a = resolve(&items, &imports, &var_cols, input).arrange();
                             Rendered::Arrangement(B::reduce(a, reducer, *limit, shape_of(input)))
                         },
-                        // A merged reduce is the reduce of the signed concatenation of its inputs.
-                        (None, st::ReduceInput::Merged(inputs)) => {
-                            let shape = shape_of(&inputs[0].0);
-                            let mut parts = inputs.iter().map(|(r, sign)| {
-                                let c = resolve(&items, &imports, &var_cols, r).collection();
-                                if *sign < 0 { B::linear(c, vec![LinearOp::Negate], level, shape_of(r)) } else { c }
-                            });
-                            let first = parts.next().expect("a merged reduce has an input");
-                            let union = parts.fold(first, |acc, c| acc.concat(c));
-                            let a = Rendered::<'s, B>::Collection(union).arrange();
-                            Rendered::Arrangement(B::reduce(a, reducer, *limit, shape))
+                        // Every input is arranged, and the reduce reads the arrangements directly.
+                        None => {
+                            let arrs = input.refs().map(|r| resolve(&items, &imports, &var_cols, r).arrange()).collect();
+                            let signs = match input {
+                                st::ReduceInput::Merged(inputs) => Some(inputs.iter().map(|(_, sign)| *sign).collect()),
+                                st::ReduceInput::Grouped(_) => None,
+                            };
+                            Rendered::Arrangement(B::reduce_many(arrs, signs, reducer, *limit, input.refs().map(shape_of).collect()))
                         },
-                        (None, st::ReduceInput::Grouped(_)) => unimplemented!("reduce over several inputs"),
                     },
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();

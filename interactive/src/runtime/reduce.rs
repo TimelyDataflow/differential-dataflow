@@ -49,6 +49,37 @@ use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
+/// An input batch of a reduce: a plain batch, or one tagged by the input of a reduce over several
+/// arrangements it came from.
+pub(crate) trait InBatch<T: ColTime> {
+    /// The input the batch came from. A plain batch comes from input 0.
+    fn tag(&self) -> usize;
+    fn batch(&self) -> &CBatch<T>;
+}
+
+impl<T: ColTime> InBatch<T> for CBatch<T> {
+    fn tag(&self) -> usize { 0 }
+    fn batch(&self) -> &CBatch<T> { self }
+}
+
+impl<T: ColTime> InBatch<T> for (usize, CBatch<T>) {
+    fn tag(&self) -> usize { self.0 }
+    fn batch(&self) -> &CBatch<T> { &self.1 }
+}
+
+/// The chunks of `batches`, and each chunk's input.
+fn tagged_chunks_of<T: ColTime, B: InBatch<T>>(batches: &[B]) -> (Vec<&CorgiChunk<T, Diff>>, Vec<usize>) {
+    let mut chunks = Vec::new();
+    let mut tags = Vec::new();
+    for b in batches {
+        for chunk in b.batch().chunks.iter() {
+            chunks.push(chunk);
+            tags.push(b.tag());
+        }
+    }
+    (chunks, tags)
+}
+
 /// Values named by id: id `i` is row `refs[i].1` of `columns[refs[i].0]`.
 #[derive(Default)]
 struct Pool {
@@ -158,6 +189,8 @@ pub(crate) struct CorgiReduceBackend<T> {
     window_size: usize,
     /// The retire in progress.
     retire: Retire,
+    /// Each input's sign, by input index. A merged reduce reads the signed sum of its inputs.
+    signs: Vec<Diff>,
 }
 
 /// A retire's keys and where its input chunks hold them, found once by its first window.
@@ -234,7 +267,15 @@ impl<T> CorgiReduceBackend<T> {
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             window_size: window_size.max(1),
             retire: Retire::default(),
+            signs: vec![1],
         }
+    }
+
+    /// The backend of a merged reduce, which reads input `i`'s diffs times `signs[i]`. Its input
+    /// batches are tagged by input.
+    pub(crate) fn with_signs(mut self, signs: Vec<Diff>) -> Self {
+        self.signs = signs;
+        self
     }
 }
 
@@ -259,9 +300,10 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches 
 /// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows. The keys `colliding`
 /// marks (by index; empty when none do) hold several real keys under one identifier: their rows are
 /// first split by real key, so that an id names one real key's value, and the row it is recorded
-/// at holds that key.
+/// at holds that key. With `signs`, chunk `i`'s diffs count `signs[i]` times.
 fn present<T: ColTime + Ord>(
     chunks: &[&CorgiChunk<T, Diff>],
+    signs: Option<&[Diff]>,
     keys: &[i64],
     matches: &Matches,
     colliding: &[bool],
@@ -295,7 +337,8 @@ fn present<T: ColTime + Ord>(
         &whole
     };
     let (sorted, groups) = sort_blocks(&labels, &gather_refs(vals, rows.iter().copied()));
-    let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
+    // A chunk's diffs count times its sign, before equal values consolidate.
+    let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row] * signs.map_or(1, |s| s[chunk]));
     let (mut start, mut updates) = (0, Vec::new());
     for group in groups.chunk_by(|a, b| a == b) {
         let members = &sorted[start..start + group.len()];
@@ -423,7 +466,7 @@ where
     }
 }
 
-impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
+impl<T, B: InBatch<T>> ProxyReduceBackend<T, B, CBatch<T>> for CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
@@ -437,14 +480,18 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, B, CBatch<T>>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64>) {
         if *from == KeyPosition::End {
             return;
         }
-        let novel_chunks = chunks_of(instance.input_batches);
-        let mut in_chunks = chunks_of(instance.source_batches);
+        let (novel_chunks, novel_tags) = tagged_chunks_of(instance.input_batches);
+        let (mut in_chunks, mut in_tags) = tagged_chunks_of(instance.source_batches);
         let prior = in_chunks.len();
         in_chunks.extend(novel_chunks.iter().copied());
+        in_tags.extend(novel_tags);
+        // Each input chunk's sign, unless every one is positive.
+        let in_signs: Vec<Diff> = in_tags.iter().map(|tag| self.signs[*tag]).collect();
+        let in_signs = in_signs.iter().any(|sign| *sign != 1).then_some(&in_signs[..]);
         let out_chunks = chunks_of(instance.output_batches);
 
         // The first window finds the retire's keys, where the input holds them, and the columns
@@ -498,11 +545,11 @@ where
         // survives in `window.seeds` above. Input ids name rows for this window only.
         self.input.refs.clear();
         let projected = (self.project_values && self.reads.value != Demand::All).then_some(&self.input.columns[..]);
-        present(&in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
+        present(&in_chunks, in_signs, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
         // The output history, same keys. Output ids name rows for the whole retire, and the rows
         // that hold their keys are at the same positions of the output chunks' key columns.
         let fresh = self.output.refs.len();
-        present(&out_chunks, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
+        present(&out_chunks, None, keys, &out_matches, colliding, None, &mut self.output.refs, &mut window.output);
         self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
 
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
@@ -734,6 +781,12 @@ mod tests {
         assert!(backend.project_values);
     }
 
+    /// The corrections of a backend over plain input batches. The backend reads plain and tagged
+    /// batches, so the batch type is named here.
+    fn corrections(backend: &mut CorgiReduceBackend<Time>, keys: &[i64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>>::reduce_corrections(backend, keys, in_ends, input, out_ends, output)
+    }
+
     /// The rows of a column of `Int` leaves, products of them, or units, as vectors.
     fn rows_of(col: &CValue) -> Vec<Vec<u64>> {
         let fields: Vec<Vec<i64>> = match col {
@@ -805,7 +858,7 @@ mod tests {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
                 let (mut refs, mut bridge) = (Vec::new(), Vec::new());
-                present(&chunks, &keys, &search(&chunks, &keys), &[], None, &mut refs, &mut bridge);
+                present(&chunks, None, &keys, &search(&chunks, &keys), &[], None, &mut refs, &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
@@ -832,7 +885,7 @@ mod tests {
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
         let output = [(0, 1), (1, 1), (2, 1)];
-        let (corr, ends) = backend.reduce_corrections(&[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
+        let (corr, ends) = corrections(&mut backend, &[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
         assert_eq!((corr.clone(), ends), (vec![(1, -1), (2, -1), (3, 1)], vec![1, 3, 3]));
         assert_eq!(rows_of(&backend.output.gather(&[3])), vec![vec![3]]);
     }
@@ -848,13 +901,13 @@ mod tests {
         backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
         backend.output_keys = vec![(0, 0)];
         for _ in 0..64 {
-            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 5)], &[1], &[(0, 1)]), (vec![], vec![0]));
+            assert_eq!(corrections(&mut backend, &[10], &[1], &[(0, 5)], &[1], &[(0, 1)]), (vec![], vec![0]));
             assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (1, 1));
         }
-        assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(0, 1)]), (vec![(0, -1), (1, 1)], vec![2]));
+        assert_eq!(corrections(&mut backend, &[10], &[1], &[(0, 3)], &[1], &[(0, 1)]), (vec![(0, -1), (1, 1)], vec![2]));
         assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
         for _ in 0..64 {
-            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(1, 1)]), (vec![], vec![0]));
+            assert_eq!(corrections(&mut backend, &[10], &[1], &[(0, 3)], &[1], &[(1, 1)]), (vec![], vec![0]));
             assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
         }
         assert_eq!(rows_of(&backend.output.gather(&[0, 1])), vec![vec![5], vec![3]]);
@@ -912,7 +965,7 @@ mod tests {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
                 // Distinct reads its values whole, so the input pool holds what was presented.
                 let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), None, shape, window_size);
-                backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
+                ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>>::begin(&mut backend, Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
                 while from != KeyPosition::End {
