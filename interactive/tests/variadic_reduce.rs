@@ -489,14 +489,14 @@ fn import_source(name: &str) -> Option<interactive::scope_ir::RowShape> {
     (name == "p::x").then_some((corgi::Shape::Int, corgi::Shape::Int))
 }
 
-/// Plans `src` with no passes, prints the optimized stage, replans the text, and checks the two
-/// plans compare equal and the second print equals the first.
-fn assert_printed_replans(src: &str, expect: &str) {
+/// Plans `src` with the passes `config`, prints the optimized stage, replans the text with no
+/// passes, and checks the two plans compare equal and the second print equals the first.
+fn assert_printed_replans(src: &str, config: &interactive::passes::Config, expect: &str) {
     use interactive::plan::{self, ddp::DdpStage};
-    let config = interactive::passes::Config::none();
-    let first = plan::report(src, &import_source, &config).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let first = plan::report(src, &import_source, config).unwrap_or_else(|e| panic!("{src}: {e}"));
     let text = first.emit_ddp_at(DdpStage::Optimized).unwrap_or_else(|e| panic!("{src}: {e}")).text;
     assert!(text.contains(expect), "{src}: expected `{expect}` in\n{text}");
+    let config = interactive::passes::Config::none();
     let second = plan::report(&text, &import_source, &config).unwrap_or_else(|e| panic!("{src}: printed text does not replan: {e}\n{text}"));
     assert!(second.stages.iter().all(|s| s.problems.is_empty()), "{src}: {text}");
     assert_eq!(first.compare_final(&second), Vec::<String>::new(), "{src}: {text}");
@@ -520,7 +520,59 @@ fn printed_reduces_replan_identically() {
         ("output \"o\" = a | reduce(b, c, (k, la, lb, lc) -> la);", "a | reduce(b, c, "),
         ("output \"o\" = a | reduce(b | filter((k, v) -> (k, 0) gt), (k, la, lb) -> la);", "reduce("),
     ];
-    for (body, expect) in cases { assert_printed_replans(&format!("{header}{body}"), expect); }
+    for (body, expect) in cases { assert_printed_replans(&format!("{header}{body}"), &interactive::passes::Config::none(), expect); }
+}
+
+/// The merge-reduce pass's output prints and replans: each program is planned with the default
+/// passes, so the pass fires, and its optimized text replans with none to the same plan.
+#[test]
+fn merged_by_the_pass_replans_identically() {
+    let header = r#"
+        let a = input 0 : (int, int) | arrange;
+        let b = input 1 : (int, int) | arrange;
+        let d = input 2 : (int, int);
+        let e = input 3 : (int, int);
+        let f = input 4 : (int, int);
+    "#;
+    let cases = [
+        // One arranged leaf, and the unarranged ones share one arrangement of their signed concat.
+        ("output \"o\" = a + d + e - f | count;", "let o_idx = o_rows | arrange;\nlet o_reduce = [a, o_idx] | reduce("),
+        // A single negated unarranged leaf keeps its sign.
+        ("output \"o\" = a - d | count;", "[a, -d_idx] | reduce("),
+        ("output \"o\" = a | negate | count;", "[-a] | reduce("),
+        ("output \"o\" = a + a | count;", "[a, a] | reduce("),
+    ];
+    for (body, expect) in cases { assert_printed_replans(&format!("{header}{body}"), &interactive::passes::Config::default(), expect); }
+    // A merged reduce in a loop, of two outer arrangements and the loop's own arrangement.
+    let looped = r#"
+        let seed = input 0 : (int, ()) | arrange;
+        let blocked = input 1 : (int, ()) | arrange;
+        s: { set x = (::seed - ::blocked + x) | distinct; }
+        output "o" = s::x;
+    "#;
+    assert_printed_replans(looped, &interactive::passes::Config::default(), "[::seed, -::blocked, ");
+    // A merged reduce of a child scope that hoisting moves out of it.
+    let hoisted = r#"
+        let a = input 0 : (int, int) | arrange;
+        let d = input 1 : (int, int);
+        let roots = input 2 : (int, int);
+        s: {
+            let c = ::a - ::d | count;
+            set x = (roots + (x | join(c, (k, v, n) -> (k, v)))) | distinct;
+        }
+        output "o" = s::x;
+    "#;
+    assert_printed_replans(hoisted, &interactive::passes::Config::default(), "\nlet c = [a, -d_idx] | reduce(");
+}
+
+/// `[e]` is `e`, so `[a] | distinct` prints with the same by-record re-key as `a | distinct`.
+#[test]
+fn single_list_distinct_keys_by_record() {
+    use interactive::plan::{self, ddp::DdpStage};
+    let src = "let a = input 0 : (int, int); output \"o\" = [a] | distinct;";
+    let report = plan::report(src, &import_source, &interactive::passes::Config::none()).unwrap();
+    let text = report.emit_ddp_at(DdpStage::Parsed).unwrap().text;
+    assert!(text.contains("map((k, v) -> ((k, v), ()))"), "{text}");
 }
 
 /// With projection on, merged and grouped reduces plan without panicking and answer as with it
