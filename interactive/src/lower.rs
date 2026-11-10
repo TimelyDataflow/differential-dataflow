@@ -710,6 +710,19 @@ mod tree_tests {
     }
 
     #[test]
+    fn child_rearranges_a_parent_rewritten_by_record_distinct() {
+        let program = lower_tree(parse(r#"
+            let a = input 0 : (int, int);
+            let d = a | distinct;
+            s: { let m = ::d | min; }
+            output "o" = s::m;
+        "#));
+        // A by-record distinct ends in a map, so the child must arrange its import.
+        let s = child(&program.root, "s");
+        assert!(s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Arrange(Ref::Import(_))))));
+    }
+
+    #[test]
     fn keeps_explicit_arranges_and_scope_boundaries() {
         let program = lower_tree(parse(r#"
             let rows = input 0 : (int, ()) | arrange | arrange;
