@@ -180,6 +180,8 @@ fn merged_loop_matches_concat() {
             assert_eq!(many(&program(list)), 2, "{list}: {:?}", operator_names(&program(list)));
             assert_eq!(many(&program(concat)), 2, "{concat}: {:?}", operator_names(&program(concat)));
             assert_eq!(run(workers, &program(list), Some("none"), epochs.clone()), expected, "{list} on {workers} workers");
+            // The concatenation with default passes, merging on, answers as the unmerged form does.
+            assert_eq!(run(workers, &program(concat), None, epochs.clone()), expected, "{concat} with default passes on {workers} workers");
         }
     }
 }
@@ -265,12 +267,16 @@ fn list_misuse_is_rejected() {
     }
 }
 
-/// The names of the operators installing `src` builds on one worker.
-fn operator_names(src: &str) -> Vec<String> {
+/// The names of the operators installing `src` builds on one worker, with default passes.
+fn operator_names(src: &str) -> Vec<String> { operator_names_with(src, None) }
+
+/// The names of the operators installing `src` builds on one worker, with the passes `passes` names.
+fn operator_names_with(src: &str, passes: Option<&str>) -> Vec<String> {
     use std::cell::RefCell;
     use std::rc::Rc;
     use timely::logging::{TimelyEvent, TimelyEventBuilder};
     let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    let passes = passes.map(|p| interactive::passes::Config::parse(p).unwrap());
     timely::execute_directly(move |worker| {
         let names: Rc<RefCell<Vec<String>>> = Rc::default();
         let sink = Rc::clone(&names);
@@ -282,6 +288,7 @@ fn operator_names(src: &str) -> Vec<String> {
             }
         });
         let mut server = Server::new();
+        if let Some(passes) = passes { server.set_passes(passes); }
         server.install(worker, "p", &program).expect("install");
         server.tick(worker);
         worker.log_register().unwrap().remove("timely");
@@ -558,11 +565,43 @@ fn merge_reduce_pass_on_off_agree() {
         "a + c | count", "a - (b - c) | count", "a + (c | negate) | collect", "c - a | count",
         "a | map((k, v) -> (k, v)) - b | distinct", "a - (b | filter((k, v) -> v)) | distinct",
     ];
+    // The same arranged leaf twice.
+    let repeated = ["a + a | count", "a - a | count", "a + a - b | count"];
     let program = |expr: &str| format!("let a = input 0 : (int, int) | arrange; let b = input 1 : (int, int) | arrange; let c = input 2 : (int, int); output \"o\" = {expr};");
     for workers in [1, 3] {
-        for expr in cases {
+        for expr in cases.into_iter().chain(repeated) {
             let off = run(workers, &program(expr), Some("-merge-reduce"), epochs.clone());
             assert_eq!(run(workers, &program(expr), None, epochs.clone()), off, "{expr} on {workers} workers");
         }
+    }
+    // The pass fires on every case that reduces an arranged leaf: the reduce is a merged one with it
+    // on and a plain one with it off. A `distinct` of `(int, int)` rows rekeys each leaf by its
+    // whole record first, and a rekeyed leaf is not arranged, so those cases stay plain.
+    let many = |expr: &str, passes: Option<&str>| operator_names_with(&program(expr), passes).iter().filter(|n| *n == "CorgiReduceMany").count();
+    for expr in cases.into_iter().chain(repeated).filter(|expr| !expr.contains("distinct")) {
+        assert_eq!(many(expr, None), 1, "{expr} merges");
+        assert_eq!(many(expr, Some("-merge-reduce")), 0, "{expr} stays plain with the pass off");
+    }
+}
+
+/// A negation read elsewhere is not absorbed into the merged reduce's signs: the reduce still
+/// merges the arranged leaf, and the other reader sees the negation.
+#[test]
+fn shared_negation_answers_match() {
+    let epochs = vec![
+        vec![lines(&[(1, 5, 1), (1, 7, 2), (2, 3, 1)]), lines(&[(1, 5, 1), (3, 9, 1), (2, 3, 2)])],
+        vec![lines(&[(1, 5, -1), (4, 4, 1)]), lines(&[(3, 9, -1), (4, 4, 1)])],
+    ];
+    let src = r#"
+        let a = input 0 : (int, int) | arrange;
+        let b = input 1 : (int, int) | arrange;
+        let nb = b | negate;
+        output "o" = a + nb | count;
+        output "nb" = nb;
+    "#;
+    for workers in [1, 3] {
+        let off = run(workers, src, Some("-merge-reduce"), epochs.clone());
+        assert!(off.iter().any(|e| !e["nb"].is_empty()));
+        assert_eq!(run(workers, src, None, epochs.clone()), off, "{workers} workers");
     }
 }

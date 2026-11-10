@@ -231,4 +231,22 @@ mod tests {
         let folded = reduces(child).iter().any(|input| matches!(input, ReduceInput::Merged(v) if v.iter().any(|(r, s)| *s == -1 && matches!(r, Ref::Import(_)))));
         assert!(folded, "{:?}", reduces(child));
     }
+
+    /// A negation another reader uses stays a node and is not folded into a sign.
+    #[test]
+    fn shared_negation_is_not_absorbed() {
+        let src = r#"
+            let a = input 0 : (int, int) | arrange;
+            let b = input 1 : (int, int) | arrange;
+            let nb = b | negate;
+            output "out" = a + nb | count;
+            output "nb" = nb;
+        "#;
+        let p = optimized(src, &default());
+        let inputs = merged(&p.root);
+        assert!(inputs.iter().all(|(_, s)| *s == 1), "{inputs:?}");
+        assert_eq!(inputs.len(), 2, "{inputs:?}");
+        let negates = p.root.items.iter().filter(|item| matches!(item, Item::Op(Node::Linear { ops, .. }) if ops == &[LinearOp::Negate])).count();
+        assert_eq!(negates, 1, "{:?}", p.root.items);
+    }
 }
