@@ -174,8 +174,11 @@ fn merged_loop_matches_concat() {
             let expected = run(workers, &program(concat), Some("none"), epochs.clone());
             assert!(expected.iter().any(|epoch| !epoch["reach"].is_empty()), "the loop reaches nodes");
             assert!(expected.windows(2).filter(|w| w[0]["reach"] != w[1]["reach"]).count() > 10, "the reached nodes change");
-            let names = operator_names(&program(list));
-            assert_eq!(names.iter().filter(|n| *n == "CorgiReduceMany").count(), 1, "{list}: {names:?}");
+            // The merge-reduce pass also merges `cand`'s concatenation of an arranged `roots`, so
+            // the list's reduce is one of two. The concatenation form fuses the same way.
+            let many = |src: &str| operator_names(src).iter().filter(|n| *n == "CorgiReduceMany").count();
+            assert_eq!(many(&program(list)), 2, "{list}: {:?}", operator_names(&program(list)));
+            assert_eq!(many(&program(concat)), 2, "{concat}: {:?}", operator_names(&program(concat)));
             assert_eq!(run(workers, &program(list), Some("none"), epochs.clone()), expected, "{list} on {workers} workers");
         }
     }
@@ -537,4 +540,29 @@ fn projection_keeps_variadic_reduce_answers() {
     // Planning with projection on does not panic either.
     let config = interactive::passes::Config { projection: true, ..interactive::passes::Config::none() };
     interactive::plan::report(src, &|_| None, &config).expect("plans");
+}
+
+/// The merge-reduce pass changes the plan and not the answers: concats with arranged leaves, run
+/// with the pass off and on, on one and several workers.
+#[test]
+fn merge_reduce_pass_on_off_agree() {
+    let epochs = vec![
+        vec![lines(&[(1, 5, 1), (1, 7, 2), (2, 3, 1), (3, 1, 1)]), lines(&[(1, 5, 1), (3, 9, 1), (1, 6, 1)]), lines(&[(1, 7, 1), (2, 3, 1)])],
+        vec![lines(&[(1, 5, -1), (4, 4, 1)]), lines(&[(3, 9, -1), (2, 3, 1), (4, 4, 1)]), lines(&[(1, 7, -1), (3, 1, 1)])],
+        vec![lines(&[(1, 7, -2), (2, 3, -1)]), lines(&[(1, 5, -1), (1, 6, 1), (2, 3, -1)]), lines(&[(4, 4, 1), (1, 6, 1)])],
+    ];
+    // `a` and `b` are arranged, `c` is not.
+    let cases = [
+        "a - b | count", "a - b | min", "a - b | collect", "a - b | reduce((k, vals) -> vals)",
+        "a - b | reduce(limit 1, (k, vals) -> vals)", "a | negate | count", "a + b - c | distinct",
+        "a + c | count", "a - (b - c) | count", "a + (c | negate) | collect", "c - a | count",
+        "a | map((k, v) -> (k, v)) - b | distinct", "a - (b | filter((k, v) -> v)) | distinct",
+    ];
+    let program = |expr: &str| format!("let a = input 0 : (int, int) | arrange; let b = input 1 : (int, int) | arrange; let c = input 2 : (int, int); output \"o\" = {expr};");
+    for workers in [1, 3] {
+        for expr in cases {
+            let off = run(workers, &program(expr), Some("-merge-reduce"), epochs.clone());
+            assert_eq!(run(workers, &program(expr), None, epochs.clone()), off, "{expr} on {workers} workers");
+        }
+    }
 }
