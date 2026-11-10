@@ -72,8 +72,10 @@ impl Printer<'_> {
             Expr::Join(left, right, l) => format!("{} | join({}, {})", self.expression(left)?, self.expression(right)?, self.parsed_lambda(l)?),
             Expr::HalfJoin(stream, arrangement, strict, l) => format!("{} | half_join({}, {}, {})", self.expression(stream)?, self.expression(arrangement)?, u8::from(*strict), self.parsed_lambda(l)?),
             Expr::Reduce(input, reducer) => {
-                // A list is no collection to key by its records, and `distinct` handles any values.
-                let by_record = matches!(reducer, crate::parse::Reducer::Distinct) && !matches!(**input, Expr::List(_));
+                // A list of several elements, or a negated one, is no collection to key by its
+                // records, and `distinct` handles any values. `[e]` is `e`, and keys by record.
+                let merged_list = matches!(&**input, Expr::List(parts) if parts.len() > 1 || parts.iter().any(|(sign, _)| *sign < 0));
+                let by_record = matches!(reducer, crate::parse::Reducer::Distinct) && !merged_list;
                 let lambda = if by_record {
                     self.parsed_lambda(&crate::reducers::unit_distinct())?
                 } else { self.parsed_lambda(&reducer.lambda())? };

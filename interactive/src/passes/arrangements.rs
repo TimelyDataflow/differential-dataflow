@@ -21,7 +21,8 @@ fn key(r: &Ref) -> (u8, usize, usize) {
     }
 }
 
-fn arranged(scope: &Scope, imports: &[bool], r: &Ref) -> bool {
+/// Whether `r` is statically arranged in `scope`, whose imports are arranged as `imports` says.
+pub(super) fn arranged(scope: &Scope, imports: &[bool], r: &Ref) -> bool {
     match r {
         Ref::Local(i) => matches!(scope.items[*i], Item::Op(Node::Arrange(_) | Node::Reduce { .. })),
         Ref::Import(i) => imports[*i],
@@ -30,7 +31,8 @@ fn arranged(scope: &Scope, imports: &[bool], r: &Ref) -> bool {
     }
 }
 
-fn child_imports(scope: &Scope, imports: &[bool], child: &Scope) -> Vec<bool> {
+/// Per import of `child`, whether it reads an arranged value of `scope`.
+pub(super) fn child_imports(scope: &Scope, imports: &[bool], child: &Scope) -> Vec<bool> {
     child.imports.iter().map(|i| match &i.from {
         Source::Parent(r) => arranged(scope, imports, r),
         _ => false,

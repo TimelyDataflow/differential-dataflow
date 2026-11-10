@@ -277,9 +277,10 @@ A program moves through four parts, each using only the ones before it.
 2. **Rewrites** turn a program into another program. `passes/` holds the passes install runs,
    through one entry point, `passes::run`: dead-code removal, structural optimization, map
    composition, arrangement sharing, invariant motion, projection (fields nothing reads
-   become `()`), and the as-of drop. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
+   become `()`), the as-of drop, and `merge-reduce`, which reduces a concatenation through its
+   leaves' arrangements. None is needed to run a program, and each can be switched off: `DDIR_PASSES` on the server and
    `ddir-plan --passes` take a list such as `none` or `all,-projection`. The default
-   excludes projection; `all` enables every pass. `explain/` produces a
+   excludes projection, so `merge-reduce` is on; `all` enables every pass. `explain/` produces a
    program that explains its own outputs.
 3. **The runtime** renders a program to differential dataflow. `backend/` holds the `Backend`
    trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's

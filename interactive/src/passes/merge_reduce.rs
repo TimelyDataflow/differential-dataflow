@@ -12,8 +12,9 @@
 //! The pass must run before code motion: hoisting can move a loop-invariant negation out of an
 //! iterative scope, where its import is no longer one this pass can fold.
 
-use crate::scope_ir::{Item, Node, ReduceInput, Ref, Scope, Source};
+use crate::scope_ir::{Item, Node, ReduceInput, Ref, Scope};
 use crate::ir::{Diff, LinearOp};
+use super::arrangements::{arranged, child_imports};
 use super::structural::{compact, use_counts};
 
 /// Rewrite every scope of the tree rooted at `scope`, whose imports are arranged as `imports`
@@ -22,24 +23,11 @@ pub(super) fn run(scope: &mut Scope, imports: &[bool]) -> usize {
     let mut count = rewrite_scope(scope, imports);
     for i in 0..scope.items.len() {
         let Item::Sub(child) = &scope.items[i] else { continue };
-        let child_imports: Vec<bool> = child.imports.iter().map(|import| match &import.from {
-            Source::Parent(r) => arranged(scope, imports, r),
-            _ => false,
-        }).collect();
+        let arranged_imports = child_imports(scope, imports, child);
         let Item::Sub(sub) = &mut scope.items[i] else { unreachable!() };
-        count += run(sub, &child_imports);
+        count += run(sub, &arranged_imports);
     }
     count
-}
-
-/// Whether `r` is statically arranged in `scope`.
-fn arranged(scope: &Scope, imports: &[bool], r: &Ref) -> bool {
-    match r {
-        Ref::Local(i) => matches!(scope.items[*i], Item::Op(Node::Arrange(_) | Node::Reduce { .. })),
-        Ref::Import(i) => imports[*i],
-        // Leaving a child flattens its exports. Feedback is also a collection.
-        Ref::Var(_) | Ref::ChildExport(_, _) => false,
-    }
 }
 
 /// The signed leaves of `r` read with `sign`, through single-use concats and negations, which are
@@ -204,6 +192,7 @@ mod tests {
         assert!(p.root.items.iter().any(|item| matches!(item, Item::Op(Node::Concat(_)))));
     }
 
+    /// A concat another output also reads stays, and the reduce keeps its single input.
     #[test]
     fn shared_concat_no_rewrite() {
         let src = r#"
