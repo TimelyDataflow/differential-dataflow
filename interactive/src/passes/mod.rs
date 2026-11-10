@@ -246,9 +246,9 @@ pub fn optimize(program: &mut Program) {
 fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, root: usize, config: &Config, timings: &mut Timings, observe: &mut Observe<'_>) {
     // Merge reduces of concatenations before hoisting can move a negation out of a loop, where
     // its import is no longer one the pass can fold.
-    let merge_reduce = |program: &mut Program, timings: &mut Timings| {
-        let imports: Vec<bool> = program.root.imports.iter().map(|i| matches!(i.from, Source::Trace(_))).collect();
-        timings.pass_mut(Pass::MergeReduce).rewrites(|| merge_reduce::run(&mut program.root, &imports))
+    let merge_reduce = |staged: &mut Program, times: &mut Timings| {
+        let imports: Vec<bool> = staged.root.imports.iter().map(|i| matches!(i.from, Source::Trace(_))).collect();
+        times.pass_mut(Pass::MergeReduce).rewrites(|| merge_reduce::run(&mut staged.root, &imports))
     };
     if config.merge_reduce { merge_reduce(program, timings); }
     // Move pure statements before fusion can absorb them into a time-sensitive chain.

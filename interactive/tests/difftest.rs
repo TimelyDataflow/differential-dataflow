@@ -556,20 +556,28 @@ impl Gen {
                 // A grouped reduce over the stream and 1 to 3 collections of its key, whose values
                 // may have other shapes.
                 93..=95 => {
-                    let others: Vec<Coll> = self.colls.iter().filter(|c| c.key == key).cloned().collect();
-                    if others.is_empty() { continue; }
-                    let others: Vec<Coll> = (0..1 + self.rng.below(3)).map(|_| self.rng.pick(&others).clone()).collect();
+                    let candidates: Vec<Coll> = self.colls.iter().filter(|c| c.key == key).cloned().collect();
+                    if candidates.is_empty() { continue; }
+                    let mut picked: Vec<Coll> = (0..1 + self.rng.below(3)).map(|_| self.rng.pick(&candidates).clone()).collect();
+                    // When some collection of the key holds another value shape, the first input
+                    // after the stream is one.
+                    let differing: Vec<Coll> = candidates.iter().filter(|c| c.val != val).cloned().collect();
+                    if !differing.is_empty() { picked[0] = self.rng.pick(&differing).clone(); }
+                    let others = picked;
                     let names = others.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
                     let lists: Vec<String> = (0..=others.len()).map(|i| format!("l{i}")).collect();
                     let lens: Vec<String> = lists.iter().map(|l| format!("{l} len")).collect();
                     // The lambda binds one list per input, the stream's first.
-                    let (body, v2) = match self.rng.below(3) {
+                    let last = others.last().unwrap().val.clone();
+                    let (body, v2) = match self.rng.below(4) {
                         0 => {
                             let sum = lens.iter().skip(1).fold(lens[0].clone(), |acc, l| format!("({acc}, {l}) add"));
                             (format!("({sum}, 1) enlist"), Sh::Int)
                         }
                         1 => (format!("(({}), 1) enlist", lens.join(", ")), Sh::Tup(vec![Sh::Int; lens.len()])),
-                        _ => ("l0 map ((v, _) -> (v, 1))".to_string(), val.clone()),
+                        // The contents of the first list, and of the last, a list of another shape.
+                        2 => ("l0 map ((v, _) -> (v, 1))".to_string(), val.clone()),
+                        _ => (format!("l{} map ((v, _) -> (v, 1))", others.len()), last),
                     };
                     let op = Op::Plain { text: format!("reduce({names}, (_, {}) -> {body})", lists.join(", ")), same_shape: v2 == val };
                     val = v2;

@@ -441,7 +441,7 @@ impl ScopeLower {
             },
             // A grouped reduce reads every input arranged, as a join does.
             Expr::GroupedReduce(es, lambda) => {
-                let inputs = es.iter().map(|e| { let r = self.lower_expr(e); self.arrange(r) }).collect();
+                let inputs = es.iter().map(|input| { let r = self.lower_expr(input); self.arrange(r) }).collect();
                 self.push(st::Node::Reduce { input: st::ReduceInput::Grouped(inputs), reducer: crate::ir::Reducer::Expr(lambda.clone()), limit: None })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
@@ -451,6 +451,7 @@ impl ScopeLower {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "the scope tree walk threads its environment through parameters")]
 fn lower_scope_tree(
     address: &[String],
     body: &[Stmt],

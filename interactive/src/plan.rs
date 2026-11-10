@@ -405,7 +405,7 @@ fn node(node: &Node, names: &Names) -> String {
         Node::Arrange(input) => format!("{} | arrange", names.of(input)),
         Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), source_lambda(projection)),
         Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), source_lambda(projection)),
-        Node::Reduce { input, reducer: r, limit } => format!("{} | {}", ddp::reduce_head(input, |r| names.of(r)), reducer(r, *limit, ddp::grouped_rest(input, |r| names.of(r)))),
+        Node::Reduce { input, reducer: red, limit } => format!("{} | {}", ddp::reduce_head(input, |r| names.of(r)), reducer(red, *limit, ddp::grouped_rest(input, |r| names.of(r)))),
         Node::Inspect { input, label } => format!("{} | inspect({})", names.of(input), quote(label)),
     }
 }

@@ -206,15 +206,15 @@ fn list_in_loop_infers_shape() {
         output "o" = s::x;
     "#;
     for workers in [1, 2] {
-        assert_eq!(run(workers, src, None, epochs.clone()), run(workers, &plain, None, epochs.clone()));
+        assert_eq!(run(workers, src, None, epochs.clone()), run(workers, plain, None, epochs.clone()));
     }
     // No `var` declares x's shape: it comes from the list's elements.
-    let src = r#"
+    let looped = r#"
         let seed = input 0 : (int, int);
         s: { set x = [::seed, -x] | distinct; }
         output "o" = s::x;
     "#;
-    let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(looped));
     interactive::passes::optimize(&mut program);
     let (_, problems) = interactive::shapes::infer(&program, &|_| None, 1);
     assert!(problems.conflicts.is_empty(), "{:?}", problems.conflicts);
@@ -227,8 +227,8 @@ fn by_record_distinct_element_is_arranged() {
         let b = input 1 : (int, int);
         output "o" = [a | distinct, -b] | distinct;
     "#;
-    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
-    let items = &program.root.items;
+    let lowered = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    let items = &lowered.root.items;
     let mut merged = 0;
     for item in items {
         let Item::Op(Node::Reduce { input: ReduceInput::Merged(inputs), .. }) = item else { continue };
@@ -342,8 +342,8 @@ fn grouped_hands_one_list_per_input() {
     for workers in [1, 3] {
         for passes in [None, Some("none")] {
             let got = run(workers, src, passes, epochs.clone());
-            for (epoch, expected) in expected.iter().enumerate() {
-                assert_eq!(&got[epoch]["co"], expected, "workers={workers}, passes {passes:?}, epoch={epoch}");
+            for (epoch, want_rows) in expected.iter().enumerate() {
+                assert_eq!(&got[epoch]["co"], want_rows, "workers={workers}, passes {passes:?}, epoch={epoch}");
             }
         }
     }
@@ -392,18 +392,18 @@ fn grouped_matches_tagged_concat() {
     let mut epochs = Vec::new();
     for _ in 0..3 {
         let mut epoch = Vec::new();
-        for (input, held) in held.iter_mut().enumerate() {
+        for (input, pool) in held.iter_mut().enumerate() {
             let mut rows = Vec::new();
             for _ in 0..40 {
                 // Retract a held row, or add a new one.
-                if !held.is_empty() && rng.next(3) == 0 {
-                    let (k, v) = held.swap_remove(usize::try_from(rng.next(u64::try_from(held.len()).unwrap())).unwrap());
+                if !pool.is_empty() && rng.next(3) == 0 {
+                    let (k, v) = pool.swap_remove(usize::try_from(rng.next(u64::try_from(pool.len()).unwrap())).unwrap());
                     rows.push(format!("{k} val={v} diff=-1"));
                 } else {
                     let k = rng.next(12);
                     let v = if input == 2 { format!("tuple({},{})", rng.next(3), rng.next(3)) } else { rng.next(4).to_string() };
                     let d = [1, 1, 2, -1][usize::try_from(rng.next(4)).unwrap()];
-                    for _ in 0..d.max(0) { held.push((k, v.clone())); }
+                    for _ in 0..d.max(0) { pool.push((k, v.clone())); }
                     rows.push(format!("{k} val={v} diff={d}"));
                 }
             }
@@ -476,17 +476,17 @@ fn grouped_rejects_limit() {
     let src = "let a = input 0 : (int, int); let b = input 1 : (int, int); output \"o\" = a | reduce(limit 2, b, (k, la, lb) -> la);";
     assert_eq!(parse_error(src), "a reduce over several inputs takes no limit");
     // `limit` is the keyword only before an integer, so a collection may be named `limit`.
-    let src = "let a = input 0 : (int, int); let limit = input 1 : (int, int); output \"o\" = a | reduce(limit, (k, la, lb) -> la);";
-    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    let limit_src = "let a = input 0 : (int, int); let limit = input 1 : (int, int); output \"o\" = a | reduce(limit, (k, la, lb) -> la);";
+    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(limit_src));
     assert!(program.root.items.iter().any(|i| matches!(i, Item::Op(Node::Reduce { input: ReduceInput::Grouped(v), .. }) if v.len() == 2)), "{:?}", program.root.items);
     // A list is a merged reduce's input, and takes no further inputs.
-    let src = "let a = input 0 : (int, int); let b = input 1 : (int, int); let c = input 2 : (int, int); output \"o\" = [a, -b] | reduce(c, (k, la, lb) -> la);";
-    assert_eq!(parse_error(src), "a list of collections cannot take extra reduce inputs");
+    let list_src = "let a = input 0 : (int, int); let b = input 1 : (int, int); let c = input 2 : (int, int); output \"o\" = [a, -b] | reduce(c, (k, la, lb) -> la);";
+    assert_eq!(parse_error(list_src), "a list of collections cannot take extra reduce inputs");
 }
 
 /// The shapes of the imports a printed program names: `p::x` is `(int, int)`.
 fn import_source(name: &str) -> Option<interactive::scope_ir::RowShape> {
-    (name == "p::x").then(|| (corgi::Shape::Int, corgi::Shape::Int))
+    (name == "p::x").then_some((corgi::Shape::Int, corgi::Shape::Int))
 }
 
 /// Plans `src` with no passes, prints the optimized stage, replans the text, and checks the two

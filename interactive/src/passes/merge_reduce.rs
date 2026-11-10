@@ -26,8 +26,8 @@ pub(super) fn run(scope: &mut Scope, imports: &[bool]) -> usize {
             Source::Parent(r) => arranged(scope, imports, r),
             _ => false,
         }).collect();
-        let Item::Sub(child) = &mut scope.items[i] else { unreachable!() };
-        count += run(child, &child_imports);
+        let Item::Sub(sub) = &mut scope.items[i] else { unreachable!() };
+        count += run(sub, &child_imports);
     }
     count
 }
@@ -50,7 +50,7 @@ fn leaves(scope: &Scope, uses: &[usize], r: &Ref, sign: Diff, absorbed: &mut Vec
             match &scope.items[*n] {
                 Item::Op(Node::Concat(refs)) => {
                     absorbed.push(*n);
-                    for r in refs { leaves(scope, uses, r, sign, absorbed, out); }
+                    for part in refs { leaves(scope, uses, part, sign, absorbed, out); }
                     return;
                 }
                 Item::Op(Node::Linear { input, ops }) if !ops.is_empty() && ops.iter().all(|op| matches!(op, LinearOp::Negate)) => {
@@ -66,6 +66,7 @@ fn leaves(scope: &Scope, uses: &[usize], r: &Ref, sign: Diff, absorbed: &mut Vec
     out.push((r.clone(), sign));
 }
 
+#[expect(clippy::needless_range_loop, reason = "the loops index `inserted` while a closure borrows it mutably")]
 fn rewrite_scope(scope: &mut Scope, imports: &[bool]) -> usize {
     let count = scope.items.len();
     let uses = use_counts(scope, &vec![false; count]);
@@ -88,10 +89,10 @@ fn rewrite_scope(scope: &mut Scope, imports: &[bool]) -> usize {
         for (leaf, sign) in found {
             if arranged(scope, imports, &leaf) { merged.push((leaf, sign)); } else { rest.push((leaf, sign)); }
         }
-        let mut add = |scope: &mut Scope, node: Node| {
-            let at = scope.items.len();
-            scope.items.push(Item::Op(node));
-            if scope.labels.len() == at { scope.labels.push(scope.labels[i].clone()); }
+        let mut add = |target: &mut Scope, node: Node| {
+            let at = target.items.len();
+            target.items.push(Item::Op(node));
+            if target.labels.len() == at { target.labels.push(target.labels[i].clone()); }
             inserted[i].push(at);
             Ref::Local(at)
         };
@@ -110,8 +111,8 @@ fn rewrite_scope(scope: &mut Scope, imports: &[bool]) -> usize {
             merged.push((arr, 1));
         }
         for n in absorbed { dead[n] = true; }
-        let Item::Op(Node::Reduce { input, .. }) = &mut scope.items[i] else { unreachable!() };
-        *input = ReduceInput::Merged(merged);
+        let Item::Op(Node::Reduce { input: rewritten, .. }) = &mut scope.items[i] else { unreachable!() };
+        *rewritten = ReduceInput::Merged(merged);
         rewrites += 1;
     }
     if rewrites == 0 { return 0; }

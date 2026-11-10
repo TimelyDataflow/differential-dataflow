@@ -66,6 +66,7 @@ fn arrange<'s>(c: VecCollection<'s, u64, (u64, u64), i64>) -> Arranged<'s, Trace
     arrange_core::<Pipeline, Vec<((u64, (u64, u64)), u64, i64)>, _, Spine>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new)
 }
 
+#[expect(clippy::ptr_arg, reason = "the signature the reduce logic takes")]
 fn max_logic(_k: &u64, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>) {
     if let Some(m) = input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| *v).max() {
         updates.push((m, 1));
@@ -83,11 +84,11 @@ fn input_ahead_matches_concat() {
     let got = Arc::new(Mutex::new(Vec::new()));
     let want = Arc::new(Mutex::new(Vec::new()));
     let ahead = Arc::new(AtomicUsize::new(0));
-    let (g, w, seen) = (got.clone(), want.clone(), ahead.clone());
+    let (g, w, seen) = (Arc::clone(&got), Arc::clone(&want), Arc::clone(&ahead));
     timely::execute_directly(move |worker| {
         let mut a = InputSession::<u64, (u64, u64), i64>::new();
         let mut b = InputSession::<u64, (u64, u64), i64>::new();
-        let (g, w, seen) = (g.clone(), w.clone(), seen.clone());
+        let (g, w, seen) = (Arc::clone(&g), Arc::clone(&w), Arc::clone(&seen));
         let probe = worker.dataflow::<u64, _, _>(|scope| {
             let (ca, cb) = (a.to_collection(scope), b.to_collection(scope));
             let tactic = Untag { inner: ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 3)), ahead: seen };

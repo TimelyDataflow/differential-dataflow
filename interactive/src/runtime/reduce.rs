@@ -327,6 +327,7 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches 
 /// at holds that key. With `signs`, chunk `i`'s diffs count `signs[i]` times. Only the chunks
 /// `keep` selects are read, and only their values are gathered, so the others may hold values of
 /// another shape.
+#[expect(clippy::too_many_arguments, reason = "a gather of chunks, keys, matches and sinks")]
 fn present<T: ColTime + Ord>(
     chunks: &[&CorgiChunk<T, Diff>],
     signs: Option<&[Diff]>,
@@ -1213,8 +1214,8 @@ mod tests {
             let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();
             let (second, _) = tactic.retire(novel(&early), first.clone(), novel(&late), &Antichain::from_elem(stamp(2)), &Antichain::new(), &held);
             let mut netted = BTreeMap::new();
-            for batch in first.iter().chain(second.and_then(|span| span.inner).as_ref()) {
-                for chunk in batch.chunks.iter() {
+            for done in first.iter().chain(second.and_then(|span| span.inner).as_ref()) {
+                for chunk in done.chunks.iter() {
                     let keys = recover_key(chunk.keys());
                     for i in 0..chunk.diffs().len() {
                         *netted.entry((print(&keys, i), print(chunk.vals(), i), chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
