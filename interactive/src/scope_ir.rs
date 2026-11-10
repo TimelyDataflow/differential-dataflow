@@ -378,11 +378,12 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
                     Node::Reduce { input, reducer, limit } => {
-                        let inputs = match input {
-                            ReduceInput::Merged(v) => v.iter().map(|(r, s)| format!("{}{}", if *s < 0 { "-" } else { "" }, fmt_ref(r))).collect::<Vec<_>>().join(" + "),
-                            ReduceInput::Grouped(v) => format!("cogroup({})", v.iter().map(fmt_ref).collect::<Vec<_>>().join(", ")),
-                        };
-                        format!("{} | {:?} limit={limit:?}", inputs, reducer)
+                        // The DDP forms: `[a, -b] | ..` for a merged reduce, `a | reduce(b, c, ..)` for a grouped one.
+                        match input {
+                            ReduceInput::Merged(v) if matches!(v.as_slice(), [(_, 1)]) => format!("{} | {:?} limit={limit:?}", fmt_ref(&v[0].0), reducer),
+                            ReduceInput::Merged(v) => format!("[{}] | {:?} limit={limit:?}", v.iter().map(|(r, s)| format!("{}{}", if *s < 0 { "-" } else { "" }, fmt_ref(r))).collect::<Vec<_>>().join(", "), reducer),
+                            ReduceInput::Grouped(v) => format!("{} | reduce({}, {:?})", fmt_ref(&v[0]), v[1..].iter().map(fmt_ref).collect::<Vec<_>>().join(", "), reducer),
+                        }
                     }
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };

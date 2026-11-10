@@ -11,7 +11,7 @@ use corgi::Shape;
 use crate::ir::{Lambda, LinearOp};
 use crate::lambda::Projection;
 use crate::level::Level;
-use crate::scope_ir::{self as st, Item, Node, Ref, Source};
+use crate::scope_ir::{self as st, Item, Node, ReduceInput, Ref, Source};
 use crate::shapes::{self, CollShape, ItemShapes, ScopeShapes};
 
 #[derive(Clone, Debug)]
@@ -761,10 +761,13 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
-            (Item::Op(Node::Reduce { input, reducer, .. }), PlannedItem::Op { output, .. }) => {
+            // A merged reduce's inputs share one row shape, so the mask goes into its reducer as for
+            // one input. A grouped reduce's reducer reads a list per input and is not narrowed.
+            (Item::Op(Node::Reduce { input: input @ ReduceInput::Merged(_), reducer, .. }), PlannedItem::Op { output, .. }) => {
+                let input = input.first();
                 if needs_mask(&output.shape.1, &output.val, live) {
                     let value = mask_part("input", &output.shape.1, &output.val, live);
-                    let shape = &plan.at(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))).expect("reduce input").shape;
+                    let shape = &plan.at(input).expect("reduce input").shape;
                     *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"), &shape.0, &shape.1);
                     masked += output.val.iter().filter(|&&id| !live[id]).count();
                 }
@@ -882,7 +885,9 @@ fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, level: Level) -
         }
         if projections.is_empty() { continue; }
         let Item::Op(Node::Reduce { input, reducer, .. }) = &mut scope.items[j] else { unreachable!() };
-        let Some(shape) = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))) else { continue };
+        // A grouped reduce's reducer is not narrowed, and a merged one's inputs share a shape.
+        if matches!(input, ReduceInput::Grouped(_)) { continue; }
+        let Some(shape) = shapes.of(input.first()) else { continue };
         for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
         changed += projections.len();
         let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };

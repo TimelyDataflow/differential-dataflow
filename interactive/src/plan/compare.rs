@@ -75,8 +75,7 @@ fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> 
             vec![Shape::Prod(vec![s.key, fields.first()?.clone(), a.val])]
         }
         Node::Reduce { input, .. } => {
-            let shape = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")))?;
-            vec![Shape::Prod(vec![shape.key, Shape::List(Box::new(Shape::Prod(vec![shape.val, Shape::Int])))])]
+            vec![shapes.reduce_input(input)?]
         }
         _ => Vec::new(),
     })

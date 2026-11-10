@@ -139,8 +139,12 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize], 
                 // A limited reduce depends only on the values it hands its lambda, and these can
                 // differ from round to round as values come and go: they are a site of their own.
                 if let Node::Reduce { input, limit: Some(k), .. } = node {
+                    // A merged reduce keeps its inputs and signs, so the lambda sees the same
+                    // consolidated values as in the original.
+                    let mut mapped = input.clone();
+                    mapped.for_each_ref(|r| *r = map_ref(r, &locals, &subs, import_map, var_base));
                     let presented = Node::Reduce {
-                        input: ReduceInput::single(map_ref(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")), &locals, &subs, import_map, var_base)),
+                        input: mapped,
                         reducer: Reducer::Expr(crate::parse::Reducer::Distinct.lambda()),
                         limit: Some(*k),
                     };
@@ -1023,25 +1027,30 @@ impl<'a> Reverse<'a> {
             Node::Arrange(input) | Node::Inspect { input, .. } => {
                 self.push(ex, path, input, dep_this);
             }
+            // Each input, merged or grouped, contributes the rows at the demanded keys.
             Node::Reduce { input, limit: None, .. } => {
-                let target = resolve(self.orig, path, input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")));
-                let side = self.side(&target);
-                let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
-                let contrib = ex.emit_lookup_keyed(dep, &side, out_len);
-                self.contribs.entry(target).or_default().push(contrib);
+                for r in input.refs() {
+                    let target = resolve(self.orig, path, r);
+                    let side = self.side(&target);
+                    let (dep, out_len) = align(ex, dep_this.clone(), path, target_path(&target));
+                    let contrib = ex.emit_lookup_keyed(dep, &side, out_len);
+                    self.contribs.entry(target).or_default().push(contrib);
+                }
             }
             // A limited reduce reads only each key's first values. Its output at a chain is decided
             // by the values first at that chain and at every chain before it, so it depends on the
             // values it handed its lambda at those chains, and on every input row holding them up
             // to the demanded chain: with them, each round's first values are as in the reference.
             Node::Reduce { input, limit: Some(_), .. } => {
-                let target = resolve(self.orig, path, input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")));
-                let side = self.side(&target);
                 let presented = self.side(&Target::Site(Addr { path: path.to_vec(), site: Site::Presented(i) }));
                 let values = ex.emit_lookup_presented(dep_this, &presented, path.len());
-                let (dep, out_len) = align(ex, values, path, target_path(&target));
-                let contrib = ex.emit_lookup_shape_preserving(dep, &side, out_len);
-                self.contribs.entry(target).or_default().push(contrib);
+                for r in input.refs() {
+                    let target = resolve(self.orig, path, r);
+                    let side = self.side(&target);
+                    let (dep, out_len) = align(ex, values.clone(), path, target_path(&target));
+                    let contrib = ex.emit_lookup_shape_preserving(dep, &side, out_len);
+                    self.contribs.entry(target).or_default().push(contrib);
+                }
             }
             // It reads its stream's whole times, as `lift` does.
             Node::HalfJoin { .. } => panic!("explain: half_join is not supported"),

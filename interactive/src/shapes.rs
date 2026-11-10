@@ -64,6 +64,22 @@ impl ScopeShapes {
             st::Ref::ChildExport(i, e) => match &self.items[*i] { ItemShapes::Sub(c) => c.exports[*e].clone(), ItemShapes::Op(_) => None },
         }
     }
+    /// The shape a reduce's lambda reads: `(key, vals)`, with a flat `(key, vals_0, .., vals_{n-1})`
+    /// for a grouped reduce. `None` while a shape it needs is unknown. A merged reduce's inputs
+    /// share one shape, so any known one gives it.
+    pub fn reduce_input(&self, input: &st::ReduceInput) -> Option<Shape> {
+        let (key, vals): (Shape, Vec<Shape>) = match input {
+            st::ReduceInput::Merged(inputs) => {
+                let c = inputs.iter().find_map(|(r, _)| self.of(r))?;
+                (c.key, vec![c.val])
+            }
+            st::ReduceInput::Grouped(inputs) => {
+                let known = inputs.iter().map(|r| self.of(r)).collect::<Option<Vec<_>>>()?;
+                (known[0].key.clone(), known.into_iter().map(|c| c.val).collect())
+            }
+        };
+        Some(Shape::Prod(crate::lambda::reduce_rows(&key, &vals)))
+    }
     /// The scope at `path` (indices of `Sub` items from this one).
     pub(crate) fn at(&self, path: &[usize]) -> &ScopeShapes {
         match path.split_first() {

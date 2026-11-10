@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use corgi::Shape;
 use crate::ir::{Lambda, LinearOp, Reducer};
-use crate::scope_ir::{Item, Node, Ref, Scope, Source};
+use crate::scope_ir::{Item, Node, ReduceInput, Ref, Scope, Source};
 use crate::shapes::{self, ItemShapes, ScopeShapes};
 use super::{Form, Report};
 use crate::parse::{Expr, InputRef, Stmt};
@@ -423,11 +423,11 @@ impl Printer<'_> {
             Node::Reduce { input, reducer, limit } => {
                 let word = match reducer {
                     Reducer::Expr(l) => {
-                        let input = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))).map(|s| Shape::Prod(vec![s.key, Shape::List(Box::new(Shape::Prod(vec![s.val, Shape::Int])))]));
-                        format!("reduce({}{})", limit_text(*limit), self.lambda(l, input)?)
+                        let shape = shapes.reduce_input(input);
+                        format!("reduce({}{}{})", grouped_rest(input, |r| names.of(r)), limit_text(*limit), self.lambda(l, shape)?)
                     }
                 };
-                format!("{} | {word}", names.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"))))
+                format!("{} | {word}", reduce_head(input, |r| names.of(r)))
             }
             Node::Inspect { input, label } => {
                 if identifier(label) != *label { return Err(format!("inspect label {label:?} is not a DDP identifier")); }
@@ -442,6 +442,27 @@ impl Printer<'_> {
 fn aliases(aliases: &[(&String, &Ref)], names: &Names, defined: &mut BTreeSet<String>, indent: &str, out: &mut String) {
     for &(name, r) in aliases {
         if defined.insert(name.clone()) { writeln!(out, "{indent}let {name} = {};", names.raw(r)).unwrap(); }
+    }
+}
+
+/// The text before a reduce's `| reduce(..)`: the one input of a plain reduce, else the bracket
+/// list of a merged reduce, `[a, -b]`, or the first input of a grouped one.
+pub(crate) fn reduce_head(input: &ReduceInput, name: impl Fn(&Ref) -> String) -> String {
+    match input {
+        ReduceInput::Merged(v) => match v.as_slice() {
+            [(r, 1)] => name(r),
+            _ => format!("[{}]", v.iter().map(|(r, s)| format!("{}{}", if *s < 0 { "-" } else { "" }, name(r))).collect::<Vec<_>>().join(", ")),
+        },
+        ReduceInput::Grouped(v) => name(&v[0]),
+    }
+}
+
+/// A grouped reduce's inputs after the first, each followed by a comma and a space, as written
+/// before its lambda: `b, c, `. Empty for a merged reduce.
+pub(crate) fn grouped_rest(input: &ReduceInput, name: impl Fn(&Ref) -> String) -> String {
+    match input {
+        ReduceInput::Merged(_) => String::new(),
+        ReduceInput::Grouped(v) => v[1..].iter().map(|r| format!("{}, ", name(r))).collect(),
     }
 }
 

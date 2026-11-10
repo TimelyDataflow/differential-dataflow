@@ -473,3 +473,68 @@ fn grouped_rejects_limit() {
     let src = "let a = input 0 : (int, int); let b = input 1 : (int, int); let c = input 2 : (int, int); output \"o\" = [a, -b] | reduce(c, (k, la, lb) -> la);";
     assert_eq!(parse_error(src), "a list of collections cannot take extra reduce inputs");
 }
+
+/// The shapes of the imports a printed program names: `p::x` is `(int, int)`.
+fn import_source(name: &str) -> Option<interactive::scope_ir::RowShape> {
+    (name == "p::x").then(|| (corgi::Shape::Int, corgi::Shape::Int))
+}
+
+/// Plans `src` with no passes, prints the optimized stage, replans the text, and checks the two
+/// plans compare equal and the second print equals the first.
+fn assert_printed_replans(src: &str, expect: &str) {
+    use interactive::plan::{self, ddp::DdpStage};
+    let config = interactive::passes::Config::none();
+    let first = plan::report(src, &import_source, &config).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let text = first.emit_ddp_at(DdpStage::Optimized).unwrap_or_else(|e| panic!("{src}: {e}")).text;
+    assert!(text.contains(expect), "{src}: expected `{expect}` in\n{text}");
+    let second = plan::report(&text, &import_source, &config).unwrap_or_else(|e| panic!("{src}: printed text does not replan: {e}\n{text}"));
+    assert!(second.stages.iter().all(|s| s.problems.is_empty()), "{src}: {text}");
+    assert_eq!(first.compare_final(&second), Vec::<String>::new(), "{src}: {text}");
+    assert_eq!(second.emit_ddp_at(DdpStage::Optimized).unwrap().text, text, "{src}");
+}
+
+#[test]
+fn printed_reduces_replan_identically() {
+    let header = r#"
+        let a = input 0 : (int, int) | arrange;
+        let b = input 1 : (int, int) | arrange;
+        let c = input 2 : (int, int) | arrange;
+        let imp = import "p::x" : (int, int);
+    "#;
+    let cases = [
+        ("output \"o\" = [a, -b] | count;", "[a, -b] | reduce("),
+        ("output \"o\" = [-a] | count;", "[-a] | reduce("),
+        ("output \"o\" = [imp, -b] | min;", "[imp, -b] | reduce("),
+        ("output \"o\" = [a, b - c] | distinct;", "] | reduce("),
+        ("output \"o\" = [a, -b] | reduce(limit 1, (k, vals) -> vals);", "reduce(limit 1, "),
+        ("output \"o\" = a | reduce(b, c, (k, la, lb, lc) -> la);", "a | reduce(b, c, "),
+        ("output \"o\" = a | reduce(b | filter((k, v) -> (k, 0) gt), (k, la, lb) -> la);", "reduce("),
+    ];
+    for (body, expect) in cases { assert_printed_replans(&format!("{header}{body}"), expect); }
+}
+
+/// With projection on, merged and grouped reduces plan without panicking and answer as with it
+/// off. A merged reduce's output is masked into its reducer, a grouped one is left whole.
+#[test]
+fn projection_keeps_variadic_reduce_answers() {
+    let src = r#"
+        let a = input 0 : (int, (int, int));
+        let b = input 1 : (int, (int, int));
+        let c = input 2 : (int, int);
+        output "merged" = [a, -b] | reduce((k, vals) -> vals) | map((k, v) -> (k, v .0));
+        output "grouped" = a | reduce(b, c, (k, la, lb, lc) -> (la, lb) append) | map((k, v) -> (k, 0));
+    "#;
+    let row = |k: i64, x: i64, y: i64, d: i64| format!("{k} val=tuple({x},{y}) diff={d}");
+    let epochs = vec![
+        vec![vec![row(1, 1, 2, 1), row(1, 3, 4, 1), row(2, 5, 6, 2)], vec![row(1, 1, 2, 1), row(3, 7, 8, 1)], lines(&[(1, 9, 1), (2, 8, 1)])],
+        vec![vec![row(1, 1, 2, -1), row(3, 1, 1, 1)], vec![row(2, 5, 6, 1)], lines(&[(1, 9, -1)])],
+    ];
+    for workers in [1, 2] {
+        let off = run(workers, src, Some("none"), epochs.clone());
+        let on = run(workers, src, Some("projection"), epochs.clone());
+        assert_eq!(off, on, "workers={workers}");
+    }
+    // Planning with projection on does not panic either.
+    let config = interactive::passes::Config { projection: true, ..interactive::passes::Config::none() };
+    interactive::plan::report(src, &|_| None, &config).expect("plans");
+}
