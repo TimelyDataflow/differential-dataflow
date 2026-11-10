@@ -343,7 +343,14 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
             }
         }
         st::Node::Reduce { input, reducer, .. } => {
-            let c = shapes.of(input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs")))?;
+            let st::ReduceInput::Merged(inputs) = input else { unimplemented!("reduce over several inputs") };
+            // The inputs are summed, so any one whose shape is known gives the row shape. In a loop
+            // the others may be known only through this reduce.
+            let known: Vec<CollShape> = inputs.iter().filter_map(|(r, _)| shapes.of(r)).collect();
+            let c = known.first()?.clone();
+            if let Some(other) = known.iter().find(|o| o.key != c.key || o.val != c.val) {
+                return fail(format!("reduce over inputs ({}, {}) and ({}, {})", c.key, c.val, other.key, other.val));
+            }
             let Reducer::Expr(lambda) = reducer;
             let v = match reduce_shape(lambda, &c.key, &c.val) {
                 Ok(v) => v,

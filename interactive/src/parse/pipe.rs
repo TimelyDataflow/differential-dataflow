@@ -41,6 +41,11 @@
 //!   `List` of `(val, diff)`. `| reduce(limit n, (k, vals) -> out)` hands the lambda only each
 //!   key's first `n` values (`n` at least one), whatever their diffs; `min` is
 //!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`.
+//! - `[a, -b] | min` (also `distinct`, `count`, `collect`, `reduce(..)`) — reduce the signed sum of a
+//!   bracket list of collections, as `a - b | min` does but without arranging the sum. Each element
+//!   is an optional `-` and a pipe expression up to the next `,` or `]`, and the sign covers the
+//!   whole element. A list is no collection: only a reduce reads one, so it must be followed by one
+//!   of those stages. `[e]` is `e`.
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
 //! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
 //!   element, value `(pos, element)`.
@@ -122,10 +127,12 @@ enum Token {
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
-    LParen, RParen, LBrace, RBrace,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq,
     Pipe, Plus, Minus, Eof,
 }
+
+const LIST_MISUSE: &str = "a list of collections is the input of a reduce";
 
 /// A shape before names in type declarations have been resolved.
 enum TypeShape {
@@ -253,6 +260,8 @@ fn lex(input: &str) -> Vec<Token> {
                 }
             },
             ')' => { chars.next(); tokens.push(Token::RParen); },
+            '[' => { chars.next(); tokens.push(Token::LBracket); },
+            ']' => { chars.next(); tokens.push(Token::RBracket); },
             '{' => { chars.next(); tokens.push(Token::LBrace); },
             '}' => { chars.next(); tokens.push(Token::RBrace); },
             ',' => { chars.next(); tokens.push(Token::Comma); },
@@ -523,8 +532,21 @@ impl Parser {
 
     /// An atom followed by stages, applied left to right: `| op`, `+ atom` and `- atom`. A run of
     /// `+`/`-` stages is one `Concat`.
+    ///
+    /// A bracket list `[e, -f]` is only the input of a reduce, so it must start the expression
+    /// and the next stage must be `| min`, `| distinct`, `| count`, `| collect` or `| reduce(`.
     fn parse_pipe_expr(&mut self) -> Expr {
-        let mut expr = self.parse_atom();
+        let mut expr = if *self.peek() == Token::LBracket {
+            let list = self.parse_list();
+            // The token stream ends in `Eof`, so a `Pipe` has a successor.
+            let reduces = *self.peek() == Token::Pipe && match &self.tokens[self.pos + 1] {
+                Token::Min | Token::Distinct | Token::Count | Token::Collect => true,
+                Token::Ident(word) => word == "reduce",
+                _ => false,
+            };
+            assert!(reduces, "{LIST_MISUSE}");
+            list
+        } else { self.parse_atom() };
         let mut concat = false;
         loop {
             let part = match self.peek() {
@@ -540,6 +562,23 @@ impl Parser {
             concat = true;
         }
         expr
+    }
+
+    /// `[` element `,` element `]`, each element an optional `-` and a pipe expression that ends at
+    /// the next top-level `,` or `]`. The sign covers the whole element.
+    fn parse_list(&mut self) -> Expr {
+        self.expect(&Token::LBracket);
+        let mut elements = Vec::new();
+        loop {
+            let sign = if *self.peek() == Token::Minus { self.next(); -1 } else { 1 };
+            elements.push((sign, self.parse_pipe_expr()));
+            match self.next() {
+                Token::Comma => {},
+                Token::RBracket => break,
+                other => panic!("Expected `,` or `]` in a list, got {:?}", other),
+            }
+        }
+        Expr::List(elements)
     }
 
     fn parse_atom(&mut self) -> Expr {
@@ -578,6 +617,7 @@ impl Parser {
                 else { Expr::Name(parts.pop().unwrap()) }
             },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
+            Token::LBracket => panic!("{LIST_MISUSE}"),
             other => panic!("Unexpected token in atom: {:?}", other),
         }
     }

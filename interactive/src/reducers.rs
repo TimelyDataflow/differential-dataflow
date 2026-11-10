@@ -35,7 +35,8 @@ pub(crate) fn expand_distinct(
         if distinct { sites.next(); }
         let by_record = distinct && match &item {
             Item::Op(Node::Reduce { input, .. }) => {
-                let input = input.as_single().unwrap_or_else(|| unimplemented!("reduce over several inputs"));
+                // Lowering registers only the plain reduce of one positive input as a site.
+                let input = input.as_single().expect("a distinct site reads one input");
                 !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit)
             }
             _ => false,
@@ -82,7 +83,7 @@ pub(crate) fn expand_distinct(
         };
         if distinct {
             let Item::Op(Node::Reduce { input, .. }) = item else { unreachable!() };
-            let input = input.as_single().cloned().unwrap_or_else(|| unimplemented!("reduce over several inputs"));
+            let input = input.as_single().cloned().expect("a distinct site reads one input");
             let input = if by_record {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, v) = input in ((k, v), ())".into(), &corgi::Scope::default()))] })
             } else { input };

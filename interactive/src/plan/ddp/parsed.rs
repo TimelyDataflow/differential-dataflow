@@ -72,11 +72,13 @@ impl Printer<'_> {
             Expr::Join(left, right, l) => format!("{} | join({}, {})", self.expression(left)?, self.expression(right)?, self.parsed_lambda(l)?),
             Expr::HalfJoin(stream, arrangement, strict, l) => format!("{} | half_join({}, {}, {})", self.expression(stream)?, self.expression(arrangement)?, u8::from(*strict), self.parsed_lambda(l)?),
             Expr::Reduce(input, reducer) => {
-                let lambda = if matches!(reducer, crate::parse::Reducer::Distinct) {
+                // A list is no collection to key by its records, and `distinct` handles any values.
+                let by_record = matches!(reducer, crate::parse::Reducer::Distinct) && !matches!(**input, Expr::List(_));
+                let lambda = if by_record {
                     self.parsed_lambda(&crate::reducers::unit_distinct())?
                 } else { self.parsed_lambda(&reducer.lambda())? };
                 let input = self.expression(input)?;
-                if matches!(reducer, crate::parse::Reducer::Distinct) {
+                if by_record {
                     // Parsed syntax has no inferred shapes. Key by the whole record,
                     // which also preserves unit-valued distinct's meaning.
                     format!("{input} | map((k, v) -> ((k, v), ())) | reduce({lambda}) | map((kv, ()) -> kv)")
@@ -90,6 +92,10 @@ impl Printer<'_> {
             }
             Expr::Inspect(input, label) => format!("{} | inspect({label})", self.expression(input)?),
             Expr::Concat(parts) => parts.iter().map(|part| self.atom(part)).collect::<Result<Vec<_>, _>>()?.join(" + "),
+            Expr::List(parts) => {
+                let parts = parts.iter().map(|(sign, part)| Ok(format!("{}{}", if *sign < 0 { "-" } else { "" }, self.expression(part)?))).collect::<Result<Vec<_>, String>>()?;
+                format!("[{}]", parts.join(", "))
+            }
         })
     }
 }

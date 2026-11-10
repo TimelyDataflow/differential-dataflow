@@ -79,6 +79,9 @@ pub enum Expr {
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),
+    /// `[e, -f, ..]`: the signed elements, each sign `1` or `-1`. Only a reduce reads one, as its
+    /// input (`Reduce(List(..), _)`), the sum of its elements.
+    List(Vec<(crate::ir::Diff, Expr)>),
 }
 
 #[derive(Debug)]

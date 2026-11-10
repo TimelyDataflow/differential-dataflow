@@ -196,6 +196,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             resolve_expr(r, here, item, scopes, plan);
         }
         Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
+        Expr::List(parts) => for (_, part) in parts { resolve_expr(part, here, item, scopes, plan); },
         Expr::Input(..) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
     }
 }
@@ -252,6 +253,7 @@ fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expr_free_names(l, out); expr_free_names(r, out); },
         Expr::Concat(es) => { for e in es { expr_free_names(e, out); } },
+        Expr::List(es) => { for (_, e) in es { expr_free_names(e, out); } },
     }
 }
 
@@ -418,7 +420,17 @@ impl ScopeLower {
                 let rr = self.lower_expr(r); let ra = self.arrange(rr);
                 self.push(st::Node::HalfJoin { stream, arrangement: ra, strict: *strict, projection: p.clone() })
             },
+            Expr::Reduce(e, red) if matches!(&**e, Expr::List(parts) if parts.len() != 1 || parts[0].0 < 0) => {
+                let Expr::List(parts) = &**e else { unreachable!() };
+                // Each element is an input of its own, so its sign becomes the input's sign and no
+                // `negate` is built. A merged distinct is not a by-record site: no arrangement of
+                // the sum exists to be keyed by the record, and `Distinct` handles any values.
+                let inputs = parts.iter().map(|(sign, part)| { let r = self.lower_expr(part); (self.arrange(r), *sign) }).collect();
+                self.push(st::Node::Reduce { input: st::ReduceInput::Merged(inputs), reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
+            },
             Expr::Reduce(e, red)=> {
+                // `[e]` is `e`.
+                let e = match &**e { Expr::List(parts) => &parts[0].1, e => e };
                 let r = self.lower_expr(e);
                 let a = if matches!(red, Reducer::Distinct) {
                     // Once shapes are known, lower distinct by key or by whole record.
@@ -428,6 +440,7 @@ impl ScopeLower {
                 self.push(st::Node::Reduce { input: st::ReduceInput::single(a), reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
+            Expr::List(_) => unreachable!("the parser admits a list only as the input of a reduce"),
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
         }
     }
