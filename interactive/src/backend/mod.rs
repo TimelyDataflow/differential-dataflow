@@ -110,7 +110,8 @@ pub(crate) enum Rendered<'s, B: Backend> {
     Collection(Collection<'s, Time, B::Container>),
     Arrangement(B::Arr<'s>),
     /// An imported arrangement that the scope also reads as rows: both forms, so the rows
-    /// are flattened out of it once rather than once per use.
+    /// are flattened out of it once rather than once per use. Also imported rows that the
+    /// scope reads as an arrangement, so they are arranged once rather than once per reader.
     Both(B::Arr<'s>, Collection<'s, Time, B::Container>),
 }
 
@@ -175,6 +176,25 @@ fn resolve<'s, B: Backend>(
     }
 }
 
+/// The arrangement of `r`. An import that arrived as rows is arranged at its first such read,
+/// and the import then holds both forms, so every later reader shares that one arrangement.
+fn arranged<'s, B: Backend>(
+    items: &[RItem<'s, B>],
+    imports: &mut [Rendered<'s, B>],
+    var_cols: &[Collection<'s, Time, B::Container>],
+    r: &st::Ref,
+) -> B::Arr<'s> {
+    if let st::Ref::Import(i) = r {
+        if let Rendered::Collection(c) = &imports[*i] {
+            // A trace import rendered as rows (arranged imports off) has no `Arrange` item, as
+            // lowering treats it as arranged, so each index reader would arrange it again.
+            let a = B::arrange(c.clone());
+            imports[*i] = Rendered::Both(a, c.clone());
+        }
+    }
+    resolve(items, imports, var_cols, r).arrange()
+}
+
 /// Whether scope `s` reads import `k` as rows: as a linear op's, concat's, or inspect's input,
 /// or as a bind or export. A child's import is not a read: the arrangement enters the child.
 fn reads_rows(s: &st::Scope, k: usize) -> bool {
@@ -218,7 +238,7 @@ pub(crate) fn render_scope<'s, B: Backend>(
         (c.key, c.val)
     };
     // An arranged import that is also read as rows gets its rows flattened once, here.
-    let imports: Vec<Rendered<'s, B>> = imports.into_iter().enumerate().map(|(k, imp)| match imp {
+    let mut imports: Vec<Rendered<'s, B>> = imports.into_iter().enumerate().map(|(k, imp)| match imp {
         Rendered::Arrangement(a) if reads_rows(s, k) => {
             let rows = B::as_collection(a.clone());
             Rendered::Both(a, rows)
@@ -251,25 +271,25 @@ pub(crate) fn render_scope<'s, B: Backend>(
                         for r in &refs[1..] { c = c.concat(resolve(&items, &imports, &var_cols, r).collection()); }
                         Rendered::Collection(c)
                     },
-                    st::Node::Arrange(r) => Rendered::Arrangement(resolve(&items, &imports, &var_cols, r).arrange()),
+                    st::Node::Arrange(r) => Rendered::Arrangement(arranged(&items, &mut imports, &var_cols, r)),
                     st::Node::Join { left, right, projection } => {
-                        let l = resolve(&items, &imports, &var_cols, left).arrange();
-                        let r = resolve(&items, &imports, &var_cols, right).arrange();
+                        let l = arranged(&items, &mut imports, &var_cols, left);
+                        let r = arranged(&items, &mut imports, &var_cols, right);
                         Rendered::Collection(B::join(l, r, projection, (shape_of(left), shape_of(right))))
                     },
                     st::Node::HalfJoin { stream, arrangement, strict, projection } => {
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
-                        let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
+                        let a = arranged(&items, &mut imports, &var_cols, arrangement);
                         Rendered::Collection(B::half_join(c, a, *strict, projection, level, (shape_of(stream), shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer, limit } => match input.as_single() {
                         Some(input) => {
-                            let a = resolve(&items, &imports, &var_cols, input).arrange();
+                            let a = arranged(&items, &mut imports, &var_cols, input);
                             Rendered::Arrangement(B::reduce(a, reducer, *limit, shape_of(input)))
                         },
                         // Every input is arranged, and the reduce reads the arrangements directly.
                         None => {
-                            let arrs = input.refs().map(|r| resolve(&items, &imports, &var_cols, r).arrange()).collect();
+                            let arrs = input.refs().map(|r| arranged(&items, &mut imports, &var_cols, r)).collect();
                             let signs = match input {
                                 st::ReduceInput::Merged(inputs) => Some(inputs.iter().map(|(_, sign)| *sign).collect()),
                                 st::ReduceInput::Grouped(_) => None,
