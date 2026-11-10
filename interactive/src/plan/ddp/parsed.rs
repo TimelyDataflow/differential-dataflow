@@ -86,6 +86,10 @@ impl Printer<'_> {
                     format!("{input} | reduce({}{lambda})", super::limit_text(reducer.limit()))
                 }
             }
+            Expr::GroupedReduce(inputs, l) => {
+                let rest = inputs[1..].iter().map(|input| self.expression(input)).collect::<Result<Vec<_>, _>>()?;
+                format!("{} | reduce({}, {})", self.expression(&inputs[0])?, rest.join(", "), self.parsed_lambda(l)?)
+            }
             Expr::Negate(input) | Expr::Lift(input) | Expr::LiftIter(input) | Expr::Arrange(input) => {
                 let word = match expr { Expr::Negate(_) => "negate", Expr::Lift(_) => "lift", Expr::LiftIter(_) => "lift_iter", _ => "arrange" };
                 format!("{} | {word}", self.expression(input)?)

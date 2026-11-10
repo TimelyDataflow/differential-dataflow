@@ -1,4 +1,5 @@
 //! Bracket lists: `[a, -b] | reduce` reduces the signed sum of its elements as one merged reduce.
+//! Extra inputs: `a | reduce(b, (k, la, lb) -> ..)` is a grouped reduce, one value list per input.
 //!
 //! The tests check lowering, the answers against the same programs written as concatenations,
 //! shape inference in loops, and the parse errors.
@@ -299,4 +300,176 @@ fn merged_reduce_reads_input_arrangements() {
     // The arrangements of `a` and `b`, and no arrangement of their concatenation.
     assert_eq!(count("CorgiArrange"), 2, "{names:?}");
     assert_eq!(count("Concatenate"), 0, "{names:?}");
+}
+
+/// Each key's lists, as the lambda is handed them: retractions, values in one input only, equal
+/// values in both inputs (which must not cancel), and keys in some inputs only.
+#[test]
+fn grouped_hands_one_list_per_input() {
+    let src = r#"
+        let a = input 0 : (int, int);
+        let b = input 1 : (int, int);
+        output "co" = a | reduce(b, (_, va, vb) -> ((va, vb), 1) enlist);
+    "#;
+    let epochs = vec![
+        vec![lines(&[(1, 5, 1), (1, 7, 2), (2, 3, 1)]), lines(&[(1, 5, 1), (3, 9, 1), (1, 6, -1)])],
+        vec![lines(&[(1, 5, -1)]), lines(&[(3, 9, -1), (2, 3, 1)])],
+        vec![lines(&[(1, 7, -2), (2, 3, -1)]), lines(&[(1, 5, -1), (1, 6, 1), (2, 3, -1)])],
+    ];
+    let want = |rows: &[(&str, &str)]| -> Rows { rows.iter().map(|(k, v)| (k.to_string(), v.to_string(), 1)).collect() };
+    let expected = [
+        want(&[
+            ("1", "tuple(list(tuple(5,1),tuple(7,2)),list(tuple(5,1),tuple(6,-1)))"),
+            ("2", "tuple(list(tuple(3,1)),list())"),
+            ("3", "tuple(list(),list(tuple(9,1)))"),
+        ]),
+        want(&[
+            ("1", "tuple(list(tuple(7,2)),list(tuple(5,1),tuple(6,-1)))"),
+            ("2", "tuple(list(tuple(3,1)),list(tuple(3,1)))"),
+        ]),
+        want(&[]),
+    ];
+    for workers in [1, 3] {
+        for passes in [None, Some("none")] {
+            let got = run(workers, src, passes, epochs.clone());
+            for (epoch, expected) in expected.iter().enumerate() {
+                assert_eq!(&got[epoch]["co"], expected, "workers={workers}, passes {passes:?}, epoch={epoch}");
+            }
+        }
+    }
+    // Every input is arranged, and the reduce reads the arrangements.
+    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    let items = &program.root.items;
+    let grouped: Vec<&Vec<Ref>> = items.iter().filter_map(|i| match i { Item::Op(Node::Reduce { input: ReduceInput::Grouped(v), limit: None, .. }) => Some(v), _ => None }).collect();
+    assert_eq!(grouped.len(), 1, "{items:?}");
+    assert_eq!(grouped[0].len(), 2);
+    for r in grouped[0] {
+        let Ref::Local(i) = r else { panic!("{r:?}") };
+        assert!(matches!(&items[*i], Item::Op(Node::Arrange(_))), "{:?}", items[*i]);
+    }
+    let names = operator_names(src);
+    assert_eq!(names.iter().filter(|n| *n == "CorgiReduceMany").count(), 1, "{names:?}");
+}
+
+/// A small deterministic generator.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self, n: u64) -> i64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        i64::try_from((self.0 >> 33) % n).unwrap()
+    }
+}
+
+/// A grouped reduce over three inputs, one of them pair-valued, keyed by a hashed compound key,
+/// agrees with a tagged concatenation reduced by a plain `reduce`, whose sorted values are the
+/// lists one after the other.
+#[test]
+fn grouped_matches_tagged_concat() {
+    let src = r#"
+        let a = input 0 : (int, int) | map((k, v) -> ((k, (k, 3) mul), v));
+        let b = input 1 : (int, int) | map((k, v) -> ((k, (k, 3) mul), v));
+        let c = input 2 : (int, (int, int)) | map((k, v) -> ((k, (k, 3) mul), v));
+        output "co" = a | reduce(b, c, (_, va, vb, vc) ->
+            (((va map ((v, d) -> ((0, (v, 0)), d)), vb map ((v, d) -> ((1, (v, 0)), d))) append,
+              vc map ((v, d) -> ((2, v), d))) append, 1) enlist);
+        output "ref" = (a | map((k, v) -> (k, (0, (v, 0)))))
+            + (b | map((k, v) -> (k, (1, (v, 0)))))
+            + (c | map((k, v) -> (k, (2, v))))
+            | reduce((_, vals) -> (vals, 1) enlist);
+    "#;
+    let mut rng = Rng(0x5EED);
+    let mut held: [Vec<(i64, String)>; 3] = Default::default();
+    let mut epochs = Vec::new();
+    for _ in 0..3 {
+        let mut epoch = Vec::new();
+        for (input, held) in held.iter_mut().enumerate() {
+            let mut rows = Vec::new();
+            for _ in 0..40 {
+                // Retract a held row, or add a new one.
+                if !held.is_empty() && rng.next(3) == 0 {
+                    let (k, v) = held.swap_remove(usize::try_from(rng.next(u64::try_from(held.len()).unwrap())).unwrap());
+                    rows.push(format!("{k} val={v} diff=-1"));
+                } else {
+                    let k = rng.next(12);
+                    let v = if input == 2 { format!("tuple({},{})", rng.next(3), rng.next(3)) } else { rng.next(4).to_string() };
+                    let d = [1, 1, 2, -1][usize::try_from(rng.next(4)).unwrap()];
+                    for _ in 0..d.max(0) { held.push((k, v.clone())); }
+                    rows.push(format!("{k} val={v} diff={d}"));
+                }
+            }
+            epoch.push(rows);
+        }
+        epochs.push(epoch);
+    }
+    for workers in [1, 3] {
+        for passes in [None, Some("none")] {
+            let got = run(workers, src, passes, epochs.clone());
+            for (epoch, outputs) in got.iter().enumerate() {
+                assert!(!outputs["ref"].is_empty());
+                assert_eq!(outputs["co"], outputs["ref"], "workers={workers}, passes {passes:?}, epoch={epoch}");
+            }
+        }
+    }
+}
+
+/// A grouped reduce reads a feedback variable that declares no shape: the variable's shape comes
+/// from `seed`, and the reduce's once it is known. Each key's `x` holds its `seed` value and the
+/// count of its `x` values plus its `other` values, iterated to a fixed point.
+#[test]
+fn grouped_in_loop_without_var() {
+    let src = r#"
+        let seed = input 0 : (int, int);
+        let other = input 1 : (int, int);
+        s: {
+            let g = x | reduce(::other, (_, lx, lo) -> ((lx len, lo len) add, 1) enlist);
+            set x = ::seed + g | distinct;
+        }
+        output "o" = s::x;
+    "#;
+    let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    interactive::passes::optimize(&mut program);
+    let (_, problems) = interactive::shapes::infer(&program, &|_| None, 1);
+    assert!(problems.conflicts.is_empty() && problems.unknown.is_empty(), "{problems:?}");
+    // Key 1: seed 5 and two others give {2, 5}, then {4, 5}. Key 2: seed 1 and no others give {1}.
+    // Key 3: no seed and one other give {1}, then {2}. Retracting an other of key 1 gives {3, 5}.
+    let epochs = vec![
+        vec![lines(&[(1, 5, 1), (2, 1, 1)]), lines(&[(1, 7, 1), (1, 8, 1), (3, 4, 1)])],
+        vec![vec![], lines(&[(1, 8, -1)])],
+    ];
+    let want = |rows: &[(i64, i64)]| -> Rows { rows.iter().map(|(k, v)| (k.to_string(), v.to_string(), 1)).collect() };
+    for workers in [1, 2] {
+        for passes in [None, Some("none")] {
+            let got = run(workers, src, passes, epochs.clone());
+            assert_eq!(got[0]["o"], want(&[(1, 4), (1, 5), (2, 1), (3, 2)]), "workers={workers}, passes {passes:?}");
+            assert_eq!(got[1]["o"], want(&[(1, 3), (1, 5), (2, 1), (3, 2)]), "workers={workers}, passes {passes:?}");
+        }
+    }
+}
+
+/// A grouped reduce whose other input never gets a shape fails inference, naming that input.
+#[test]
+fn grouped_unknown_input_is_named() {
+    let src = r#"
+        let a = input 0 : (int, int);
+        let b = input 1;
+        output "o" = a | reduce(b, (_, la, lb) -> (la len, 1) enlist);
+    "#;
+    let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    interactive::passes::optimize(&mut program);
+    let (_, problems) = interactive::shapes::infer(&program, &|_| None, 1);
+    assert!(problems.conflicts.is_empty(), "{problems:?}");
+    assert!(problems.unknown.iter().any(|e| e.contains("reduce input 1") && e.contains("has no shape")), "{problems:?}");
+}
+
+#[test]
+fn grouped_rejects_limit() {
+    let src = "let a = input 0 : (int, int); let b = input 1 : (int, int); output \"o\" = a | reduce(limit 2, b, (k, la, lb) -> la);";
+    assert_eq!(parse_error(src), "a reduce over several inputs takes no limit");
+    // `limit` is the keyword only before an integer, so a collection may be named `limit`.
+    let src = "let a = input 0 : (int, int); let limit = input 1 : (int, int); output \"o\" = a | reduce(limit, (k, la, lb) -> la);";
+    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(src));
+    assert!(program.root.items.iter().any(|i| matches!(i, Item::Op(Node::Reduce { input: ReduceInput::Grouped(v), .. }) if v.len() == 2)), "{:?}", program.root.items);
+    // A list is a merged reduce's input, and takes no further inputs.
+    let src = "let a = input 0 : (int, int); let b = input 1 : (int, int); let c = input 2 : (int, int); output \"o\" = [a, -b] | reduce(c, (k, la, lb) -> la);";
+    assert_eq!(parse_error(src), "a list of collections cannot take extra reduce inputs");
 }

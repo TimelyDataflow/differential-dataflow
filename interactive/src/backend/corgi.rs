@@ -400,7 +400,14 @@ impl Backend for CorgiBackend {
                 assert!(shapes.iter().all(|shape| *shape == shapes[0]), "reduce: merged inputs differ in shape: {shapes:?}");
                 CorgiReduceBackend::new(reducer.clone(), limit, shapes[0].clone()).with_signs(signs)
             },
-            None => unimplemented!("a grouped reduce"),
+            None => {
+                // A grouped reduce's inputs share a key shape, and the backend compiles at each
+                // input's value shape.
+                assert!(limit.is_none(), "reduce: a grouped reduce has no limit");
+                assert!(shapes.iter().all(|shape| shape.0 == shapes[0].0), "reduce: grouped inputs differ in key shape: {shapes:?}");
+                let kshape = shapes[0].0.clone();
+                CorgiReduceBackend::grouped(reducer.clone(), kshape, shapes.into_iter().map(|shape| shape.1).collect(), 1 << 12)
+            },
         };
         // As for the join, the inputs are read as of the join of their times. Every program time
         // is at or beyond each import's time, so this reads each input as the unary reduce would.

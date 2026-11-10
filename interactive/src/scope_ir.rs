@@ -142,8 +142,8 @@ pub enum ReduceInput {
     /// ones negated) and arranged. All inputs share one row shape and every sign is `1` or `-1`.
     /// `Merged([(x, 1)])` is the plain reduce of `x`.
     Merged(Vec<(Ref, Diff)>),
-    /// Cogroup: the reducer is handed each key's values one list per input, `(key, (vals_0, ..,
-    /// vals_{n-1}))`, each `vals_i` input `i`'s consolidated `(val, diff)` list in value order,
+    /// Grouped: the reducer is handed each key's values one list per input, `(key, vals_0, ..,
+    /// vals_{n-1})`, each `vals_i` input `i`'s consolidated `(val, diff)` list in value order,
     /// empty where the input holds nothing at the key. Equal values of different inputs never
     /// merge. Inputs share a key shape. Their value shapes may differ.
     Grouped(Vec<Ref>),

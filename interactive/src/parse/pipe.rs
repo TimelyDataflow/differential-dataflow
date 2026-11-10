@@ -40,7 +40,13 @@
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
 //!   `List` of `(val, diff)`. `| reduce(limit n, (k, vals) -> out)` hands the lambda only each
 //!   key's first `n` values (`n` at least one), whatever their diffs; `min` is
-//!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`.
+//!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`. `limit` is the keyword only when an
+//!   integer follows it.
+//! - `a | reduce(b, c, (k, la, lb, lc) -> out)` — reduce over co-keyed inputs, `a` and the
+//!   collections before the lambda: the lambda is handed the key and one `(val, diff)` list per
+//!   input, `la` the values of `a`, each in value order and empty where its input holds nothing at
+//!   the key. Equal values of two inputs stay in their own lists. The inputs share a key shape and
+//!   may differ in value shape. `out` is as for `reduce`. It takes no `limit`, and no bracket list.
 //! - `[a, -b] | min` (also `distinct`, `count`, `collect`, `reduce(..)`) — reduce the signed sum of a
 //!   bracket list of collections, as `a - b | min` does but without arranging the sum. Each element
 //!   is an optional `-` and a pipe expression up to the next `,` or `]`, and the sign covers the
@@ -89,9 +95,9 @@
 //! # Lambdas
 //!
 //! A slot runs `let pat = input in body` in corgi's ML syntax, with `input` the tuple of the
-//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join, and
-//! `(key, vals)` for `reduce`. For example, `map(((src, dst), ()) -> (src, dst))` keys each row
-//! of pairs by its first field. Operators are postfix (`(a, b) add`, `xs len`,
+//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join,
+//! `(key, vals)` for `reduce`, and `(key, vals_0, vals_1, ..)` for a reduce over several inputs.
+//! For example, `map(((src, dst), ()) -> (src, dst))` keys each row of pairs by its first field. Operators are postfix (`(a, b) add`, `xs len`,
 //! `(mask, a, b) select`); `x.N` is a tuple's field, `(e)` a one-field tuple and `()` unit;
 //! `[1, 2]` is a list of constants and `(xs, ys) append` concatenates. A `--` comment may sit
 //! inside a lambda. The language is corgi's (its `frontend/ml.rs` and `NOTES.md`).
@@ -664,7 +670,8 @@ impl Parser {
             Token::Ident(name) if name == "reduce" => {
                 self.next(); self.expect(&Token::LParen);
                 // `reduce(limit k, (k, vals) -> …)`: the lambda is handed each key's first `k` values.
-                let limit = if matches!(self.peek(), Token::Ident(word) if word == "limit") {
+                // `limit` is the keyword only before an integer, else it names a collection.
+                let limit = if matches!(self.peek(), Token::Ident(word) if word == "limit") && matches!(self.tokens[self.pos + 1], Token::Int(_)) {
                     self.next();
                     let k = match self.next() {
                         Token::Int(k) if k > 0 => k as usize,
@@ -673,9 +680,20 @@ impl Parser {
                     self.expect(&Token::Comma);
                     Some(k)
                 } else { None };
+                // `reduce(b, c, (k, la, lb, lc) -> …)`: the collections before the lambda are further
+                // inputs of a grouped reduce.
+                let mut inputs = Vec::new();
+                while !matches!(self.peek(), Token::Lambda { .. }) {
+                    inputs.push(self.parse_pipe_expr());
+                    self.expect(&Token::Comma);
+                }
                 let lambda = self.lambda();
                 self.expect(&Token::RParen);
-                Expr::Reduce(Box::new(lhs), Reducer::Expr(lambda, limit))
+                if inputs.is_empty() { return Expr::Reduce(Box::new(lhs), Reducer::Expr(lambda, limit)); }
+                assert!(!matches!(lhs, Expr::List(_)), "a list of collections cannot take extra reduce inputs");
+                assert!(limit.is_none(), "a reduce over several inputs takes no limit");
+                inputs.insert(0, lhs);
+                Expr::GroupedReduce(inputs, lambda)
             },
             Token::FlatMap => { self.next(); Expr::FlatMap(Box::new(lhs), self.slot()) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },

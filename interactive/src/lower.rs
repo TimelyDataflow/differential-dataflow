@@ -195,7 +195,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             resolve_expr(l, here, item, scopes, plan);
             resolve_expr(r, here, item, scopes, plan);
         }
-        Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
+        Expr::Concat(parts) | Expr::GroupedReduce(parts, _) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
         Expr::List(parts) => for (_, part) in parts { resolve_expr(part, here, item, scopes, plan); },
         Expr::Input(..) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
     }
@@ -252,7 +252,7 @@ fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
             | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expr_free_names(l, out); expr_free_names(r, out); },
-        Expr::Concat(es) => { for e in es { expr_free_names(e, out); } },
+        Expr::Concat(es) | Expr::GroupedReduce(es, _) => { for e in es { expr_free_names(e, out); } },
         Expr::List(es) => { for (_, e) in es { expr_free_names(e, out); } },
     }
 }
@@ -438,6 +438,11 @@ impl ScopeLower {
                     r
                 } else { self.arrange(r) };
                 self.push(st::Node::Reduce { input: st::ReduceInput::single(a), reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
+            },
+            // A grouped reduce reads every input arranged, as a join does.
+            Expr::GroupedReduce(es, lambda) => {
+                let inputs = es.iter().map(|e| { let r = self.lower_expr(e); self.arrange(r) }).collect();
+                self.push(st::Node::Reduce { input: st::ReduceInput::Grouped(inputs), reducer: crate::ir::Reducer::Expr(lambda.clone()), limit: None })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::List(_) => unreachable!("the parser admits a list only as the input of a reduce"),
