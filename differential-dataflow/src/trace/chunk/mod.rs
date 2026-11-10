@@ -88,6 +88,29 @@ pub trait Chunk: Sized + Clone {
     /// point it appends the queue to the output without the method's assistance.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>);
 
+    /// Merge the fronts of two input deques and advance the result by `frontier`, as one step.
+    ///
+    /// This is [`merge`](Chunk::merge) followed by [`advance`](Chunk::advance), and that is its
+    /// default. An implementor for whom writing a chunk is the expensive part can override it to
+    /// write each merged update once, where the two steps write it twice.
+    ///
+    /// `carry` holds merged updates that are not yet advanced, as `advance` leaves them at the
+    /// front of its input: a trailing `(key, val)` group that may continue. The method may leave
+    /// such a group there in turn. Advanced, consolidated chunks go to `out`.
+    /// The obligations of `merge` hold: an invocation consumes at least one of its inputs.
+    fn merge_advance(
+        in1: &mut VecDeque<Self>,
+        in2: &mut VecDeque<Self>,
+        frontier: AntichainRef<Self::Time>,
+        carry: &mut VecDeque<Self>,
+        out: &mut VecDeque<Self>,
+    ) {
+        let mut produced = VecDeque::new();
+        Self::merge(in1, in2, &mut produced);
+        carry.extend(produced);
+        Self::advance(carry, frontier, false, out);
+    }
+
     /// Partition `input` updates into `keep` (greater or equal `frontier`) or not (`ship`).
     ///
     /// An implementation should yield with some frequency to allow the output to "settle".
@@ -378,15 +401,20 @@ where
                 self.idx2 += 1;
             }
 
-            // Merge's per-tick output (a burst's worth, or one tail chunk), measured
-            // for fuel before it joins the carry already in `merged`.
-            let mut produced = VecDeque::new();
+            // A step's work, for fuel, is the updates it takes from the inputs: a burst's
+            // worth merged, or one tail chunk.
+            let work: usize;
             if !self.in1.is_empty() && !self.in2.is_empty() {
-                // Both sides have data: drain the loaded burst.
-                C::merge(&mut self.in1, &mut self.in2, &mut produced);
+                // Both sides have data: merge and advance the fronts of the loaded burst.
+                let loaded = |in1: &VecDeque<C>, in2: &VecDeque<C>| in1.iter().chain(in2.iter()).map(C::len).sum::<usize>();
+                let before = loaded(&self.in1, &self.in2);
+                C::merge_advance(&mut self.in1, &mut self.in2, self.frontier.borrow(), &mut self.merged, &mut self.advanced);
+                work = before - loaded(&self.in1, &self.in2);
             } else if let Some(chunk) = self.in1.pop_front().or_else(|| self.in2.pop_front()) {
                 // Exactly one side has data: flush its verbatim tail, one chunk a step.
-                produced.push_back(chunk);
+                work = chunk.len();
+                self.merged.push_back(chunk);
+                C::advance(&mut self.merged, self.frontier.borrow(), false, &mut self.advanced);
             } else {
                 // Both sources drained: final flush of advance's and settle's carries.
                 C::advance(&mut self.merged, self.frontier.borrow(), true, &mut self.advanced);
@@ -395,9 +423,6 @@ where
                 break;
             }
 
-            let work: usize = produced.iter().map(C::len).sum();
-            self.merged.extend(produced);
-            C::advance(&mut self.merged, self.frontier.borrow(), false, &mut self.advanced);
             // Maintain grading at the yield boundary: this step may exhaust `fuel` and
             // suspend with `advanced` held, and held chunk state must be graded.
             C::settle(&mut self.advanced, false, &mut self.settled);

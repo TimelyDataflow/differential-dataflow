@@ -136,6 +136,192 @@ where
         }
     }
 
+    /// The merge of the two front chunks through their shared horizon, as [`Chunk::merge`]
+    /// describes; and with `compact`, a frontier and a carry, the advancing and consolidating of
+    /// the merged rows as well, as [`Chunk::advance`] would do next.
+    ///
+    /// With `compact` the merged order stays as indices into the sources. Complete `(key, val)`
+    /// groups have their times advanced, each group of several rows is sorted and summed on its
+    /// times, and only the surviving rows are gathered. The key and value columns are so written
+    /// once, where merging and then advancing writes them twice.
+    /// The last group may continue in a later chunk. It is held back in the carry, unadvanced,
+    /// and a group the step before held back joins this step as a third source.
+    fn merge_fronts(
+        in1: &mut VecDeque<Self>,
+        in2: &mut VecDeque<Self>,
+        mut compact: Option<(AntichainRef<T>, &mut VecDeque<Self>)>,
+        out: &mut VecDeque<Self>,
+    ) {
+        let c1 = in1.pop_front().unwrap();
+        let c2 = in2.pop_front().unwrap();
+        let (kv1, kv2) = (c1.kv(), c2.kv());
+        let (n1, n2) = (c1.len_(), c2.len_());
+        let (t1, d1) = (c1.times(), c1.diffs());
+        let (t2, d2) = (c2.times(), c2.diffs());
+        // A group the step before held back: one `(key, val)`, whose rows come first.
+        let held = compact.as_mut().and_then(|(_, carry)| carry.pop_front());
+        let kv0 = held.as_ref().map(Self::kv);
+        let n0 = held.as_ref().map_or(0, Self::len_);
+
+        let runs = survey_groups(&kv1, &kv2);
+        let (mut tags, mut offs) = (Vec::with_capacity(n0 + n1 + n2), Vec::with_capacity(n0 + n1 + n2));
+        // Emitted chunks own this allocation. Size it by surviving rows so cancellation
+        // does not leave a small result holding storage for both full inputs. Times are
+        // reserved for both inputs, to copy ranges without regrowing, and shrunk below if
+        // fewer than half the rows survive.
+        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        times.reserve(t1.width().max(t2.width()), n0 + n1 + n2);
+        if let Some(held) = &held {
+            tags.resize(n0, 2);
+            offs.extend(0..n0);
+            times.push_range(held.times(), 0, n0);
+            diffs.extend_from_slice(held.diffs());
+        }
+        // When compacting: where each group starts in the merged order. A run exclusive to one
+        // side starts a group, as does each group within it, read off that side's own group ends.
+        // A class both sides hold is one group.
+        let ends = compact.as_ref().map(|_| (group_bounds(&kv1), group_bounds(&kv2)));
+        let (mut e1, mut e2) = (0, 0);
+        let mut starts: Vec<usize> = Vec::new();
+        if n0 > 0 { starts.push(0); }
+        let mark = |starts: &mut Vec<usize>, ends: &[usize], e: &mut usize, base: usize, lo: usize, hi: usize| {
+            starts.push(base);
+            while *e < ends.len() && ends[*e] <= lo { *e += 1; }
+            while *e < ends.len() && ends[*e] < hi { starts.push(base + ends[*e] - lo); *e += 1; }
+        };
+        // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
+        let (mut p1, mut p2) = (n1, n2);
+        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
+            let (t, d) = if side == 0 { (t1, d1) } else { (t2, d2) };
+            tags.resize(tags.len() + (hi - lo), side);
+            offs.extend(lo..hi);
+            times.push_range(t, lo, hi);
+            diffs.extend_from_slice(&d[lo..hi]);
+        };
+        for (r, run) in runs.iter().enumerate() {
+            let last = r + 1 == runs.len();
+            match *run {
+                GroupRun::A(lo, hi) => {
+                    if last { p1 = lo; } else {
+                        if let Some((ends1, _)) = &ends { mark(&mut starts, ends1, &mut e1, tags.len(), lo, hi); }
+                        copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, lo, hi);
+                    }
+                }
+                GroupRun::B(lo, hi) => {
+                    if last { p2 = lo; } else {
+                        if let Some((_, ends2)) = &ends { mark(&mut starts, ends2, &mut e2, tags.len(), lo, hi); }
+                        copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, lo, hi);
+                    }
+                }
+                GroupRun::Both(a_lo, a_hi, b_lo, b_hi) => {
+                    // Both classes hold one `(key, val)`, sorted by time: merge on time, summing the
+                    // diffs of equal times, which is the consolidation.
+                    if ends.is_some() { starts.push(tags.len()); }
+                    let (mut i, mut j) = (a_lo, b_lo);
+                    while i < a_hi && j < b_hi {
+                        match t1.cmp_cross(i, t2, j) {
+                            Ordering::Less => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, i + 1); i += 1; }
+                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, j + 1); j += 1; }
+                            Ordering::Equal => {
+                                let mut d = d1[i].clone();
+                                d.plus_equals(&d2[j]);
+                                if !d.is_zero() { tags.push(0); offs.push(i); times.push_ref(t1, i); diffs.push(d); }
+                                i += 1;
+                                j += 1;
+                            }
+                        }
+                    }
+                    // Equal (key, val) classes can continue in the next chunk. Once either
+                    // whole input chunk is spent, its last timestamp is the shared horizon:
+                    // retain the other side's suffix, including the rest of this class.
+                    if i == n1 || j == n2 {
+                        p1 = i;
+                        p2 = j;
+                        break;
+                    }
+                    if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
+                    if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
+                }
+            }
+        }
+
+        // The survey can be large. Its last use precedes materializing the
+        // output columns, so do not retain it across that allocation peak.
+        drop(runs);
+        let mut srcs = vec![Some(&kv1), Some(&kv2)];
+        if let Some(kv0) = &kv0 { srcs.push(Some(kv0)); }
+        match compact {
+            None => {
+                if times.len() * 2 < n1 + n2 { times.shrink_to_fit(); }
+                Self::emit(&srcs, &tags, &offs, times, diffs, out);
+            }
+            Some((frontier, carry)) => {
+                let m = tags.len();
+                // A class whose rows all cancelled leaves a start with no rows.
+                starts.dedup();
+                if starts.last() == Some(&m) { starts.pop(); }
+                // The held group continues if the first merged row has its `(key, val)`.
+                if n0 > 0 && starts.get(1) == Some(&n0) {
+                    let first = if tags[n0] == 0 { &kv1 } else { &kv2 };
+                    if equal_idx(kv0.as_ref().unwrap(), first, &[0], &[offs[n0]])[0] == 0 { starts.remove(1); }
+                }
+                if let Some(&g) = starts.last() {
+                    // The last group may continue in a later chunk: hold it back, as it is.
+                    let mut last = ColTimes::new();
+                    last.push_range(&times, g, m);
+                    carry.push_front(Self::from_kv(gather_lanes(&srcs, &tags[g..], &offs[g..]), last, diffs[g..].to_vec()));
+                    // Advance the complete groups' times in one lane-wise pass. Advancing can reorder
+                    // a group's times and make some equal, so each group of several rows is sorted
+                    // on its times and equal times sum. All rows of a group share `(key, val)`, so
+                    // any of them stands for the group in the gather.
+                    times.advance_by(frontier, g);
+                    let (mut otags, mut ooffs, mut rows) = (Vec::with_capacity(g), Vec::with_capacity(g), Vec::with_capacity(g));
+                    let mut odiffs: Vec<R> = Vec::with_capacity(g);
+                    let mut order: Vec<usize> = Vec::new();
+                    for group in starts.windows(2) {
+                        let (lo, hi) = (group[0], group[1]);
+                        if hi - lo == 1 {
+                            if !diffs[lo].is_zero() { otags.push(tags[lo]); ooffs.push(offs[lo]); rows.push(lo); odiffs.push(diffs[lo].clone()); }
+                            continue;
+                        }
+                        order.clear();
+                        order.extend(lo..hi);
+                        order.sort_by(|&a, &b| times.cmp(a, b));
+                        let mut k = 0;
+                        while k < order.len() {
+                            let rep = order[k];
+                            let mut d = diffs[rep].clone();
+                            k += 1;
+                            while k < order.len() && times.cmp(order[k], rep) == Ordering::Equal {
+                                d.plus_equals(&diffs[order[k]]);
+                                k += 1;
+                            }
+                            if !d.is_zero() { otags.push(tags[rep]); ooffs.push(offs[rep]); rows.push(rep); odiffs.push(d); }
+                        }
+                    }
+                    // The one gather of the key and value columns.
+                    if !rows.is_empty() { Self::emit(&srcs, &otags, &ooffs, times.gather(&rows), odiffs, out); }
+                }
+            }
+        }
+        drop(tags);
+        drop(offs);
+
+        // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
+        if p1 < n1 {
+            let idx: Vec<usize> = (p1..n1).collect();
+            let mut t = ColTimes::new();
+            t.push_range(t1, p1, n1);
+            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[p1..].to_vec()));
+        }
+        if p2 < n2 {
+            let idx: Vec<usize> = (p2..n2).collect();
+            let mut t = ColTimes::new();
+            t.push_range(t2, p2, n2);
+            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[p2..].to_vec()));
+        }
+    }
+
     /// Concatenate a run of (globally-sorted) chunks into one combined `(kv, times, diffs)`, the
     /// key/val columns a range at a time ([`concat_blocks`]).
     fn concat(chunks: &[Self]) -> (CValue, ColTimes<T>, Vec<R>) {
@@ -171,91 +357,25 @@ where
     /// hold — where consolidation can happen — are merged row by row, on their times, which corgi
     /// does not own. The shape is walked once per level per chunk, never once per row.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
-        let c1 = in1.pop_front().unwrap();
-        let c2 = in2.pop_front().unwrap();
-        let (kv1, kv2) = (c1.kv(), c2.kv());
-        let (n1, n2) = (c1.len_(), c2.len_());
-        let (t1, d1) = (c1.times(), c1.diffs());
-        let (t2, d2) = (c2.times(), c2.diffs());
+        Self::merge_fronts(in1, in2, None, out);
+    }
 
-        let runs = survey_groups(&kv1, &kv2);
-        let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
-        // Emitted chunks own this allocation. Size it by surviving rows so cancellation
-        // does not leave a small result holding storage for both full inputs. Times are
-        // reserved for both inputs, to copy ranges without regrowing, and shrunk below if
-        // fewer than half the rows survive.
-        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
-        times.reserve(t1.width().max(t2.width()), n1 + n2);
-        // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
-        let (mut p1, mut p2) = (n1, n2);
-        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
-            let (t, d) = if side == 0 { (t1, d1) } else { (t2, d2) };
-            tags.resize(tags.len() + (hi - lo), side);
-            offs.extend(lo..hi);
-            times.push_range(t, lo, hi);
-            diffs.extend_from_slice(&d[lo..hi]);
-        };
-        for (r, run) in runs.iter().enumerate() {
-            let last = r + 1 == runs.len();
-            match *run {
-                GroupRun::A(lo, hi) => {
-                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, lo, hi); }
-                }
-                GroupRun::B(lo, hi) => {
-                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, lo, hi); }
-                }
-                GroupRun::Both(a_lo, a_hi, b_lo, b_hi) => {
-                    // Both classes hold one `(key, val)`, sorted by time: merge on time, summing the
-                    // diffs of equal times, which is the consolidation.
-                    let (mut i, mut j) = (a_lo, b_lo);
-                    while i < a_hi && j < b_hi {
-                        match t1.cmp_cross(i, t2, j) {
-                            Ordering::Less => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, i + 1); i += 1; }
-                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, j + 1); j += 1; }
-                            Ordering::Equal => {
-                                let mut d = d1[i].clone();
-                                d.plus_equals(&d2[j]);
-                                if !d.is_zero() { tags.push(0); offs.push(i); times.push_ref(t1, i); diffs.push(d); }
-                                i += 1;
-                                j += 1;
-                            }
-                        }
-                    }
-                    // Equal (key, val) classes can continue in the next chunk. Once either
-                    // whole input chunk is spent, its last timestamp is the shared horizon:
-                    // retain the other side's suffix, including the rest of this class.
-                    if i == n1 || j == n2 {
-                        p1 = i;
-                        p2 = j;
-                        break;
-                    }
-                    if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
-                    if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
-                }
-            }
-        }
-
-        // The survey can be large. Its last use precedes materializing the
-        // output columns, so do not retain it across that allocation peak.
-        drop(runs);
-        if times.len() * 2 < n1 + n2 { times.shrink_to_fit(); }
-        let srcs = [Some(&kv1), Some(&kv2)];
-        Self::emit(&srcs, &tags, &offs, times, diffs, out);
-        drop(tags);
-        drop(offs);
-
-        // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
-        if p1 < n1 {
-            let idx: Vec<usize> = (p1..n1).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t1, p1, n1);
-            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[p1..].to_vec()));
-        }
-        if p2 < n2 {
-            let idx: Vec<usize> = (p2..n2).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t2, p2, n2);
-            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[p2..].to_vec()));
+    /// Merge and advance as one step ([`merge_fronts`](Self::merge_fronts)), which gathers the
+    /// key and value columns once. With more than a single group held over, the two steps.
+    fn merge_advance(
+        in1: &mut VecDeque<Self>,
+        in2: &mut VecDeque<Self>,
+        frontier: AntichainRef<T>,
+        carry: &mut VecDeque<Self>,
+        out: &mut VecDeque<Self>,
+    ) {
+        if carry.len() > 1 {
+            let mut produced = VecDeque::new();
+            Self::merge(in1, in2, &mut produced);
+            carry.extend(produced);
+            Self::advance(carry, frontier, false, out);
+        } else {
+            Self::merge_fronts(in1, in2, Some((frontier, carry)), out);
         }
     }
 
@@ -1179,6 +1299,29 @@ mod test {
             // A merge that cancels to nothing reports an absent payload.
             assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\nu1={u1:?}\nu2={u2:?}\nf={f}");
             assert_eq!(result.as_ref().map_or_else(BTreeMap::new, read_batch), want, "u1={u1:?}\nu2={u2:?}\nf={f}");
+        }
+    }
+
+    // A `(key, val)` group that spans every chunk of both inputs is held back from step to step,
+    // and advanced once, whole. Compacted to a frontier past all of its times it is one update.
+    #[test]
+    fn merge_advance_carries_a_group_across_chunks() {
+        let mut u1: Vec<((u64, u64), u64, i64)> = (0..9).map(|t| ((7, 7), 2 * t, 1)).collect();
+        let mut u2: Vec<((u64, u64), u64, i64)> = (0..9).map(|t| ((7, 7), 2 * t + 1, 1)).collect();
+        u1.push(((1, 1), 0, 1));
+        u2.push(((9, 9), 0, 1));
+        for sz in 1..5 {
+            let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
+            let frontier = Antichain::from_elem(100);
+            let mut merger = ChunkBatchMerger::new(&s1, &s2, frontier.borrow());
+            loop {
+                let mut fuel = 1isize;
+                merger.work(&s1, &s2, &mut fuel);
+                if fuel > 0 { break; }
+            }
+            let result = merger.done().expect("three updates remain");
+            assert_eq!(read_batch(&result), reference(&u1, &u2, 100), "chunks of {sz}");
+            assert_eq!(result.chunks.iter().map(Chunk::len).sum::<usize>(), 3, "chunks of {sz}");
         }
     }
 }
