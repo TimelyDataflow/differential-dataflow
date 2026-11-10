@@ -247,3 +247,119 @@ fn input_ahead_in_loop_matches_concat() {
     assert!(!want.is_empty());
     assert_eq!(got, want);
 }
+
+/// Records, for each handed batch, the `lower` of the retire that handed it and the batch's times.
+struct Record<Tac> {
+    inner: Tac,
+    handed: Arc<Mutex<Vec<(u64, Vec<u64>)>>>,
+}
+
+impl<Tac: ReduceTactic<u64, (usize, Batch), Batch>> ReduceTactic<u64, (usize, Batch), Batch> for Record<Tac> {
+    fn retire(
+        &mut self,
+        source_batches: Vec<(usize, Batch)>,
+        output_batches: Vec<Batch>,
+        input_batches: Vec<(usize, Batch)>,
+        lower: &Antichain<u64>,
+        upper: &Antichain<u64>,
+        held: &Antichain<u64>,
+    ) -> (Option<Span<u64, Batch>>, Antichain<u64>) {
+        for (_, batch) in &input_batches {
+            let mut times = Vec::new();
+            for chunk in &batch.chunks {
+                let mut c = chunk.cursor();
+                while c.key_valid(chunk) {
+                    while c.val_valid(chunk) {
+                        c.map_times(chunk, |t, _| times.push(*t));
+                        c.step_val(chunk);
+                    }
+                    c.step_key(chunk);
+                }
+            }
+            let at = lower.elements().first().copied().unwrap_or(u64::MAX);
+            self.handed.lock().unwrap().push((at, times));
+        }
+        self.inner.retire(source_batches, output_batches, input_batches, lower, upper, held)
+    }
+}
+
+#[expect(clippy::ptr_arg, reason = "the signature the reduce logic takes")]
+fn count_logic(_k: &u64, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>) {
+    let count: i64 = input.iter().map(|(_, d)| *d).sum();
+    if count != 0 {
+        updates.push((u64::try_from(count).expect("negative count"), 1));
+    }
+    for (w, d) in current.iter() {
+        updates.push((*w, -*d));
+    }
+}
+
+/// Input `a` holds its only batch at time 10 while input `b` advances through times 0 to 10 without
+/// updates. No capability lies below the interval, so the driver keeps `a`'s batch queued, neither
+/// handing it to the tactic nor counting it as history. Once `b` passes 10 with updates of its own
+/// on other keys, the driver hands the batch over once, and the per-key counts match the reduce of
+/// the concatenation.
+#[test]
+fn queued_beyond_interval_matches_concat() {
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let want = Arc::new(Mutex::new(Vec::new()));
+    let handed = Arc::new(Mutex::new(Vec::new()));
+    let (g, w, h) = (Arc::clone(&got), Arc::clone(&want), Arc::clone(&handed));
+    timely::execute_directly(move |worker| {
+        let mut a = InputSession::<u64, (u64, u64), i64>::new();
+        let mut b = InputSession::<u64, (u64, u64), i64>::new();
+        let (g, w, h) = (Arc::clone(&g), Arc::clone(&w), Arc::clone(&h));
+        let probe = worker.dataflow::<u64, _, _>(|scope| {
+            let (ca, cb) = (a.to_collection(scope), b.to_collection(scope));
+            let untag = Untag { inner: ProxyReduceTactic::new(VecReduceBackend::with_window(count_logic, 3)), ahead: Arc::new(AtomicUsize::new(0)) };
+            let tactic = Record { inner: untag, handed: h };
+            co_reduce_with_tactic::<_, Spine, _>(vec![arrange(ca.clone()), arrange(cb.clone())], "CoReduce", tactic)
+                .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
+                .inspect(move |(d, t, r)| g.lock().unwrap().push((*d, *t, *r)));
+            ca.concat(cb)
+                .reduce(|_k, input, output| {
+                    let count: i64 = input.iter().map(|(_, d)| *d).sum();
+                    if count != 0 { output.push((u64::try_from(count).expect("negative count"), 1)); }
+                })
+                .inspect(move |(d, t, r)| w.lock().unwrap().push((*d, *t, *r)))
+                .probe()
+                .0
+        });
+
+        // `a` has updates only at time 10, on keys 0 to 2. Its input advances to 10 before the
+        // updates, so the batch's capability is at 10.
+        a.advance_to(10);
+        a.flush();
+        for k in 0..3 {
+            for v in 0..=k { a.update((k, v), 1); }
+        }
+        a.advance_to(11);
+        a.flush();
+        // `b` advances one empty time at a time, stepping so the driver retires each interval
+        // while `a`'s batch stays queued.
+        for t in 0..10 {
+            b.advance_to(t + 1);
+            b.flush();
+            for _ in 0..4 { worker.step(); }
+        }
+        // `b` then has updates at time 11, on keys 3 and 4.
+        b.advance_to(11);
+        for k in 3..5 {
+            for v in 0..k { b.update((k, v), 1); }
+        }
+        b.advance_to(12);
+        b.flush();
+        a.close();
+        b.close();
+        while !probe.done() { worker.step(); }
+    });
+    let (mut got, mut want) = (got.lock().unwrap().clone(), want.lock().unwrap().clone());
+    differential_dataflow::consolidation::consolidate_updates(&mut got);
+    differential_dataflow::consolidation::consolidate_updates(&mut want);
+    assert_eq!(want.len(), 5, "every key has one count");
+    assert_eq!(got, want);
+    // The batch holding time 10 reaches the tactic exactly once, in a retire starting at 10.
+    let handed = handed.lock().unwrap().clone();
+    let at_ten: Vec<_> = handed.iter().filter(|(_, times)| times.contains(&10)).map(|(at, _)| *at).collect();
+    assert_eq!(at_ten, vec![10], "the batch at time 10 was not held back until the interval reached it: {handed:?}");
+}
