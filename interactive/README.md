@@ -308,7 +308,6 @@ Another expression language or backend should plug in at those two places, witho
 the stack depending on it.
 
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
-The `examples/ledger/` directory is a larger one: the logic of durable ledgers, with a harness that makes its results durable from outside the server.
 The one executable is the server (the `ddir-server` crate in `server/`, documented in
 `server/README.md`; the session scripts in `examples/server/` show it at work); a program runs by
 loading it, feeding its inputs, and closing epochs. For example, on a random graph of 100 nodes and
