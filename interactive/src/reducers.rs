@@ -133,9 +133,10 @@ impl Reducer {
         let mut composed = Lambda::compose("arg", &[(&base, "arg".into())], |names| {
             format!("{} map ((_value, _diff) -> ({}, _diff))", names[0], projection.text("_value"))
         });
-        // Source is only a spelling. Keep the composed graph, and accept the graph
-        // printer's spelling only when reparsing gives the same graph compiled at
-        // this input type, which proves and removes the patterns in either spelling.
+        // Accept the graph printer's spelling only when reparsing gives the same graph
+        // compiled at this input type, which proves and removes the patterns in either
+        // spelling. Then keep the spelling's graph, as reparsing it would build: lambdas
+        // equal as printed stay equal in the plan, so structural merging sees them.
         let input = corgi::Shape::Prod(vec![key.clone(), corgi::Shape::List(Box::new(corgi::Shape::Prod(vec![val.clone(), corgi::Shape::Int])))]);
         let spelling = (|| {
             let printed = crate::lambda::print::print_composed(&composed, &input);
@@ -146,11 +147,14 @@ impl Reducer {
             for f in crate::lambda::registered() { words.word(f.name(), crate::lambda::function_word(&f)).ok()?; }
             let parsed = corgi::parse_ml_in(&src, &words).ok()?;
             let graph = composed.graph().ok()?;
-            if corgi::compile(parsed, &input).ok()?.graph()
+            if corgi::compile(parsed.clone(), &input).ok()?.graph()
                 != corgi::compile(graph.as_ref().clone(), &input).ok()?.graph() { return None; }
-            Some(src)
+            Some((src, parsed))
         })();
-        if let Some(src) = spelling { composed.src = src; }
+        if let Some((src, parsed)) = spelling {
+            composed.src = src;
+            composed.graph = Ok(std::sync::Arc::new(parsed));
+        }
         Self::Expr(composed)
     }
 }
@@ -162,7 +166,7 @@ mod tests {
     use corgi::{Bounds, Shape, Value};
 
     #[test]
-    fn composed_spelling_preserves_the_exact_graph() {
+    fn composed_spelling_is_its_own_graph() {
         let base = Sugar::Min.lambda();
         let projection = Projection::Tuple(vec![Projection::Unit, Projection::Field(vec![1])]);
         let mechanical = Lambda::compose("arg", &[(&base, "arg".into())], |names| {
@@ -171,11 +175,11 @@ mod tests {
         let Reducer::Expr(readable) = Reducer::Expr(base).project(&projection, &Shape::Int, &Shape::Prod(vec![Shape::Int, Shape::Int]));
         assert!(!readable.src.contains("_call0"), "{}", readable.src);
         assert!(readable.src.contains("head"));
-        assert_eq!(readable.graph().unwrap(), mechanical.graph().unwrap());
         let parsed = Lambda::new(readable.src.clone(), &corgi::Scope::default());
+        assert_eq!(readable.graph().unwrap(), parsed.graph().unwrap());
         let val = Shape::Prod(vec![Shape::Int, Shape::Int]);
         assert_eq!(crate::lambda::compile_reduce(&readable, &Shape::Int, &val).unwrap().graph(),
-            crate::lambda::compile_reduce(&parsed, &Shape::Int, &val).unwrap().graph());
+            crate::lambda::compile_reduce(&mechanical, &Shape::Int, &val).unwrap().graph());
         // The known input type also proves authored nested pattern checks.
         let base = Lambda::new("let ((k, _), vals) = input in (vals head.0, 1) enlist".into(), &corgi::Scope::default());
         let Reducer::Expr(kept) = Reducer::Expr(base).project(&projection, &Shape::Prod(vec![Shape::Int, Shape::Int]), &Shape::Prod(vec![Shape::Int, Shape::Int]));

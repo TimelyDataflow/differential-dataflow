@@ -3,7 +3,7 @@
 use interactive::{explain, lower, parse, plan};
 use interactive::passes::Config;
 
-const REPROS: [(&str, &str); 7] = [
+const REPROS: [(&str, &str); 8] = [
     ("F1",
     r#"let rows = input 0 : (int, ());
         s: { set x = rows; }
@@ -52,6 +52,12 @@ const REPROS: [(&str, &str); 7] = [
         let reduced = both | min;
         let dead = reduced + reduced;
         output "out" = rows;"#),
+    ("reductions masked to the same spelling merge before printing",
+    r#"let rows = input 0 : ((int, int), ());
+        let sum = rows | reduce((_, vals) -> ((0, vals) fold ((acc, (_, d)) -> (acc, d) add), 1) enlist) | map((k, _) -> (k, ()));
+        let all = rows | collect | map((k, _) -> (k, ()));
+        output "a" = sum;
+        output "b" = all;"#),
 ];
 
 fn roundtrip(first: plan::Report, config: Config, context: &str) {
