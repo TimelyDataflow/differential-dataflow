@@ -1,0 +1,32 @@
+-- Shape flat rows of ints into the requests the rules take (see ../../model/resolve.ddp).
+-- A driver can then send its requests as plain columns of ints, and the shaping is done here.
+-- Every ledger made this way has one time coordinate, starts at [0], and has an empty shape;
+-- every append has an empty batch.
+--
+--   input 0, singles : ((tx), (hi, lo, lower, upper, seqno))           one append, alone in its transaction
+--   input 1, grouped : ((tx), (hi, lo, lower, upper, seqno))           one append of a transaction with several
+--   input 2, creates : ((tx), (hi, lo, clock_hi, clock_lo, following)) one creation; several may share a transaction
+
+type Batch = Empty | Inline List(int) | Blob List(int);
+type Clock = Free | Follows (int, int);
+type Action = Create ((int, int), List(int), int, List(List(int)), Clock)
+            | Append ((int, int), List(List(int)), List(List(int)), Batch, int);
+
+let singles = input 0 : ((int), (int, int, int, int, int));
+let grouped = input 1 : ((int), (int, int, int, int, int));
+let creates = input 2 : ((int), (int, int, int, int, int));
+
+-- Actions that share a transaction are listed in order of (ledger, kind), as the rules require.
+let appends = grouped | map((tx, (hi, lo, lower, upper, seqno)) ->
+    (tx, ((hi, lo), 1, ((hi, lo), lower enlist enlist, upper enlist enlist, () inject Empty, seqno) inject Append)));
+let creations = creates | map((tx, (hi, lo, clock_hi, clock_lo, following)) ->
+    let shape = [] : List(int) in
+    let clock = (following, (clock_hi, clock_lo) inject Follows, () inject Free) select in
+    (tx, ((hi, lo), 0, ((hi, lo), shape, 1, 0 enlist enlist, clock) inject Create)));
+let together = (appends + creations) | reduce((_, vals) ->
+    ((vals map (((_, _, action), _) -> action)), 1) enlist);
+let alone = singles | map((tx, (hi, lo, lower, upper, seqno)) ->
+    let action = ((hi, lo), lower enlist enlist, upper enlist enlist, () inject Empty, seqno) inject Append in
+    (tx, (action enlist)));
+
+output "requests" = together + alone;

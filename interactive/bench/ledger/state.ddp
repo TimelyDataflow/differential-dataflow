@@ -1,0 +1,22 @@
+-- What a resolver keeps resident, each as an arrangement others can read.
+--
+-- The manifest, which is the record: registrations and spans, as in ../../model/ledger.ddp.
+-- Three indexes derived from it, which the rules read: each ledger's version and own upper,
+-- its width and start, and the clock it follows.
+-- A driver feeds each round's conclusions into all five; after a restart it feeds the manifest
+-- from the durable log, and derives the indexes from that.
+
+type Batch = Empty | Inline List(int) | Blob List(int);
+type Clock = Free | Follows (int, int);
+
+let own = input 0 : (((int, int)), (int, List(List(int))));
+let registered = input 1 : (((int, int)), (int, List(List(int))));
+let follows = input 2 : (((int, int)), ((int, int)));
+let registrations = input 3 : (((int, int)), (List(int), int, List(List(int)), Clock));
+let spans = input 4 : (((int, int)), (int, List(List(int)), List(List(int)), List(List(int)), Batch));
+
+output "own" = own;
+output "registered" = registered;
+output "follows" = follows;
+output "registrations" = registrations;
+output "spans" = spans;
