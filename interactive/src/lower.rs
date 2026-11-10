@@ -298,8 +298,20 @@ fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
 
 use crate::scope_ir as st;
 
-pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
-    matches!(input, st::Ref::Local(i) if matches!(&items[*i], st::Item::Op(st::Node::Arrange(_) | st::Node::Reduce { .. })))
+/// Whether `input` is already an arrangement. A local item is one when it is an
+/// arrange or a reduce. An import is one when it names a trace, or when it enters
+/// a parent item that is itself arranged (`parent_arranged`, indexed by import id).
+/// Input imports are collections.
+pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item], imports: &[st::Import], parent_arranged: &[bool]) -> bool {
+    match input {
+        st::Ref::Local(i) => matches!(&items[*i], st::Item::Op(st::Node::Arrange(_) | st::Node::Reduce { .. })),
+        st::Ref::Import(i) => match &imports[*i].from {
+            st::Source::Trace(_) => true,
+            st::Source::Parent(_) => parent_arranged[*i],
+            st::Source::Input(_) => false,
+        },
+        _ => false,
+    }
 }
 
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
@@ -311,9 +323,9 @@ pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
     let mut distinct = HashMap::new();
-    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut distinct) };
+    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, None, &mut distinct) };
     let (shapes, _) = crate::shapes::infer(&program, &|_| None, 1);
-    crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &mut Vec::new());
+    crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &[], &mut Vec::new());
     program
 }
 
@@ -328,6 +340,8 @@ struct ScopeLower {
     /// The statement being lowered, which names the items it pushes.
     statement: String,
     imports: Vec<st::Import>,
+    /// Per import, whether it enters an arranged item of the parent scope.
+    parent_arranged: Vec<bool>,
     input_import: HashMap<usize, usize>, // input n  -> import idx (root, deduped)
     trace_import: HashMap<String, usize>, // trace name -> import idx (root, deduped)
     env: HashMap<RefName, st::Ref>,        // local names, qualified child exports, and imports
@@ -341,7 +355,7 @@ impl ScopeLower {
         st::Ref::Local(i)
     }
     fn arrange(&mut self, input: st::Ref) -> st::Ref {
-        if is_arranged(&input, &self.items) { input }
+        if is_arranged(&input, &self.items, &self.imports, &self.parent_arranged) { input }
         else { self.push(st::Node::Arrange(input)) }
     }
     /// Input `n`, named as written (`input "name"`), or `input{n}` if it is unnamed.
@@ -351,6 +365,7 @@ impl ScopeLower {
         let i = self.imports.len();
         let name = name.map_or_else(|| format!("input{n}"), str::to_string);
         self.imports.push(st::Import { name, from: st::Source::Input(n), shape: None });
+        self.parent_arranged.push(false);
         self.input_import.insert(n, i);
         st::Ref::Import(i)
     }
@@ -359,6 +374,7 @@ impl ScopeLower {
         if let Some(&i) = self.trace_import.get(name) { return st::Ref::Import(i); }
         let i = self.imports.len();
         self.imports.push(st::Import { name: name.to_string(), from: st::Source::Trace(name.to_string()), shape: None });
+        self.parent_arranged.push(false);
         self.trace_import.insert(name.to_string(), i);
         st::Ref::Import(i)
     }
@@ -424,6 +440,7 @@ fn lower_scope_tree(
     exports_wanted: &[PathKey],
     plan: &PathPlan,
     is_root: bool,
+    parent: Option<&ScopeLower>,
     distinct: &mut HashMap<Vec<String>, Vec<usize>>,
 ) -> st::Scope {
     let scope_name = scope_label(address);
@@ -434,6 +451,7 @@ fn lower_scope_tree(
         labels: Vec::new(),
         statement: String::new(),
         imports: Vec::new(),
+        parent_arranged: Vec::new(),
         input_import: HashMap::new(),
         trace_import: HashMap::new(),
         env: HashMap::new(),
@@ -453,6 +471,7 @@ fn lower_scope_tree(
                 RefName::Path(key) => panic!("path `{}` is unavailable in scope `{scope_name}`", key.display()),
             });
             let i = s.imports.len();
+            s.parent_arranged.push(parent.is_some_and(|p| is_arranged(&from, &p.items, &p.imports, &p.parent_arranged)));
             s.imports.push(st::Import { name: match &name {
                 RefName::Plain(n) => n.clone(),
                 RefName::Path(key) => key.display(),
@@ -558,7 +577,7 @@ fn lower_scope_tree(
                 let mut child_address = address.to_vec();
                 child_address.push(name.clone());
                 let wanted: Vec<PathKey> = plan.exports.get(&child_address).into_iter().flatten().cloned().collect();
-                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, distinct);
+                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, Some(&s), distinct);
                 let slots = export_slots(&wanted, &child_address);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
@@ -665,8 +684,29 @@ mod tree_tests {
                 st::Item::Op(st::Node::Reduce { input, .. }) => vec![input],
                 _ => Vec::new(),
             };
-            for input in inputs { assert!(is_arranged(input, &program.root.items), "{item:?}"); }
+            for input in inputs { assert!(is_arranged(input, &program.root.items, &program.root.imports, &[]), "{item:?}"); }
         }
+    }
+
+    #[test]
+    fn arranged_trace_import_is_not_rearranged() {
+        let program = lower_tree(parse(r#"
+            let x = import "p::x" : (int, int);
+            output "o" = x | min;
+        "#));
+        assert!(!program.root.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Arrange(_)))));
+        assert!(program.root.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Reduce { input: Ref::Import(_), .. }))));
+    }
+
+    #[test]
+    fn arranged_parent_is_not_rearranged_in_child() {
+        let program = lower_tree(parse(r#"
+            let a = input 0 : (int, int) | arrange;
+            s: { let m = ::a | min; }
+            output "o" = s::m;
+        "#));
+        let s = child(&program.root, "s");
+        assert!(!s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Arrange(_)))));
     }
 
     #[test]
@@ -684,7 +724,9 @@ mod tree_tests {
         }).collect();
         assert!(arranges.iter().any(|input| matches!(input, Ref::ChildExport(..))));
         let inner = child(&program.root, "inner");
-        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Arrange(Ref::Import(_)))));
+        // The arranged parent item is entered as an arrangement, so the child reads it as is.
+        assert!(matches!(&inner.items[0], st::Item::Op(st::Node::Reduce { input: Ref::Import(_), .. })));
+        assert!(!inner.items.iter().any(|item| matches!(item, st::Item::Op(st::Node::Arrange(_)))));
     }
 
     #[test]

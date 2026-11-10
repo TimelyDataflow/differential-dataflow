@@ -16,6 +16,7 @@ pub(crate) fn expand_distinct(
     scope: &mut crate::scope_ir::Scope,
     shapes: &crate::shapes::ScopeShapes,
     pending: &std::collections::HashMap<Vec<String>, Vec<usize>>,
+    parent_arranged: &[bool],
     path: &mut Vec<String>,
 ) {
     use crate::scope_ir::{Item, Node, Ref, Source};
@@ -39,19 +40,25 @@ pub(crate) fn expand_distinct(
             Item::Op(node) => node.for_each_ref(|r| remap_ref(r, &remap)),
             Item::Sub(child) => {
                 let crate::shapes::ItemShapes::Sub(shapes) = &shapes.items[i] else { unreachable!() };
-                path.push(child.name.clone());
-                expand_distinct(child, shapes, pending, path);
-                path.pop();
                 for import in &mut child.imports {
                     if let Source::Parent(r) = &mut import.from { remap_ref(r, &remap); }
                 }
+                // A by-record distinct ends in a map, so an import that lowering took
+                // to be arranged may not be. Recompute it against the rewritten items.
+                let entering: Vec<bool> = child.imports.iter().map(|import| match &import.from {
+                    Source::Parent(r) => crate::lower::is_arranged(r, &items, &scope.imports, parent_arranged),
+                    _ => false,
+                }).collect();
+                path.push(child.name.clone());
+                expand_distinct(child, shapes, pending, &entering, path);
+                path.pop();
             }
         }
         let mut push = |mut node: Node| {
             // Distinct can replace a Reduce with a map back from the record key.
             // Check consumers after remapping, when their actual input is known.
             let mut arrange = |input: &mut Ref| {
-                if !crate::lower::is_arranged(input, &items) {
+                if !crate::lower::is_arranged(input, &items, &scope.imports, parent_arranged) {
                     let r = Ref::Local(items.len());
                     items.push(Item::Op(Node::Arrange(input.clone())));
                     labels.push(scope.labels[i].clone());

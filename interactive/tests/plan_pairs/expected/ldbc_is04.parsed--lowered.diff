@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,4 +1,11 @@
+@@ -1,4 +1,10 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int), ());
@@ -9,8 +9,7 @@
 -output "answer" = answer | arrange;
 +let answer_map = request | map(((rid, m), ()) -> (m, rid));
 +let answer_idx = answer_map | arrange;
-+let message_idx = message | arrange;
-+let answer = answer_idx | join(message_idx, (_, rid, (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((rid, 0), (created, ((text len, 0) gt, text, image) select)));
++let answer = answer_idx | join(message, (_, rid, (_, created, _, _, text, image, _, _, _, _, _, _, _)) -> ((rid, 0), (created, ((text len, 0) gt, text, image) select)));
 +let answer_idx2 = answer | arrange;
 +-- Renderer: publish the existing arrangement.
 +output "answer" = answer_idx2;

@@ -1,13 +1,12 @@
 --- projected
 +++ as-of
-@@ -2,8 +2,9 @@
+@@ -2,7 +2,8 @@
  -- Trace imports use provider arrangements; history advances to G = (0, []).
  let rows = import "rows::rows" : (int, int);
  let lifted = rows | lift;
+-let strict_join = lifted | half_join(rows, 1, (k, v, _) -> (k, v));
 +let lifted_filter = lifted | filter((_, (_, (t0))) -> (t0, 0) ne);
- let rows_idx = rows | arrange;
--let strict_join = lifted | half_join(rows_idx, 1, (k, v, _) -> (k, v));
-+let strict_join = lifted_filter | half_join(rows_idx, 1, (k, v, _) -> (k, v));
- let inclusive_join = lifted | half_join(rows_idx, 0, (k, v, _) -> (k, v));
++let strict_join = lifted_filter | half_join(rows, 1, (k, v, _) -> (k, v));
+ let inclusive_join = lifted | half_join(rows, 0, (k, v, _) -> (k, v));
  -- Renderer: build an export arrangement.
  output "strict" = strict_join;

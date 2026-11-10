@@ -5,11 +5,9 @@ let person = import "graph::person" : (int, (List(int), List(int), List(int), in
 let friend = import "graph::friend" : (int, (int, int));
 let ranked_map = request | map(((rid, who), ()) -> (who, rid));
 let ranked_idx = ranked_map | arrange;
-let friend_idx = friend | arrange;
-let ranked_join = ranked_idx | join(friend_idx, (_, rid, (f, since)) -> (f, (rid, since)));
+let ranked_join = ranked_idx | join(friend, (_, rid, (f, since)) -> (f, (rid, since)));
 let ranked_idx2 = ranked_join | arrange;
-let person_idx = person | arrange;
-let ranked_join2 = ranked_idx2 | join(person_idx, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))));
+let ranked_join2 = ranked_idx2 | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))));
 let ranked_idx3 = ranked_join2 | arrange;
 let ranked_reduce = ranked_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));

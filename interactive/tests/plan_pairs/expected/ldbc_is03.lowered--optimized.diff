@@ -1,7 +1,7 @@
 --- lowered
 +++ optimized
-@@ -12,8 +12,7 @@
- let ranked_join2 = ranked_idx2 | join(person_idx, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))));
+@@ -10,8 +10,7 @@
+ let ranked_join2 = ranked_idx2 | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))));
  let ranked_idx3 = ranked_join2 | arrange;
  let ranked_reduce = ranked_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
 -let ranked = ranked_reduce | flatmap((_, entries) -> entries);
