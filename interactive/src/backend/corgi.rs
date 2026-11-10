@@ -392,8 +392,14 @@ impl Backend for CorgiBackend {
     fn reduce_many<'s>(inputs: Vec<Self::Arr<'s>>, signs: Option<Vec<Diff>>, reducer: &Reducer, limit: Option<usize>, shapes: Vec<st::RowShape>) -> Self::Arr<'s> {
         // The backend reads each input's batches tagged by input, and a merged reduce reads their
         // diffs times the input's sign.
+        assert!(shapes.len() == inputs.len(), "reduce: {} shapes for {} inputs", shapes.len(), inputs.len());
         let backend = match signs {
-            Some(signs) => CorgiReduceBackend::new(reducer.clone(), limit, shapes[0].clone()).with_signs(signs),
+            Some(signs) => {
+                // A merged reduce's inputs share one row shape, which the backend compiles at.
+                assert!(signs.len() == inputs.len(), "reduce: {} signs for {} inputs", signs.len(), inputs.len());
+                assert!(shapes.iter().all(|shape| *shape == shapes[0]), "reduce: merged inputs differ in shape: {shapes:?}");
+                CorgiReduceBackend::new(reducer.clone(), limit, shapes[0].clone()).with_signs(signs)
+            },
             None => unimplemented!("a grouped reduce"),
         };
         // As for the join, the inputs are read as of the join of their times. Every program time

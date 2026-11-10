@@ -67,19 +67,6 @@ impl<T: ColTime> InBatch<T> for (usize, CBatch<T>) {
     fn batch(&self) -> &CBatch<T> { &self.1 }
 }
 
-/// The chunks of `batches`, and each chunk's input.
-fn tagged_chunks_of<T: ColTime, B: InBatch<T>>(batches: &[B]) -> (Vec<&CorgiChunk<T, Diff>>, Vec<usize>) {
-    let mut chunks = Vec::new();
-    let mut tags = Vec::new();
-    for b in batches {
-        for chunk in b.batch().chunks.iter() {
-            chunks.push(chunk);
-            tags.push(b.tag());
-        }
-    }
-    (chunks, tags)
-}
-
 /// Values named by id: id `i` is row `refs[i].1` of `columns[refs[i].0]`.
 #[derive(Default)]
 struct Pool {
@@ -274,6 +261,7 @@ impl<T> CorgiReduceBackend<T> {
     /// The backend of a merged reduce, which reads input `i`'s diffs times `signs[i]`. Its input
     /// batches are tagged by input.
     pub(crate) fn with_signs(mut self, signs: Vec<Diff>) -> Self {
+        assert!(!signs.is_empty(), "a merged reduce has an input");
         self.signs = signs;
         self
     }
@@ -384,11 +372,12 @@ fn split_real_keys<T: ColTime>(
     (labels, rows, Some(label_keys))
 }
 
-fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
+fn chunks_of<T, B>(batches: &[B]) -> Vec<&CorgiChunk<T, Diff>>
 where
     T: ColTime,
+    B: InBatch<T>,
 {
-    batches.iter().flat_map(|b| b.chunks.iter()).collect()
+    batches.iter().flat_map(|b| b.batch().chunks.iter()).collect()
 }
 
 /// A retire's keys, ascending: those the novel batches touch, and the `changed` set the harness
@@ -484,14 +473,18 @@ where
         if *from == KeyPosition::End {
             return;
         }
-        let (novel_chunks, novel_tags) = tagged_chunks_of(instance.input_batches);
-        let (mut in_chunks, mut in_tags) = tagged_chunks_of(instance.source_batches);
+        let novel_chunks = chunks_of(instance.input_batches);
+        let mut in_chunks = chunks_of(instance.source_batches);
         let prior = in_chunks.len();
         in_chunks.extend(novel_chunks.iter().copied());
-        in_tags.extend(novel_tags);
-        // Each input chunk's sign, unless every one is positive.
-        let in_signs: Vec<Diff> = in_tags.iter().map(|tag| self.signs[*tag]).collect();
-        let in_signs = in_signs.iter().any(|sign| *sign != 1).then_some(&in_signs[..]);
+        // Each input chunk's sign, in the order of `in_chunks`. Only a reduce with a negated input
+        // builds it, so a unary reduce reads its chunks as before.
+        let in_signs: Option<Vec<Diff>> = self.signs.iter().any(|sign| *sign != 1).then(|| {
+            instance.source_batches.iter().chain(instance.input_batches)
+                .flat_map(|b| std::iter::repeat_n(self.signs[b.tag()], b.batch().chunks.len()))
+                .collect()
+        });
+        let in_signs = in_signs.as_deref();
         let out_chunks = chunks_of(instance.output_batches);
 
         // The first window finds the retire's keys, where the input holds them, and the columns
