@@ -1,6 +1,7 @@
 //! The ledger rules (`examples/ledger/resolve.ddp`) and the ledger model (`examples/ledger/ledger.ddp`), on one small history.
 //!
-//! Each round runs the rules on the indexes the rounds before it left, and checks every outcome.
+//! Each round runs a client's checks (`examples/ledger/check.ddp`) on its requests, and then the rules,
+//! on the indexes the rounds before it left, and checks every outcome.
 //! After each round the model derives the same indexes from the manifest alone, and they must agree;
 //! and every invariant of the model must hold of the manifest.
 
@@ -39,9 +40,29 @@ fn absorb(into: &mut Rows, changes: &Rows) {
 #[derive(Default)]
 struct State { own: Rows, registered: Rows, follows: Rows, registrations: Rows, spans: Rows }
 
-/// One round of the rules. Returns each request's outcome, by its key.
-fn round(rules: &Program, state: &mut State, requests: &[(i64, String)], workers: usize) -> BTreeMap<i64, String> {
+/// The client's checks, and the rules that trust them.
+struct Rules { check: Program, resolve: Program }
+
+fn rules() -> Rules {
+    Rules { check: program(include_str!("../examples/ledger/check.ddp")), resolve: program(include_str!("../examples/ledger/resolve.ddp")) }
+}
+
+fn key(text: &str) -> i64 { text.trim_start_matches("tuple(").trim_end_matches(')').parse().unwrap() }
+
+/// One round: the client's checks, and then the rules on the requests that pass. Returns each request's outcome, by its key.
+fn round(rules: &Rules, state: &mut State, requests: &[(i64, String)], workers: usize) -> BTreeMap<i64, String> {
     let requests = requests.iter().map(|(key, actions)| format!("{key} val=tuple(list({actions}))")).collect();
+    let checked = evaluate(&rules.check, &[requests], workers);
+    let mut outcomes = resolve(&rules.resolve, state, lines(&checked["valid"]), workers);
+    for ((tx, index), diff) in &checked["invalid"] {
+        assert_eq!(*diff, 1, "one failed check for {tx}");
+        assert!(outcomes.insert(key(tx), rejected(key(index), INVALID)).is_none(), "one outcome for {tx}");
+    }
+    outcomes
+}
+
+/// One round of the rules alone, on requests as they are. Returns each request's outcome, by its key.
+fn resolve(rules: &Program, state: &mut State, requests: Vec<String>, workers: usize) -> BTreeMap<i64, String> {
     let out = evaluate(rules, &[lines(&state.own), requests, lines(&state.registered), lines(&state.follows)], workers);
     absorb(&mut state.own, &out["own_delta"]);
     absorb(&mut state.registered, &out["registered_add"]);
@@ -50,7 +71,7 @@ fn round(rules: &Program, state: &mut State, requests: &[(i64, String)], workers
     absorb(&mut state.spans, &out["spans_add"]);
     out["results"].iter().map(|((key, val), diff)| {
         assert_eq!(*diff, 1, "one outcome for {key}");
-        (key.trim_start_matches("tuple(").trim_end_matches(')').parse().unwrap(), val.clone())
+        (self::key(key), val.clone())
     }).collect()
 }
 
@@ -84,7 +105,7 @@ const INVALID: &str = "inject(3,tuple())";
 
 #[test]
 fn rounds_follow_the_model() {
-    let rules = program(include_str!("../examples/ledger/resolve.ddp"));
+    let rules = rules();
     let model = program(include_str!("../examples/ledger/ledger.ddp"));
     for workers in [1, 2] {
         let mut state = State::default();
@@ -134,14 +155,14 @@ fn rounds_follow_the_model() {
             // The clock's advance lands after this append.
             (40, append(1, &[5], &[6], 1)),
             (50, format!("{},{}", create(2, 1, &[0], Some(9)), append(2, &[5], &[6], 0))),
-            // Times of two coordinates, on a ledger of one.
+            // Times of two coordinates, on a ledger of one: its lower is not the ledger's write frontier.
             (60, append(3, &[2, 0], &[3, 0], 2)),
             // Stale against its own creation, which takes no effect.
             (70, format!("{},{}", create(12, 1, &[0], None), append(12, &[4], &[5], 0))),
         ], workers);
         assert_eq!(outcomes, BTreeMap::from([
             (10, rejected(0, &stale(2, 7))), (20, rejected(1, &stale(1, 7))), (30, COMMITTED.into()),
-            (40, COMMITTED.into()), (50, COMMITTED.into()), (60, rejected(0, INVALID)),
+            (40, COMMITTED.into()), (50, COMMITTED.into()), (60, rejected(0, &stale(2, 2))),
             (70, rejected(1, &stale(0, 0))),
         ]));
         check(&model, &state, workers);
@@ -158,7 +179,7 @@ fn rounds_follow_the_model() {
 /// though neither order of running them whole would commit both: an advance lands after its round's appends.
 #[test]
 fn a_clock_advance_lands_after_its_round() {
-    let rules = program(include_str!("../examples/ledger/resolve.ddp"));
+    let rules = rules();
     let model = program(include_str!("../examples/ledger/ledger.ddp"));
     let mut state = State::default();
     let created = |outcomes: BTreeMap<i64, String>| assert!(outcomes.values().all(|outcome| outcome == COMMITTED));
@@ -173,5 +194,31 @@ fn a_clock_advance_lands_after_its_round() {
     // The next round sees both advances: each follower now begins at [5].
     let outcomes = round(&rules, &mut state, &[(10, append(1, &[1], &[2], 1)), (20, append(2, &[5], &[6], 1))], 2);
     assert_eq!(outcomes, BTreeMap::from([(10, rejected(0, &stale(1, 5))), (20, COMMITTED.into())]));
+    check(&model, &state, 2);
+}
+
+/// The rules trust that a transaction names no ledger twice for one kind of action.
+/// A request that breaks that trust is rejected, or judged in the order it lists, and the round still ends.
+#[test]
+fn an_unchecked_request_does_not_stop_a_round() {
+    let rules = rules();
+    let model = program(include_str!("../examples/ledger/ledger.ddp"));
+    let mut state = State::default();
+    let unchecked = |state: &mut State, requests: &[(i64, String)]| {
+        let requests = requests.iter().map(|(key, actions)| format!("{key} val=tuple(list({actions}))")).collect();
+        resolve(&rules.resolve, state, requests, 2)
+    };
+    let outcomes = unchecked(&mut state, &[
+        (10, format!("{},{}", create(1, 1, &[0], None), create(1, 1, &[0], None))),
+        (20, create(2, 1, &[0], None)),
+    ]);
+    // The second creation finds the ledger its own transaction registered.
+    assert_eq!(outcomes, BTreeMap::from([(10, rejected(1, "inject(1,tuple(0,1))")), (20, COMMITTED.into())]));
+    let outcomes = unchecked(&mut state, &[
+        (10, format!("{},{}", append(2, &[0], &[1], 0), append(2, &[0], &[2], 0))),
+        (20, format!("{},{}", append(2, &[0], &[1], 0), append(2, &[1], &[2], 1))),
+    ]);
+    // The second append of 10 is stale against its first. The two of 20 follow one another, and both commit.
+    assert_eq!(outcomes, BTreeMap::from([(10, rejected(1, &stale(2, 2))), (20, COMMITTED.into())]));
     check(&model, &state, 2);
 }

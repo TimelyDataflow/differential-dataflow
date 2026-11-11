@@ -5,6 +5,10 @@ These are results from [`fabric.py`](fabric.py), the driver that makes each roun
 
 ## Recorded results
 
+These were recorded with the rules as they first stood.
+The rules have since been reworked to do less each round, and the figures below have not been run again.
+As one point of comparison: at 25,600 appends a round, pipelined, the first rules committed 522k spans/s and the reworked rules 667k.
+
 Apple M4 Mac mini (4 performance and 6 efficiency cores), 2026-11-10, four workers, one million ledgers.
 Each figure is from its own run on a fresh log: the mean of 128 rounds after 5 of warmup (64 for the largest rounds).
 Every ledger has one time coordinate and every batch is empty, so these are spans of metadata.

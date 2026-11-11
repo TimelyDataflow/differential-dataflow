@@ -2,35 +2,32 @@
 --
 -- A round takes the requests waiting, in the order of their keys, and decides each.
 -- A transaction is a list of actions that all take effect or none do.
--- `Create` registers a ledger. `Append` adds a span, and succeeds only if its `seqno`
--- is the ledger's version and its `lower` is the ledger's write frontier.
+-- `Create` registers a ledger, and succeeds only if the ledger is not registered.
+-- `Append` adds a span, and succeeds only if its `seqno` is the ledger's version
+-- and its `lower` is the ledger's write frontier.
 --
--- The state these rules read is three derived indexes, all as the round found them:
+-- A write frontier is the join of the ledger's own upper, as the round's earlier
+-- transactions left it, with the frontier of the clock it follows, as the round found it.
+-- So an append to a clock lands after every other append of its round.
+--
+-- These rules trust what a request says about itself: its actions are in order, its times have
+-- one width, each append's lower is before its upper, and its frontiers are in canonical form.
+-- check.ddp is those checks, for a client to run before it submits.
+--
+-- The state these rules read, as the round found it:
 --   input 0, own        : ((id), (version, upper))   a ledger's version and its own last upper
---   input 2, registered : ((id), (width, start))
+--   input 2, registered : ((id), (width, start))     read only for the width of a clock
 --   input 3, follows    : ((id), (clock))            only for ledgers that follow a clock
 -- Input 1 is the round's requests: ((tx), (actions)).
 --
--- A write frontier is the join of the ledger's own upper, as the round's earlier
--- transactions left it, with the own uppers of the clocks above it as the round found them.
--- So an append to a clock lands after every other append of its round.
---
--- Actions must be listed in order of ledger id, a `Create` before an `Append` of the same ledger,
--- so that no ledger is created twice or appended twice in one transaction.
--- A `Create` that names a clock needs that clock registered before the round, with the same width.
---
 -- Outputs:
---   results           ((tx), (outcome))                         every request's outcome
---   registrations_add ((id), (shape, width, start, clock))      the round's change to the manifest,
+--   results           ((tx), (outcome))                             every request's outcome
+--   registrations_add ((id), (shape, width, start, clock))          the round's change to the manifest,
 --   spans_add         ((id), (seqno, lower, upper, since, batch))   to be made durable
---   own_delta, registered_add, follows_add                      the changes to the three indexes
---   taken             ((tx), (actions))                         the requests this round decided
+--   own_delta, registered_add, follows_add                          the changes to the three indexes
+--   taken             ((tx), (actions))                             the requests this round decided
 --
--- Two idioms recur below, each for a reason in the lambda language.
---   `(context, sum) cap_sum match (...)`: a match arm does not see variables bound outside it,
---   so what an arm needs is passed in beside the sum.
---   `let none = [] : List(..) in none map (..)`: there is no constant for an empty list whose
---   elements hold a sum, so one is made by mapping over an empty list that holds none.
+-- The file ends with a section that only words rejections. Nothing in it changes what commits.
 
 type Batch = Empty | Inline List(int) | Blob List(int);
 type Clock = Free | Follows (int, int);
@@ -39,87 +36,43 @@ type Action = Create ((int, int), List(int), int, List(List(int)), Clock)
 -- A rejection for a stale append reports the ledger's version and write frontier as the round left them.
 type Failure = Stale (int, List(List(int))) | Exists (int, int) | Unknown (int, int) | Invalid;
 type Outcome = Committed | Rejected (int, Failure);
--- What a ledger's group holds, in this order: its registered width, its version and own upper,
--- the own upper of each clock above it, and then the round's actions on it by key.
--- A proposal is (tx, index, kind, seqno, lower, upper, width, eligible); kind 0 creates, 1 appends.
-type Row = Reg int
-         | Own (int, List(List(int)))
+-- What a ledger's group holds: its version and own upper, the frontier of the clock it follows,
+-- and the round's actions on it, in order of (tx, index).
+-- A proposal is (tx, index, kind, seqno, lower, upper, eligible); kind 0 creates, 1 appends.
+type Row = Own (int, List(List(int)))
          | Floor List(List(int))
-         | Proposal (int, int, int, int, List(List(int)), List(List(int)), int, int);
+         | Proposal (int, int, int, int, List(List(int)), List(List(int)), int);
 
 let own = input 0 : (((int, int)), (int, List(List(int))));
 let requests = input 1 : ((int), (List(Action)));
 let registered = input 2 : (((int, int)), (int, List(List(int))));
 let follows = input 3 : (((int, int)), ((int, int)));
 
--- SHAPE: every time in a frontier has one width. This uses no frontier comparison, so that
--- the comparisons below never meet a ragged frontier. The result is the first misshapen action, or -1.
-let sized = requests | map((tx, (actions)) ->
-    let shapely = actions map (action -> action match (
-        Create ((_, _, width, start, _) ->
-            (width, start) cap_list map ((width, time) -> (time len, width) eq) fold_all),
-        Append ((_, lower, upper, _, _) ->
-            let width = lower map (time -> time len) fold_max in
-            ((lower len, 0) gt,
-             (width, lower) cap_list map ((width, time) -> (time len, width) eq) fold_all,
-             (width, upper) cap_list map ((width, time) -> (time len, width) eq) fold_all) all))) in
-    let first = ((0, -1), shapely) fold (((index, bad), ok) ->
-        ((index, 1) add, (((bad, 0) lt, (ok, 0) eq) all, index, bad) select)) in
-    (tx, (actions, first.1)));
-let misshapen = sized | filter((_, (_, bad)) -> (bad, 0) ge) | map((tx, (_, bad)) -> (tx, (bad)));
-
--- ORDER AND BOUNDS: actions in order of (ledger, kind), and each append's lower strictly before its upper.
--- Frontiers are put in canonical form here, once; equal frontiers are then equal as values.
-let ordered = sized | filter((_, (_, bad)) -> (bad, 0) lt) | map((tx, (actions, _)) ->
-    let actions = actions map (action -> action match (
-        Create ((id, shape, width, start, clock) ->
-            (id, shape, width, start call frontier_normalize, clock) inject Create),
-        Append ((id, lower, upper, batch, seqno) ->
-            (id, lower call frontier_normalize, upper call frontier_normalize, batch, seqno) inject Append))) in
-    let first = ((((0, 0), 0), 0, 0, -1), actions) fold (((previous, seen, index, bad), action) ->
-        let (place, bounds) = action match (
-            Create ((id, _, _, _, _) -> ((id, 0), 1)),
-            Append ((id, lower, upper, _, _) -> ((id, 1), (lower, upper) call frontier_lt))) in
-        let ok = ((seen, (previous, place) lt, 1) select, bounds) all in
-        (place, 1, (index, 1) add, (((bad, 0) lt, (ok, 0) eq) all, index, bad) select)) in
-    (tx, (actions, first.3)));
-let disordered = ordered | filter((_, (_, bad)) -> (bad, 0) ge) | map((tx, (_, bad)) -> (tx, (bad)));
-let invalid = misshapen + disordered;
-let valid = ordered | filter((_, (_, bad)) -> (bad, 0) lt) | map((tx, (actions, _)) -> (tx, (actions)));
-
--- One row per action. The control fields the decision needs are projected once;
--- shapes and batches stay out of the decision.
-let acts = valid | flatmap((tx, (actions)) -> actions);
+-- One row per action, with the fields the decision needs.
+-- A match arm does not see variables bound outside it, so `cap_sum` passes them in beside the sum.
+let acts = requests | flatmap((tx, (actions)) -> actions);
 let checks = acts | map((tx, (index, action)) ->
     ((tx, index), action) cap_sum match (
         Create (((tx, index), (id, _, width, start, clock)) ->
             let (following, clock) = clock match (Free (_ -> (0, (0, 0))), Follows (clock -> (1, clock))) in
-            (tx, (id, index, 0, 0, start, start, width, following, clock))),
+            (tx, (id, index, 0, 0, start, start, following, clock, width))),
         Append (((tx, index), (id, lower, upper, _, seqno)) ->
-            (tx, (id, index, 1, seqno, lower, upper, lower map (time -> time len) fold_max, 0, (0, 0))))));
+            (tx, (id, index, 1, seqno, lower, upper, 0, (0, 0), 0)))));
 
--- The ledgers this round touches, and every clock above one of them.
+-- THE LEDGERS THE ROUND TOUCHES: each one's standing, and the clock it follows.
+-- A clock that many touched ledgers follow would bring them all to one worker, if they met it by its id.
+-- They meet it by (clock, part) instead, where a ledger's part is one of 64 by its id.
 let touched = checks | map((_, (id, _, _, _, _, _, _, _, _)) -> ((id), ())) | distinct;
-up: {
-    let next = above | map(((seed), (clock)) -> ((clock), (seed)))
-                     | join(follows, ((clock), (seed), (parent)) -> ((seed), (parent)));
-    set above = ((touched | join(follows, (seed, (), (clock)) -> (seed, (clock)))) + next) | distinct;
-}
-let clocks = up::above | map((_, (clock)) -> ((clock), ())) | distinct;
--- The probes of the resident indexes: at the touched ledgers, and at the clocks above them.
 let owned = own | join(touched, (id, standing, ()) -> (id, standing));
-let known = registered | join(touched, (id, registration, ()) -> (id, registration));
-let ticking = own | join(clocks, (clock, (_, upper), ()) -> (clock, (upper)));
--- Each touched ledger's floors: the own uppers of the clocks above it.
-let floors = up::above | map(((seed), (clock)) -> ((clock), (seed)))
-                       | join(ticking, ((clock), (seed), (upper)) -> ((seed), (upper)));
+let direct = touched | join(follows, ((id), (), (clock)) -> ((clock, (id hash shr_b64 1, 64) rem), (id)));
+let parts = direct | map((part, _) -> (part, ())) | distinct;
 
--- CREATIONS THAT FOLLOW A CLOCK. The clock must be registered, with the creation's width.
--- The new ledger's write frontier is its start joined with the clock's.
--- The clocks named and those above them are found by their own climb, as small as such creations are few.
-let hitched = checks | filter((_, (_, _, kind, _, _, _, _, following, _)) -> ((kind, 0) eq, following) all)
-                     | map(((tx), (id, index, _, _, start, _, width, _, clock)) -> ((clock), (tx, index, id, width, start)));
-let named = hitched | map((clock, _) -> (clock, ())) | distinct;
+-- THE CLOCKS THE ROUND NEEDS: those a touched ledger follows, and those a creation names.
+-- A clock's frontier is the join of its own upper with the own uppers of the clocks above it.
+-- The climb starts from these clocks, so it costs what the clocks are, however many follow them.
+let hitched = checks | filter((_, (_, _, kind, _, _, _, following, _, _)) -> ((kind, 0) eq, following) all)
+                     | map(((tx), (id, index, _, _, start, _, _, clock, width)) -> ((clock), (tx, index, id, width, start)));
+let named = ((parts | map(((clock, _), ()) -> ((clock), ()))) + (hitched | map((clock, _) -> (clock, ())))) | distinct;
 over: {
     let next = above | map(((seed), (clock)) -> ((clock), (seed)))
                      | join(follows, ((clock), (seed), (parent)) -> ((seed), (parent)));
@@ -133,110 +86,87 @@ let clock_frontier = ((own | join(named, (clock, (_, upper), ()) -> (clock, (upp
                        let joined = ((0, none), vals) fold (((seen, sofar), ((upper), _)) ->
                            (1, (seen, (sofar, upper) call frontier_join, upper) select)) in
                        ((joined.1), 1) enlist);
-let hitching = hitched | join(registered, ((clock), (tx, index, id, width, start), (theirs, _)) ->
-                   ((clock), (tx, index, id, width, start, theirs)));
--- Failures are ((tx), (index, code, ledger, version, frontier, stands)); only a stale append fills the last three.
-let clockless = (hitched | map(((clock), (tx, index, id, _, _)) ->
-                    let none = [] : List(List(int)) in ((tx), (index, 3, clock, 0, none, 0))))
-              - (hitching | map(((clock), (tx, index, id, _, _, _)) ->
-                    let none = [] : List(List(int)) in ((tx), (index, 3, clock, 0, none, 0))));
-let unfit = hitching | filter((_, (_, _, _, width, _, theirs)) -> (width, theirs) ne)
-                     | map(((clock), (tx, index, id, _, _, _)) ->
-                           let none = [] : List(List(int)) in ((tx), (index, 4, id, 0, none, 0)));
-let unhitched = clockless + unfit;
-let doomed = unhitched | map((tx, _) -> (tx, ())) | distinct;
-let hitches = hitching | filter((_, (_, _, _, width, _, theirs)) -> (width, theirs) eq)
-                       | join(clock_frontier, ((clock), (tx, index, id, width, start, _), (frontier)) ->
-                             let begins = (start, frontier) call frontier_join in
-                             ((tx), (id, index, 0, 0, begins, begins, width)));
+-- Each touched ledger's floor: the frontier of the clock it follows.
+let spread = parts | map(((clock, part), ()) -> ((clock), (part)))
+                   | join(clock_frontier, ((clock), (part), (frontier)) -> ((clock, part), (frontier)));
+let floors = direct | join(spread, (_, (id), (frontier)) -> ((id), (frontier)));
 
--- What each action proposes: (tx) -> (id, index, kind, seqno, lower, upper, width).
+-- CREATIONS THAT FOLLOW A CLOCK. The clock must be registered before the round, with the creation's width.
+-- The new ledger's write frontier is its start joined with the clock's.
+-- A transaction with a creation that fails this is rejected.
+let hitching = hitched | join(registered, ((clock), (tx, index, id, width, start), (theirs, _)) ->
+                   ((clock), (tx, index, id, start, (width, theirs) eq)));
+let fit = hitching | filter((_, (_, _, _, _, same)) -> same);
+let doomed = ((hitched | map((_, (tx, _, _, _, _)) -> ((tx), ())))
+            - (fit | map((_, (tx, _, _, _, _)) -> ((tx), ())))) | distinct;
+let hitches = fit | join(clock_frontier, ((clock), (tx, index, id, start, _), (frontier)) ->
+                        let begins = (start, frontier) call frontier_join in
+                        ((tx), (id, index, 0, 0, begins, begins)));
+
+-- What each action proposes: (tx) -> (id, index, kind, seqno, lower, upper).
 -- A creation's lower and upper are both the new ledger's write frontier.
-let proposed = (checks | filter((_, (_, _, _, _, _, _, _, following, _)) -> (following, 0) eq)
-                       | map((tx, (id, index, kind, seqno, lower, upper, width, _, _)) ->
-                             (tx, (id, index, kind, seqno, lower, upper, width))))
+let proposed = (checks | filter((_, (_, _, _, _, _, _, following, _, _)) -> (following, 0) eq)
+                       | map((tx, (id, index, kind, seqno, lower, upper, _, _, _)) ->
+                             (tx, (id, index, kind, seqno, lower, upper))))
              + hitches;
 
 -- What each touched ledger brings into the round.
-let standing = (known | map((id, (width, _)) -> (id, width inject Reg)))
-             + (owned | map((id, standing) -> (id, standing inject Own)))
-             + (floors | map((id, (upper)) -> (id, upper inject Floor)));
+let standing = (owned | map((id, standing) -> (id, standing inject Own)))
+             + (floors | map((id, (frontier)) -> (id, frontier inject Floor)));
 
+-- THE DECISION. A transaction is rejected if any of its actions fails.
+-- An action is judged against its ledger as the transactions before it left it.
+-- A rejected transaction's actions are still judged, but take no effect on the ledger.
 res: {
-    -- A rejected transaction's actions are still judged, but take no effect.
     let excluded = proposed | join(rejected, (tx, proposal, ()) -> (tx, proposal));
-    let proposals = ((proposed - excluded) | map(((tx), (id, index, kind, seqno, lower, upper, width)) ->
-                        ((id), (tx, index, kind, seqno, lower, upper, width, 1) inject Proposal)))
-                  + (excluded | map(((tx), (id, index, kind, seqno, lower, upper, width)) ->
-                        ((id), (tx, index, kind, seqno, lower, upper, width, 0) inject Proposal)));
+    let proposals = ((proposed - excluded) | map(((tx), (id, index, kind, seqno, lower, upper)) ->
+                        ((id), (tx, index, kind, seqno, lower, upper, 1) inject Proposal)))
+                  + (excluded | map(((tx), (id, index, kind, seqno, lower, upper)) ->
+                        ((id), (tx, index, kind, seqno, lower, upper, 0) inject Proposal)));
 
-    -- One ledger's round. The state is (known, version, write frontier, width), and then what a
-    -- creation would have set had its transaction not been rejected: (has, tx, write frontier, width).
-    -- An append is judged against its own transaction's creation even when that takes no effect,
-    -- so that it is told its lower was stale, not that the ledger is unknown.
-    -- Codes: 0 succeeds, 1 stale, 2 exists, 3 unknown, 4 the wrong width.
+    -- One ledger's round. `unweave` gives the tags, then each variant's rows.
+    -- The state is the ledger as it stands, (known, version, write), and then the ledger as the last
+    -- transaction saw it, with that transaction's own earlier actions applied: (tx, known, version, write).
+    -- An action is judged against the second when it is its own transaction's, and else against the first.
+    -- So a transaction's verdict does not depend on whether it now counts as rejected, and the loop settles.
+    -- Codes: 0 succeeds, 1 stale, 2 exists, 3 unknown.
     let bad = (standing + proposals) | reduce(((id), vals) ->
         let none = [] : List(List(int)) in
-        let entries = vals map ((row, _) -> row) in
-        let final = ((0, 0, none, 0, 0, 0, none, 0), entries) foldscan ((state, row) ->
-            (state, row) cap_sum match (
-                Reg (((_, version, write, _, has, mine, theirs, wide), width) ->
-                    ((1, version, write, width, has, mine, theirs, wide), (0, 0, 0, 0, write))),
-                Own (((known, _, _, width, has, mine, theirs, wide), (version, upper)) ->
-                    ((known, version, upper, width, has, mine, theirs, wide), (0, 0, 0, 0, upper))),
-                Floor (((known, version, write, width, has, mine, theirs, wide), floor) ->
-                    ((known, version, (write, floor) call frontier_join, width, has, mine, theirs, wide), (0, 0, 0, 0, floor))),
-                Proposal (((known, version, write, width, has, mine, theirs, wide), (tx, index, kind, seqno, lower, upper, span, eligible)) ->
-                    let creating = (kind, 0) eq in
-                    let own = (has, (mine, tx) eq) all in
-                    let (k, v, w, d) = ((own, 1, known) select, (own, 0, version) select,
-                                        (own, theirs, write) select, (own, wide, width) select) in
-                    let current = ((seqno, v) eq, (lower, w) eq) all in
-                    let code = (creating,
-                        (known, 2, 0) select,
-                        (k, ((span, d) eq, (current, 0, 1) select, 4) select, 3) select) select in
-                    let apply = ((code, 0) eq, eligible) all in
-                    let keep = ((code, 0) eq, creating, (eligible, 0) eq) all in
-                    ((((apply, creating) all, 1, known) select,
-                      (apply, (creating, 0, (version, 1) add) select, version) select,
-                      (apply, upper, write) select,
-                      ((apply, creating) all, span, width) select,
-                      (keep, 1, has) select, (keep, tx, mine) select,
-                      (keep, upper, theirs) select, (keep, span, wide) select),
-                     (tx, index, code, v, w))))) in
+        let parts = vals map ((row, _) -> row) unweave in
+        let known = (parts.1 len, 0) gt in
+        let (version, upper) = ((0, none), parts.1) fold ((_, standing) -> standing) in
+        let write = (upper, parts.2) fold ((sofar, floor) -> (sofar, floor) call frontier_join) in
+        let final = ((known, version, write, 0, known, version, write), parts.3) foldscan (
+            ((known, version, write, last, lk, lv, lw), (tx, index, kind, seqno, lower, upper, eligible)) ->
+                let mine = (last, tx) eq in
+                let (k, v, w) = ((mine, lk, known) select, (mine, lv, version) select, (mine, lw, write) select) in
+                let creating = (kind, 0) eq in
+                let current = ((seqno, v) eq, (lower, w) eq) all in
+                let code = (creating, (k, 2, 0) select, (k, (current, 0, 1) select, 3) select) select in
+                let ok = (code, 0) eq in
+                let (nk, nv, nw) = ((ok, 1, k) select, (ok, (creating, 0, (v, 1) add) select, v) select, (ok, upper, w) select) in
+                let apply = (ok, eligible) all in
+                (((apply, nk, known) select, (apply, nv, version) select, (apply, nw, write) select, tx, nk, nv, nw),
+                 (tx, index, code, v, w))) in
         let failed = (final.1 map ((_, _, code, _, _) -> (code, 0) ne), final.1) zip filter in
         -- A failure reports the ledger as the round leaves it, if it stands then; else as it was judged.
-        let (stands, version, write, _, _, _, _, _) = final.0 in
+        let (stands, version, write, _, _, _, _) = final.0 in
         ((stands, version, write, id), failed) cap_list map (((stands, version, write, id), (tx, index, code, v, w)) ->
             ((tx, index, code, id, (stands, version, v) select, (stands, write, w) select, stands), 1)))
         | map((_, (tx, index, code, id, version, write, stands)) -> ((tx), (index, code, id, version, write, stands)));
     set rejected = ((bad | map((tx, _) -> (tx, ()))) + doomed) | distinct;
 }
-
--- The first failed action of each rejected transaction.
-let failures = (res::bad + unhitched) | min;
 let rejected = res::rejected;
 let committed = acts - (acts | join(rejected, (tx, act, ()) -> (tx, act)));
 
 -- THE ROUND'S CHANGE TO THE MANIFEST.
-let created = committed | flatmap((_, (_, action)) -> action match (
-                              Create ((id, shape, width, start, clock) -> ((id), (shape, width, start, clock)) enlist),
-                              Append (_ ->
-                                  let none = [] : List(((int, int), List(int), int, List(List(int)))) in
-                                  none map ((id, shape, width, start) -> ((id), (shape, width, start, () inject Free))))))
-                        | map((_, (_, row)) -> row);
-let appended = committed | flatmap((_, (_, action)) -> action match (
-                               Create (_ ->
-                                   let none = [] : List(((int, int), List(List(int)), List(List(int)), int)) in
-                                   none map ((id, lower, upper, seqno) -> ((id), (lower, upper, () inject Empty, seqno)))),
-                               Append ((id, lower, upper, batch, seqno) -> ((id), (lower, upper, batch, seqno)) enlist)))
-                         | map((_, (_, row)) -> row);
--- A new span's since is its ledger's start, registered before the round or created in it.
-let starts = (known | map((id, (_, start)) -> (id, (start))))
-           + (created | map((id, (_, _, start, _)) -> (id, (start))));
+let created = committed | flatmap((_, (_, action)) -> action enlist unweave .1)
+                        | map((_, (_, (id, shape, width, start, clock))) -> ((id), (shape, width, start, clock)));
+let appended = committed | flatmap((_, (_, action)) -> action enlist unweave .2)
+                         | map((_, (_, (id, lower, upper, batch, seqno))) -> ((id), (lower, upper, batch, seqno)));
 output "registrations_add" = created;
-output "spans_add" = appended | join(starts, (id, (lower, upper, batch, seqno), (start)) ->
-                         (id, (seqno, lower, upper, start, batch)));
+-- A new span's since is its own lower: its times are as they were written, and it is not compacted.
+output "spans_add" = appended | map((id, (lower, upper, batch, seqno)) -> (id, (seqno, lower, upper, lower, batch)));
 
 -- THE CHANGES TO THE INDEXES.
 -- A ledger's new standing is its last committed action's: the start of a creation, or the upper of an append.
@@ -246,14 +176,27 @@ let renewed = marks | reduce((_, vals) ->
     let entries = vals map ((mark, _) -> mark) in
     let last = ((entries len, 1) sub enlist, entries) gather in
     last map ((seqno, upper) -> (((seqno, 1) add, upper), 1)));
-let own_delta = renewed - (owned | join(renewed, (id, standing, _) -> (id, standing)));
-output "own_delta" = own_delta;
+output "own_delta" = renewed - (owned | join(renewed, (id, standing, _) -> (id, standing)));
 output "registered_add" = created | map((id, (_, width, start, _)) -> (id, (width, start)));
-let follows_add = created | filter((_, (_, _, _, clock)) -> clock match (Free (_ -> 0), Follows (_ -> 1)))
-                          | map((id, (_, _, _, clock)) -> (id, (clock match (Free (_ -> (0, 0)), Follows (c -> c)))));
+let follows_add = created | flatmap((id, (_, _, _, clock)) -> clock enlist unweave .2)
+                          | map((id, (_, clock)) -> (id, (clock)));
 output "follows_add" = follows_add;
+output "taken" = requests;
 
--- OUTCOMES. A stale append is told where its ledger stands as the round leaves it: its version, and its
+-- WHAT A REJECTED REQUEST IS TOLD. Nothing below changes what commits.
+-- A rejection names the first action that failed, and why.
+-- Failures are ((tx), (index, code, ledger, version, frontier, stands)); only a stale append fills the last three.
+-- A creation whose clock is not registered is told the clock is unknown; one of another width, that it is invalid.
+let unhitched = (hitched | map(((clock), (tx, index, _, _, _)) ->
+                    let none = [] : List(List(int)) in ((tx), (index, 3, clock, 0, none, 0))))
+              - (hitching | map(((clock), (tx, index, _, _, _)) ->
+                    let none = [] : List(List(int)) in ((tx), (index, 3, clock, 0, none, 0))))
+              + (hitching | filter((_, (_, _, _, _, same)) -> (same, 0) eq)
+                          | map(((clock), (tx, index, id, _, _)) ->
+                    let none = [] : List(List(int)) in ((tx), (index, 4, id, 0, none, 0))));
+let failures = (res::bad + unhitched) | min;
+
+-- A stale append is told where its ledger stands as the round leaves it: its version, and its
 -- write frontier, which is its own upper joined with the uppers, after this round, of the clocks above it.
 -- Those clocks are found by one more climb, from the stale ledgers only: along the clocks they followed
 -- before the round, or, for a ledger created in this round, from the clock it was created under.
@@ -282,9 +225,7 @@ let told = (stale | join(left, (id, (tx, index, version, _, _), (frontier)) ->
          + (failures | filter((_, (_, code, _, _, _, _)) -> (code, 1) ne)
                      | map((tx, (index, code, id, _, _, _)) ->
                (tx, ((index, ((code, 2) eq, id inject Exists,
-                             ((code, 3) eq, id inject Unknown, () inject Invalid) select) select) inject Rejected))))
-         + (invalid | map((tx, (index)) -> (tx, ((index, () inject Invalid) inject Rejected))));
-output "results" = ((valid | map((tx, _) -> (tx, (() inject Committed))))
-                  - (valid | join(rejected, (tx, _, ()) -> (tx, (() inject Committed)))))
+                             ((code, 3) eq, id inject Unknown, () inject Invalid) select) select) inject Rejected))));
+output "results" = ((requests | map((tx, _) -> (tx, (() inject Committed))))
+                  - (requests | join(rejected, (tx, _, ()) -> (tx, (() inject Committed)))))
                  + told;
-output "taken" = requests;

@@ -14,7 +14,8 @@ It says what a ledger is, what may change a set of ledgers, what is not settled,
 | The model | [`model.md`](model.md) | The model, in prose. |
 | | [`ledger.ddp`](ledger.ddp) | The model's state: two collections, what is derived from them, and seven invariants as views that must be empty. |
 | | [`resolve.ddp`](resolve.ddp) | The model's rules: one round of transactions, each committed or rejected. |
-| Checks | [`../../tests/ledgers.rs`](../../tests/ledgers.rs) | Runs rounds of the rules, and after each has the state program rebuild the indexes from the manifest. They must agree, and every invariant must hold. |
+| | [`check.ddp`](check.ddp) | What a client checks of its own requests before it submits them. It reads no state. |
+| Checks | [`../../tests/ledgers.rs`](../../tests/ledgers.rs) | Runs rounds of a client's checks and then the rules, and after each has the state program rebuild the indexes from the manifest. They must agree, and every invariant must hold. |
 | | [`views.txt`](views.txt) | A session: the derived views under a tree of clocks, then each invariant broken once. |
 | The harness | [`fabric.py`](fabric.py) | A driver that pumps rounds, makes each durable, rebuilds a server from the log, and measures. |
 | | [`state.ddp`](state.ddp) | What a resolver keeps between rounds. It has no logic: five inputs, published. |
@@ -24,7 +25,7 @@ It says what a ledger is, what may change a set of ledgers, what is not settled,
 
 Outside this directory, [`../../src/lambda/frontiers.rs`](../../src/lambda/frontiers.rs) adds the four frontier functions the programs call.
 
-## Why four programs
+## Why five programs
 
 **`ledger.ddp` is the definition.**
 Everything about a ledger is derived from the manifest, which is its registrations and spans.
@@ -34,6 +35,12 @@ That derivation does work for every ledger, so it is used to check and to rebuil
 It does not read the manifest.
 It reads three indexes of it: each ledger's version and own upper, its width and start, and the clock it follows.
 It reports the round's change to the manifest, and the changes to those indexes.
+Its last section only words rejections, and changes nothing that commits.
+
+**`check.ddp` is what the rules trust a client to have checked.**
+Each check reads the request alone: its actions are in order, its times have one width, and each append's lower is before its upper.
+The test runs it in front of the rules.
+The drivers here make well-formed requests, and do not run it.
 
 **`state.ddp` holds the manifest and the three indexes between rounds.**
 A driver feeds it each round's conclusions.

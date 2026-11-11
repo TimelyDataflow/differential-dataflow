@@ -19,6 +19,7 @@ A SPAN is a durable statement about part of a ledger: `(seqno, lower, upper, sin
 
 * `lower` and `upper` are frontiers; the span holds exactly the ledger's updates at times at or after `lower` and not at or after `upper`.
 * `since` is a frontier; the span's updates accumulate correctly at any time at or after `since`.
+  A new span is written with `since` equal to its `lower`, which marks it as not compacted: its times are as they were written.
 * `batch` says where the updates are: nowhere, because there are none; inline; or in a blob named by its hash.
 * `seqno` numbers the ledger's spans: 0, 1, 2 and so on.
   It lets a reader tell a span that is missing from a stretch of time that a clock passed over.
@@ -87,7 +88,7 @@ An implementation need not: it may compute the write frontier only for the ledge
 
 ## Invariants
 
-These hold of every reachable state.
+These hold of every state reached by requests that pass a client's checks (see Transactions).
 Each is a view in `ledger.ddp` that must be empty.
 
 1. **malformed.** A span's lower is strictly before its upper.
@@ -114,13 +115,22 @@ So it names a ledger in at most one `Create` and at most one `Append`, and this 
 
 * `Create` succeeds if the id is not registered and, when it names a clock, that clock was registered before the round, with the same width.
   It adds the registration.
-* `Append` succeeds if the ledger is registered, `seqno` equals its version, `lower` equals its write frontier, and `lower` is strictly before `upper`.
-  It adds the span `(seqno, lower, upper, start, batch)`: a new span's `since` is the ledger's start.
+* `Append` succeeds if the ledger is registered, `seqno` equals its version, and `lower` equals its write frontier.
+  It adds the span `(seqno, lower, upper, lower, batch)`: a new span's `since` is its `lower`.
 
 A transaction COMMITS if every one of its actions succeeds, in order, and otherwise it is REJECTED and changes nothing.
-A rejection names the first action that failed and why: a stale append, an id already registered, an id not registered, or a request that is invalid in itself.
+A rejection names the first action that failed and why: a stale append, an id already registered, an id not registered, or a creation of another width than its clock.
 A stale append is told the ledger's version and write frontier as the round leaves them, which is where a retry must begin.
-A request is invalid in itself if its actions are out of order, a frontier's times differ in width, an append's lower is not strictly before its upper, or its times are not of the ledger's width.
+
+Some of what a request must satisfy can be checked from the request alone.
+Its actions are in the order above, the times of each frontier have one width, an append's `lower` is not empty and is strictly before its `upper`, and its frontiers are in canonical form.
+The rules trust these, and do not check them.
+[`check.ddp`](check.ddp) is the checks, for a client to run before it submits.
+An append's times must also have its ledger's width.
+The rules do not check that either, but a checked append of another width is stale, because its `lower` cannot equal the write frontier.
+
+A request that skips the checks can break invariant 1 for the ledgers it names, or reopen a ledger that was closed.
+It cannot stop a round: each action is judged in the order listed, against the ledger as its own transaction's earlier actions would leave it.
 
 The writer of a batch vouches for it: its updates have the ledger's shapes, and lie in the span.
 The rules do not open a batch.
@@ -212,13 +222,13 @@ Nothing here makes a DDIR program's inputs or outputs durable.
 * **The model runs.** `ledger.ddp` is the state, the write frontier and the invariants.
   `views.txt` shows the write frontiers under a two-level clock tree, and then breaks each invariant once.
 * **The rules run.** `resolve.ddp` resolves one round as described above.
-* **They are checked against each other.** `tests/ledgers.rs` runs rounds of the rules, and after each has the model derive the indexes from the manifest alone; they must agree, and every invariant must hold.
+* **They are checked against each other.** `tests/ledgers.rs` runs rounds of a client's checks and then the rules, and after each has the model derive the indexes from the manifest alone; they must agree, and every invariant must hold.
 * **Many sessions can feed one resolver.** `resolver.py` has nine client sessions and a tenth that pumps the rounds.
 * **Rounds can be made durable, and recovered.** `fabric.py` writes each round's change to the manifest as a blob and swaps a root file.
   With `--check` it kills the server, rebuilds the manifest from the log, derives the indexes with the model, and checks the invariants.
   Its measurements are in `MEASUREMENTS.md`.
 * **Frontier comparisons never fail.** They take times of different widths, reading a missing coordinate as before every int, so a ragged request cannot stop a server.
-  The rules reject such requests before comparing them.
+  The rules do not look for such requests; `check.ddp` does.
 
 What the server does not do itself, and a driver does from outside:
 
