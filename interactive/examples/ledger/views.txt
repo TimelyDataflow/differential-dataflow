@@ -1,0 +1,58 @@
+# The state of a set of ledgers and its derived views (see ledger.ddp and model.md, beside this file).
+#
+# First a valid state: the write frontiers under a two-level clock tree, and every invariant view empty.
+# Then one row that breaks each invariant, and the views that report it.
+#
+#   ./target/release/ddir_server < interactive/examples/ledger/views.txt
+
+load ledgers from interactive/examples/ledger/ledger.ddp
+# Ledgers 1 and 2 follow clock 9; clock 9 follows clock 8; ledger 3 is free. All have width 1 and start at [0].
+feed ledgers 0 begin
+tuple(tuple(0,1)) val=tuple(list(1,2),1,list(list(0)),inject(1,tuple(0,9)))
+tuple(tuple(0,2)) val=tuple(list(1,2),1,list(list(0)),inject(1,tuple(0,9)))
+tuple(tuple(0,3)) val=tuple(list(1,2),1,list(list(0)),inject(0,tuple()))
+tuple(tuple(0,8)) val=tuple(list(1,2),1,list(list(0)),inject(0,tuple()))
+tuple(tuple(0,9)) val=tuple(list(1,2),1,list(list(0)),inject(1,tuple(0,8)))
+end-feed
+# Ledger 2 has spans [0,3) then [5,8), not abutting; clock 9 advanced to [5]; clock 8 to [7]; ledger 3 has [0,1).
+feed ledgers 1 begin
+tuple(tuple(0,2)) val=tuple(0,list(list(0)),list(list(3)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,2)) val=tuple(1,list(list(5)),list(list(8)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,9)) val=tuple(0,list(list(0)),list(list(5)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,8)) val=tuple(0,list(list(0)),list(list(7)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,3)) val=tuple(0,list(list(0)),list(list(1)),list(list(0)),inject(0,tuple()))
+end-feed
+tick
+peek ledgers::follows
+peek ledgers::own
+peek ledgers::write
+peek ledgers::malformed
+peek ledgers::orphaned
+peek ledgers::forked
+peek ledgers::skipped
+peek ledgers::early
+peek ledgers::unclocked
+peek ledgers::mismatched
+# Now break each invariant once: a span with lower at its upper (ledger 1), a span of an unregistered
+# ledger (77), a version used twice and one skipped (ledger 3), a span that begins before the last
+# ended (clock 8), a clock that is not registered (ledger 4), and a clock of another width (ledger 5).
+feed ledgers 0 begin
+tuple(tuple(0,4)) val=tuple(list(1,2),1,list(list(0)),inject(1,tuple(0,55)))
+tuple(tuple(0,5)) val=tuple(list(1,2),2,list(list(0,0)),inject(1,tuple(0,9)))
+end-feed
+feed ledgers 1 begin
+tuple(tuple(0,1)) val=tuple(0,list(list(4)),list(list(4)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,77)) val=tuple(0,list(list(0)),list(list(1)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,3)) val=tuple(0,list(list(0)),list(list(2)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,3)) val=tuple(3,list(list(2)),list(list(3)),list(list(0)),inject(0,tuple()))
+tuple(tuple(0,8)) val=tuple(1,list(list(6)),list(list(9)),list(list(0)),inject(0,tuple()))
+end-feed
+tick
+peek ledgers::malformed
+peek ledgers::orphaned
+peek ledgers::forked
+peek ledgers::skipped
+peek ledgers::early
+peek ledgers::unclocked
+peek ledgers::mismatched
+exit
