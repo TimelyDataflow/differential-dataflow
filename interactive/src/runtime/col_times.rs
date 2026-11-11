@@ -146,6 +146,27 @@ impl<T> ColTimes<T> {
         self.len += e - s;
     }
 
+    /// Append rows `[s, e)` of `other` joined with `t`: a slice copy per lane where `t`'s
+    /// coordinate is zero, a max with it otherwise.
+    pub(crate) fn push_range_joined(&mut self, other: &ColTimes<T>, s: usize, e: usize, t: &[u64]) {
+        if e <= s { return; }
+        self.widen(other.lanes.len().max(t.len()));
+        for (j, lane) in self.lanes.iter_mut().enumerate() {
+            match (other.lanes.get(j), t.get(j).copied().unwrap_or(0)) {
+                (Some(src), 0) => lane.extend_from_slice(&src[s..e]),
+                (Some(src), m) => lane.extend(src[s..e].iter().map(|&x| x.max(m))),
+                (None, m) => lane.resize(lane.len() + (e - s), m),
+            }
+        }
+        self.len += e - s;
+    }
+
+    /// Keep the first `len` rows.
+    pub(crate) fn truncate_rows(&mut self, len: usize) {
+        for lane in &mut self.lanes { lane.truncate(len); }
+        self.len = self.len.min(len);
+    }
+
     /// A new column of the selected rows, in selection order.
     pub(crate) fn gather(&self, rows: &[usize]) -> Self {
         let lanes = self.lanes.iter().map(|lane| rows.iter().map(|&i| lane[i]).collect()).collect();
@@ -323,6 +344,35 @@ impl<'a, T: Lanes> FromIterator<&'a T> for ColTimes<T> {
         for t in iter { out.push(t); }
         out
     }
+}
+
+/// The proxy join's time column: blocks of matches join lane by lane, a max per coordinate.
+impl<T: Lanes> differential_dataflow::operators::int_proxy::TimeColumn<T> for ColTimes<T> {
+    fn len(&self) -> usize { ColTimes::len(self) }
+    fn clear(&mut self) { ColTimes::clear(self) }
+    fn extend_cross_join(&mut self, a: &Self, b: &Self, blocks: &[(std::ops::Range<usize>, std::ops::Range<usize>)]) {
+        let rows: usize = blocks.iter().map(|(r0, r1)| r0.len() * r1.len()).sum();
+        self.widen(a.lanes.len().max(b.lanes.len()));
+        for (j, lane) in self.lanes.iter_mut().enumerate() {
+            match (a.lanes.get(j), b.lanes.get(j)) {
+                (Some(x), Some(y)) => for (r0, r1) in blocks {
+                    for i in r0.clone() { let xi = x[i]; lane.extend(y[r1.clone()].iter().map(|&yj| xi.max(yj))); }
+                },
+                (Some(x), None) => for (r0, r1) in blocks {
+                    for i in r0.clone() { lane.resize(lane.len() + r1.len(), x[i]); }
+                },
+                (None, Some(y)) => for (r0, r1) in blocks {
+                    for _ in r0.clone() { lane.extend_from_slice(&y[r1.clone()]); }
+                },
+                (None, None) => lane.resize(lane.len() + rows, 0),
+            }
+        }
+        self.len += rows;
+        // A column is as wide as its widest row: drop coordinates no row of these blocks carries.
+        while self.lanes.last().is_some_and(|lane| lane.iter().all(|&x| x == 0)) { self.lanes.pop(); }
+    }
+    fn owned_get(&self, i: usize) -> T { self.get(i) }
+    fn owned_push(&mut self, t: &T) { self.push(t) }
 }
 
 #[cfg(test)]
