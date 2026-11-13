@@ -103,7 +103,8 @@ fn uses(s: &Scope) -> Vec<Vec<Use>> {
                 add(arrangement, Use::Other);
             }
             Item::Op(Node::Linear { input, ops }) => add(input, if ops.iter().all(keeps_times) { Use::Linear(c) } else { Use::Other }),
-            Item::Op(Node::Arrange(r) | Node::Reduce { input: r, .. } | Node::Inspect { input: r, .. }) => add(r, Use::Other),
+            Item::Op(Node::Arrange(r) | Node::Inspect { input: r, .. }) => add(r, Use::Other),
+            Item::Op(Node::Reduce { input, .. }) => for r in input.refs() { add(r, Use::Other); },
             Item::Op(Node::Join { left, right, .. }) => { add(left, Use::Other); add(right, Use::Other); }
             Item::Op(Node::Concat(refs)) => for r in refs { add(r, Use::Other); },
             Item::Sub(child) => for imp in &child.imports {

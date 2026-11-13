@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -22,12 +22,13 @@
+@@ -19,12 +19,13 @@
  let known_rows = known_join | filter((same, _) -> same) | map((_, (pair, row)) -> ((pair, row), ()));
  let known_idx2 = known_rows | arrange;
  let known_reduce = known_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
@@ -16,5 +16,5 @@
 +let marked_map3 = marked_rows | map(((who, _), row) -> (who, (row, 0)));
 +let marked = marked_map + marked_map3;
  let marked_idx = marked | arrange;
- let person_idx = person | arrange;
- let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
+ let ranked_join = marked_idx | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
+ let ranked_idx = ranked_join | arrange;

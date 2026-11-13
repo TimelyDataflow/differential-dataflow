@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -35,10 +35,11 @@
+@@ -30,10 +30,11 @@
  let liked_idx3 = liked_join2 | arrange;
  let liked = liked_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let points_map = liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1));

@@ -9,6 +9,6 @@
 -let answered_idx = answered_map | arrange;
 +let answered_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who));
 +let answered_idx = answered_rows | arrange;
- let message_idx = message | arrange;
- let answered_join = answered_idx | join(message_idx, (_, who, (_, _, to, _, _, _, _, _, _, _, _, _, _)) -> (who, to));
+ let answered_join = answered_idx | join(message, (_, who, (_, _, to, _, _, _, _, _, _, _, _, _, _)) -> (who, to));
  let answered = answered_join | filter((who, to) -> (who, to) ne);
+ let talks_map = answered | map((a, b) -> ((a, b), ()));

@@ -529,6 +529,60 @@ impl Gen {
                     val = v2;
                     op
                 }
+                // A bracket list of the stream and 1 to 3 signed collections of its shape, reduced
+                // as one merged reduce. A marker, rewritten below into the list that is the next
+                // op's source, with that reduce as the next op.
+                90..=92 => {
+                    let others: Vec<Coll> = self.colls.iter().filter(|c| c.key == key && c.val == val).cloned().collect();
+                    if others.is_empty() { continue; }
+                    let mut elements = Vec::new();
+                    for _ in 0..1 + self.rng.below(3) {
+                        let other = self.rng.pick(&others).clone();
+                        elements.push(format!("{}{}", if self.rng.chance(50) { "-" } else { "" }, other.name));
+                    }
+                    let (text, v2) = match self.rng.below(5) {
+                        0 => ("distinct".to_string(), val.clone()),
+                        1 => ("count".to_string(), Sh::Int),
+                        2 => ("min".to_string(), val.clone()),
+                        _ => self.reducer(&val),
+                    };
+                    ops.push(Op::Plain { text: format!("__list {}", elements.join(", ")), same_shape: true });
+                    concat_shapes.push((key.clone(), val.clone()));
+                    // The reduce stays with its list: dropping it would leave a list alone.
+                    ops.push(Op::Plain { text, same_shape: false });
+                    val = v2;
+                    continue;
+                }
+                // A grouped reduce over the stream and 1 to 3 collections of its key, whose values
+                // may have other shapes.
+                93..=95 => {
+                    let candidates: Vec<Coll> = self.colls.iter().filter(|c| c.key == key).cloned().collect();
+                    if candidates.is_empty() { continue; }
+                    let mut picked: Vec<Coll> = (0..1 + self.rng.below(3)).map(|_| self.rng.pick(&candidates).clone()).collect();
+                    // When some collection of the key holds another value shape, the first input
+                    // after the stream is one.
+                    let differing: Vec<Coll> = candidates.iter().filter(|c| c.val != val).cloned().collect();
+                    if !differing.is_empty() { picked[0] = self.rng.pick(&differing).clone(); }
+                    let others = picked;
+                    let names = others.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
+                    let lists: Vec<String> = (0..=others.len()).map(|i| format!("l{i}")).collect();
+                    let lens: Vec<String> = lists.iter().map(|l| format!("{l} len")).collect();
+                    // The lambda binds one list per input, the stream's first.
+                    let last = others.last().unwrap().val.clone();
+                    let (body, v2) = match self.rng.below(4) {
+                        0 => {
+                            let sum = lens.iter().skip(1).fold(lens[0].clone(), |acc, l| format!("({acc}, {l}) add"));
+                            (format!("({sum}, 1) enlist"), Sh::Int)
+                        }
+                        1 => (format!("(({}), 1) enlist", lens.join(", ")), Sh::Tup(vec![Sh::Int; lens.len()])),
+                        // The contents of the first list, and of the last, a list of another shape.
+                        2 => ("l0 map ((v, _) -> (v, 1))".to_string(), val.clone()),
+                        _ => (format!("l{} map ((v, _) -> (v, 1))", others.len()), last),
+                    };
+                    let op = Op::Plain { text: format!("reduce({names}, (_, {}) -> {body})", lists.join(", ")), same_shape: v2 == val };
+                    val = v2;
+                    op
+                }
                 _ => {
                     let others: Vec<Coll> = self.colls.iter().filter(|c| c.key == key && c.val == val).cloned().collect();
                     if others.is_empty() { continue; }
@@ -550,6 +604,16 @@ impl Gen {
         let mut concat_shapes = concat_shapes.into_iter();
         for op in ops {
             match &op {
+                Op::Plain { text, .. } if text.starts_with("__list ") => {
+                    let (mk, mv) = concat_shapes.next().unwrap();
+                    // As for a concat, the list's first element is a named let.
+                    if !lowered.is_empty() {
+                        let mid = self.name();
+                        self.push_let(Let { name: mid.clone(), var: false, src: src_text.clone(), ops: std::mem::take(&mut lowered), key: mk, val: mv });
+                        src_text = mid;
+                    }
+                    src_text = format!("[{src_text}, {}]", &text["__list ".len()..]);
+                }
                 Op::Plain { text, .. } if text.starts_with("__concat ") => {
                     let rest = &text["__concat ".len()..];
                     let (sign, other) = rest.split_at(1);
@@ -586,7 +650,7 @@ impl Gen {
             true
         } else {
             let names: Vec<&Coll> = l.src.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter_map(named).collect();
-            !l.src.contains(" - ") && names.iter().all(|c| c.positive)
+            !l.src.contains(" - ") && !l.src.contains(", -") && names.iter().all(|c| c.positive)
         };
         for op in &l.ops {
             match op {
@@ -1387,10 +1451,11 @@ fn parse_case(text: &str) -> Case {
 /// Draw independently of generation, so minimization and new generator draws keep the subset.
 fn subset(seed: u64) -> Config {
     if let Ok(text) = std::env::var("DIFFTEST_PASSES") { return Config::parse(&text).unwrap(); }
-    let bits = Rng(seed ^ 0x7061_7373_6573).below(128);
+    let bits = Rng(seed ^ 0x7061_7373_6573).below(256);
     Config { structural: bits & 1 != 0, compose_maps: bits & 2 != 0,
         dead_code: bits & 4 != 0, projection: bits & 8 != 0, as_of_drop: bits & 16 != 0,
-        collapse_parent_arranges: bits & 32 != 0, hoist_invariant: bits & 64 != 0 }
+        collapse_parent_arranges: bits & 32 != 0, hoist_invariant: bits & 64 != 0,
+        merge_reduce: bits & 128 != 0 }
 }
 
 fn pass_names(config: Config) -> String {

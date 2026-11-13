@@ -1,6 +1,6 @@
 --- lowered
 +++ optimized
-@@ -2,11 +2,11 @@
+@@ -2,48 +2,40 @@
  -- Trace imports use provider arrangements; history advances to G = (0, []).
  let store = import "store::store" : ((int), (int, int));
  let intents = input 0 : ((int, int, int), (int));
@@ -16,8 +16,7 @@
 +let wid_idx = wid | arrange;
  let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
  let rk_idx = rk | arrange;
- let store_idx = store | arrange;
-@@ -14,37 +14,29 @@
+ let base = rk_idx | join(store, ((k), (rid, e), (sw, v)) -> ((k, rid, e), (sw neg, v)));
  res: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
      var rollback;
@@ -62,13 +61,3 @@
  let rb_idx = rb | arrange;
  let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
  let committed_neg = wbad | negate;
-@@ -53,8 +45,7 @@
- let latest_idx = latest_map | arrange;
- let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
- let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
--let store_idx2 = store | arrange;
--let old_rows = latest | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
-+let old_rows = latest | join(store_idx, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
- let delta_neg = old_rows | negate;
- let delta_rows = new_rows + delta_neg;
- -- Renderer: build an export arrangement.

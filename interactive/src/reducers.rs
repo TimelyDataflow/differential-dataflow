@@ -2,6 +2,7 @@
 //! `vals` is nonempty, ordered, and holds `(value, nonzero diff)` pairs.
 
 use crate::ir::{Lambda, Reducer};
+use crate::scope_ir::ReduceInput;
 use crate::lambda::Projection;
 
 /// Distinct after its input has been keyed by the whole record.
@@ -16,6 +17,7 @@ pub(crate) fn expand_distinct(
     scope: &mut crate::scope_ir::Scope,
     shapes: &crate::shapes::ScopeShapes,
     pending: &std::collections::HashMap<Vec<String>, Vec<usize>>,
+    parent_arranged: &[bool],
     path: &mut Vec<String>,
 ) {
     use crate::scope_ir::{Item, Node, Ref, Source};
@@ -32,26 +34,36 @@ pub(crate) fn expand_distinct(
         let distinct = sites.peek() == Some(&i);
         if distinct { sites.next(); }
         let by_record = distinct && match &item {
-            Item::Op(Node::Reduce { input, .. }) => !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit),
+            Item::Op(Node::Reduce { input, .. }) => {
+                // Lowering registers only the plain reduce of one positive input as a site.
+                let input = input.as_single().expect("a distinct site reads one input");
+                !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit)
+            }
             _ => false,
         };
         match &mut item {
             Item::Op(node) => node.for_each_ref(|r| remap_ref(r, &remap)),
             Item::Sub(child) => {
                 let crate::shapes::ItemShapes::Sub(shapes) = &shapes.items[i] else { unreachable!() };
-                path.push(child.name.clone());
-                expand_distinct(child, shapes, pending, path);
-                path.pop();
                 for import in &mut child.imports {
                     if let Source::Parent(r) = &mut import.from { remap_ref(r, &remap); }
                 }
+                // A by-record distinct ends in a map, so an import that lowering took
+                // to be arranged may not be. Recompute it against the rewritten items.
+                let entering: Vec<bool> = child.imports.iter().map(|import| match &import.from {
+                    Source::Parent(r) => crate::lower::is_arranged(r, &items, &scope.imports, parent_arranged),
+                    _ => false,
+                }).collect();
+                path.push(child.name.clone());
+                expand_distinct(child, shapes, pending, &entering, path);
+                path.pop();
             }
         }
         let mut push = |mut node: Node| {
             // Distinct can replace a Reduce with a map back from the record key.
             // Check consumers after remapping, when their actual input is known.
             let mut arrange = |input: &mut Ref| {
-                if !crate::lower::is_arranged(input, &items) {
+                if !crate::lower::is_arranged(input, &items, &scope.imports, parent_arranged) {
                     let r = Ref::Local(items.len());
                     items.push(Item::Op(Node::Arrange(input.clone())));
                     labels.push(scope.labels[i].clone());
@@ -61,7 +73,7 @@ pub(crate) fn expand_distinct(
             match &mut node {
                 Node::Join { left, right, .. } => { arrange(left); arrange(right); }
                 Node::HalfJoin { arrangement, .. } => arrange(arrangement),
-                Node::Reduce { input, .. } => arrange(input),
+                Node::Reduce { input, .. } => input.for_each_ref(&mut arrange),
                 _ => {}
             }
             let r = Ref::Local(items.len());
@@ -71,13 +83,14 @@ pub(crate) fn expand_distinct(
         };
         if distinct {
             let Item::Op(Node::Reduce { input, .. }) = item else { unreachable!() };
+            let input = input.as_single().cloned().expect("a distinct site reads one input");
             let input = if by_record {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, v) = input in ((k, v), ())".into(), &corgi::Scope::default()))] })
             } else { input };
             // Both paths now have unit values: either they were known to be unit,
             // or the map above keyed the collection by its whole record.
             let reducer = Reducer::Expr(unit_distinct());
-            let output = push(Node::Reduce { input, reducer, limit: None });
+            let output = push(Node::Reduce { input: ReduceInput::single(input), reducer, limit: None });
             if by_record {
                 push(Node::Linear { input: output, ops: vec![LinearOp::Project(Lambda::new("let (kv, ()) = input in kv".into(), &corgi::Scope::default()))] });
             }

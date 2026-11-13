@@ -64,6 +64,22 @@ impl ScopeShapes {
             st::Ref::ChildExport(i, e) => match &self.items[*i] { ItemShapes::Sub(c) => c.exports[*e].clone(), ItemShapes::Op(_) => None },
         }
     }
+    /// The shape a reduce's lambda reads: `(key, vals)`, with a flat `(key, vals_0, .., vals_{n-1})`
+    /// for a grouped reduce. `None` while a shape it needs is unknown. A merged reduce's inputs
+    /// share one shape, so any known one gives it.
+    pub fn reduce_input(&self, input: &st::ReduceInput) -> Option<Shape> {
+        let (key, vals): (Shape, Vec<Shape>) = match input {
+            st::ReduceInput::Merged(inputs) => {
+                let c = inputs.iter().find_map(|(r, _)| self.of(r))?;
+                (c.key, vec![c.val])
+            }
+            st::ReduceInput::Grouped(inputs) => {
+                let known = inputs.iter().map(|r| self.of(r)).collect::<Option<Vec<_>>>()?;
+                (known[0].key.clone(), known.into_iter().map(|c| c.val).collect())
+            }
+        };
+        Some(Shape::Prod(crate::lambda::reduce_rows(&key, &vals)))
+    }
     /// The scope at `path` (indices of `Sub` items from this one).
     pub(crate) fn at(&self, path: &[usize]) -> &ScopeShapes {
         match path.split_first() {
@@ -275,11 +291,11 @@ fn pair_shape(projection: &Lambda, rows: &[Shape]) -> Result<(Shape, Shape), Str
     }
 }
 
-/// The output value shape of `reduce(lambda)` over a key of shape `key` with values of shape `val`:
-/// the lambda reads the key and a `List` of `(val, diff)`, and must give a `List` of `(val, diff)`.
-fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, String> {
-    let env = [key.clone(), Shape::List(Box::new(Shape::Prod(vec![val.clone(), Shape::Int])))];
-    match slot_shape(lambda, &env).map_err(|e| format!("reduce: {e}"))? {
+/// The output value shape of `reduce(lambda)` over a key of shape `key` with inputs of value shapes
+/// `vals`: the lambda reads the key and one `List` of `(val, diff)` per input, and must give a
+/// `List` of `(val, diff)`.
+fn reduce_shape(lambda: &Lambda, key: &Shape, vals: &[Shape]) -> Result<Shape, String> {
+    match slot_shape(lambda, &crate::lambda::reduce_rows(key, vals)).map_err(|e| format!("reduce: {e}"))? {
         Shape::List(e) => match *e {
             Shape::Prod(mut fs) if fs.len() == 2 && fs[1] == Shape::Int => Ok(fs.swap_remove(0)),
             other => Err(format!("reduce: output elements of shape {other}, not (val, diff)")),
@@ -342,14 +358,46 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
                 Err(e) => fail(format!("half_join: {e}")),
             }
         }
-        st::Node::Reduce { input, reducer, .. } => {
-            let c = shapes.of(input)?;
+        st::Node::Reduce { input: st::ReduceInput::Merged(inputs), reducer, .. } => {
+            // The inputs are summed, so any one whose shape is known gives the row shape. In a loop
+            // the others may be known only through this reduce.
+            let known: Vec<CollShape> = inputs.iter().filter_map(|(r, _)| shapes.of(r)).collect();
+            let c = known.first()?.clone();
+            if let Some(other) = known.iter().find(|o| o.key != c.key || o.val != c.val) {
+                return fail(format!("reduce over inputs ({}, {}) and ({}, {})", c.key, c.val, other.key, other.val));
+            }
             let Reducer::Expr(lambda) = reducer;
-            let v = match reduce_shape(lambda, &c.key, &c.val) {
+            let v = match reduce_shape(lambda, &c.key, std::slice::from_ref(&c.val)) {
                 Ok(v) => v,
                 Err(e) => return fail(e),
             };
             Some(CollShape::new(c.key, v, level))
+        }
+        st::Node::Reduce { input: st::ReduceInput::Grouped(inputs), reducer, .. } => {
+            // The lambda reads every input's values, so it types only once all their shapes are
+            // known. Inference revisits this reduce as they become known, so one still unknown
+            // when the scope settles is reported, by its position.
+            let mut known = Vec::with_capacity(inputs.len());
+            for (i, r) in inputs.iter().enumerate() {
+                match shapes.of(r) {
+                    Some(c) => known.push(c),
+                    None => {
+                        problems.unknown.push(format!("{at}: reduce input {i} ({r:?}) has no shape"));
+                        return None;
+                    }
+                }
+            }
+            // The inputs share a key shape, and each keeps its own value shape.
+            let key = known[0].key.clone();
+            if let Some(other) = known.iter().find(|o| o.key != key) {
+                return fail(format!("reduce over inputs keyed by {key} and {}", other.key));
+            }
+            let vals: Vec<Shape> = known.into_iter().map(|c| c.val).collect();
+            let Reducer::Expr(lambda) = reducer;
+            match reduce_shape(lambda, &key, &vals) {
+                Ok(v) => Some(CollShape::new(key, v, level)),
+                Err(e) => fail(e),
+            }
         }
     }
 }

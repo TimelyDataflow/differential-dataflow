@@ -1,6 +1,6 @@
 --- optimized
 +++ projected
-@@ -19,9 +19,10 @@
+@@ -16,9 +16,10 @@
  let before = before_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
  let during_idx = during | arrange;

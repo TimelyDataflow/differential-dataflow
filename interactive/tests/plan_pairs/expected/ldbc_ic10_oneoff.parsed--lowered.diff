@@ -6,7 +6,7 @@
  let request = input 0 : ((int, int, int), ());
  let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
  let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-@@ -8,16 +10,59 @@
+@@ -8,16 +10,53 @@
  let people = import "ic10s::people" : (int, (List(int), List(int), List(int), List(int), int, int));
  let posts = import "ic10s::posts" : (int, int);
  let likes = import "ic10s::likes" : ((int, int), ());
@@ -20,11 +20,9 @@
 -let summed = points | join_function((key, p) -> ((key, ()), (0), p) enlist) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +let hop1_map = request | map(((rid, who, month), ()) -> (who, (rid, who, month)));
 +let hop1_idx = hop1_map | arrange;
-+let friend_idx = friend | arrange;
-+let hop1 = hop1_idx | join(friend_idx, (_, req, (f, _)) -> (f, (req, 1)));
++let hop1 = hop1_idx | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
 +let hop1_idx2 = hop1 | arrange;
-+let friend_idx2 = friend | arrange;
-+let hop2 = hop1_idx2 | join(friend_idx2, (_, (req, _), (g, _)) -> (g, (req, 2)));
++let hop2 = hop1_idx2 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
 +let twohop_rows = hop1 + hop2;
 +let twohop_filter = twohop_rows | filter((node, ((_, who, _), _)) -> (node, who) ne);
 +let twohop_map = twohop_filter | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d));
@@ -33,21 +31,17 @@
 +let twohop = twohop_reduce | filter((_, d) -> (d, 2) eq);
 +let cands_map = twohop | map(((rid, who, month, node), _) -> (node, (rid, who, month)));
 +let cands_idx = cands_map | arrange;
-+let people_idx = people | arrange;
-+let cands_join = cands_idx | join(people_idx, (node, (rid, who, month), (first, last, gender, town, bmonth, bday)) -> ((rid, who, node), (first, last, gender, town, month, bmonth, bday)));
++let cands_join = cands_idx | join(people, (node, (rid, who, month), (first, last, gender, town, bmonth, bday)) -> ((rid, who, node), (first, last, gender, town, month, bmonth, bday)));
 +let cands_filter = cands_join | filter((_, (_, _, _, _, month, bmonth, bday)) -> (((bmonth, month) eq, (bday, 21) ge) all, ((bmonth, ((month, 12) eq, 1, (month, 1) add) select) eq, (bday, 22) lt) all) any);
 +let cands = cands_filter | map((key, (first, last, gender, town, _, _, _)) -> (key, (first, last, gender, town)));
 +let wrote_map = cands | map(((rid, who, node), _) -> (node, (rid, who)));
 +let wrote_idx = wrote_map | arrange;
-+let posts_idx = posts | arrange;
-+let wrote = wrote_idx | join(posts_idx, (node, (rid, who), m) -> ((rid, who, node, m), ()));
++let wrote = wrote_idx | join(posts, (node, (rid, who), m) -> ((rid, who, node, m), ()));
 +let liked_map = wrote | map(((rid, who, node, m), ()) -> (m, (rid, who, node)));
 +let liked_idx = liked_map | arrange;
-+let tags_of_idx = tags_of | arrange;
-+let liked_join = liked_idx | join(tags_of_idx, (m, (rid, who, node), t) -> ((who, t), (rid, node, m)));
++let liked_join = liked_idx | join(tags_of, (m, (rid, who, node), t) -> ((who, t), (rid, node, m)));
 +let liked_idx2 = liked_join | arrange;
-+let likes_idx = likes | arrange;
-+let liked_join2 = liked_idx2 | join(likes_idx, ((who, _), (rid, node, m), ()) -> ((rid, who, node, m), ()));
++let liked_join2 = liked_idx2 | join(likes, ((who, _), (rid, node, m), ()) -> ((rid, who, node, m), ()));
 +let liked_idx3 = liked_join2 | arrange;
 +let liked = liked_idx3 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +let points_map = liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1));

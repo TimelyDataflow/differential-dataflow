@@ -99,3 +99,43 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
 fn arranged_imports_answer_as_unarranged_imports_do() {
     assert_eq!(scenario(true), scenario(false));
 }
+
+/// How many arrange operators installing a consumer whose two joins read one trace import builds,
+/// with arranged imports `arranged`.
+fn import_arranges(arranged: bool) -> usize {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use timely::logging::{TimelyEvent, TimelyEventBuilder};
+    const READER: &str = r#"
+        let edges = import "prod::edges";
+        let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
+        output "out" = roots | join(edges, (n, _, dst) -> (dst, n));
+        output "in" = roots | join(edges, (n, _, dst) -> (n, dst));
+    "#;
+    timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        server.set_arranged_imports(arranged);
+        install(&mut server, worker, "prod", PRODUCER);
+        server.tick(worker);
+        let names: Rc<RefCell<Vec<String>>> = Rc::default();
+        let sink = Rc::clone(&names);
+        worker.log_register().unwrap().insert::<TimelyEventBuilder, _>("timely", move |_, data| {
+            if let Some(data) = data {
+                for (_, event) in data.iter() {
+                    if let TimelyEvent::Operates(op) = event { sink.borrow_mut().push(op.name.clone()); }
+                }
+            }
+        });
+        install(&mut server, worker, "reader", READER);
+        server.tick(worker);
+        worker.log_register().unwrap().remove("timely");
+        let count = names.borrow().iter().filter(|n| *n == "CorgiArrange").count();
+        count
+    })
+}
+
+/// A trace import that arrives as rows is arranged once, and both joins read that arrangement.
+#[test]
+fn unarranged_import_is_arranged_once() {
+    assert_eq!(import_arranges(false), import_arranges(true) + 1);
+}

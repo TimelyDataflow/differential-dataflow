@@ -7,6 +7,7 @@ mod canonical;
 pub mod projection;
 pub(crate) mod reduce_demand;
 mod as_of;
+mod merge_reduce;
 mod timing;
 pub use timing::{Measurement, Pass, Timings};
 
@@ -63,6 +64,8 @@ pub struct Config {
     pub projection: bool,
     /// Drop updates at the as-of time that only strict half joins would read.
     pub as_of_drop: bool,
+    /// Reduce a single-use concatenation through the arrangements of its arranged leaves.
+    pub merge_reduce: bool,
 }
 
 impl Default for Config {
@@ -71,10 +74,10 @@ impl Default for Config {
 
 impl Config {
     /// The names `parse` takes, in reporting order.
-    pub const NAMES: [&'static str; 7] = ["dead-code", "structural", "collapse-parent-arranges", "hoist-invariant", "compose-maps", "projection", "as-of-drop"];
+    pub const NAMES: [&'static str; 8] = ["dead-code", "structural", "collapse-parent-arranges", "hoist-invariant", "compose-maps", "projection", "as-of-drop", "merge-reduce"];
 
-    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_invariant: true, compose_maps: true, dead_code: true, projection: true, as_of_drop: true } }
-    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_invariant: false, compose_maps: false, dead_code: false, projection: false, as_of_drop: false } }
+    pub fn all() -> Self { Self { structural: true, collapse_parent_arranges: true, hoist_invariant: true, compose_maps: true, dead_code: true, projection: true, as_of_drop: true, merge_reduce: true } }
+    pub fn none() -> Self { Self { structural: false, collapse_parent_arranges: false, hoist_invariant: false, compose_maps: false, dead_code: false, projection: false, as_of_drop: false, merge_reduce: false } }
 
     /// Start from the default passes and apply comma-separated words in order: `all`, `none`, a pass
     /// name to turn it on, or `-name` to turn it off. So `none`, `-projection` and
@@ -96,7 +99,7 @@ impl Config {
 
     /// The passes switched off, by name, in schedule order.
     pub fn off(&self) -> Vec<&'static str> {
-        let on = [self.dead_code, self.structural, self.collapse_parent_arranges, self.hoist_invariant, self.compose_maps, self.projection, self.as_of_drop];
+        let on = [self.dead_code, self.structural, self.collapse_parent_arranges, self.hoist_invariant, self.compose_maps, self.projection, self.as_of_drop, self.merge_reduce];
         Self::NAMES.into_iter().zip(on).filter(|(_, on)| !on).map(|(name, _)| name).collect()
     }
 
@@ -109,6 +112,7 @@ impl Config {
             "dead-code" => Some(&mut self.dead_code),
             "projection" => Some(&mut self.projection),
             "as-of-drop" => Some(&mut self.as_of_drop),
+            "merge-reduce" => Some(&mut self.merge_reduce),
             _ => None,
         }
     }
@@ -169,12 +173,12 @@ pub fn run(
             from: ItemName::new(scope, ordinals, from), to: ItemName::new(scope, ordinals, to),
         });
     });
-    for pass in [Pass::DeadCode, Pass::ComposeMaps, Pass::MergeImports] {
+    for pass in [Pass::DeadCode, Pass::ComposeMaps, Pass::MergeImports, Pass::MergeReduce] {
         let count = timings.pass(pass).changes;
         if count > 0 { changes.push(Change::Rewritten { pass, count }); }
     }
     timings.optimizer.record(start.elapsed(), changes.iter().map(Change::count).sum());
-    for (on, name) in [(config.dead_code, "dead-code"), (config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps")] {
+    for (on, name) in [(config.dead_code, "dead-code"), (config.structural, "structural"), (config.collapse_parent_arranges, "collapse-parent-arranges"), (config.hoist_invariant, "hoist-invariant"), (config.compose_maps, "compose-maps"), (config.merge_reduce, "merge-reduce")] {
         if !on { changes.push(Change::Off(name)); }
     }
     timings.observe("after optimizer", program, &changes, observe);
@@ -240,6 +244,13 @@ pub fn optimize(program: &mut Program) {
 }
 
 fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowShape>, root: usize, config: &Config, timings: &mut Timings, observe: &mut Observe<'_>) {
+    // Merge reduces of concatenations before hoisting can move a negation out of a loop, where
+    // its import is no longer one the pass can fold.
+    let merge_reduce = |staged: &mut Program, times: &mut Timings| {
+        let imports: Vec<bool> = staged.root.imports.iter().map(|i| matches!(i.from, Source::Trace(_))).collect();
+        times.pass_mut(Pass::MergeReduce).rewrites(|| merge_reduce::run(&mut staged.root, &imports))
+    };
+    if config.merge_reduce { merge_reduce(program, timings); }
     // Move pure statements before fusion can absorb them into a time-sensitive chain.
     // Finish dependent moves too: a hoisted arrange can expose a join, then a map.
     if config.hoist_invariant {
@@ -251,6 +262,7 @@ fn optimize_with(program: &mut Program, source: &dyn Fn(&Source) -> Option<RowSh
     loop {
         timings.optimizer_rounds += 1;
         let mut changed = false;
+        if config.merge_reduce { changed |= merge_reduce(program, timings); }
         // Remove dead readers before structural fusion counts uses. This shares
         // the optimizer's fixed point; liveness itself makes one backward walk.
         if config.dead_code {

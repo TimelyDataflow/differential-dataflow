@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,15 +1,28 @@
+@@ -1,15 +1,27 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let store = import "store::store" : ((int), (int, int));
@@ -15,8 +15,7 @@
  let read_entries = reads | map(((rid, k), (e)) -> ((k), (1, rid, e)));
 -let store_entries = read_entries | join(store, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
 +let read_entries_idx = read_entries | arrange;
-+let store_idx = store | arrange;
-+let store_entries = read_entries_idx | join(store_idx, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
++let store_entries = read_entries_idx | join(store, ((k), _, (sw, v)) -> ((k), (0, sw, v)));
  res: {
 -    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
 -    let writes = wid + (wr_bad | negate);
@@ -35,7 +34,7 @@
          let ws = (entries map ((t, _, _) -> (t, 0) eq), entries) zip filter in
          let rs = (entries map ((t, _, _) -> (t, 1) eq), entries) zip filter in
          let judged = (ws, rs) cap_list map ((ws, (_, i, x)) ->
-@@ -18,13 +31,26 @@
+@@ -18,13 +30,25 @@
              let (bid, bv) = best in
              (((bid, -1) eq, (x, -1) ne, (bv, x) ne) select, ((i), 1))) in
          (judged map ((b, _) -> b), judged map ((_, o) -> o)) zip filter);
@@ -58,9 +57,7 @@
 +let latest_idx = latest_map | arrange;
 +let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
--let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
-+let store_idx2 = store | arrange;
-+let old_rows = latest | join(store_idx2, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
+ let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
 +let delta_neg = old_rows | negate;
 +let delta_rows = new_rows + delta_neg;
 +-- Renderer: build an export arrangement.

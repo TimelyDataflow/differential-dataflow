@@ -404,8 +404,21 @@ pub(crate) fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> 
 /// values') → a corgi `List` column of `(val, diff)`, one list per key. The result is compiled at
 /// that input, so the backend narrows it without compiling it again.
 pub(crate) fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<corgi::Compiled> {
-    let list = Shape::List(Box::new(Shape::Prod(vec![vshape.clone(), Shape::Int])));
-    match slot_graph(lambda, &[kshape.clone(), list])? {
+    compile_grouped_reduce(lambda, kshape, std::slice::from_ref(vshape))
+}
+
+/// The rows a `reduce` lambda reads over inputs of values `vshapes`: the key, then one list of
+/// `(val, diff)` per input. One input gives the `(key, vals)` of a plain reduce.
+pub(crate) fn reduce_rows(kshape: &Shape, vshapes: &[Shape]) -> Vec<Shape> {
+    std::iter::once(kshape.clone())
+        .chain(vshapes.iter().map(|v| Shape::List(Box::new(Shape::Prod(vec![v.clone(), Shape::Int])))))
+        .collect()
+}
+
+/// [`compile_reduce`] over `(key, vals_0, .., vals_{n-1})`, one list of `(val, diff)` per input of
+/// value shape `vshapes[i]`, as a grouped reduce hands them.
+pub(crate) fn compile_grouped_reduce(lambda: &Lambda, kshape: &Shape, vshapes: &[Shape]) -> Res<corgi::Compiled> {
+    match slot_graph(lambda, &reduce_rows(kshape, vshapes))? {
         (g, Shape::List(e)) if matches!(&*e, Shape::Prod(fs) if fs.len() == 2 && fs[1] == Shape::Int) => Ok(g),
         (_, other) => Err(format!("reduce output is not a list of (val, diff): {other}")),
     }

@@ -58,6 +58,10 @@ pub enum Expr {
     /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
     HalfJoin(Box<Expr>, Box<Expr>, bool, Lambda),
     Reduce(Box<Expr>, Reducer),
+    /// `a | reduce(b, .., (k, la, lb, ..) -> out)`: a reduce over two or more co-keyed inputs, the
+    /// first of them `a`, whose lambda is handed one `(val, diff)` list per input. See
+    /// `scope_ir::ReduceInput::Grouped`.
+    GroupedReduce(Vec<Expr>, Lambda),
     Filter(Box<Expr>, Lambda),
     Negate(Box<Expr>),
     /// Append the current user-iter coord (at the operator's scope depth)
@@ -79,6 +83,9 @@ pub enum Expr {
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),
+    /// `[e, -f, ..]`: the signed elements, each sign `1` or `-1`. Only a reduce reads one, as its
+    /// input (`Reduce(List(..), _)`), the sum of its elements.
+    List(Vec<(crate::ir::Diff, Expr)>),
 }
 
 #[derive(Debug)]

@@ -40,7 +40,19 @@
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
 //!   `List` of `(val, diff)`. `| reduce(limit n, (k, vals) -> out)` hands the lambda only each
 //!   key's first `n` values (`n` at least one), whatever their diffs; `min` is
-//!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`.
+//!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`. `limit` is the keyword only when an
+//!   integer follows it.
+//! - `a | reduce(b, c, (k, la, lb, lc) -> out)`: reduce over co-keyed inputs, `a` and the
+//!   collections before the lambda: the lambda is handed the key and one `(val, diff)` list per
+//!   input, `la` the values of `a`, each in value order and empty where its input holds nothing at
+//!   the key. Equal values of two inputs stay in their own lists. The inputs share a key shape and
+//!   may differ in value shape. `out` is as for `reduce`. It takes no `limit`, and no bracket list.
+//! - `[a, -b] | min` (also `distinct`, `count`, `collect`, `reduce(..)`): reduce the signed sum of
+//!   a bracket list of collections, as `a - b | min` does but without arranging the sum. Each element
+//!   is an optional `-` and a pipe expression up to the next `,` or `]`, and the sign covers the
+//!   whole element. A list is no collection: only a reduce reads one, so it must be followed by one
+//!   of those stages. `[e]` is `e`, except that a list of any length, `[e]` included, cannot take
+//!   extra reduce inputs.
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
 //! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
 //!   element, value `(pos, element)`.
@@ -84,12 +96,12 @@
 //! # Lambdas
 //!
 //! A slot runs `let pat = input in body` in corgi's ML syntax, with `input` the tuple of the
-//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join, and
-//! `(key, vals)` for `reduce`. For example, `map(((src, dst), ()) -> (src, dst))` keys each row
-//! of pairs by its first field. Operators are postfix (`(a, b) add`, `xs len`,
-//! `(mask, a, b) select`); `x.N` is a tuple's field, `(e)` a one-field tuple and `()` unit;
-//! `[1, 2]` is a list of constants and `(xs, ys) append` concatenates. A `--` comment may sit
-//! inside a lambda. The language is corgi's (its `frontend/ml.rs` and `NOTES.md`).
+//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join,
+//! `(key, vals)` for `reduce`, and `(key, vals_0, vals_1, ..)` for a reduce over several inputs.
+//! For example, `map(((src, dst), ()) -> (src, dst))` keys each row of pairs by its first field.
+//! Operators are postfix (`(a, b) add`, `xs len`, `(mask, a, b) select`); `x.N` is a tuple's
+//! field, `(e)` a one-field tuple and `()` unit; `[1, 2]` is a list of constants and
+//! `(xs, ys) append` concatenates. A `--` comment may sit inside a lambda. The language is corgi's (its `frontend/ml.rs` and `NOTES.md`).
 //!
 //! A lambda is parsed in its program's scope, which names what the program has not defined:
 //!
@@ -122,10 +134,12 @@ enum Token {
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
-    LParen, RParen, LBrace, RBrace,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq,
     Pipe, Plus, Minus, Eof,
 }
+
+const LIST_MISUSE: &str = "a list of collections is the input of a reduce";
 
 /// A shape before names in type declarations have been resolved.
 enum TypeShape {
@@ -253,6 +267,8 @@ fn lex(input: &str) -> Vec<Token> {
                 }
             },
             ')' => { chars.next(); tokens.push(Token::RParen); },
+            '[' => { chars.next(); tokens.push(Token::LBracket); },
+            ']' => { chars.next(); tokens.push(Token::RBracket); },
             '{' => { chars.next(); tokens.push(Token::LBrace); },
             '}' => { chars.next(); tokens.push(Token::RBrace); },
             ',' => { chars.next(); tokens.push(Token::Comma); },
@@ -523,8 +539,21 @@ impl Parser {
 
     /// An atom followed by stages, applied left to right: `| op`, `+ atom` and `- atom`. A run of
     /// `+`/`-` stages is one `Concat`.
+    ///
+    /// A bracket list `[e, -f]` is only the input of a reduce, so it must start the expression
+    /// and the next stage must be `| min`, `| distinct`, `| count`, `| collect` or `| reduce(`.
     fn parse_pipe_expr(&mut self) -> Expr {
-        let mut expr = self.parse_atom();
+        let mut expr = if *self.peek() == Token::LBracket {
+            let list = self.parse_list();
+            // The token stream ends in `Eof`, so a `Pipe` has a successor.
+            let reduces = *self.peek() == Token::Pipe && match &self.tokens[self.pos + 1] {
+                Token::Min | Token::Distinct | Token::Count | Token::Collect => true,
+                Token::Ident(word) => word == "reduce",
+                _ => false,
+            };
+            assert!(reduces, "{LIST_MISUSE}");
+            list
+        } else { self.parse_atom() };
         let mut concat = false;
         loop {
             let part = match self.peek() {
@@ -540,6 +569,23 @@ impl Parser {
             concat = true;
         }
         expr
+    }
+
+    /// `[` element `,` element `]`, each element an optional `-` and a pipe expression that ends at
+    /// the next top-level `,` or `]`. The sign covers the whole element.
+    fn parse_list(&mut self) -> Expr {
+        self.expect(&Token::LBracket);
+        let mut elements = Vec::new();
+        loop {
+            let sign = if *self.peek() == Token::Minus { self.next(); -1 } else { 1 };
+            elements.push((sign, self.parse_pipe_expr()));
+            match self.next() {
+                Token::Comma => {},
+                Token::RBracket => break,
+                other => panic!("Expected `,` or `]` in a list, got {:?}", other),
+            }
+        }
+        Expr::List(elements)
     }
 
     fn parse_atom(&mut self) -> Expr {
@@ -578,6 +624,7 @@ impl Parser {
                 else { Expr::Name(parts.pop().unwrap()) }
             },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
+            Token::LBracket => panic!("{LIST_MISUSE}"),
             other => panic!("Unexpected token in atom: {:?}", other),
         }
     }
@@ -624,7 +671,8 @@ impl Parser {
             Token::Ident(name) if name == "reduce" => {
                 self.next(); self.expect(&Token::LParen);
                 // `reduce(limit k, (k, vals) -> …)`: the lambda is handed each key's first `k` values.
-                let limit = if matches!(self.peek(), Token::Ident(word) if word == "limit") {
+                // `limit` is the keyword only before an integer, else it names a collection.
+                let limit = if matches!(self.peek(), Token::Ident(word) if word == "limit") && matches!(self.tokens[self.pos + 1], Token::Int(_)) {
                     self.next();
                     let k = match self.next() {
                         Token::Int(k) if k > 0 => k as usize,
@@ -633,9 +681,20 @@ impl Parser {
                     self.expect(&Token::Comma);
                     Some(k)
                 } else { None };
+                // `reduce(b, c, (k, la, lb, lc) -> …)`: the collections before the lambda are further
+                // inputs of a grouped reduce.
+                let mut inputs = Vec::new();
+                while !matches!(self.peek(), Token::Lambda { .. }) {
+                    inputs.push(self.parse_pipe_expr());
+                    self.expect(&Token::Comma);
+                }
                 let lambda = self.lambda();
                 self.expect(&Token::RParen);
-                Expr::Reduce(Box::new(lhs), Reducer::Expr(lambda, limit))
+                if inputs.is_empty() { return Expr::Reduce(Box::new(lhs), Reducer::Expr(lambda, limit)); }
+                assert!(!matches!(lhs, Expr::List(_)), "a list of collections cannot take extra reduce inputs");
+                assert!(limit.is_none(), "a reduce over several inputs takes no limit");
+                inputs.insert(0, lhs);
+                Expr::GroupedReduce(inputs, lambda)
             },
             Token::FlatMap => { self.next(); Expr::FlatMap(Box::new(lhs), self.slot()) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },

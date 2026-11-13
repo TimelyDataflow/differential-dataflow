@@ -72,11 +72,15 @@ impl Printer<'_> {
             Expr::Join(left, right, l) => format!("{} | join({}, {})", self.expression(left)?, self.expression(right)?, self.parsed_lambda(l)?),
             Expr::HalfJoin(stream, arrangement, strict, l) => format!("{} | half_join({}, {}, {})", self.expression(stream)?, self.expression(arrangement)?, u8::from(*strict), self.parsed_lambda(l)?),
             Expr::Reduce(input, reducer) => {
-                let lambda = if matches!(reducer, crate::parse::Reducer::Distinct) {
+                // A list of several elements, or a negated one, is no collection to key by its
+                // records, and `distinct` handles any values. `[e]` is `e`, and keys by record.
+                let merged_list = matches!(&**input, Expr::List(parts) if parts.len() > 1 || parts.iter().any(|(sign, _)| *sign < 0));
+                let by_record = matches!(reducer, crate::parse::Reducer::Distinct) && !merged_list;
+                let lambda = if by_record {
                     self.parsed_lambda(&crate::reducers::unit_distinct())?
                 } else { self.parsed_lambda(&reducer.lambda())? };
                 let input = self.expression(input)?;
-                if matches!(reducer, crate::parse::Reducer::Distinct) {
+                if by_record {
                     // Parsed syntax has no inferred shapes. Key by the whole record,
                     // which also preserves unit-valued distinct's meaning.
                     format!("{input} | map((k, v) -> ((k, v), ())) | reduce({lambda}) | map((kv, ()) -> kv)")
@@ -84,12 +88,20 @@ impl Printer<'_> {
                     format!("{input} | reduce({}{lambda})", super::limit_text(reducer.limit()))
                 }
             }
+            Expr::GroupedReduce(inputs, l) => {
+                let rest = inputs[1..].iter().map(|input| self.expression(input)).collect::<Result<Vec<_>, _>>()?;
+                format!("{} | reduce({}, {})", self.expression(&inputs[0])?, rest.join(", "), self.parsed_lambda(l)?)
+            }
             Expr::Negate(input) | Expr::Lift(input) | Expr::LiftIter(input) | Expr::Arrange(input) => {
                 let word = match expr { Expr::Negate(_) => "negate", Expr::Lift(_) => "lift", Expr::LiftIter(_) => "lift_iter", _ => "arrange" };
                 format!("{} | {word}", self.expression(input)?)
             }
             Expr::Inspect(input, label) => format!("{} | inspect({label})", self.expression(input)?),
             Expr::Concat(parts) => parts.iter().map(|part| self.atom(part)).collect::<Result<Vec<_>, _>>()?.join(" + "),
+            Expr::List(parts) => {
+                let parts = parts.iter().map(|(sign, part)| Ok(format!("{}{}", if *sign < 0 { "-" } else { "" }, self.expression(part)?))).collect::<Result<Vec<_>, String>>()?;
+                format!("[{}]", parts.join(", "))
+            }
         })
     }
 }

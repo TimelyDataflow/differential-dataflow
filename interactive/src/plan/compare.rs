@@ -2,7 +2,7 @@
 //! Scalar equality is equality of graphs compiled at the known input type, not sampled values.
 
 use crate::ir::{Lambda, LinearOp, Reducer};
-use crate::scope_ir::{Item, Node, Ref, Scope, Source};
+use crate::scope_ir::{Item, Node, ReduceInput, Ref, Scope, Source};
 use crate::shapes::{ItemShapes, ScopeShapes};
 use super::Report;
 
@@ -28,6 +28,13 @@ struct Mapping {
 }
 
 impl Mapping {
+    fn same_reduce(&self, a: &ReduceInput, b: &ReduceInput) -> bool {
+        match (a, b) {
+            (ReduceInput::Merged(a), ReduceInput::Merged(b)) => a.len() == b.len() && a.iter().zip(b).all(|((a, x), (b, y))| x == y && self.same(a, b)),
+            (ReduceInput::Grouped(a), ReduceInput::Grouped(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| self.same(a, b)),
+            _ => false,
+        }
+    }
     fn same(&self, a: &Ref, b: &Ref) -> bool {
         match (a, b) {
             (Ref::Import(a), Ref::Import(b)) => self.imports.get(*a) == Some(b),
@@ -68,8 +75,7 @@ fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> 
             vec![Shape::Prod(vec![s.key, fields.first()?.clone(), a.val])]
         }
         Node::Reduce { input, .. } => {
-            let shape = shapes.of(input)?;
-            vec![Shape::Prod(vec![shape.key, Shape::List(Box::new(Shape::Prod(vec![shape.val, Shape::Int])))])]
+            vec![shapes.reduce_input(input)?]
         }
         _ => Vec::new(),
     })
@@ -98,7 +104,7 @@ fn node(a: &Node, b: &Node, map: &Mapping, scalar: bool, inputs: &[corgi::Shape]
         (Node::Arrange(a), Node::Arrange(b)) => map.same(a, b),
         (Node::Join { left: a, right: b, projection: p }, Node::Join { left: c, right: d, projection: q }) => map.same(a, c) && map.same(b, d) && (!scalar || lambda(p, q, inputs.first())),
         (Node::HalfJoin { stream: a, arrangement: b, strict: s, projection: p }, Node::HalfJoin { stream: c, arrangement: d, strict: t, projection: q }) => map.same(a, c) && map.same(b, d) && s == t && (!scalar || lambda(p, q, inputs.first())),
-        (Node::Reduce { input: a, reducer: x, limit: s }, Node::Reduce { input: b, reducer: y, limit: t }) => map.same(a, b) && s == t && (!scalar || reducer(x, y, inputs.first())),
+        (Node::Reduce { input: a, reducer: x, limit: s }, Node::Reduce { input: b, reducer: y, limit: t }) => map.same_reduce(a, b) && s == t && (!scalar || reducer(x, y, inputs.first())),
         (Node::Inspect { input: a, label: x }, Node::Inspect { input: b, label: y }) => map.same(a, b) && x == y,
         _ => false,
     }

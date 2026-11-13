@@ -11,10 +11,10 @@
  let posts = import "ic4s::posts" : (int, (int, int));
  let tags = import "ic4s::tags" : (int, (int, List(int)));
  let seen_map = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)));
-@@ -17,9 +14,8 @@
+@@ -14,9 +11,8 @@
+ let seen_join2 = seen_idx2 | join(posts, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end)));
  let seen_idx3 = seen_join2 | arrange;
- let tags_idx = tags | arrange;
- let seen = seen_idx3 | join(tags_idx, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
+ let seen = seen_idx3 | join(tags, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
 -let before_filter = seen | filter((_, (_, created, start, _)) -> (created, start) lt);
 -let before_map = before_filter | map((key, _) -> (key, ()));
 -let before_idx = before_map | arrange;

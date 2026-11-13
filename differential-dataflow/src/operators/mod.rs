@@ -13,6 +13,7 @@ pub mod cursor;
 pub mod history;
 pub mod int_proxy;
 pub mod reduce;
+pub mod co_reduce;
 pub mod iterate;
 pub mod join;
 pub mod count;

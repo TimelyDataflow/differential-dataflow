@@ -75,7 +75,8 @@ fn check_scope(scope: &Scope, parent: Option<(&Scope, usize)>, labels: bool, ori
         match item {
             Item::Op(node) => match node {
                 Node::Linear { input, .. } | Node::Arrange(input)
-                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => check_ref(input, i),
+                | Node::Inspect { input, .. } => check_ref(input, i),
+                Node::Reduce { input, .. } => input.refs().for_each(|r| check_ref(r, i)),
                 Node::Concat(refs) => for r in refs { check_ref(r, i); },
                 Node::Join { left, right, .. } => { check_ref(left, i); check_ref(right, i); }
                 Node::HalfJoin { stream, arrangement, .. } => { check_ref(stream, i); check_ref(arrangement, i); }

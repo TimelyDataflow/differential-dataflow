@@ -1,6 +1,6 @@
 --- parsed
 +++ lowered
-@@ -1,21 +1,62 @@
+@@ -1,21 +1,61 @@
 +-- Time lanes: epoch.
 +-- Trace imports use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
@@ -42,8 +42,7 @@
 +    let grow_rows = open + near;
 +    let grow_map = grow_rows | map((rid, (side, node, d)) -> (node, (rid, side, d)));
 +    let grow_idx = grow_map | arrange;
-+    let friend_idx = ::friend | arrange;
-+    let grow = grow_idx | join(friend_idx, (_, (rid, side, d), (next, _)) -> ((rid, side, next, (d, 1) add), ()));
++    let grow = grow_idx | join(::friend, (_, (rid, side, d), (next, _)) -> ((rid, side, next, (d, 1) add), ()));
 +    let search_rows = ::starts + search + grow;
 +    let search_map = search_rows | map(((rid, side, node, d), ()) -> ((rid, side, node), d));
 +    let search_idx = search_map | arrange;
