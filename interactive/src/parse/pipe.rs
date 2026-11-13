@@ -42,8 +42,8 @@
 //!   key's first `n` values (`n` at least one), whatever their diffs; `min` is
 //!   `reduce(limit 1, (_, vals) -> (vals head.0, 1) enlist)`.
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
-//! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
-//!   element, value `(pos, element)`.
+//! - `| flatmap((k, v) -> list)` — any number of complete `(key, val)` rows.
+//!   For positions, write `((0, l len) range, l) zip`; keys are chosen by the lambda.
 //! - `| negate` · `| arrange` · `| inspect(label)` ·
 //!   `| lift_iter`.
 //! - `| lift` — pair each value with its whole time, `(key, (val, time))`, the time a tuple

@@ -5,7 +5,7 @@
 let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, (a enlist, b enlist, (a, b) add enlist) append));
 -- rows: (a, [a, b, a+b])
 
-let exploded = rows | flatmap((_, l) -> l);
+let exploded = rows | flatmap((k, l) -> (k, ((0, l len) range, l) zip) cap_list);
 -- one row per element: (a, (pos, elem))
 
 let regrouped = exploded | collect;

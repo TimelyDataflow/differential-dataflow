@@ -484,7 +484,7 @@ impl Gen {
                     let elem = if self.rng.chance(70) { Sh::Int } else { self.shape(&env, false, false) };
                     let list = self.expr(&Sh::List(Box::new(elem.clone())), &env, false);
                     val = Sh::Tup(vec![Sh::Int, elem]);
-                    Op::Plain { text: format!("flatmap({input} -> {list})"), same_shape: false }
+                    Op::Plain { text: format!("flatmap(row -> let {input} = row in let l = {list} in (row.0, ((0, l len) range, l) zip) cap_list)"), same_shape: false }
                 }
                 55..=59 => same_shape("negate".into()),
                 60..=62 => same_shape("arrange".into()),
@@ -502,7 +502,7 @@ impl Gen {
                         // A rank, as the LDBC queries write one: collect, then explode the list,
                         // each element beside its position.
                         val = Sh::Tup(vec![Sh::Int, elem]);
-                        Op::Plain { text: format!("{once}collect | flatmap((_, l) -> l)"), same_shape: false }
+                        Op::Plain { text: format!("{once}collect | flatmap((k, l) -> (k, ((0, l len) range, l) zip) cap_list)"), same_shape: false }
                     } else {
                         Op::Plain { text: format!("{once}collect"), same_shape: false }
                     }
@@ -714,7 +714,7 @@ impl Gen {
                 let mut env = Env::new();
                 let input = format!("({}, {})", self.pattern(&pk, &mut env), self.pattern(&pv, &mut env));
                 let list = self.bounded_list(&env);
-                ops.push(Op::Plain { text: format!("flatmap({input} -> {list})"), same_shape: false });
+                ops.push(Op::Plain { text: format!("flatmap(row -> let {input} = row in let l = {list} in (row.0, ((0, l len) range, l) zip) cap_list)"), same_shape: false });
                 pv = Sh::Tup(vec![Sh::Int, Sh::Int]);
             }
             let mut env = Env::new();
@@ -741,7 +741,7 @@ impl Gen {
             let mut e = Env::new();
             let input = format!("({}, ())", self.pattern(key, &mut e));
             let list = self.bounded_list(&e);
-            ops.push(Op::Plain { text: format!("flatmap({input} -> {list})"), same_shape: false });
+            ops.push(Op::Plain { text: format!("flatmap(row -> let {input} = row in let l = {list} in (row.0, ((0, l len) range, l) zip) cap_list)"), same_shape: false });
             let mut exploded = Env::new();
             let row = format!("({}, {})", self.pattern(key, &mut exploded), self.pattern(&Sh::pair(), &mut exploded));
             ops.push(Op::Plain { text: format!("map({row} -> ({}, ()))", self.expr(key, &exploded, true)), same_shape: false });
@@ -1621,7 +1621,7 @@ outer: {
         var reached : (int, ());
         let mapped = ::edges | map((src, dst) -> (dst, src));
         let filtered = mapped | filter((_, src) -> (src, 0) ge);
-        let flat = filtered | flatmap((_, src) -> src enlist) | map((dst, (_, src)) -> (src, dst));
+        let flat = filtered | flatmap((k, src) -> (k, (0, src)) enlist) | map((dst, (_, src)) -> (src, dst));
         let doubled = flat + flat;
         let once = doubled + (flat | negate);
         let paired = once | join(::edges, (src, dst, _) -> (src, dst));

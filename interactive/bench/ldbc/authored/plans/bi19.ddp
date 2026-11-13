@@ -38,7 +38,7 @@ let best   = ends | map((rid, (_, _, cost)) -> (rid, cost)) | min;
 let ranked = ends | join(best, (rid, (source, node, cost), least) -> (rid, (source, node, cost, least)))
                   | filter((_, (_, _, cost, least)) -> (cost, least) eq)
                   | map((rid, (source, node, cost, _)) -> (rid, ((source, node), cost)))
-                  | collect | flatmap((_, entries) -> entries);
+                  | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((source, node), cost))) -> ((rid, rank), (source, node, cost)));
 
 output "answer" = answer | arrange;

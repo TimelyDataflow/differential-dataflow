@@ -399,7 +399,7 @@ class Compiler:
             ordered = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort}))'
             out = product([*(f'item.{len(order)}.{i}' for i in range(len(source.fields))),'rank'])
             if limit is None:
-                code = ordered+' | collect | flatmap((_, values) -> values)'
+                code = ordered+' | collect | flatmap((k, values) -> (k, ((0, values len) range, values) zip) cap_list)'
                 code += f' | map((_, (rank, item)) -> ({out}, ()))'
             else:
                 # DD retains all candidates; the lambda copies only the best

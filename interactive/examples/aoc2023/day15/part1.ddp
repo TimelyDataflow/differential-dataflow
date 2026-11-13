@@ -7,8 +7,7 @@ let chars = input 0 : ((int, int, int), ()) | map(((r, pos, code), ()) -> ((r, p
 let lens = chars | map(((r, _), _) -> (r, ())) | count;   -- (r, len)
 
 let ktab = chars | map(_ -> ((), ())) | distinct
-    | flatmap(_ -> (0, 34) range)
-    | map((_, (_, k)) -> ((), k));
+    | flatmap(_ -> (0, 34) range map (k -> ((), k)));
 -- ((), k)
 
 hash: {

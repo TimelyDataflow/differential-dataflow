@@ -21,7 +21,7 @@ let lists = rows
           ) append));
 
 -- one row per element, carrying its position
-let exploded = lists | flatmap((_, l) -> l);
+let exploded = lists | flatmap((k, l) -> (k, ((0, l len) range, l) zip) cap_list);
 
 -- bucket by (position, magnitude); payload folds a four-element list, wrapped in a variant
 -- and matched straight back out (the tag is the point, not the payload).

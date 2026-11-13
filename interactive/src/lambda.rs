@@ -395,7 +395,7 @@ fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(corgi::Compiled, Shape)
 /// not list-shaped is the type error: the backend explodes the column structurally.
 pub(crate) fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match slot_graph(list, &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::List(_)) => Ok(k.graph().clone()),
+        (k, Shape::List(e)) => { crate::shapes::row_shape(*e)?; Ok(k.graph().clone()) },
         (_, other) => Err(format!("flatmap over a non-list: {other}")),
     }
 }

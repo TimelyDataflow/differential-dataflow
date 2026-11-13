@@ -39,8 +39,7 @@ pub enum LinearOp {
     /// the value. Time itself is unchanged. See `Expr::LiftIter` for the
     /// discipline restriction.
     LiftIter,
-    /// UNNEST: explode the `List` a lambda gives into one row per element, value
-    /// `(pos, element)`. See `parse::Expr::FlatMap`.
+    /// Each row becomes the lambda's list of complete `(key, val)` rows.
     FlatMap(Lambda),
     /// Pair each value with its whole time: `(key, val)` becomes `(key, (val, time))`.
     /// The time is a tuple of `Int`s, the epoch and then every scope coordinate, so its

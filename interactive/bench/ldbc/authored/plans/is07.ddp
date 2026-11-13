@@ -24,7 +24,7 @@ let known  = reply | map(((who, op), row) -> (who, (op, row)))
                    | map(((pair, row), ()) -> (pair, row));
 let marked = (known | map(((who, _), row) -> (who, (row, 1)))) + ((reply - known) | map(((who, _), row) -> (who, (row, 0))));
 let ranked = marked | join(person, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))))
-                    | collect | flatmap((_, entries) -> entries);
+                    | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
 
 output "answer" = answer | arrange;

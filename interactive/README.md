@@ -65,6 +65,9 @@ The pair structure `(key, val)` calls out first how the data are organized, and 
 
 A currently unfortunate amount of symbolic load is in shuffling around fields of collection elements.
 The `map` operator applies to each record, and the `->` fragment is an expression converting the input to the output.
+`flatmap` gives a `List((key, val))` of complete rows, choosing both keys and values.
+A zero-or-one-element list drops or keeps a row; `match` builds only the selected arm.
+For positions, explicitly zip a list `l` with its range: `((0, l len) range, l) zip`.
 The language is a small interpreted columnar language with ADTs, and is at the moment a bit esoteric (the `inject` verb puts data within an enum variant).
 
 </details>

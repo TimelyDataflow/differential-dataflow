@@ -43,7 +43,7 @@ let total  = sums | filter(((_, _, _, _, c), _) -> (c, 0) eq)
                   | join_function(((rid, _, _, _, _), n) -> ((rid, ()), (0), n) enlist) | count;
 let ranked = groups | map(((rid, year, kind, cat), (n, s)) -> (rid, (year, kind, cat, n, s)))
                     | join(total, (rid, (year, kind, cat, n, s), all) -> (rid, ((year neg, kind, cat), (n, s, all))))
-                    | collect | flatmap((_, entries) -> entries);
+                    | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((neg_year, kind, cat), (n, s, all)))) -> ((rid, rank),
                  (neg_year neg, kind, cat, n, (s to_float, n to_float) div, s, ((n, 100) mul to_float, all to_float) div)));
 

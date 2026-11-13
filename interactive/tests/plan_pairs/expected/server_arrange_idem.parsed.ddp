@@ -1,6 +1,6 @@
 let node = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));
 let elems = node | map((id, _) -> (id, id));
-let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((_, cs) -> cs) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
+let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
 let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ()))) + (node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ())));
 let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, (0, cs) get));
 eqsat: {

@@ -26,9 +26,9 @@
  let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
  let ranked_idx = ranked_join | arrange;
  let ranked_reduce = ranked_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
--let ranked = ranked_reduce | flatmap((_, entries) -> entries);
+-let ranked = ranked_reduce | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 -let answer = ranked | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
-+let answer = ranked_reduce | flatmap((_, entries) -> entries) | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
++let answer = ranked_reduce | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list) | map((rid, (rank, ((neg, who), (id, text, first, last, k)))) -> ((rid, rank), (id, text, neg neg, who, first, last, k)));
  let answer_idx = answer | arrange;
  -- Renderer: publish the existing arrangement.
  output "answer" = answer_idx;

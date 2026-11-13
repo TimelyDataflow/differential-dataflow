@@ -68,9 +68,7 @@ pub enum Expr {
     /// implicit leave. This preserves the "loop body is a time-invariant
     /// function" property; in-scope use risks defeating the fixpoint.
     LiftIter(Box<Expr>),
-    /// UNNEST: explode the `List` a lambda gives into one row per element, keyed
-    /// as the input, with value `(pos, element)` (position innermost-first
-    /// so `Collect` can restore order). The cross-join of a row with its list.
+    /// Replace each row with the lambda's list of complete `(key, val)` rows.
     FlatMap(Box<Expr>, Lambda),
     /// Pair each row's value with its whole time. See `LinearOp::Lift`.
     Lift(Box<Expr>),

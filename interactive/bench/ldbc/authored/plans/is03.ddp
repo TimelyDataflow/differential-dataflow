@@ -7,7 +7,7 @@ let friend  = import "graph::friend" : (int, (int, int));      -- (person, (frie
 let ranked = request | map(((rid, who), ()) -> (who, rid))
                      | join(friend, (_, rid, (f, since)) -> (f, (rid, since)))
                      | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))))
-                     | collect | flatmap((_, entries) -> entries);
+                     | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
 
 output "answer" = answer | arrange;

@@ -250,7 +250,7 @@ pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Lev
             },
             LinearOp::Negate => {}
             LinearOp::FlatMap(t) => match slot_shape(t, &env)? {
-                Shape::List(e) => v = Shape::Prod(vec![Shape::Int, *e]),
+                Shape::List(e) => (k, v) = row_shape(*e)?,
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
             // Extend a tuple, or pair any other value.
@@ -267,12 +267,16 @@ pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Lev
     Ok(steps)
 }
 
-/// The `(key, val)` shapes a projection gives over rows of `rows`.
-fn pair_shape(projection: &Lambda, rows: &[Shape]) -> Result<(Shape, Shape), String> {
-    match slot_shape(projection, rows)? {
+pub(crate) fn row_shape(shape: Shape) -> Result<(Shape, Shape), String> {
+    match shape {
         Shape::Prod(mut fs) if fs.len() == 2 => { let v = fs.pop().unwrap(); Ok((fs.pop().unwrap(), v)) }
         other => Err(format!("gives {other}, not (key, val)")),
     }
+}
+
+/// The `(key, val)` shapes a projection gives over rows of `rows`.
+fn pair_shape(projection: &Lambda, rows: &[Shape]) -> Result<(Shape, Shape), String> {
+    row_shape(slot_shape(projection, rows)?)
 }
 
 /// The output value shape of `reduce(lambda)` over a key of shape `key` with values of shape `val`:

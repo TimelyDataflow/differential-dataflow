@@ -40,7 +40,7 @@ def program():
         exports.append(f'output "{name}" = {compiler.emit(ranked)} | arrange;')
     lines = [*compiler.lines, *exports, f'let values = {initial} '
              '| map((row, ()) -> (row.0, (row.1, row.2, row)));',
-             'let baseline = values | collect | flatmap((_, vals) -> vals) '
+             'let baseline = values | collect | flatmap((k, vals) -> (k, ((0, vals len) range, vals) zip) cap_list) '
              '| filter((_, (rank, _)) -> (rank, 20) lt);',
              'output "baseline" = baseline | map((key, value) -> ((key, value.0), value.1)) | arrange;']
     for name, (buckets, hash_key) in VARIANTS.items():

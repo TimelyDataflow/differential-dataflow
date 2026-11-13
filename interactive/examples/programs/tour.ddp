@@ -27,7 +27,7 @@ let tagged = edges
 let folded = edges
     | map((a, b) -> (a, (a enlist, b enlist, 7 enlist) append))
     | map((k, l) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
-let nested = edges | flatmap((a, b) -> (b enlist, a enlist) append) | collect;
+let nested = edges | flatmap(row -> let (a, b) = row in let l = (b enlist, a enlist) append in (row.0, ((0, l len) range, l) zip) cap_list) | collect;
 
 -- Reducers.
 let counted = edges | count;
