@@ -82,7 +82,7 @@ pub struct Timings {
     pub optimizer_rounds: usize,
     /// Hoisting rounds before structural fusion, including the final stable round.
     pub hoist_rounds: usize,
-    /// Projection/optimizer alternations, including the final stable round.
+    /// Whole-program projection demand builds.
     pub projection_rounds: usize,
 }
 

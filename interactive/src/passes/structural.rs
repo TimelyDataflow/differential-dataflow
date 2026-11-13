@@ -41,6 +41,22 @@ pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super:
             optimize_scope(child, &format!("{path}/{}", child.name), observe);
         }
     }
+    optimize_local(scope, path, observe);
+}
+
+/// The same local rewrites, retaining each surviving item's already checked shape.
+pub(super) fn optimize_typed(scope: &mut Scope, shapes: &mut crate::shapes::ScopeShapes, path: &str, observe: &mut super::Observe<'_>) {
+    for (item, shape) in scope.items.iter_mut().zip(&mut shapes.items) {
+        if let (Item::Sub(child), crate::shapes::ItemShapes::Sub(typed)) = (item, shape) {
+            optimize_typed(child, typed, &format!("{path}/{}", child.name), observe);
+        }
+    }
+    let dead = optimize_local(scope, path, observe);
+    let mut keep = dead.iter();
+    shapes.items.retain(|_| !*keep.next().unwrap());
+}
+
+fn optimize_local(scope: &mut Scope, path: &str, observe: &mut super::Observe<'_>) -> Vec<bool> {
     let ordinals = super::item_ordinals(scope);
     let mut note = |scope: &Scope, action: &'static str, from, to| observe(path, scope, &ordinals, action, from, to);
     let mut dead: Vec<bool> = vec![false; scope.items.len()];
@@ -51,6 +67,7 @@ pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super:
         if !changed { break; }
     }
     compact(scope, &dead);
+    dead
 }
 
 /// Count, for each item, the references to it (`Local` or `ChildExport`)
