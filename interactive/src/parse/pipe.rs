@@ -373,6 +373,8 @@ impl Parser {
             let start = self.pos;
             let kind = self.next();
             let name = self.parse_ident();
+            assert!(!matches!(name.as_str(), "int" | "float" | "List" | "Option" | "Result"),
+                "`{name}` is a built-in shape and cannot be declared");
             assert!(!indices.contains_key(&name), "type `{name}` declared twice");
             self.expect(&Token::Eq);
             let body = if kind == Token::Enum {
@@ -388,7 +390,8 @@ impl Parser {
                 TypeBody::Enum(variants)
             } else {
                 let shape = self.parse_type_shape();
-                assert!(*self.peek() != Token::Pipe, "sums are declared with `enum`, not `type`");
+                // Anything but `;` after the shape, such as a `|` or a variant's payload, was meant as a sum.
+                assert!(*self.peek() == Token::Semi, "type `{name}` must be one shape followed by `;`; sums are declared with `enum`, not `type`");
                 TypeBody::Alias(shape)
             };
             self.expect(&Token::Semi);
@@ -857,8 +860,18 @@ mod tests {
 
     #[test]
     fn sums_require_enum() {
-        let message = panic_text("type X = A | B;");
-        assert!(message.contains("sums are declared with `enum`"), "{message}");
+        for src in ["type X = A | B;", "type Node = Node List(int);"] {
+            let message = panic_text(src);
+            assert!(message.contains("sums are declared with `enum`"), "{message}");
+        }
+    }
+
+    #[test]
+    fn built_in_shapes_cannot_be_declared() {
+        for src in ["type int = float;", "enum float = F;", "type List = int;", "enum Option = O;", "type Result = (int, int);"] {
+            let message = panic_text(src);
+            assert!(message.contains("is a built-in shape and cannot be declared"), "{message}");
+        }
     }
 
     #[test]
