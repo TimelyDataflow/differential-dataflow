@@ -37,6 +37,8 @@ You can write this as (it's one file, but broken up for exposition):
 Although at the beginning, this can technically go anywhere in the root scope.
 Here we just define some types, and the number and shapes of input collections.
 The language is structurally typed, with collections containing non-recursive algebraic data types (sums, products, lists).
+Enums are structural: variant names are for reading and erase, so two enums with the same lane shapes are the same type.
+`type Name = shape;` declares an erased alias, usable in collection shapes and enum payloads, but not yet inside lambdas.
 
 </details>
 <p>
@@ -46,8 +48,8 @@ The language is structurally typed, with collections containing non-recursive al
 -- groups contain users and other groups, and a block on a member
 -- reaches everyone inside it.
 
-type Access = Owner | Edit | View;           -- decreasing levels of access
-type Member = User int | Group int;          -- a user, or group of members
+enum Access = Owner | Edit | View;           -- decreasing levels of access
+enum Member = User int | Group int;          -- a user, or group of members
 
 let grants = input 0 : (int, (Member, Access));   -- doc -> (member, access)
 let groups = input 1 : (int, Member);             -- group id -> member

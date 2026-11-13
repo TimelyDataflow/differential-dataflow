@@ -91,7 +91,7 @@ enum Sh { Int, Unit, Tup(Vec<Sh>), List(Box<Sh>), Sum, Float }
 const LATE_INSTALLS: bool = true;
 
 /// The one declared sum, `S`: its lanes' payload shapes are `int`, `(int, int)` and `()`.
-const SUM_DECL: &str = "type S = A int | B (int, int) | C;";
+const SUM_DECL: &str = "enum S = A int | B (int, int) | C;";
 
 impl Sh {
     fn text(&self) -> String {
@@ -140,7 +140,7 @@ enum Op {
 
 #[derive(Clone, Debug)]
 enum Stmt {
-    /// A line written as is, such as a type declaration.
+    /// A line written as is, such as an enum declaration.
     Raw(String),
     Input { name: String, input: usize, key: Sh, val: Sh },
     Let(Let),

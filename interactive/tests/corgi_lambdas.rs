@@ -5,6 +5,25 @@
 use interactive::{lower, parse};
 
 #[test]
+fn aliases_inside_lambdas_explain_the_limit() {
+    timely::execute_directly(|worker| {
+        let src = r#"type Text = List(int); output "out" = input 0 : (int, Text) | map((k, x : Text) -> (k, x));"#;
+        let program = lower::lower_tree(parse::pipe::parse(src));
+        let error = interactive::server::Server::new().install(worker, "p", &program).unwrap_err();
+        assert!(error.contains("alias `Text`: aliases are not yet available inside lambdas"), "{error}");
+    });
+}
+
+#[test]
+fn inline_enums_inside_lambdas_still_work() {
+    timely::execute_directly(|worker| {
+        let src = r#"output "out" = input 0 : (int, int) | map((k, v) -> enum Local = One int in (k, v inject One));"#;
+        let program = lower::lower_tree(parse::pipe::parse(src));
+        interactive::server::Server::new().install(worker, "p", &program).unwrap();
+    });
+}
+
+#[test]
 fn mismatched_lambdas_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [

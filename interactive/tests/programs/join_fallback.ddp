@@ -1,7 +1,7 @@
 -- A join whose projection depends on the data's shape: a `case`, whose arm homogeneity is a
 -- fact about the data. The join compiles its projection against each block's actual column
 -- shapes, so such terms need no separate path. The gate is its recorded answer.
-type L = L int;
+enum L = L int;
 
 let left = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let right = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));

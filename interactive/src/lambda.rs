@@ -38,7 +38,7 @@ pub(crate) mod normalize;
 /// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
 /// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
 /// the registered functions and the base words `call` reaches, and the program's
-/// `type` declarations as enums. A parse error is kept, and reported where the program is compiled
+/// `enum` declarations. A parse error is kept, and reported where the program is compiled
 /// or run. A composed lambda's graph is authoritative: its readable `src` is
 /// reconstructed from the component sources and may reparse to a different
 /// graph, especially after masking. Serialization stores only `src` and

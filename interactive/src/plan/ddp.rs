@@ -251,7 +251,7 @@ impl Printer<'_> {
         let (name, variants) = self.types[i].clone();
         let variants = variants.iter().map(|(v, s)| Ok(if *s == Shape::Unit { v.clone() } else { format!("{v} {}", self.shape(s)?) })).collect::<Result<Vec<_>, String>>()?;
         for j in named..self.types.len() { self.declare_type(j, text)?; }
-        writeln!(text, "type {name} = {};", variants.join(" | ")).unwrap();
+        writeln!(text, "enum {name} = {};", variants.join(" | ")).unwrap();
         Ok(())
     }
 
@@ -573,7 +573,7 @@ mod tests {
         let source = |_: &str| Some((Shape::Sum(vec![Shape::Int, Shape::Unit]), Shape::Unit));
         let before = super::super::report("output \"out\" = import \"sum\";", &source, &crate::passes::Config::all()).unwrap();
         let text = before.emit_ddp().unwrap().text;
-        assert!(text.contains("type Sum0 = V0 int | V1;"));
+        assert!(text.contains("enum Sum0 = V0 int | V1;"));
         let after = super::super::report(&text, &source, &crate::passes::Config::all()).unwrap();
         assert!(before.compare_final(&after).is_empty());
         assert_eq!(text, after.emit_ddp().unwrap().text);
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn graph_wins_over_stale_source_and_uses_declared_sums() {
-        let report = plan("type Member = User int | Group int; let x = input 0 : (int, Member); output \"out\" = x | map((k, v) -> (k inject Group, v));");
+        let report = plan("enum Member = User int | Group int; let x = input 0 : (int, Member); output \"out\" = x | map((k, v) -> (k inject Group, v));");
         let mut printer = Printer { as_of: report.as_of, context: &report.context, types: report.context.types.clone(), counts: LambdaCounts::default() };
         let mut lambda = Lambda::new("let (k, v) = input in (k inject Group, v)".into(), &report.context.scope);
         lambda.src = "let (k, v) = input in (k, v)".into();

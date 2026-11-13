@@ -8,7 +8,7 @@
 --
 -- Inputs may be any integers: corgi orders integers by their signed values, as DDIR does.
 
-type Dir = Fwd int | Bwd int;
+enum Dir = Fwd int | Bwd int;
 
 let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 

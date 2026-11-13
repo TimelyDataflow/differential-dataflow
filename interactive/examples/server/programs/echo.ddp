@@ -1,5 +1,5 @@
 -- Echoes input 0 to its output, so `inspect` shows whatever is fed — used to
 -- demonstrate structured (ADT) values and time-scheduled input. Its rows are
 -- values of a declared sum type.
-type Node = Leaf int | Pair (int, int);
+enum Node = Leaf int | Pair (int, int);
 output "out" = input 0 : (Node, ()) | inspect(echo);
