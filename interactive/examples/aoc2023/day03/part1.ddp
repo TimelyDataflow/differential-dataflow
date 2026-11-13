@@ -29,8 +29,7 @@ labels: {
 
 -- digit cells adjacent to a symbol
 let symnbrs = symbols
-    | flatmap(_ -> [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)])
-    | map(((r, col), (_, (dr, dc))) -> (((r, dr) add, (col, dc) add), ())) | distinct;
+    | flatmap(((r, col), _) -> ((r, col), [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)]) cap_list map (((r, col), (dr, dc)) -> (((r, dr) add, (col, dc) add), ()))) | distinct;
 
 let active_runs = labels::label
     | map(((r, col, s), _) -> ((r, col), s)) | join(symnbrs, ((r, _), s, _) -> ((r, s), ())) | distinct;

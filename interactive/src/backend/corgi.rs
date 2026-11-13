@@ -183,29 +183,36 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
             }
             LinearOp::FlatMap(_) => {
                 let g = plan.graph(&kshape, &vshape);
-                // Structural explode: the evaluated list column's FLAT element storage already
-                // IS the new value column, so the elements never move. Each row's span in the
-                // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
-                // carrying key/time/diff across. No per-row eval, no transcode.
+                // The flat element storage is already the output rows. Repeat only time/diff.
                 let (bounds, elems) =
-                    corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list").unwrap();
-                let ends: Vec<usize> = bounds.to_vec();
-                let total = ends.last().copied().unwrap_or(0);
-                let (mut reps, mut pos) = (Vec::with_capacity(total), Vec::with_capacity(total));
-                let mut start = 0usize;
-                for (row, end) in ends.into_iter().enumerate() {
-                    for p in 0..(end - start) {
-                        reps.push(row);
-                        pos.push(p as i64);
+                    corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_list("flatmap list").unwrap();
+                let mut row = elems.into_prod("flatmap row").unwrap();
+                let vals = row.pop().unwrap();
+                let keys = row.pop().unwrap();
+                // Enlist's uniform 1:1 case can retain the original metadata columns.
+                if bounds.strided() == Some(1) {
+                    c = CorgiContainer { keys, vals, times: c.times, diffs: c.diffs };
+                    continue;
+                }
+                let ends = bounds.to_vec();
+                let mut start = 0;
+                let zero_or_one = ends.iter().all(|&end| {
+                    let len = end - start;
+                    start = end;
+                    len <= 1
+                });
+                let mut reps = Vec::with_capacity(ends.last().copied().unwrap_or(0));
+                start = 0;
+                for (r, end) in ends.into_iter().enumerate() {
+                    if zero_or_one {
+                        if end != start { reps.push(r); }
+                    } else {
+                        reps.extend(std::iter::repeat_n(r, end - start));
                     }
                     start = end;
                 }
-                CorgiContainer {
-                    keys: gather(&c.keys, &reps),
-                    vals: CValue::Prod(vec![CValue::i64(pos), elems]),
-                    times: c.times.gather(&reps),
-                    diffs: reps.iter().map(|&r| c.diffs[r]).collect(),
-                }
+                CorgiContainer { keys, vals, times: c.times.gather(&reps),
+                    diffs: reps.iter().map(|&r| c.diffs[r]).collect() }
             }
         };
     }

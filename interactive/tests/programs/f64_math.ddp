@@ -32,7 +32,7 @@ let specials = xs
 
 -- A row-at-a-time filter and flatmap.
 let big = xs | filter((_, (x, _)) -> (x call fexp, 2.0) call fgt);
-let spread = xs | flatmap((_, (x, y)) -> (x call fabs call fsqrt enlist, y call fexp enlist) append);
+let spread = xs | flatmap((k, (x, y)) -> let l = (x call fabs call fsqrt enlist, y call fexp enlist) append in (k, ((0, l len) range, l) zip) cap_list);
 
 -- A join whose projection runs a row at a time.
 let scale = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));

@@ -505,9 +505,8 @@ fn build_scope(
                                 LinearOp::LiftIter => builder.lift_iter(&after, &before),
                                 LinearOp::Lift => builder.lift(&after, &before),
                                 LinearOp::FlatMap(lambda) => {
-                                    builder.key_identity(&after, &before);
-                                    // The list determines output presence and positions,
-                                    // even when no element payload is demanded.
+                                    builder.presence(&after, &before);
+                                    // The lambda determines output presence as well as rows.
                                     builder.scalar_lambda(&after, &[&before], lambda);
                                 }
                                 LinearOp::JoinFunction(lambda) => {
@@ -1144,7 +1143,7 @@ mod tests {
     fn flatmap_reads_only_the_list_it_explodes() {
         let text = "let x = input 0 : (int, (List(int), List(int)))
                     | map((k, v) -> (k, v));
-                    output \"out\" = x | flatmap((k, v) -> v.0) | count;";
+                    output \"out\" = x | flatmap((k, v) -> (k, v.0) cap_list) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
     }

@@ -29,7 +29,7 @@ let counted = chosen | map(((rid, who, _), ()) -> ((rid, who), ())) | count;
 let perhead = counted + ((everyone - (everyone | join(counted, (key, z, _) -> (key, z)))));
 let people  = perhead | map(((rid, _), n) -> ((rid, n), ())) | count;
 let ranked  = people | map(((rid, n), p) -> (rid, (p neg, n neg)))
-                     | collect | flatmap((_, entries) -> entries);
+                     | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer  = ranked | map((rid, (rank, (np, nn))) -> ((rid, rank), (nn neg, np neg)));
 
 output "answer" = answer | arrange;

@@ -27,7 +27,7 @@ let jobs    = circle | map(((node, rid, country, year), ()) -> (node, (rid, coun
                      | map((key, (company, _, _)) -> (key, company));
 
 -- Within one person and start year, number companies by name; order puts the last name first.
-let named  = jobs | collect | flatmap((_, entries) -> entries);
+let named  = jobs | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked = named | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)))

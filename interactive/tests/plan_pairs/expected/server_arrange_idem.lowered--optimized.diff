@@ -5,9 +5,9 @@
  let node = input0 | map(((id), v) -> (id, v));
  let elems = node | map((id, _) -> (id, id));
 -let pc_map = node | map((id, (op, cs)) -> ((id, op), cs));
--let pc_rows = pc_map | flatmap((_, cs) -> cs);
+-let pc_rows = pc_map | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list);
 -let pc = pc_rows | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
-+let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((_, cs) -> cs) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
++let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
 +let pc_idx = pc | arrange;
  let producing_filter = node | filter((_, (op, _)) -> (op, 1) eq);
  let producing_map = producing_filter | map((id, _) -> (id, ()));

@@ -5,8 +5,7 @@ let ops = input 0 : ((int, int, int, int, int), ())
     | map(((r, l1, l2, op, d), ()) -> (r, (l1, l2, ((op, 61) eq, (d, 48) sub, 0) select)));
 
 let ktab = ops | map(_ -> ((), ())) | distinct
-    | flatmap(_ -> (0, 34) range)
-    | map((_, (_, k)) -> ((), k));
+    | flatmap(_ -> (0, 34) range map (k -> ((), k)));
 
 let opsk = ops | map((r, (l1, l2, f)) -> ((l1, l2), (r, f)));   -- ((l1,l2), (r, op))
 let dels = opsk | filter((_, (_, f)) -> (f, 0) eq) | map((l, (r, _)) -> (l, (1000000, r) sub)) | min

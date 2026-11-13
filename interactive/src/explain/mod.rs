@@ -493,13 +493,14 @@ impl Sb {
     fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list: &Lambda) -> Ref {
         let (in_len, out_len) = (side.user_len, out_user_len);
         let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        // Pair table: each source row keyed by (k, hash of its value), exploded, then re-keyed
-        // to the output (k, (pos, elem)) carrying (k, hash).
+        // Pair each complete output row with (source key, hash of source value).
+        // Carrying the hash rather than the list avoids quadratic output size.
         let hashed = || tup(vec![var(0), format!("{} hash", var(1))]);
         let rekeyed = self.project(src.clone(), projection(hashed(), f(1, 0), 2));
-        let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list.clone())]);
-        let pair = self.project(exploded, projection(tup(vec![f(0, 0), var(1)]), var(0), 2));
-        // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
+        let paired = slot(2, &[(list, tup(vec![var(0), var(1)]))], |out|
+            format!("({}, {}) cap_list map ((source, row) -> (row, source))", var(0), out[0]));
+        let pair = self.linear(rekeyed, vec![LinearOp::FlatMap(paired)]);
+        // Re-key the demand by the complete output; keep its chain ++ q.
         let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
         // The demanded elements' sources, as (k, hash) ; chain_out ++ q.
         let sourced = self.join(dep_keyed, pair, projection(tup(vec![f(2, 0), f(2, 1)]), tup(fidx(1, 0, out_len + 1)), 3));
@@ -524,11 +525,12 @@ impl Sb {
         let in_len = side.user_len;
         let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
         let rekeyed = self.project(src, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
-        let list = slot(2, &[(lambda, tup(vec![f(0, 0), format!("{}.1.0", var(0))]))], |out| out[0].clone());
+        let list = slot(2, &[(lambda, tup(vec![f(0, 0), format!("{}.1.0", var(0))]))], |out|
+            format!("({}, {}) cap_list map ((source, row) -> (source, row))", var(0), out[0]));
         let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list)]);
-        // FlatMap's value is (position, ((key, val), time, diff)).
-        let nonzero = self.filter(exploded, predicate(format!("({}.1.2, 0) ne", var(1))));
-        let pair = self.project(nonzero, projection(format!("{}.1.0", var(1)), tup(vec![var(0), format!("{}.1.1", var(1))]), 2));
+        // FlatMap's value is ((key, val), time, diff).
+        let nonzero = self.filter(exploded, predicate(format!("({}.2, 0) ne", var(1))));
+        let pair = self.project(nonzero, projection(format!("{}.0", var(1)), tup(vec![var(0), format!("{}.1", var(1))]), 2));
         let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
         // Wide value: (V_in, chain_in..., chain_out..., q, time).
         let source = format!("{}.0", var(2));

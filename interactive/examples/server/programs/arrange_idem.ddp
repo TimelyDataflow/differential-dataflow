@@ -23,7 +23,7 @@ let elems = node | map((id, _) -> (id, id));                     -- id ; id   (s
 -- canonicalized through the current class map, then regrouped into a signature
 let pc = node
     | map((id, (op, cs)) -> ((id, op), cs))
-    | flatmap((_, cs) -> cs)
+    | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list)
     | map(((id, op), (pos, child)) -> (child, (id, op, pos)));              -- (child, (id, op, pos))
 
 -- nodes that produce an arrangement (op 1 = Arrange, op 2 = Reduce)

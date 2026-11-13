@@ -440,7 +440,7 @@ fn flatmap_of_a_parent_explanations_sufficient() {
         let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
         let roots = edges | map((src, _) -> (src, ()));
         reach: {
-            let hops = edges | flatmap((_, (dst)) -> (dst enlist, (dst, 1) add enlist) append) | map((src, (_, dst)) -> (src, (dst)));
+            let hops = edges | flatmap((k, (dst)) -> (k, (dst enlist, (dst, 1) add enlist) append) cap_list) | map((src, dst) -> (src, (dst)));
             let step = x | join(hops, (_, (), (dst)) -> ((dst), ()));
             set x = (roots + step) | distinct;
         }
@@ -589,8 +589,19 @@ fn fuzz_explanations_sufficient() {
 /// op that used to `panic!` in explain.
 const FLATMAP_ROW: &str = r#"
     let rows = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), ((a enlist, b enlist) append)));
-    output "result" = rows | flatmap((_, (l)) -> l);
+    output "result" = rows | flatmap((k, (l)) -> (k, ((0, l len) range, l) zip) cap_list);
 "#;
+
+#[test]
+fn flatmap_rekey_and_drop_explanations_sufficient() {
+    let src = r#"
+        let rows = input 0 : ((int, int), ());
+        output "result" = rows | flatmap(((a, b), ()) ->
+            ((a, b), (a, b) lt) branch Result match (
+                Ok (_ -> [] : List((int, int))), Err ((a, b) -> (b, a) enlist)));
+    "#;
+    assert!(!assert_all_rows_sufficient(src, &[gen_edges(20, 22)]).is_empty());
+}
 
 #[test]
 fn flatmap_explanations_sufficient_small() {
@@ -608,7 +619,7 @@ const LAMBDAS: &str = r#"
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         set reach = roots + proposals | distinct;
     }
-    output "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
+    output "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> let l = (a enlist, b enlist) append in ((a), ((0, l len) range, l) zip) cap_list);
 "#;
 
 #[test]
@@ -626,7 +637,7 @@ const SCALARS: &str = r#"
     let pairs = input 0 : (int, int);
     let counted = pairs | filter((_, v) -> (v, 3) gt) | count;
     let lists = pairs | value((_, v) -> (v, 2) mul) | collect;
-    let flat = lists | flatmap((_, l) -> l) | value((_, (_, x)) -> x);
+    let flat = lists | flatmap((k, l) -> (k, l) cap_list) | value((_, x) -> x);
     inner: {
         set low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
     }

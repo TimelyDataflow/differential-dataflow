@@ -1,5 +1,5 @@
 -- The slots that take one lambda: `value` (the value as written, with no tuple around it),
--- `filter`, `flatmap` (a row per element, valued `(position, element)`) and `delay` (a row
+-- `filter`, `flatmap` (complete rows, with positions explicitly zipped here) and `delay` (a row
 -- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment
 -- may sit inside a lambda written over several lines. Declared types and the built-in `Option`
 -- are enums a lambda builds and takes apart, also when a payload is itself a sum.
@@ -12,7 +12,7 @@ let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
 
 output "value" = pairs | value(((a), (b)) -> ((b, 10) mul, a) add);
 output "filter" = pairs | filter(((a), (b)) -> (a, b) lt);
-output "flatmap" = pairs | flatmap(((a), (b)) -> (a enlist, b enlist, (a, b) add enlist) append);
+output "flatmap" = pairs | flatmap(row -> let ((a), (b)) = row in let l = (a enlist, b enlist, (a, b) add enlist) append in (row.0, ((0, l len) range, l) zip) cap_list);
 stepped: {
     let delayed = pairs | delay((_, (b)) -> (0, (256, b call bit_length) mul));
     set counted = delayed | count;

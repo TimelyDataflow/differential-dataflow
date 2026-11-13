@@ -5,5 +5,5 @@ let person = import "graph::person" : ((int), (List(int), List(int), int));
 let friends = request | map(((rid, pid), ()) -> ((pid), rid))
     | join(edge, (_, rid, (q, created)) -> ((q), (rid, created)))
     | join(person, ((q), (rid, created), (first, last, _)) -> (rid, (created neg, q, first, last)));
-output "answer" = friends | collect | flatmap((_, vs) -> vs)
+output "answer" = friends | collect | flatmap((k, vs) -> (k, ((0, vs len) range, vs) zip) cap_list)
     | map((rid, (pos, (negc, q, first, last))) -> ((rid, pos), (q, first, last, negc neg)));
