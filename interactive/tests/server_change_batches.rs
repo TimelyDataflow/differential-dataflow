@@ -9,7 +9,7 @@ use interactive::{lower, parse};
 fn tapped_changes_sum_to_the_export_and_are_taken_once() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
-            type Three = A int | B int | C int;
+            enum Three = A int | B int | C int;
             let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
             output "plain" = pairs;
             output "lists" = pairs | collect;

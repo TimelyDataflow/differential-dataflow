@@ -133,7 +133,7 @@ fn fed_sums_arrive_at_their_time() {
     timely::execute_directly(|worker| {
         let mut server = Server::new();
         install(&mut server, worker, r#"
-            type Node = Leaf int | Pair (int, int);
+            enum Node = Leaf int | Pair (int, int);
             output "rows" = input 0 : (Node, ());
         "#);
         let node = corgi::Shape::Sum(vec![corgi::Shape::Int, corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int])]);

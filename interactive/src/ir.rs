@@ -12,7 +12,7 @@ pub use crate::lambda::Lambda;
 /// registered function may not take one as its name (`crate::lambda::register`). The lexer's own
 /// table (`parse::pipe`) must agree, which its tests check.
 pub(crate) const KEYWORDS: &[&str] = &[
-    "let", "var", "set", "output", "type", "input", "import", "map", "join", "min", "distinct", "count",
+    "let", "var", "set", "output", "type", "enum", "input", "import", "map", "join", "min", "distinct", "count",
     "collect", "flatmap", "arrange", "negate", "filter", "inspect", "lift_iter",
 ];
 

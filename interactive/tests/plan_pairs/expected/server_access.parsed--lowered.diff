@@ -1,8 +1,8 @@
 --- parsed
 +++ lowered
 @@ -1,19 +1,42 @@
- type Access = Owner | Edit | View;
- type Member = User int | Group int;
+ enum Access = Owner | Edit | View;
+ enum Member = User int | Group int;
 +-- Time lanes: epoch.
  let grants = input 0 : (int, (Member, Access));
  let groups = input 1 : (int, Member);

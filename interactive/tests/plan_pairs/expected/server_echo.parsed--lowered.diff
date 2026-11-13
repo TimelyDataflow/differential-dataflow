@@ -1,7 +1,7 @@
 --- parsed
 +++ lowered
 @@ -1,2 +1,6 @@
- type Node = Leaf int | Pair (int, int);
+ enum Node = Leaf int | Pair (int, int);
 -output "out" = input 0 : (Node, ()) | inspect(echo);
 +-- Time lanes: epoch.
 +let input0 = input 0 : (Node, ());

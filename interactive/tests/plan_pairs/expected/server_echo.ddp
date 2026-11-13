@@ -1,4 +1,4 @@
-type Node = Leaf int | Pair (int, int);
+enum Node = Leaf int | Pair (int, int);
 -- Time lanes: epoch.
 let input0 = input 0 : (Node, ());
 let out_inspect = input0 | inspect(echo);

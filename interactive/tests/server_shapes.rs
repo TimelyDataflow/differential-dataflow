@@ -17,14 +17,46 @@ fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
 
 #[test]
+fn aliases_erase_in_collection_shapes_and_enum_payloads() {
+    timely::execute_directly(|worker| {
+        let mut server = Server::new();
+        let src = r#"
+            let rows = input 0 : (Key, Named);
+            s: { var v : (Key, Named); set v = rows; }
+            output "out" : (Key, Named) = s::v;
+            type Named = Entry;
+            enum Entry = Value Payload | Empty;
+            type Payload = (Scalar, float, (), List(Scalar), Option(Scalar), Result(Scalar, float));
+            type Key = Scalar;
+            types: { type Scalar = int; }
+        "#;
+        server.install(worker, "aliases", &program(src)).unwrap();
+        let payload = Shape::Prod(vec![Shape::Int, Shape::Float, Shape::Unit,
+            Shape::List(Box::new(Shape::Int)), Shape::Sum(vec![Shape::Unit, Shape::Int]),
+            Shape::Sum(vec![Shape::Int, Shape::Float])]);
+        let expected = (Shape::Int, Shape::Sum(vec![payload, Shape::Unit]));
+        assert_eq!(server.trace_shape("aliases::out"), Some(expected.clone()));
+        let consumer = r#"
+            type Key = int;
+            type Payload = (int, float, (), List(int), Option(int), Result(int, float));
+            enum Same = Other Payload | Nothing;
+            type Named = Same;
+            output "out" = import "aliases::out" : (Key, Named);
+        "#;
+        server.install(worker, "consumer", &program(consumer)).unwrap();
+        assert_eq!(server.trace_shape("consumer::out"), Some(expected));
+    });
+}
+
+#[test]
 fn later_types_are_available_to_shapes_and_qualified_variants() {
     timely::execute_directly(|worker| {
         let src = r#"
             output "out" = input 0 : (int, Inner)
                 | map((k, v) -> (k, v inject Outer::Wrap));
-            type Outer = Wrap Inner;
-            type Other = Wrap int;
-            type Inner = Leaf int;
+            enum Outer = Wrap Inner;
+            enum Other = Wrap int;
+            enum Inner = Leaf int;
         "#;
         Server::new().install(worker, "later", &program(src)).unwrap();
     });

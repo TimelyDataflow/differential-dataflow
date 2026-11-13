@@ -3,8 +3,8 @@
 -- groups contain users and other groups, and a block on a member
 -- reaches everyone inside it.
 
-type Access = Owner | Edit | View;           -- decreasing levels of access
-type Member = User int | Group int;          -- a user, or group of members
+enum Access = Owner | Edit | View;           -- decreasing levels of access
+enum Member = User int | Group int;          -- a user, or group of members
 
 let grants = input 0 : (int, (Member, Access));   -- doc -> (member, access)
 let groups = input 1 : (int, Member);             -- group id -> member

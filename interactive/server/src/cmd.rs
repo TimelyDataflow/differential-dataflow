@@ -876,7 +876,7 @@ mod tests {
     /// A parser that has prepared a load of `world`, whose inputs are fed below.
     fn world() -> LineParser {
         let program = r#"
-            type T = A int | B int | C (int, int);
+            enum T = A int | B int | C (int, int);
             output "pairs" = input 0 : ((int, int), ());
             output "both" = input 1 : ((int, int), (int, int));
             output "tagged" = input 2 : ((), T);

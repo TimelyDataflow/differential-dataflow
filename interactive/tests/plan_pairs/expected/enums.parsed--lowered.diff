@@ -1,7 +1,7 @@
 --- parsed
 +++ lowered
 @@ -1,4 +1,7 @@
- type Entry = Empty | Number int | Pair (int, int);
+ enum Entry = Empty | Number int | Pair (int, int);
 +-- Time lanes: epoch.
  let rows = input 0 : (int, Entry);
  let values = rows | map((k, v) -> (k, v match (Empty (_ -> 0), Number (n -> n), Pair ((a, b) -> (a, b) add))));

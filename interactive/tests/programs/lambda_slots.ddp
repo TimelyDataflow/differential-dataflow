@@ -4,9 +4,9 @@
 -- may sit inside a lambda written over several lines. Declared types and the built-in `Option`
 -- are enums a lambda builds and takes apart, also when a payload is itself a sum.
 
-type Size = Small int | Big (int, int);
-type Inner = A int | B;
-type Outer = Wrap Inner | Opt Option(int) | Nums List(int);
+enum Size = Small int | Big (int, int);
+enum Inner = A int | B;
+enum Outer = Wrap Inner | Opt Option(int) | Nums List(int);
 
 let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
 

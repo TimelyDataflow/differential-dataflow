@@ -3,7 +3,7 @@
 -- fixtures under tests/programs/ pin individual lowerings and their fallback
 -- routing; this program pins that the constructs work TOGETHER.
 
-type Dir = Fwd int | Bwd int;
+enum Dir = Fwd int | Bwd int;
 
 let edges = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
