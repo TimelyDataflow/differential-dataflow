@@ -13,7 +13,7 @@
 +let rk_idx = rk | arrange;
 +let rkk = reads | map((rk, _) -> (rk, ()));
 +let reads_idx = reads | arrange;
-+let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
++let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> let ((wid, k), (v)) = ((wid, k), (v)) in ((wid), (k, v)));
 +let wid_idx = wid | arrange;
  res: {
      -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.

@@ -5,7 +5,7 @@ let intents = input 0 : ((int, int, int), (int));
 let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
 let rkk = reads | map((rk, _) -> (rk, ()));
 let reads_idx = reads | arrange;
-let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((a, _, b), (c)) -> ((a), (b, c)));
+let wid = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> let ((wid, k), (v)) = ((wid, k), (v)) in ((wid), (k, v)));
 let wid_idx = wid | arrange;
 let rk = reads | map(((rid, k), (e)) -> ((k), (rid, e)));
 let rk_idx = rk | arrange;

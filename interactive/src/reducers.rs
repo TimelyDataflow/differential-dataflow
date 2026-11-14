@@ -135,6 +135,18 @@ impl Reducer {
         });
         Self::Expr(composed)
     }
+
+    /// Retain an authored row mapper while keeping the projected reducer graph.
+    pub(crate) fn project_map(&self, projection: &Projection, map: &Lambda) -> Self {
+        let Self::Expr(mut composed) = self.project(projection);
+        if let Some((pattern, body)) = map.source() {
+            let base = self.lambda();
+            // The inner let scopes only the value expression. Even a mapper
+            // binding `row` cannot capture the difference in the other field.
+            composed.src = format!("let arg = input in let _call0 = let input = arg in {} in (arg.0, _call0) cap_list map (row -> (let {pattern} = (row.0, row.1.0) in {body}.1, row.1.1))", base.src);
+        }
+        Self::Expr(composed)
+    }
 }
 
 #[cfg(test)]

@@ -3,6 +3,6 @@
 let edges = import "random:nodes=8,edges=12" : ((int, int), ());
 let edge_count_map = edges | map(_ -> ((), ()));
 let edge_count_idx = edge_count_map | arrange;
-let edge_count_reduce = edge_count_idx | reduce(arg -> let _call0 = let input = arg in let (_, vals) = input in let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter in (arg.0, _call0) cap_list map ((_key, (_value, _diff)) -> (((_key, _value).1), _diff)));
+let edge_count_reduce = edge_count_idx | reduce(arg -> let _call0 = let input = arg in let (_, vals) = input in let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter in (arg.0, _call0) cap_list map (row -> (let (k, v) = (row.0, row.1.0) in let _call0 = let input = (k, v) in let (_, n) = input in (n) in (k, _call0).1, row.1.1)));
 -- Renderer: publish the existing arrangement.
 output "edge_count" = edge_count_reduce;

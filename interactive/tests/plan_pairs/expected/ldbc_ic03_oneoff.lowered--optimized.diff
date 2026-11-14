@@ -80,7 +80,7 @@
 -let ranked_join = ranked_idx | join(person_idx2, (node, (rid, nx, ny), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))));
 -let ranked_idx2 = ranked_join | arrange;
 -let ranked = ranked_idx2 | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
-+let counts = in_x | join(in_y, arg -> let _call0 = let input = arg in let (key, nx, ny) = input in (key, (nx, ny)) in let _call1 = let input = _call0 in let ((rid, node), (nx, ny)) = input in (node, (rid, nx, ny)) in _call1);
++let counts = in_x | join(in_y, (key, nx, ny) -> let ((rid, node), (nx, ny)) = (key, (nx, ny)) in (node, (rid, nx, ny)));
 +let counts_idx = counts | arrange;
 +let ranked_join = counts_idx | join(person_idx, (node, (rid, nx, ny), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))));
 +let ranked_idx = ranked_join | arrange;

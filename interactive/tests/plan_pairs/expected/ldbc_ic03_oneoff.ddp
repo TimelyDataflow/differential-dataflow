@@ -50,7 +50,7 @@ let in_x = in_x_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in 
 let in_y_rows = seen | filter((_, (_, iy)) -> (iy, 1) eq) | map((key, _) -> (key, ()));
 let in_y_idx = in_y_rows | arrange;
 let in_y = in_y_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
-let counts = in_x | join(in_y, arg -> let _call0 = let input = arg in let (key, nx, ny) = input in (key, (nx, ny)) in let _call1 = let input = _call0 in let ((rid, node), (nx, ny)) = input in (node, (rid, nx, ny)) in _call1);
+let counts = in_x | join(in_y, (key, nx, ny) -> let ((rid, node), (nx, ny)) = (key, (nx, ny)) in (node, (rid, nx, ny)));
 let counts_idx = counts | arrange;
 let ranked_join = counts_idx | join(person_idx, (node, (rid, nx, ny), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny))));
 let ranked_idx = ranked_join | arrange;

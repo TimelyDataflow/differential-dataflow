@@ -99,3 +99,24 @@ fn barriers_and_computing_maps_remain() {
         assert_eq!(maps(&prepare(&text, false).root), maps(&prepare(&text, true).root), "{stage}");
     }
 }
+
+#[test]
+fn every_fold_keeps_the_authored_mapper_names() {
+    let source = "let a = input 0 : (int, (int, int)); let b = input 1 : (int, (int, int));";
+    for pipeline in [
+        "a | map((k, v) -> (k, (v.1, v.0))) | map((request, (picked, dropped)) -> ((request, picked), dropped))",
+        "a | join(b, (k, x, y) -> (k, (x, y))) | map((request, (picked, other)) -> ((request, picked.1), other.0))",
+        "a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))) | map((request, ((picked, other), clock)) -> ((request, picked.1), (other.0, clock)))",
+        "a | flatmap((k, v) -> (k, (0, v.0) range) cap_list) | map((request, picked) -> (picked, request))",
+        "a | min | map((request, (picked, other)) -> (request, (picked, request)))",
+        "a | min | map((row, (picked, _diff)) -> (row, (_diff, picked)))",
+    ] {
+        let text = format!("{source} output \"out\" = {pipeline};");
+        let report = interactive::plan::report(&text, &|_| None, &Config::default()).unwrap();
+        let printed = report.emit_ddp().unwrap().text;
+        assert!(printed.contains("picked"), "mapper names lost: {printed}");
+        let again = interactive::plan::report(&printed, &|_| None, &Config::default()).unwrap();
+        assert!(report.compare_final(&again).is_empty(), "{printed}");
+        assert_eq!(printed, again.emit_ddp().unwrap().text);
+    }
+}

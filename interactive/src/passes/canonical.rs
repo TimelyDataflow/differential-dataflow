@@ -57,9 +57,11 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: L
                         if let (LinearOp::Project(map), Some(input)) = (&op, &input) {
                             if let Some((LinearOp::FlatMap(list), _)) = result.last_mut() {
                                 if let Some(projection) = map.graph().ok().and_then(|g| canonical(g, input).ok()).and_then(|g| wiring(&g)) {
+                                    let source = list.map_source(map);
                                     *list = Lambda::compose("arg", &[(list, "arg".into())], |out| {
                                         format!("{} map (row -> {})", out[0], projection.text("row"))
                                     });
+                                    if let Some(source) = source { list.src = source; }
                                     changed += 1;
                                     continue;
                                 }
@@ -130,11 +132,13 @@ pub(super) fn fold_wiring(scope: &mut Scope, shapes: &ScopeShapes, reduce_only: 
             Item::Op(Node::HalfJoin { projection: base, .. }) if !reduce_only => {
                 let input = Shape::Prod(vec![shape.key, shape.val]);
                 let Some(projected) = half_join_wiring(&projection, &input) else { continue };
+                let source = half_join_source(base, &map);
                 *base = Lambda::compose("arg", &[(base, "arg".into())], |out| projected.text(&out[0]));
+                if let Some(source) = source { base.src = source; }
             }
             Item::Op(Node::Reduce { reducer, .. }) => {
                 let Some(value) = projection.value(&shape.key, &shape.val) else { continue };
-                *reducer = reducer.project(&value);
+                *reducer = reducer.project_map(&value, &map);
             }
             _ => continue,
         }
@@ -143,6 +147,34 @@ pub(super) fn fold_wiring(scope: &mut Scope, shapes: &ScopeShapes, reduce_only: 
         changed += 1;
     }
     changed
+}
+
+/// The time lane is appended by HalfJoin, rather than read by its lambda.
+/// Keep the author's key and payload patterns and expressions on either side.
+fn half_join_source(base: &Lambda, map: &Lambda) -> Option<String> {
+    fn pair(text: &str) -> Option<(&str, &str)> {
+        let text = text.trim().strip_prefix('(')?.strip_suffix(')')?;
+        let (mut depth, mut comma) = (0usize, None);
+        for (i, c) in text.char_indices() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.checked_sub(1)?,
+                ',' if depth == 0 => { if comma.replace(i).is_some() { return None; } }
+                '"' | '#' => return None,
+                _ => {}
+            }
+        }
+        if depth != 0 { return None; }
+        let at = comma?;
+        Some((text[..at].trim(), text[at+1..].trim()))
+    }
+    let (pattern, body) = base.source()?;
+    let (input, output) = map.source()?;
+    let (key, value_time) = pair(input)?;
+    let (value, _) = pair(value_time)?;
+    let (out_key, out_value_time) = pair(output)?;
+    let (out_value, _) = pair(out_value_time)?;
+    Some(format!("let {pattern} = input in let ({key}, {value}) = {body} in ({out_key}, {out_value})"))
 }
 
 /// HalfJoin appends data time outside its lambda. Preserve that lane exactly,
@@ -191,6 +223,7 @@ fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
     // Retain the surface pattern checks after proving graph equality without them.
     // This keeps serialization and exact plan round trips faithful to the new graph.
     composed.graph = Ok(std::sync::Arc::new(corgi::optimize(&parsed)));
+    if let Some(source) = Lambda::chain_source(maps) { composed.src = source; }
     #[cfg(test)]
     check_maps(maps, Some(&composed), input);
     Some(composed)

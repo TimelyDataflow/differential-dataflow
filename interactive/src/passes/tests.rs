@@ -23,7 +23,8 @@ fn composition_discards_arithmetic_and_uses_graphs() {
     crate::passes::optimize(&mut p);
     let chains = linears(&p.root);
     let [LinearOp::Project(lambda)] = chains[0] else { panic!("{p:?}") };
-    assert_eq!(lambda.src, "let (a, _) = input in (a, ())");
+    let shape = Shape::Prod(vec![Shape::Int, Shape::Int]);
+    assert_eq!(crate::lambda::print::print(lambda, Some(&shape), false).text, "(a, _) -> (a, ())");
     assert!(!format!("{:?}", lambda.graph().unwrap()).contains("Mul"));
     let once = format!("{p:?}");
     crate::passes::optimize(&mut p);
