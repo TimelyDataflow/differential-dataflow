@@ -32,11 +32,6 @@ pub(crate) fn print_named(lambda: &Lambda, input: Option<&Shape>, check: bool, t
     print_with(lambda, input, check, types, false)
 }
 
-/// Compositions bind the immediate input fields.
-pub(crate) fn print_composed(lambda: &Lambda, input: &Shape) -> Printed {
-    print_with(lambda, Some(input), false, &[], true)
-}
-
 fn print_with(lambda: &Lambda, input: Option<&Shape>, check: bool, types: &[(String, Vec<(String, Shape)>)], shallow: bool) -> Printed {
     let result = (|| {
         let original = lambda.graph()?;

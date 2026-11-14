@@ -1,9 +1,16 @@
 //! Projection changes what reduce stores, without changing which input wins.
 
 use corgi::Shape;
-use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::projection};
-use interactive::scope_ir::{Item, Node, Ref};
+use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::{self, Config, projection}};
+use interactive::scope_ir::{Item, Node, Program, Ref};
 use interactive::server::Server;
+
+fn uncomposed(text: &str) -> Program {
+    let mut program = lower::lower_tree(parse::pipe::parse(text));
+    let config = Config { compose_maps: false, projection: false, as_of_drop: false, ..Config::all() };
+    passes::run(&mut program, &|_| None, &config, &Default::default(), 1, &mut |_, _, _| {});
+    program
+}
 
 #[test]
 fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
@@ -12,8 +19,7 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
         let best = rows | min;
         output "answer" = best | map((k, (_, v)) -> (k, ((), v)));
     "#;
-    let mut original = lower::lower_tree(parse::pipe::parse(text));
-    interactive::passes::optimize(&mut original);
+    let mut original = uncomposed(text);
     let mut projected = original.clone();
     assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
     let Ref::Local(index) = projected.root.exports[0].value else { panic!("a local reduce") };
@@ -23,6 +29,7 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
     projected.root.exports[0].name = "after".into();
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
+        server.set_passes(Config::none());
         server.set_export_taps(true);
         server.install(worker, "before", &original).unwrap();
         server.install(worker, "after", &projected).unwrap();
@@ -56,8 +63,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
         let reduced = rows | reduce((_, vals) -> vals map ((v, d) -> (v, (d, 2) mul)));
         output "answer" = reduced | map((k, (_, b)) -> ((k, b), ()));
     "#;
-    let mut original = lower::lower_tree(parse::pipe::parse(text));
-    interactive::passes::optimize(&mut original);
+    let mut original = uncomposed(text);
     let mut projected = original.clone();
     assert!(projection::pushdown(&mut projected, &|_| None).unwrap() > 0);
     assert_eq!(projection::pushdown(&mut projected, &|_| None).unwrap(), 0);
@@ -72,6 +78,7 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
     projected.root.exports[0].name = "after".into();
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
+        server.set_passes(Config::none());
         server.install(worker, "before", &original).unwrap();
         server.install(worker, "after", &projected).unwrap();
         for rows in ["1,10,7\n1,20,7 diff=-2", "1,10,7 diff=-1\n1,20,7 diff=2"] {
@@ -83,17 +90,16 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
 }
 
 #[test]
-fn fusion_requires_one_reader_an_unchanged_key_and_a_value_projection() {
+fn fusion_requires_one_reader_an_unchanged_key_and_wiring() {
     for (map, extra, fused) in [
         ("(k, (a, b)) -> (k, (b, a, b))", "", true),
         ("(k, (a, b)) -> (k, b)", "output \"also\" = best;", false),
         ("(k, (a, b)) -> (b, a)", "", false),
         ("(k, (a, b)) -> (k, (b, 1) add)", "", false),
-        ("(k, (a, b)) -> (k, (k, b))", "", false),
+        ("(k, (a, b)) -> (k, (k, b))", "", true),
     ] {
         let text = format!("let rows = input 0 : (int, (int, int)); let best = rows | min; output \"out\" = best | map({map}); {extra}");
-        let mut program = lower::lower_tree(parse::pipe::parse(&text));
-        interactive::passes::optimize(&mut program);
+        let mut program = uncomposed(&text);
         projection::pushdown(&mut program, &|_| None).unwrap();
         let Ref::Local(index) = program.root.exports[0].value else { panic!("local output") };
         assert_eq!(matches!(&program.root.items[index], Item::Op(Node::Reduce { .. })), fused, "{map}; {extra}");

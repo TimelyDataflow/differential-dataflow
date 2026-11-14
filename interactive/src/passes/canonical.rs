@@ -7,8 +7,7 @@ use crate::lambda::{normalize::canonical, Projection};
 use crate::scope_ir::{Item, Node, Ref, Scope};
 use crate::shapes::{ItemShapes, ScopeShapes};
 
-/// Compose adjacent maps, remove identity maps, and cancel adjacent negations.
-/// Structural fusion has already respected shared edges. No other operator is crossed.
+/// Compose maps, fold wiring into its sole producer, remove identities and paired negations.
 pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: Level) -> usize {
     let mut changed = 0;
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
@@ -55,7 +54,16 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: L
                         // Supported runs take the single composition above.
                     }
                     for (op, input) in run {
-                        if let (LinearOp::Project(map), Some(_)) = (&op, &input) {
+                        if let (LinearOp::Project(map), Some(input)) = (&op, &input) {
+                            if let Some((LinearOp::FlatMap(list), _)) = result.last_mut() {
+                                if let Some(projection) = map.graph().ok().and_then(|g| canonical(g, input).ok()).and_then(|g| wiring(&g)) {
+                                    *list = Lambda::compose("arg", &[(list, "arg".into())], |out| {
+                                        format!("{} map (row -> {})", out[0], projection.text("row"))
+                                    });
+                                    changed += 1;
+                                    continue;
+                                }
+                            }
                             if let Some((LinearOp::Project(first), Some(start))) = result.last() {
                                 if let Some(composed) = compose_run(&[first, map], start) {
                                     let start = start.clone();
@@ -76,7 +84,13 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: L
             _ => {}
         }
     }
-    // An empty chain is an alias. Redirect its readers, including names and exports.
+    changed += fold_wiring(scope, shapes, false);
+    changed + remove_empty(scope)
+}
+
+/// An empty chain is an alias. Redirect its readers, including names and exports.
+pub(super) fn remove_empty(scope: &mut Scope) -> usize {
+    let mut changed = 0;
     let mut dead = vec![false; scope.items.len()];
     let mut remap: Vec<_> = (0..scope.items.len()).map(Ref::Local).collect();
     for i in 0..scope.items.len() {
@@ -91,6 +105,61 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: L
     scope.for_each_ref(|r| if let Ref::Local(i) = r { *r = remap[*i].clone(); });
     super::structural::compact(scope, &dead);
     changed
+}
+
+/// Fold a leading wiring map across a single-reader edge. Projection also uses
+/// the reduce case before computing demand; all other cases belong to compose-maps.
+pub(super) fn fold_wiring(scope: &mut Scope, shapes: &ScopeShapes, reduce_only: bool) -> usize {
+    let counts = super::structural::use_counts(scope, &vec![false; scope.items.len()]);
+    let mut changed = 0;
+    for i in 0..scope.items.len() {
+        let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { continue };
+        let j = *j;
+        if counts[j] != 1 { continue; }
+        if !matches!(&scope.items[j], Item::Op(Node::Reduce { .. }))
+            && (reduce_only || !matches!(&scope.items[j], Item::Op(Node::Join { .. } | Node::HalfJoin { .. }))) { continue; }
+        let Some(LinearOp::Project(map)) = ops.first() else { continue };
+        let Some(shape) = shapes.of(&Ref::Local(j)) else { continue };
+        let input = Shape::Prod(vec![shape.key.clone(), shape.val.clone()]);
+        let Some(projection) = map.graph().ok().and_then(|g| canonical(g, &input).ok()).and_then(|g| wiring(&g)) else { continue };
+        let map = map.clone();
+        match &mut scope.items[j] {
+            Item::Op(Node::Join { projection, .. }) if !reduce_only => {
+                *projection = Lambda::compose("arg", &[(projection, "arg".into()), (&map, "_call0".into())], |out| out[1].clone());
+            }
+            Item::Op(Node::HalfJoin { projection: base, .. }) if !reduce_only => {
+                let input = Shape::Prod(vec![shape.key, shape.val]);
+                let Some(projected) = half_join_wiring(&projection, &input) else { continue };
+                *base = Lambda::compose("arg", &[(base, "arg".into())], |out| projected.text(&out[0]));
+            }
+            Item::Op(Node::Reduce { reducer, .. }) => {
+                let Some(value) = projection.value(&shape.key, &shape.val) else { continue };
+                *reducer = reducer.project(&value);
+            }
+            _ => continue,
+        }
+        let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };
+        ops.remove(0);
+        changed += 1;
+    }
+    changed
+}
+
+/// HalfJoin appends data time outside its lambda. Preserve that lane exactly,
+/// and reject any other use of it; update time is never a lambda input.
+fn half_join_wiring(projection: &Projection, input: &Shape) -> Option<Projection> {
+    let projection = projection.expanded(input)?;
+    if projection.field(1)?.field(1)? != Projection::Field(vec![1, 1]).expanded(input)? { return None; }
+    fn strip(p: Projection) -> Option<Projection> {
+        Some(match p {
+            Projection::Field(path) if path.starts_with(&[0]) => Projection::Field(path),
+            Projection::Field(path) if path.starts_with(&[1, 0]) => Projection::Field([vec![1], path[2..].to_vec()].concat()),
+            Projection::Tuple(parts) => Projection::Tuple(parts.into_iter().map(strip).collect::<Option<_>>()?),
+            Projection::Unit => Projection::Unit,
+            _ => return None,
+        })
+    }
+    strip(Projection::Tuple(vec![projection.field(0)?, projection.field(1)?.field(0)?]))
 }
 
 fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {

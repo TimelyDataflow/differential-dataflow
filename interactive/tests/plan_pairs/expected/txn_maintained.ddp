@@ -19,7 +19,7 @@ res: {
     let pairs_join = ::rk_idx | join(wk_idx, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
     let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
     let best_idx = best_rows | arrange;
-    let best = best_idx | reduce(limit 1, (_, a) -> (((), a head.0.1), 1) enlist);
+    let best = best_idx | reduce(limit 1, arg -> let _call0 = let input = arg in let (_, vals) = input in let first = vals head in (first.0, 1) enlist in (arg.0, _call0) cap_list map ((_key, (_value, _diff)) -> (((), (_key, _value).1.1), _diff)));
     let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
     let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
     let unseen = ::rkk + unseen_rows;

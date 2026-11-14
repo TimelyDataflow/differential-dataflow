@@ -1,13 +1,13 @@
 --- lowered
 +++ optimized
-@@ -2,50 +2,41 @@
+@@ -2,50 +2,40 @@
  let input0 = input 0 : ((int), (int, List(int)));
  let node = input0 | map(((id), v) -> (id, v));
  let elems = node | map((id, _) -> (id, id));
 -let pc_map = node | map((id, (op, cs)) -> ((id, op), cs));
 -let pc_rows = pc_map | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list);
 -let pc = pc_rows | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
-+let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
++let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap(arg -> let _call0 = let input = arg in let (k, cs) = input in (k, ((0, cs len) range, cs) zip) cap_list in _call0 map (row -> (row.1.1, (row.0.0, row.0.1, row.1.0))));
 +let pc_idx = pc | arrange;
  let producing_filter = node | filter((_, (op, _)) -> (op, 1) eq);
  let producing_map = producing_filter | map((id, _) -> (id, ()));
@@ -46,10 +46,12 @@
 -    let arr_cls_idx = arr_cls_map | arrange;
 -    let eq_idx3 = eq | arrange;
 -    let arr_cls = arr_cls_idx | join(eq_idx3, (_, a, cls) -> (a, cls));
-+    let arr_cls = ::arr_map_idx | join(eq_idx, (_, a, cls) -> (a, cls));
-     let rule_map = arr_cls | map((a, cls) -> (cls, a));
-     let rule_idx = rule_map | arrange;
-     let rule = rule_idx | join(arranged, (cls, a, _) -> (a, cls));
+-    let rule_map = arr_cls | map((a, cls) -> (cls, a));
+-    let rule_idx = rule_map | arrange;
+-    let rule = rule_idx | join(arranged, (cls, a, _) -> (a, cls));
++    let arr_cls = ::arr_map_idx | join(eq_idx, arg -> let _call0 = let input = arg in let (_, a, cls) = input in (a, cls) in let _call1 = let input = _call0 in let (a, cls) = input in (cls, a) in _call1);
++    let arr_cls_idx = arr_cls | arrange;
++    let rule = arr_cls_idx | join(arranged, (cls, a, _) -> (a, cls));
      let edges_map = cong | map((a, b) -> (b, a));
      let edges_map2 = rule | map((a, b) -> (b, a));
      let edges = cong + edges_map + rule + edges_map2;

@@ -161,24 +161,9 @@ impl Projection {
         let shape = Shape::Prod(vec![key.clone(), val.clone()]);
         let Self::Tuple(parts) = self.expanded(&shape)? else { return None };
         if parts.len() != 2 || parts[0] != Self::Field(vec![0]).expanded(&shape)? { return None; }
-        fn strip(p: &Projection) -> Option<Projection> {
-            Some(match p {
-                Projection::Field(path) if path.first() == Some(&1) => Projection::Field(path[1..].to_vec()),
-                Projection::Tuple(parts) => Projection::Tuple(parts.iter().map(strip).collect::<Option<_>>()?),
-                Projection::Unit => Projection::Unit,
-                _ => return None,
-            })
-        }
-        strip(&parts[1])
+        Some(parts[1].clone())
     }
 
-    pub(crate) fn of(lambda: &Lambda, input: &Shape) -> Option<Self> {
-        let projection = Self::parse(&lambda.src)?;
-        // Composed graphs are authoritative. Never optimize from diagnostic source alone.
-        let parsed = corgi::parse_ml(&lambda.src).ok()?;
-        (corgi::compile(parsed, input).ok()?.graph()
-            == corgi::compile(lambda.graph().ok()?.as_ref().clone(), input).ok()?.graph()).then_some(projection)
-    }
 
     /// A deliberately small subset of Corgi: bindings, tuple patterns, field selections,
     /// tuples and unit. Reject arithmetic, calls, and all other expressions.
