@@ -373,6 +373,7 @@ fn max_feed_bytes() -> usize {
 
 struct PendingLoad {
     plan: bool,
+    fragments: bool,
     timings: bool,
     reqid: ReqId,
     id_hint: String,
@@ -492,19 +493,12 @@ impl LineParser {
                     if let Some(err) = done.poisoned {
                         return Some((done.reqid, Err(err)));
                     }
-                    return Some((
-                        done.reqid,
-                        Ok(if done.plan {
-                            Cmd::Plan { name: done.id_hint, program: done.body, timings: done.timings }
-                        } else {
-                            Cmd::Load {
-                                id_hint: done.id_hint,
-                                bindings: done.bindings,
-                                program: done.body,
-                                explain: done.explain,
-                            }
-                        }),
-                    ));
+                    let program = if done.fragments { interactive::surface::expand(&done.body) } else { Ok(done.body) };
+                    return Some((done.reqid, program.map(|program| if done.plan {
+                        Cmd::Plan { name: done.id_hint, program, timings: done.timings }
+                    } else {
+                        Cmd::Load { id_hint: done.id_hint, bindings: done.bindings, program, explain: done.explain }
+                    })));
                 }
             }
             if pl.poisoned.is_none() {
@@ -550,6 +544,7 @@ impl LineParser {
             ParseOutcome::Err(e) => Some((reqid, Err(e))),
             ParseOutcome::BeginLoad {
                 plan,
+                fragments,
                 timings,
                 id_hint,
                 bindings,
@@ -557,6 +552,7 @@ impl LineParser {
             } => {
                 self.pending_load = Some(PendingLoad {
                     plan,
+                    fragments,
                     timings,
                     reqid,
                     id_hint,
@@ -621,6 +617,7 @@ enum ParseOutcome {
     Err(String),
     BeginLoad {
         plan: bool,
+        fragments: bool,
         timings: bool,
         id_hint: String,
         bindings: BTreeMap<String, String>,
@@ -664,7 +661,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
-                    plan: true, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None,
+                    plan: true, fragments: false, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None,
                 },
             }
         },
@@ -673,7 +670,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             // file, read here on the session thread. `load <name> [options] begin`
             // switches the parser into
             // body-collection mode; subsequent lines are program text terminated by
-            // `<reqid> end-load`. Options: `explain`, `explain=debug`, `name=binding`.
+            // `<reqid> end-load`. Options: `--fragments`, `explain`, `explain=debug`, `name=binding`.
             const USAGE: &str = "load: expected `<name> from <path> [options]` or `<name> [options] begin`";
             let Some((id_hint, rest)) = args.split_first() else {
                 return ParseOutcome::Err(USAGE.into());
@@ -685,15 +682,17 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             };
             let mut bindings = BTreeMap::new();
             let mut explain = None;
+            let mut fragments = false;
             for tok in options {
                 match *tok {
+                    "--fragments" => { fragments = true; continue; }
                     "explain" => { explain = Some(false); continue; }
                     "explain=debug" => { explain = Some(true); continue; }
                     _ => {}
                 }
                 let Some((k, v)) = tok.split_once('=') else {
                     return ParseOutcome::Err(format!(
-                        "load: argument {:?} must be `explain`, `explain=debug`, or `name=binding`",
+                        "load: argument {:?} must be `--fragments`, `explain`, `explain=debug`, or `name=binding`",
                         tok
                     ));
                 };
@@ -706,16 +705,15 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 // A file the server reads itself is not an upload, so the program-size
                 // gate (an intake defense) does not apply to it.
                 Some(path) => match std::fs::read_to_string(path) {
-                    Ok(program) => ParseOutcome::Cmd(Cmd::Load {
-                        id_hint,
-                        bindings,
-                        program,
-                        explain,
-                    }),
+                    Ok(program) => match if fragments { interactive::surface::expand(&program) } else { Ok(program) } {
+                        Ok(program) => ParseOutcome::Cmd(Cmd::Load { id_hint, bindings, program, explain }),
+                        Err(error) => ParseOutcome::Err(error),
+                    },
                     Err(error) => ParseOutcome::Err(format!("load: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
                     plan: false,
+                    fragments,
                     timings: false,
                     id_hint,
                     bindings,
@@ -1004,6 +1002,25 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/plan_pairs/cases/as_of_shared.ddp");
         assert!(matches!(p.feed(&format!("plan p from {path} --timings")), Some((_, Ok(Cmd::Plan { timings: true, .. })))));
         assert!(matches!(p.feed("plan p --typo begin"), Some((_, Err(e))) if e.starts_with("plan: expected")));
+    }
+
+    #[test]
+    fn load_fragments_is_opt_in_for_inline_and_file_text() {
+        let body = "let a=input 0 : (int,int); output \"out\"=a(x,y);";
+        let mut parser = LineParser::new(Catalog::default());
+        assert!(parser.feed("load expanded --fragments begin").is_none());
+        assert!(parser.feed(body).is_none());
+        let (_, parsed) = parser.feed("expanded end-load").unwrap();
+        let cmd = parsed.unwrap();
+        assert!(matches!(&cmd, Cmd::Load { program, .. } if !program.contains("a(x,y)")));
+        prepare(cmd, &Catalog::default()).unwrap();
+        let plain = Cmd::Load { id_hint: "plain".into(), bindings: BTreeMap::new(), program: body.into(), explain: None };
+        assert!(matches!(prepare(plain, &Catalog::default()), Err(e) if e.contains("Expected Semi, got LParen")));
+        let file = std::env::temp_dir().join(format!("surface-load-{}.ddp", std::process::id()));
+        std::fs::write(&file, body).unwrap();
+        let (_, cmd) = parser.feed(&format!("load file from {} --fragments", file.display())).unwrap();
+        std::fs::remove_file(file).unwrap();
+        prepare(cmd.unwrap(), &Catalog::default()).unwrap();
     }
 
     #[test]

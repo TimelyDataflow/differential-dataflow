@@ -22,6 +22,8 @@ pub mod scope_ir;
 // The language: text to a typed scope tree.
 // `pipe::parse`, the `.ddp` parser, and the statements it returns (`Stmt`, `Expr`).
 pub mod parse;
+// Optional surface text to ordinary DDP text: `expand`.
+pub mod surface;
 // `lower_tree`: parsed statements to a scope tree.
 pub mod lower;
 // `infer` and every collection's shape (`CollShape`, `ScopeShapes`, `Problems`).

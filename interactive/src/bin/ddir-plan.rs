@@ -7,6 +7,7 @@ fn run() -> Result<(), String> {
     let mut options = interactive::plan::PrintOptions::default();
     let mut files = Vec::new();
     let mut emit_ddp = false;
+    let mut fragments = false;
     let mut check_roundtrip = false;
     let mut stage = interactive::plan::ddp::DdpStage::AsOf;
     let mut as_of = 0;
@@ -19,6 +20,7 @@ fn run() -> Result<(), String> {
             "--timings" => options.timings = true,
             "--lambda-source" => options.lambda_source = true,
             "--check-lambdas" => options.check_lambdas = true,
+            "--fragments" => fragments = true,
             "--emit-ddp" => emit_ddp = true,
             "--emit-ddp-stage" => {
                 let name = args.next().ok_or("--emit-ddp-stage requires parsed, lowered, optimized, projected, or as-of")?;
@@ -37,7 +39,7 @@ fn run() -> Result<(), String> {
             }),
         }
     }
-    if files.is_empty() { return Err("usage: ddir-plan [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] [name=]file.ddp [[name=]more.ddp ...]".into()); }
+    if files.is_empty() { return Err("usage: ddir-plan [--fragments] [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] [name=]file.ddp [[name=]more.ddp ...]".into()); }
     if emit_ddp && options.lambda_source { return Err("--emit-ddp always checks source against the compiled graph".into()); }
     if check_roundtrip && !emit_ddp { return Err("--check-roundtrip requires --emit-ddp".into()); }
     let mut catalog = BTreeMap::new();
@@ -45,6 +47,7 @@ fn run() -> Result<(), String> {
     let mut out = io::stdout().lock();
     for (i, (program, file)) in files.iter().enumerate() {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+        let text = if fragments { interactive::surface::expand(&text).map_err(|e| format!("{file}: {e}"))? } else { text };
         let report = interactive::plan::report_at(&text, &|name| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name)), &passes, as_of).map_err(|e| format!("{file}: {e}"))?;
         if emit_ddp {
             // Earlier files supply imports. Only the requested (last) program is emitted.
