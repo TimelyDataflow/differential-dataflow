@@ -2,7 +2,7 @@
 use interactive::{lower, parse, passes, plan, server::Server};
 
 const PROGRAM: &str = r#"
-    type Member = User int | Group int;
+    enum Member = User int | Group int;
     let grants = input 0 : (int, (Member, int));
     output "users" = grants | flatmap((doc, (member, level)) ->
         ((doc, level), member) cap_sum match (
