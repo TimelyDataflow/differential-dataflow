@@ -62,6 +62,32 @@
 //!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
+//! Join fragments are an experimental surface form, not part of the plan language or a stable
+//! interface. The parser expands each one into plain DDP as it reads it, so no syntax tree,
+//! later stage or emitted plan contains one. They may change or be removed.
+//! A fragment is a pipeline source: `a(x, y) * b(y, z) | map(((x, y, z), ()) -> (x, z))`.
+//! Atoms name existing bindings (including scope paths); they always have key and value arguments.
+//! Every later key must mention at least one variable bound by an earlier atom; it may combine
+//! earlier variables with literals, tuples, unit and constructors, but not wildcards or new variables.
+//! Open built-in constructors (`Ok(x)`, `Err(e)`, `None`) cannot be built as later keys, and
+//! untyped empty lists (including `""`) cannot appear in them.
+//! A constant key would move every incoming row to one key; write a cross join as plain DDP.
+//! Atoms keep their existing arrangements: one new arrangement per `*`, of the rows so far;
+//! none at the first `*` when the first two keys are the same unrestricted variables.
+//! The first key and every value accept variables, `_`, tuples, integer/list/string literals,
+//! and constructors with payload patterns, such as `Some(x)` or `Type::Variant(x)`.
+//! A bare constructor such as `None` means its empty payload; a constructor needing a payload
+//! must supply one. A name unknown as a constructor is a variable.
+//! An empty list pattern `[]` tests emptiness; inside a list literal its element shape must
+//! come from sibling constants, otherwise DDIR rejects the literal with a shape error.
+//! Reusing a variable tests equality. Plain filters run as soon as their fields are bound,
+//! before the next rekey; a direct first join precedes its first atom's tests. Variants bind
+//! through typed payload lists in `flatmap`, which can also emit the next lookup key.
+//! Rows contain each variable once, in first-appearance order, keyed by their tuple (`(x)` for
+//! one variable, `()` for none), with unit value. A test-free final layout composes into
+//! the last join's projection. Weights multiply; nothing implies distinct.
+//! Even the parsed view shows the expansion.
+//!
 //! Statements: `let x = …;`, `set x = …;` (a feedback variable in a named
 //! scope), `name: { … }` (a nested scope), `output "name" = …;` (a
 //! program output, root scope only). An optional `var x;` or
@@ -117,6 +143,8 @@
 use super::*;
 use crate::ir::Lambda;
 
+mod fragment;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Set, Output, Type, Enum,
@@ -126,7 +154,7 @@ enum Token {
     Lambda { pat: String, body: String },
     LParen, RParen, LBrace, RBrace,
     Comma, Semi, Colon, ColonColon, Eq,
-    Pipe, Plus, Minus, Eof,
+    Pipe, Plus, Minus, Star, LBracket, RBracket, Eof,
 }
 
 /// A shape before names in type declarations have been resolved.
@@ -266,6 +294,9 @@ fn lex(input: &str) -> Vec<Token> {
             ';' => { chars.next(); tokens.push(Token::Semi); },
             '|' => { chars.next(); tokens.push(Token::Pipe); },
             '+' => { chars.next(); tokens.push(Token::Plus); },
+            '*' => { chars.next(); tokens.push(Token::Star); },
+            '[' => { chars.next(); tokens.push(Token::LBracket); },
+            ']' => { chars.next(); tokens.push(Token::RBracket); },
             '=' => { chars.next(); tokens.push(Token::Eq); },
             '"' => {
                 // String literal: the quoted name in `import "..."` / `output "..." = ...`.
@@ -546,13 +577,13 @@ impl Parser {
     /// An atom followed by stages, applied left to right: `| op`, `+ atom` and `- atom`. A run of
     /// `+`/`-` stages is one `Concat`.
     fn parse_pipe_expr(&mut self) -> Expr {
-        let mut expr = self.parse_atom();
+        let mut expr = self.parse_product();
         let mut concat = false;
         loop {
             let part = match self.peek() {
                 Token::Pipe => { self.next(); expr = self.parse_pipe_op(expr); concat = false; continue },
-                Token::Plus => { self.next(); self.parse_atom() },
-                Token::Minus => { self.next(); Expr::Negate(Box::new(self.parse_atom())) },
+                Token::Plus => { self.next(); self.parse_product() },
+                Token::Minus => { self.next(); Expr::Negate(Box::new(self.parse_product())) },
                 _ => break,
             };
             expr = match expr {
@@ -562,6 +593,11 @@ impl Parser {
             concat = true;
         }
         expr
+    }
+
+    fn parse_product(&mut self) -> Expr {
+        let source = self.parse_atom();
+        if *self.peek() == Token::LParen { self.fragment(source) } else { source }
     }
 
     fn parse_atom(&mut self) -> Expr {
