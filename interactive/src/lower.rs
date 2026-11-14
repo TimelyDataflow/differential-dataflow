@@ -196,6 +196,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             resolve_expr(r, here, item, scopes, plan);
         }
         Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
+        Expr::Fragment(_) => unreachable!("fragments expand before path resolution"),
         Expr::Input(..) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
     }
 }
@@ -245,6 +246,7 @@ fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
         Expr::Input(..) | Expr::Import(_) => {},
         Expr::Name(n) => { out.insert(RefName::Plain(n.clone())); },
         Expr::ResolvedPath { .. } => {},
+        Expr::Fragment(_) => unreachable!("fragments expand before lowering"),
         Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
             | Expr::Negate(e) | Expr::LiftIter(e)
@@ -303,6 +305,7 @@ pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
 }
 
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
+    crate::parse::pipe::fragment::expand(&mut stmts);
     let mut scopes = HashMap::new();
     // The program root has no source-level name; `::` is its only explicit anchor.
     let mut visible = HashMap::new();
@@ -381,6 +384,7 @@ impl ScopeLower {
                 .unwrap_or_else(|| panic!("unresolved name `{}`", name)),
             Expr::ResolvedPath { anchor, target, field } => self.env.get(&RefName::Path(PathKey { anchor: anchor.clone(), target: target.clone(), field: field.clone() })).cloned()
                 .unwrap_or_else(|| panic!("unresolved path `::{}::{}`", target.join("::"), field)),
+            Expr::Fragment(_) => unreachable!("fragments expand before lowering"),
             Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
             Expr::Map(e, p)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Project(p.clone())] }) },
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
