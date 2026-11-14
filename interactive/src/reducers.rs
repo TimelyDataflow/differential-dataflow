@@ -128,32 +128,22 @@ impl Reducer {
     }
 
     /// Apply a projection to each output value, preserving its diff and the grouping key.
-    pub(crate) fn project(&self, projection: &Projection, key: &corgi::Shape, val: &corgi::Shape) -> Self {
+    pub(crate) fn project(&self, projection: &Projection) -> Self {
         let base = self.lambda();
-        let mut composed = Lambda::compose("arg", &[(&base, "arg".into())], |names| {
-            format!("{} map ((_value, _diff) -> ({}, _diff))", names[0], projection.text("_value"))
+        let composed = Lambda::compose("arg", &[(&base, "arg".into())], |names| {
+            format!("(arg.0, {}) cap_list map ((_key, (_value, _diff)) -> ({}, _diff))", names[0], projection.text("(_key, _value)"))
         });
-        // Accept the graph printer's spelling only when reparsing gives the same graph
-        // compiled at this input type, which proves and removes the patterns in either
-        // spelling. Then keep the spelling's graph, as reparsing it would build: lambdas
-        // equal as printed stay equal in the plan, so structural merging sees them.
-        let input = corgi::Shape::Prod(vec![key.clone(), corgi::Shape::List(Box::new(corgi::Shape::Prod(vec![val.clone(), corgi::Shape::Int])))]);
-        let spelling = (|| {
-            let printed = crate::lambda::print::print_composed(&composed, &input);
-            if printed.fallback { return None; }
-            let (pattern, body) = printed.text.split_once(" -> ")?;
-            let src = format!("let {pattern} = input in {body}");
-            let mut words = crate::lambda::base_scope();
-            for f in crate::lambda::registered() { words.word(f.name(), crate::lambda::function_word(&f)).ok()?; }
-            let parsed = corgi::parse_ml_in(&src, &words).ok()?;
-            let graph = composed.graph().ok()?;
-            if corgi::compile(parsed.clone(), &input).ok()?.graph()
-                != corgi::compile(graph.as_ref().clone(), &input).ok()?.graph() { return None; }
-            Some((src, parsed))
-        })();
-        if let Some((src, parsed)) = spelling {
-            composed.src = src;
-            composed.graph = Ok(std::sync::Arc::new(parsed));
+        Self::Expr(composed)
+    }
+
+    /// Retain an authored row mapper while keeping the projected reducer graph.
+    pub(crate) fn project_map(&self, projection: &Projection, map: &Lambda) -> Self {
+        let Self::Expr(mut composed) = self.project(projection);
+        if let Some((pattern, body)) = map.source() {
+            let base = self.lambda();
+            // The inner let scopes only the value expression. Even a mapper
+            // binding `row` cannot capture the difference in the other field.
+            composed.src = format!("let arg = input in let _call0 = let input = arg in {} in (arg.0, _call0) cap_list map (row -> (let {pattern} = (row.0, row.1.0) in {body}.1, row.1.1))", base.src);
         }
         Self::Expr(composed)
     }
@@ -168,12 +158,11 @@ mod tests {
     #[test]
     fn composed_spelling_is_its_own_graph() {
         let base = Sugar::Min.lambda();
-        let projection = Projection::Tuple(vec![Projection::Unit, Projection::Field(vec![1])]);
+        let projection = Projection::Tuple(vec![Projection::Unit, Projection::Field(vec![1, 1])]);
         let mechanical = Lambda::compose("arg", &[(&base, "arg".into())], |names| {
-            format!("{} map ((_value, _diff) -> ({}, _diff))", names[0], projection.text("_value"))
+            format!("(arg.0, {}) cap_list map ((_key, (_value, _diff)) -> ({}, _diff))", names[0], projection.text("(_key, _value)"))
         });
-        let Reducer::Expr(readable) = Reducer::Expr(base).project(&projection, &Shape::Int, &Shape::Prod(vec![Shape::Int, Shape::Int]));
-        assert!(!readable.src.contains("_call0"), "{}", readable.src);
+        let Reducer::Expr(readable) = Reducer::Expr(base).project(&projection);
         assert!(readable.src.contains("head"));
         let parsed = Lambda::new(readable.src.clone(), &corgi::Scope::default());
         assert_eq!(readable.graph().unwrap(), parsed.graph().unwrap());
@@ -182,8 +171,7 @@ mod tests {
             crate::lambda::compile_reduce(&mechanical, &Shape::Int, &val).unwrap().graph());
         // The known input type also proves authored nested pattern checks.
         let base = Lambda::new("let ((k, _), vals) = input in (vals head.0, 1) enlist".into(), &corgi::Scope::default());
-        let Reducer::Expr(kept) = Reducer::Expr(base).project(&projection, &Shape::Prod(vec![Shape::Int, Shape::Int]), &Shape::Prod(vec![Shape::Int, Shape::Int]));
-        assert!(!kept.src.contains("_call0"), "{}", kept.src);
+        let Reducer::Expr(kept) = Reducer::Expr(base).project(&projection);
         let parsed = Lambda::new(kept.src.clone(), &corgi::Scope::default());
         assert_eq!(crate::lambda::compile_reduce(&kept, &val, &val).unwrap().graph(),
             crate::lambda::compile_reduce(&parsed, &val, &val).unwrap().graph());
@@ -196,9 +184,9 @@ mod tests {
             let lambda = sugar.lambda();
             crate::lambda::compile_reduce(&lambda, &Shape::Int, &shape).unwrap();
             let projection = if matches!(sugar, Sugar::Min | Sugar::Distinct) {
-                Projection::Tuple(vec![Projection::Unit, Projection::Field(vec![1])])
+                Projection::Tuple(vec![Projection::Unit, Projection::Field(vec![1, 1])])
             } else { Projection::Unit };
-            let Reducer::Expr(lambda) = Reducer::Expr(sugar.lambda()).project(&projection, &Shape::Int, &shape);
+            let Reducer::Expr(lambda) = Reducer::Expr(sugar.lambda()).project(&projection);
             let reparsed = Lambda::new(lambda.src.clone(), &corgi::Scope::default());
             let running = crate::lambda::compile_reduce(&lambda, &Shape::Int, &shape).unwrap();
             let printed = crate::lambda::compile_reduce(&reparsed, &Shape::Int, &shape).unwrap();

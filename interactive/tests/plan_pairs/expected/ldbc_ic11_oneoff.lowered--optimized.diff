@@ -30,7 +30,7 @@
 -let ranked_idx = ranked_map | arrange;
 -let person_idx2 = person | arrange;
 -let ranked_join = ranked_idx | join(person_idx2, (node, (rid, since, pos, company), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since, node, pos neg), (first, last, company))));
-+let ranked_rows = named_reduce | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list) | map(((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company)));
++let ranked_rows = named_reduce | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list map (((rid, since, node), (pos, company)) -> (node, (rid, since, pos, company))));
 +let ranked_idx = ranked_rows | arrange;
 +let ranked_join = ranked_idx | join(person_idx, (node, (rid, since, pos, company), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since, node, pos neg), (first, last, company))));
  let ranked_idx2 = ranked_join | arrange;

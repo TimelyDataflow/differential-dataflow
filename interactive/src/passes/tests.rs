@@ -23,7 +23,8 @@ fn composition_discards_arithmetic_and_uses_graphs() {
     crate::passes::optimize(&mut p);
     let chains = linears(&p.root);
     let [LinearOp::Project(lambda)] = chains[0] else { panic!("{p:?}") };
-    assert_eq!(lambda.src, "let (a, _) = input in (a, ())");
+    let shape = Shape::Prod(vec![Shape::Int, Shape::Int]);
+    assert_eq!(crate::lambda::print::print(lambda, Some(&shape), false).text, "(a, _) -> (a, ())");
     assert!(!format!("{:?}", lambda.graph().unwrap()).contains("Mul"));
     let once = format!("{p:?}");
     crate::passes::optimize(&mut p);
@@ -141,4 +142,23 @@ fn a_long_map_run_matches_pairwise_composition() {
     let once = compose_run(&vec![map; 64], &input).unwrap();
     assert_eq!(once.src, pairwise.src);
     assert_eq!(once.graph().unwrap(), pairwise.graph().unwrap());
+}
+
+#[test]
+fn wiring_fusion_uses_the_graph_and_respects_nested_readers() {
+    let text = r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
+        let joined = a | join(b, (k, x, y) -> (k, (x, y)));
+        output "out" = joined | map((k, v) -> (v.1, k));"#;
+    let mut p = program(text);
+    let Item::Op(Node::Linear { ops, .. }) = &mut p.root.items[3] else { panic!("{p:?}") };
+    let LinearOp::Project(map) = &mut ops[0] else { panic!() };
+    map.src = "let (k, v) = input in ((k, 1) add, v)".into();
+    let (shapes, _) = crate::shapes::infer(&p, &|_| None, 1);
+    assert!(canonical_linear(&mut p.root, &shapes, Level::root(1)) > 0);
+    assert!(linears(&p.root).is_empty());
+    let shared = text.replace("output \"out\"", "child: { let also = joined; } output \"out\"");
+    // Keep the child alive as a real second reader, including its parent import.
+    let shared = format!("{shared} output \"child\" = child::also;");
+    let p = optimized(&shared);
+    assert_eq!(linears(&p.root).len(), 1);
 }

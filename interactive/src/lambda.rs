@@ -67,7 +67,7 @@ impl Lambda {
     /// empty scope.
     pub(crate) fn compose(pattern: &str, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Self {
         let mut scope = corgi::Scope::default();
-        let (mut code, mut src, mut names, mut error) = (String::new(), String::new(), Vec::new(), None);
+        let (mut code, mut names, mut error) = (String::new(), Vec::new(), None);
         for (i, (lambda, arg)) in calls.iter().enumerate() {
             let name = format!("_call{i}");
             match lambda.graph() {
@@ -75,14 +75,43 @@ impl Lambda {
                 Err(e) => error = Some(e),
             }
             code += &format!("let {name} = {arg} call {name} in ");
-            src += &format!("let {name} = let input = {arg} in {} in ", lambda.src);
             names.push(name);
         }
         let body = body(&names);
         let mut lambda = Lambda::new(format!("let {pattern} = input in {code}{body}"), &scope);
-        lambda.src = format!("let {pattern} = input in {src}{body}");
+        // Only the spelling changes. Each component consumes the previous whole
+        // result and binds its own names, so these lets need no substitution.
+        let source = if !calls.is_empty() && calls[0].1 == pattern && body == *names.last().unwrap()
+            && calls.iter().skip(1).zip(&names).all(|((_, arg), previous)| arg == previous) {
+            Self::chain_source(&calls.iter().map(|(lambda, _)| *lambda).collect::<Vec<_>>())
+        } else { None };
+        lambda.src = source.unwrap_or_else(|| {
+            let mut src = String::new();
+            for ((lambda, arg), name) in calls.iter().zip(&names) {
+                src += &format!("let {name} = let input = {arg} in {} in ", lambda.src);
+            }
+            format!("let {pattern} = input in {src}{body}")
+        });
         if let Some(e) = error { lambda.graph = Err(e); }
         lambda
+    }
+    /// The parser's lambda form, also used by composed readable source.
+    pub(crate) fn source(&self) -> Option<(&str, &str)> {
+        self.src.strip_prefix("let ")?.split_once(" = input in ")
+    }
+    pub(crate) fn chain_source(maps: &[&Lambda]) -> Option<String> {
+        let (pattern, body) = maps.first()?.source()?;
+        let mut body = body.to_owned();
+        for map in &maps[1..] {
+            let (next, result) = map.source()?;
+            body = format!("let {next} = {body} in {result}");
+        }
+        Some(format!("let {pattern} = input in {body}"))
+    }
+    pub(crate) fn map_source(&self, map: &Lambda) -> Option<String> {
+        let (pattern, body) = self.source()?;
+        let (element, result) = map.source()?;
+        Some(format!("let {pattern} = input in {body} map ({element} -> {result})"))
     }
     /// The graph, or the parse error naming the program.
     pub(crate) fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
@@ -161,24 +190,9 @@ impl Projection {
         let shape = Shape::Prod(vec![key.clone(), val.clone()]);
         let Self::Tuple(parts) = self.expanded(&shape)? else { return None };
         if parts.len() != 2 || parts[0] != Self::Field(vec![0]).expanded(&shape)? { return None; }
-        fn strip(p: &Projection) -> Option<Projection> {
-            Some(match p {
-                Projection::Field(path) if path.first() == Some(&1) => Projection::Field(path[1..].to_vec()),
-                Projection::Tuple(parts) => Projection::Tuple(parts.iter().map(strip).collect::<Option<_>>()?),
-                Projection::Unit => Projection::Unit,
-                _ => return None,
-            })
-        }
-        strip(&parts[1])
+        Some(parts[1].clone())
     }
 
-    pub(crate) fn of(lambda: &Lambda, input: &Shape) -> Option<Self> {
-        let projection = Self::parse(&lambda.src)?;
-        // Composed graphs are authoritative. Never optimize from diagnostic source alone.
-        let parsed = corgi::parse_ml(&lambda.src).ok()?;
-        (corgi::compile(parsed, input).ok()?.graph()
-            == corgi::compile(lambda.graph().ok()?.as_ref().clone(), input).ok()?.graph()).then_some(projection)
-    }
 
     /// A deliberately small subset of Corgi: bindings, tuple patterns, field selections,
     /// tuples and unit. Reject arithmetic, calls, and all other expressions.
@@ -589,6 +603,36 @@ mod float_kernels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composition_source_keeps_names_without_changing_grafts() {
+        let first = Lambda::new("let (rid, value) = input in (value, rid)".into(), &base_scope());
+        let second = Lambda::new("let (_call0, rid) = input in (rid, _call0)".into(), &base_scope());
+        let third = Lambda::new("let (rid, value) = input in (value, rid)".into(), &base_scope());
+        let calls = [(&first, "arg".into()), (&second, "_call0".into()), (&third, "_call1".into())];
+        let composed = Lambda::compose("arg", &calls, |out| out[2].clone());
+        let mut words = corgi::Scope::default();
+        for (i, (lambda, _)) in calls.iter().enumerate() {
+            words.word(&format!("_call{i}"), lambda.graph().unwrap().as_ref().clone()).unwrap();
+        }
+        let old = Lambda::new("let arg = input in let _call0 = arg call _call0 in let _call1 = _call0 call _call1 in let _call2 = _call1 call _call2 in _call2".into(), &words);
+        assert_eq!(composed.graph, old.graph);
+        assert_eq!(composed.src, "let (rid, value) = input in let (rid, value) = let (_call0, rid) = (value, rid) in (rid, _call0) in (value, rid)");
+        let shape = Shape::Prod(vec![Shape::Int, Shape::Int]);
+        let parsed = Lambda::new(composed.src, &base_scope());
+        assert_eq!(corgi::compile(parsed.graph().unwrap().as_ref().clone(), &shape).unwrap().graph(),
+            corgi::compile(old.graph().unwrap().as_ref().clone(), &shape).unwrap().graph());
+        // Parallel calls, partial arguments, and a body using the outer argument
+        // retain the established source form instead of moving bindings.
+        for (calls, body) in [
+            (vec![(&first, "arg".into()), (&second, "arg".into())], "(_call0, _call1)"),
+            (vec![(&first, "arg.0".into())], "_call0"),
+            (vec![(&first, "arg".into())], "(arg, _call0)"),
+        ] {
+            let composed = Lambda::compose("arg", &calls, |_| body.into());
+            assert!(composed.src.starts_with("let arg = input in let _call0 = let input = "));
+        }
+    }
 
     /// `body`, a lambda body over the floats `a` and `b` in the base scope, on each pair.
     fn floats(body: &str, pairs: &[(f64, f64)]) -> CValue {

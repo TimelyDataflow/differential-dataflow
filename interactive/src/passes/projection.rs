@@ -760,11 +760,10 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     *projection = new;
                 }
             }
-            (Item::Op(Node::Reduce { input, reducer, .. }), PlannedItem::Op { output, .. }) => {
+            (Item::Op(Node::Reduce { reducer, .. }), PlannedItem::Op { output, .. }) => {
                 if needs_mask(&output.shape.1, &output.val, live) {
-                    let value = mask_part("input", &output.shape.1, &output.val, live);
-                    let shape = &plan.at(input).expect("reduce input").shape;
-                    *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"), &shape.0, &shape.1);
+                    let value = mask_part("input.1", &output.shape.1, &output.val, live);
+                    *reducer = reducer.project(&Projection::parse(&value).expect("a value mask"));
                     masked += output.val.iter().filter(|&&id| !live[id]).count();
                 }
             }
@@ -855,45 +854,13 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
 /// Fuse value maps before computing field demand. A shared reduction, a
 /// changed key, or a map that computes anything beyond tuple wiring is left alone.
 fn fuse_reduce_maps(scope: &mut st::Scope, shapes: &ScopeShapes, level: Level) -> usize {
-    let mut dead = vec![false; scope.items.len()];
-    let mut changed = 0;
-    let mut counts = super::structural::use_counts(scope, &dead);
-    // Redirection can make a later map read a reduce directly. Its input shape is
-    // still the shape at its original edge, including any projection fused earlier.
-    let input_shapes: Vec<_> = scope.items.iter().map(|item| match item {
-        Item::Op(Node::Linear { input, .. }) => shapes.of(input),
-        _ => None,
-    }).collect();
-    for i in 0..scope.items.len() {
-        if let (Item::Sub(child), ItemShapes::Sub(shapes)) = (&mut scope.items[i], &shapes.items[i]) {
+    let mut changed = super::canonical::fold_wiring(scope, shapes, true);
+    for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
+        if let (Item::Sub(child), ItemShapes::Sub(shapes)) = (item, shape) {
             changed += fuse_reduce_maps(child, shapes, level.child());
         }
-        let Item::Op(Node::Linear { input: Ref::Local(j), ops }) = &scope.items[i] else { continue };
-        let j = *j;
-        if counts[j] != 1 || !matches!(&scope.items[j], Item::Op(Node::Reduce { .. })) { continue; }
-        let Some(shape) = &input_shapes[i] else { continue };
-        let Ok(steps) = shapes::linear_shapes(ops, shape.key.clone(), shape.val.clone(), level) else { continue };
-        let mut projections = Vec::new();
-        for (op, (key, val)) in ops.iter().zip(&steps) {
-            let LinearOp::Project(lambda) = op else { break };
-            let Some(projection) = Projection::of(lambda, &Shape::Prod(vec![key.clone(), val.clone()])).and_then(|p| p.value(key, val)) else { break };
-            projections.push(projection);
-        }
-        if projections.is_empty() { continue; }
-        let Item::Op(Node::Reduce { input, reducer, .. }) = &mut scope.items[j] else { unreachable!() };
-        let Some(shape) = shapes.of(input) else { continue };
-        for projection in &projections { *reducer = reducer.project(projection, &shape.key, &shape.val); }
-        changed += projections.len();
-        let Item::Op(Node::Linear { ops, .. }) = &mut scope.items[i] else { unreachable!() };
-        ops.drain(..projections.len());
-        if ops.is_empty() {
-            scope.for_each_ref(|r| if matches!(r, Ref::Local(k) if *k == i) { *r = Ref::Local(j); });
-            dead[i] = true;
-            counts = super::structural::use_counts(scope, &dead);
-        }
     }
-    super::structural::compact(scope, &dead);
-    changed
+    changed + super::canonical::remove_empty(scope)
 }
 
 fn remap_ref(r: &mut Ref, remap: &[usize]) {
