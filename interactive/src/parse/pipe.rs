@@ -69,6 +69,8 @@
 //! Atoms name existing bindings (including scope paths); they always have key and value arguments.
 //! Every later key must mention at least one variable bound by an earlier atom; it may combine
 //! earlier variables with literals, tuples, unit and constructors, but not wildcards or new variables.
+//! Open built-in constructors (`Ok(x)`, `Err(e)`, `None`) cannot be built as later keys, and
+//! untyped empty lists (including `""`) cannot appear in them.
 //! A constant key would move every incoming row to one key; write a cross join as plain DDP.
 //! Atoms keep their existing arrangements: one new arrangement per `*`, of the rows so far;
 //! none at the first `*` when the first two keys are the same unrestricted variables.
@@ -141,7 +143,7 @@
 use super::*;
 use crate::ir::Lambda;
 
-pub mod fragment;
+mod fragment;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {

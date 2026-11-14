@@ -39,6 +39,14 @@ impl Pattern {
     fn constant(&self) -> bool {
         match self { Self::Literal(_) => true, Self::Tuple(ps) => ps.iter().all(Self::constant), _ => false }
     }
+    fn has_empty_list(&self) -> bool {
+        match self {
+            Self::Literal(s) => s == "[]",
+            Self::Tuple(ps) => ps.iter().any(Self::has_empty_list),
+            Self::Variant { payload, .. } => payload.has_empty_list(),
+            _ => false,
+        }
+    }
     fn check_lists(&self) {
         match self {
             // Check the whole literal so sibling constants can supply an empty list's shape.
@@ -52,9 +60,9 @@ impl Pattern {
     }
     fn text(&self) -> String {
         match self {
-            Self::Var(n) | Self::Literal(n) => n.clone(), Self::Wild => "_".into(),
+            Self::Literal(n) => n.clone(),
             Self::Tuple(ps) => tuple(&ps.iter().map(Self::text).collect::<Vec<_>>()),
-            Self::Variant { name, payload, .. } => format!("{name}({})", payload.text()),
+            _ => unreachable!("only constants in list literals need text"),
         }
     }
 }
@@ -197,7 +205,7 @@ enum Test { Equal(Access, Access), Literal(Access, String) }
 #[derive(Clone)]
 struct Variant { at: Access, tag: usize, shape: String }
 #[derive(Clone, Copy)]
-enum Target<'a> { Key(&'a Pattern), Current, Output }
+enum Target<'a> { Key(&'a Pattern), Keep(&'a Pattern), Current, Output }
 struct State<'a> {
     scope: &'a corgi::Scope,
     next: usize,
@@ -268,6 +276,7 @@ impl State<'_> {
             }
         }
         assert!(mentions_bound(self, p), "a constant fragment key would move every incoming row to one key; write a cross join as plain DDP");
+        assert!(!p.has_empty_list(), "DDIR fragment key literal `[]` needs a complete element shape; use plain DDP with an explicit list shape");
         p.check_lists();
     }
     fn key_expr(&self, p: &Pattern) -> String {
@@ -326,9 +335,9 @@ impl State<'_> {
                 let key = if values.len() == 1 { values[0].clone() } else { tuple(&values) };
                 format!("({key}, ())")
             }
-            Target::Key(p) => {
+            Target::Key(p) | Target::Keep(p) => {
                 self.validate_key(p);
-                let expr = self.key_expr(p);
+                let expr = if matches!(target, Target::Keep(_)) { "k".into() } else { self.key_expr(p) };
                 let mut key = BTreeMap::new();
                 self.key_locations(p, KeyRead::Value("k".into()), &mut key);
                 self.row(expr, key)
@@ -378,7 +387,7 @@ impl State<'_> {
         let payload = Access::Payload(Box::new(v.at.clone()), v.tag);
         let name = format!("payload{i}");
         self.locations.insert(payload.clone(), name.clone());
-        let (values, pat) = self.capture(&variants[i + 1..], &payload, &format!("capture{i}"), matches!(target, Target::Current));
+        let (values, pat) = self.capture(&variants[i + 1..], &payload, &format!("capture{i}"), matches!(target, Target::Current | Target::Keep(_)));
         let last = i + 1 == variants.len();
         let body = if last { self.layout(target) } else { self.payload_lists(variants, i + 1, target) };
         let binder = if v.shape == "_" { name } else { format!("{name} : {}", v.shape) };
@@ -387,7 +396,7 @@ impl State<'_> {
     }
     /// Finish one atom, before the next arrangement. A payload list can emit that next key.
     fn checkpoint(&mut self, expr: Expr, target: Target<'_>, pat: &str) -> Expr {
-        if let Target::Key(p) = target { self.validate_key(p); }
+        if let Target::Key(p) | Target::Keep(p) = target { self.validate_key(p); }
         let mut expr = self.filters(expr, pat);
         let mut bindings = Vec::new();
         let mut names = BTreeMap::new();
@@ -430,10 +439,12 @@ impl Fragment {
         s.key = s.locations.iter().map(|(a, expr)| (a.clone(), KeyRead::Value(expr.clone()))).collect();
         s.ingest(&first.val, "v".into());
         // A restricted first key is tested before a new arrangement, so rows it rejects are never paired.
-        let direct = first.key.unrestricted() && self.atoms.get(1).is_some_and(|next| first.key == next.key);
+        let same_key = self.atoms.get(1).is_some_and(|next| first.key == next.key);
+        let direct = first.key.unrestricted() && same_key;
         let mut expr = first.source.clone();
         if !direct {
-            let target = self.atoms.get(1).map_or(Target::Output, |a| Target::Key(&a.key));
+            // Tests may restrict the key, but an identical lookup must retain its original value.
+            let target = self.atoms.get(1).map_or(Target::Output, |a| if same_key { Target::Keep(&a.key) } else { Target::Key(&a.key) });
             expr = s.checkpoint(expr, target, &format!("(k : {}, v : {})", first.key.shape_pattern(), first.val.shape_pattern()));
         }
         for i in 1..self.atoms.len() {

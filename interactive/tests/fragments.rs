@@ -1,4 +1,4 @@
-//! Weighted semantics, restrictions, variants, and the two printable syntax views.
+//! Weighted fragment semantics, restrictions, placement, and emitted plans.
 use interactive::{lower, parse, plan, passes::Config, server::Server};
 
 fn program(src: &str) -> interactive::scope_ir::Program { lower::lower_tree(parse::pipe::parse(src)) }
@@ -314,7 +314,7 @@ fn first_key_restrictions_are_tested_before_a_new_arrangement() {
     let Ref::Local(i)=left else {panic!("expected arrangement")};
     assert!(!matches!(&root.items[*i],Item::Op(Node::Arrange(Ref::Import(0)))));
     let lowered=report.emit_ddp_at(plan::ddp::DdpStage::Lowered).unwrap().text;
-    // One flatmap binds the payload before the arrangement; the other reads the rebuilt key after the join.
+    // One flatmap binds the payload before the arrangement; the other reads the preserved key after the join.
     assert_eq!(lowered.matches("| filter(").count(), 1);
     assert_eq!(lowered.matches("| flatmap(").count(), 2);
     assert!(lowered.find("| flatmap(").unwrap() < lowered.find("| join(").unwrap());
@@ -474,4 +474,29 @@ fn variants_rekey_before_pending_plain_payload_tests() {
         assert_eq!(s.snapshot(worker, "p::out").unwrap().rows(),
             vec![("tuple(100,10,3)".into(), "tuple()".into(), 1)]);
     });
+}
+
+#[test]
+fn identical_restricted_first_keys_keep_their_original_values() {
+    for (shape, pattern, kept, dropped) in [
+        ("Result(int,int)", "Ok(x)", "inject(0,1)", "inject(1,2)"),
+        ("Result(int,int)", "Err(x)", "inject(1,1)", "inject(0,2)"),
+        ("(int,Option(int))", "(x,None)", "tuple(1,inject(0,tuple()))", "tuple(2,inject(1,7))"),
+    ] {
+        let src = format!("let a=input 0 : ({shape},int); let b=input 1 : ({shape},int); output \"out\"=a({pattern},v)*b({pattern},w);");
+        assert_eq!(rows(&src, vec![(0,format!("{kept} val=8 diff=2\n{dropped} val=7")),
+            (1,format!("{kept} val=9 diff=3\n{dropped} val=5"))]),
+            vec![("tuple(1,8,9)".into(), "tuple()".into(), 6)]);
+        let report = plan::report(&src, &|_| None, &Config::all()).unwrap();
+        let text = report.emit_ddp_at(plan::ddp::DdpStage::Lowered).unwrap().text;
+        assert!(!text.contains(" inject "), "{text}");
+    }
+}
+
+#[test]
+fn empty_lists_and_strings_in_later_keys_report_a_ddir_error() {
+    for literal in ["[]", "\"\"", "(7,[])", "Some((x,[]))"] {
+        let src = format!("let a=input 0 : (int,int); let b=input 1 : ((int,List(int)),int); output \"out\"=a(x,y)*b((x,{literal}),z);");
+        rejects(&src, "DDIR fragment key literal `[]` needs a complete element shape; use plain DDP with an explicit list shape");
+    }
 }
