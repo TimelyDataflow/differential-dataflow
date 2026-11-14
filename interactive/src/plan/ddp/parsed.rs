@@ -58,6 +58,7 @@ impl Printer<'_> {
             Expr::Input(InputRef::Next(_, Some(name))) => format!("input {}", quoted(name)?),
             Expr::Import(name) => format!("import {}", quoted(name)?),
             Expr::TypedSource(source, key, val) => format!("{} : {}", self.expression(source)?, self.row(&(key.clone(), val.clone()))?),
+            Expr::Fragment(fragment) => fragment.text.clone(),
             Expr::Name(name) => name.clone(),
             Expr::Path(parts, absolute) => format!("{}{}", if *absolute { "::" } else { "" }, parts.join("::")),
             Expr::ResolvedPath { .. } => return Err("parsed view unexpectedly contains a lowered path".into()),

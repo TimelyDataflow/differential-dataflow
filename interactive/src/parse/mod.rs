@@ -53,6 +53,8 @@ pub enum Expr {
     Path(Vec<String>, bool),
     /// A path checked against the scope tree before lowering.
     ResolvedPath { anchor: Vec<String>, target: Vec<String>, field: String },
+    /// A join fragment, expanded to ordinary collection syntax before IR lowering.
+    Fragment(Box<pipe::fragment::Fragment>),
     Map(Box<Expr>, Lambda),
     Join(Box<Expr>, Box<Expr>, Lambda),
     /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
