@@ -71,7 +71,7 @@
 //! earlier variables with literals, tuples, unit and constructors, but not wildcards or new variables.
 //! A constant key would move every incoming row to one key; write a cross join as plain DDP.
 //! Atoms keep their existing arrangements: one new arrangement per `*`, of the rows so far;
-//! none at the first `*` when the first two keys are written the same.
+//! none at the first `*` when the first two keys are the same unrestricted variables.
 //! The first key and every value accept variables, `_`, tuples, integer/list/string literals,
 //! and constructors with payload patterns, such as `Some(x)` or `Type::Variant(x)`.
 //! A bare constructor such as `None` means its empty payload; a constructor needing a payload

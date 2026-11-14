@@ -25,6 +25,17 @@ impl Pattern {
             _ => false,
         }
     }
+    /// Distinct variables in tuples: a key that restricts nothing, so joining on it needs no test first.
+    fn unrestricted(&self) -> bool {
+        fn walk<'a>(p: &'a Pattern, seen: &mut Vec<&'a str>) -> bool {
+            match p {
+                Pattern::Var(n) if !seen.contains(&n.as_str()) => { seen.push(n); true }
+                Pattern::Tuple(ps) => ps.iter().all(|p| walk(p, seen)),
+                _ => false,
+            }
+        }
+        walk(self, &mut Vec::new())
+    }
     fn constant(&self) -> bool {
         match self { Self::Literal(_) => true, Self::Tuple(ps) => ps.iter().all(Self::constant), _ => false }
     }
@@ -418,7 +429,8 @@ impl Fragment {
         s.ingest(&first.key, "k".into());
         s.key = s.locations.iter().map(|(a, expr)| (a.clone(), KeyRead::Value(expr.clone()))).collect();
         s.ingest(&first.val, "v".into());
-        let direct = self.atoms.get(1).is_some_and(|next| first.key == next.key);
+        // A restricted first key is tested before a new arrangement, so rows it rejects are never paired.
+        let direct = first.key.unrestricted() && self.atoms.get(1).is_some_and(|next| first.key == next.key);
         let mut expr = first.source.clone();
         if !direct {
             let target = self.atoms.get(1).map_or(Target::Output, |a| Target::Key(&a.key));

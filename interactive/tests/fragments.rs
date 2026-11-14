@@ -298,7 +298,7 @@ fn first_atom_tests_do_not_prevent_direct_arrangement_reuse() {
 }
 
 #[test]
-fn first_key_variants_and_repeated_variables_are_tested_after_direct_join() {
+fn first_key_restrictions_are_tested_before_a_new_arrangement() {
     use interactive::scope_ir::{Item, Node, Ref};
     let src = r#"
         enum Key = Group (int,int) | User (int,int);
@@ -312,12 +312,13 @@ fn first_key_variants_and_repeated_variables_are_tested_after_direct_join() {
         Item::Op(Node::Join{left,..})=>Some(left),_=>None,
     }).unwrap();
     let Ref::Local(i)=left else {panic!("expected arrangement")};
-    assert!(matches!(&root.items[*i],Item::Op(Node::Arrange(Ref::Import(0)))));
+    assert!(!matches!(&root.items[*i],Item::Op(Node::Arrange(Ref::Import(0)))));
     let lowered=report.emit_ddp_at(plan::ddp::DdpStage::Lowered).unwrap().text;
+    // One flatmap binds the payload before the arrangement; the other reads the rebuilt key after the join.
     assert_eq!(lowered.matches("| filter(").count(), 1);
-    assert_eq!(lowered.matches("| flatmap(").count(), 1);
-    assert!(lowered.find("| join(").unwrap() < lowered.find("| flatmap(").unwrap());
-    assert!(lowered.find("| flatmap(").unwrap() < lowered.find("| filter(").unwrap());
+    assert_eq!(lowered.matches("| flatmap(").count(), 2);
+    assert!(lowered.find("| flatmap(").unwrap() < lowered.find("| join(").unwrap());
+    assert!(lowered.find("| filter(").unwrap() < lowered.find("| join(").unwrap());
     assert_eq!(rows(src,vec![
         (0,"inject(0,tuple(1,1)) val=8 diff=2\ninject(0,tuple(1,2)) val=7\ninject(1,tuple(2,2)) val=6".into()),
         (1,"inject(0,tuple(1,1)) val=9 diff=3\ninject(0,tuple(1,2)) val=5\ninject(1,tuple(2,2)) val=4".into()),
