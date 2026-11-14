@@ -194,25 +194,10 @@ pub fn run(
     changes.clear();
     if !config.projection { changes.push(Change::Off("projection")); }
     else if valid {
-        let mut candidate = program.clone();
-        let mut masked = 0;
-        let mut converged = false;
-        for _ in 0..16 {
-            timings.projection_rounds += 1;
-            let count = projection::pushdown_timed(&mut candidate, source, root, timings.pass_mut(Pass::ShapeInference)).unwrap_or(0);
-            if count == 0 { converged = true; break; }
-            // Masks expose optimizer rewrites. In turn, merging identical masks can
-            // give a reduce one reader and make its remaining map fusible.
-            optimize_with(&mut candidate, source, root, config, &mut timings, &mut |_, _, _, _, _, _| {});
-            if !accept(&candidate, &mut timings) { break; }
-            masked += count;
-        }
-        if converged {
-            if masked > 0 {
-                changes.push(Change::Masked(masked));
-                *program = candidate;
-            } else { changes.push(Change::NoProjection); }
-        } else { changes.push(Change::Rejected); }
+        timings.projection_rounds += 1;
+        let count = projection::pushdown_timed(program, source, root, &shapes, config, &mut timings).unwrap_or(0);
+        if count > 0 { changes.push(Change::Masked(count)); }
+        else { changes.push(Change::NoProjection); }
     } else { changes.push(Change::Skipped); }
     timings.projection.record(start.elapsed(), changes.iter().map(Change::count).sum());
     timings.observe("after projection", program, &changes, observe);

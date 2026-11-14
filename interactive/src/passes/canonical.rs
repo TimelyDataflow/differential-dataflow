@@ -12,8 +12,31 @@ use crate::shapes::{ItemShapes, ScopeShapes};
 pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: Level) -> usize {
     let mut changed = 0;
     for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
+        if let (Item::Sub(child), ItemShapes::Sub(typed)) = (item, shape) {
+            changed += canonical_linear(child, typed, level.child());
+        }
+    }
+    changed + canonical_scope(scope, shapes, level).0
+}
+
+/// Keep item shapes aligned while identity maps and their aliases disappear.
+pub(super) fn canonical_typed(scope: &mut Scope, shapes: &mut ScopeShapes, level: Level) -> usize {
+    let mut changed = 0;
+    for (item, shape) in scope.items.iter_mut().zip(&mut shapes.items) {
+        if let (Item::Sub(child), ItemShapes::Sub(typed)) = (item, shape) {
+            changed += canonical_typed(child, typed, level.child());
+        }
+    }
+    let (local, dead) = canonical_scope(scope, shapes, level);
+    let mut keep = dead.iter();
+    shapes.items.retain(|_| !*keep.next().unwrap());
+    changed + local
+}
+
+fn canonical_scope(scope: &mut Scope, shapes: &ScopeShapes, level: Level) -> (usize, Vec<bool>) {
+    let mut changed = 0;
+    for (item, shape) in scope.items.iter_mut().zip(&shapes.items) {
         match (item, shape) {
-            (Item::Sub(child), ItemShapes::Sub(shapes)) => changed += canonical_linear(child, shapes, level.child()),
             (Item::Op(Node::Linear { input, ops }), _) => {
                 let steps = shapes.of(input).and_then(|s| {
                     crate::shapes::linear_shapes(ops, s.key, s.val, level).ok()
@@ -90,7 +113,7 @@ pub(super) fn canonical_linear(scope: &mut Scope, shapes: &ScopeShapes, level: L
     }
     scope.for_each_ref(|r| if let Ref::Local(i) = r { *r = remap[*i].clone(); });
     super::structural::compact(scope, &dead);
-    changed
+    (changed, dead)
 }
 
 fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
