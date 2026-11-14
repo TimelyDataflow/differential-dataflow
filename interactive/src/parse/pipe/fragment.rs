@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Pattern {
     Var(String), Wild, Tuple(Vec<Pattern>), Literal(String),
     Variant { name: String, tag: usize, payload: Box<Pattern> },
@@ -48,20 +48,10 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Atom { source: Expr, key: Pattern, val: Pattern }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Fragment {
-    pub(crate) text: String,
-    atoms: Vec<Atom>,
-    // Scope is compilation context, like the scope captured in ordinary parsed lambdas.
-    #[serde(skip)]
-    scope: corgi::Scope,
-}
-impl std::fmt::Debug for Fragment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.text.fmt(f) }
-}
+/// A fragment's atoms, expanded as soon as they are parsed: no syntax tree holds a fragment.
+struct Fragment { atoms: Vec<Atom> }
 
 impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
@@ -81,15 +71,7 @@ impl Parser {
             self.next();
             source = self.parse_atom();
         }
-        let text = atoms.iter().map(|a| {
-            let name = match &a.source {
-                Expr::Name(n) => n.clone(),
-                Expr::Path(ps, root) => format!("{}{}", if *root { "::" } else { "" }, ps.join("::")),
-                _ => unreachable!(),
-            };
-            format!("{name}({}, {})", a.key.text(), a.val.text())
-        }).collect::<Vec<_>>().join(" * ");
-        Expr::Fragment(Box::new(Fragment { text, atoms, scope: self.lambda_scope().clone() }))
+        Fragment { atoms }.expansion(self.lambda_scope())
     }
 
     fn fragment_pattern(&mut self) -> Pattern {
@@ -429,8 +411,8 @@ impl State<'_> {
 }
 
 impl Fragment {
-    fn expansion(&self) -> Expr {
-        let mut s = State { scope: &self.scope, next: 0, names: vec![], bound: BTreeMap::new(),
+    fn expansion(&self, scope: &corgi::Scope) -> Expr {
+        let mut s = State { scope, next: 0, names: vec![], bound: BTreeMap::new(),
             locations: BTreeMap::new(), key: BTreeMap::new(), variants: vec![], tests: vec![] };
         let first = &self.atoms[0];
         s.ingest(&first.key, "k".into());
@@ -455,26 +437,5 @@ impl Fragment {
             expr = s.checkpoint(expr, target, "(k, v)");
         }
         expr
-    }
-}
-
-/// Rewrite syntax before scope/path resolution; no arrangement or demand decisions here.
-pub(crate) fn expand(stmts: &mut [Stmt]) {
-    fn expression(e: &mut Expr) {
-        match e {
-            Expr::Fragment(f) => { *e = f.expansion(); },
-            Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-            | Expr::Negate(e) | Expr::LiftIter(e) | Expr::FlatMap(e, _) | Expr::Lift(e)
-            | Expr::JoinFunction(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => expression(e),
-            Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expression(l); expression(r); },
-            Expr::Concat(es) => for e in es { expression(e); },
-            _ => {},
-        }
-    }
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let(_, e) | Stmt::Set(_, e) | Stmt::Output(_, _, e) => expression(e),
-            Stmt::Scope(_, body) => expand(body), Stmt::Var(..) => {},
-        }
     }
 }

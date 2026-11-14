@@ -63,8 +63,8 @@
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
 //!
 //! Join fragments are an experimental surface form, not part of the plan language or a stable
-//! interface. They expand to plain DDP before path resolution and lowering; no later stage or
-//! emitted plan contains them. They may change or be removed.
+//! interface. The parser expands each one into plain DDP as it reads it, so no syntax tree,
+//! later stage or emitted plan contains one. They may change or be removed.
 //! A fragment is a pipeline source: `a(x, y) * b(y, z) | map(((x, y, z), ()) -> (x, z))`.
 //! Atoms name existing bindings (including scope paths); they always have key and value arguments.
 //! Every later key must mention at least one variable bound by an earlier atom; it may combine
@@ -84,7 +84,7 @@
 //! Rows contain each variable once, in first-appearance order, keyed by their tuple (one
 //! variable is scalar, none is unit), with unit value. A test-free final layout composes into
 //! the last join's projection. Weights multiply; nothing implies distinct.
-//! The parsed surface view retains fragments; all emitted plan stages contain plain DDP.
+//! Even the parsed view shows the expansion.
 //!
 //! Statements: `let x = …;`, `set x = …;` (a feedback variable in a named
 //! scope), `name: { … }` (a nested scope), `output "name" = …;` (a

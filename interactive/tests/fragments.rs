@@ -213,8 +213,7 @@ fn fragments_are_absent_from_every_emitted_plan_stage() {
     use plan::ddp::DdpStage;
     let src = "let a=input 0 : (int,int); let b=a; output \"out\"=a(x,7)*b(x,y);";
     let report = plan::report(src, &|_| None, &Config::all()).unwrap();
-    assert!(report.emit_ddp_at(DdpStage::Parsed).unwrap().text.contains("a(x, 7) * b(x, y)"));
-    for stage in [DdpStage::Lowered, DdpStage::Optimized, DdpStage::Projected, DdpStage::AsOf] {
+    for stage in [DdpStage::Parsed, DdpStage::Lowered, DdpStage::Optimized, DdpStage::Projected, DdpStage::AsOf] {
         let text = report.emit_ddp_at(stage).unwrap().text;
         assert!(!text.contains('*'), "{stage:?}: {text}");
         assert!(text.contains("| join("), "{stage:?}: {text}");
@@ -223,12 +222,12 @@ fn fragments_are_absent_from_every_emitted_plan_stage() {
 }
 
 #[test]
-fn parsed_retains_fragments_and_direct_first_tests_follow_the_first_join() {
+fn parsed_shows_the_expansion_and_direct_first_tests_follow_the_first_join() {
     use plan::ddp::DdpStage;
     let src="let a = input 0 : (int,int); let b = a; let c = a; output \"out\" = a(x,7) * b(x,y) * c(y,9);";
     let report=plan::report(src,&|_|None,&Config::parse("all").unwrap()).unwrap();
     let parsed=report.emit_ddp_at(DdpStage::Parsed).unwrap().text;
-    assert!(parsed.contains("a(x, 7) * b(x, y) * c(y, 9)"));
+    assert!(!parsed.contains('*') && parsed.contains("| join("));
     let lowered=report.emit_ddp_at(DdpStage::Lowered).unwrap().text;
     assert!(!lowered.contains('*'));
     assert_eq!(lowered.matches("| join(").count(),2);
