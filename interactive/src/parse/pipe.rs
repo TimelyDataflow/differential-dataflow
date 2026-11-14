@@ -179,7 +179,7 @@ impl Iterator for Chars<'_> {
 /// Corgi's text is not DDIR's (it has `.2`, float literals, `#` comments), so the lexer takes the
 /// lambda whole rather than lexing it. A pattern holds no comma outside parentheses, so the last
 /// comma before the arrow separates the lambda from the arguments before it, as in `join`.
-fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
+pub(crate) fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
     let bytes = src.as_bytes();
     let (mut depth, mut start, mut arrow) = (0usize, from, None);
     let mut i = from;
