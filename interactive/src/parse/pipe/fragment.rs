@@ -332,7 +332,7 @@ impl State<'_> {
         match target {
             Target::Output => {
                 let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
-                let key = if values.len() == 1 { values[0].clone() } else { tuple(&values) };
+                let key = tuple(&values);
                 format!("({key}, ())")
             }
             Target::Key(p) | Target::Keep(p) => {

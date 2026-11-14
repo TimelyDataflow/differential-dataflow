@@ -83,8 +83,8 @@
 //! Reusing a variable tests equality. Plain filters run as soon as their fields are bound,
 //! before the next rekey; a direct first join precedes its first atom's tests. Variants bind
 //! through typed payload lists in `flatmap`, which can also emit the next lookup key.
-//! Rows contain each variable once, in first-appearance order, keyed by their tuple (one
-//! variable is scalar, none is unit), with unit value. A test-free final layout composes into
+//! Rows contain each variable once, in first-appearance order, keyed by their tuple (`(x)` for
+//! one variable, `()` for none), with unit value. A test-free final layout composes into
 //! the last join's projection. Weights multiply; nothing implies distinct.
 //! Even the parsed view shows the expansion.
 //!

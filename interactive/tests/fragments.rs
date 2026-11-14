@@ -53,14 +53,14 @@ fn patterns_tests_and_output_order() {
     "#;
     assert_eq!(rows(src,vec![(0,"1,1 val=tuple(list(104,105),2)\n1,9 val=tuple(list(104,105),2)\n3,3 val=tuple(list(104),2)".into()),(1,"2 val=-7 diff=3\n2 val=7".into())]),vec![("tuple(1,2)".into(),"tuple()".into(),3)]);
     assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(_, _);",vec![(0,"1 val=2 diff=4".into())]),vec![("tuple()".into(),"tuple()".into(),4)]);
-    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(x, _);",vec![(0,"1 val=2".into())]),vec![("1".into(),"tuple()".into(),1)]);
+    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(x, _);",vec![(0,"1 val=2".into())]),vec![("tuple(1)".into(),"tuple()".into(),1)]);
 }
 
 #[test]
 fn empty_list_pattern_does_not_choose_an_element_shape() {
     assert_eq!(rows("let a = input 0 : (int,List((int,int))); output \"out\" = a(x, []);",
         vec![(0,"1 val=list()\n2 val=list(tuple(3,4))".into())]),
-        vec![("1".into(),"tuple()".into(),1)]);
+        vec![("tuple(1)".into(),"tuple()".into(),1)]);
 }
 
 #[test]
@@ -157,15 +157,15 @@ fn later_keys_combine_bound_variables_with_constants() {
 fn bare_constructors_match_empty_payloads_and_do_not_bind_variables() {
     assert_eq!(rows("let a=input 0 : (int,Option(int)); output \"out\"=a(x,None);",
         vec![(0,"1 val=inject(0,tuple()) diff=3\n2 val=inject(1,7)".into())]),
-        vec![("1".into(), "tuple()".into(), 3)]);
+        vec![("tuple(1)".into(), "tuple()".into(), 3)]);
     let src = "let a=input 0 : (int,(Option(int),Option(int))); output \"out\"=a(x,(None,None));";
     assert_eq!(rows(src, vec![(0,"1 val=tuple(inject(0,tuple()),inject(0,tuple()))\n2 val=tuple(inject(0,tuple()),inject(1,7))\n3 val=tuple(inject(1,7),inject(1,7))".into())]),
-        vec![("1".into(), "tuple()".into(), 1)]);
+        vec![("tuple(1)".into(), "tuple()".into(), 1)]);
     let text = plan::report(src, &|_| None, &Config::all()).unwrap().emit_ddp().unwrap().text;
     assert!(!text.contains("| filter("), "repeated None must not become equality: {text}");
     assert_eq!(rows("enum K=Empty | Full int; let a=input 0 : (K,int); output \"out\"=a(K::Empty,v);",
         vec![(0,"inject(0,tuple()) val=9\ninject(1,7) val=8".into())]),
-        vec![("9".into(), "tuple()".into(), 1)]);
+        vec![("tuple(9)".into(), "tuple()".into(), 1)]);
     assert_eq!(rows("let a=input 0 : (int,int); output \"out\"=a(x,Fresh);", vec![(0,"1 val=2".into())]),
         vec![("tuple(1,2)".into(), "tuple()".into(), 1)]);
 }
@@ -190,7 +190,7 @@ fn nested_empty_list_literals_report_a_ddir_error() {
         ("[[1],[]]", "list(list(1),list())"), ("[[],[1]]", "list(list(),list(1))")] {
         let src = format!("let a=input 0 : (int,List(List(int))); output \"out\"=a(x,{literal});");
         assert_eq!(rows(&src, vec![(0,format!("1 val={value}\n2 val=list()"))]),
-            vec![("1".into(), "tuple()".into(), 1)]);
+            vec![("tuple(1)".into(), "tuple()".into(), 1)]);
     }
 }
 
