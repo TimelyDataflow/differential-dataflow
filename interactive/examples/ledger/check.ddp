@@ -1,0 +1,55 @@
+-- What a client checks of its own requests before it submits them (see model.md).
+--
+-- The rules in resolve.ddp trust these properties, and do not check them.
+-- Each is a property of the request alone, so this program reads no state.
+--
+-- Input 0 is requests: ((tx), (actions)).
+-- Outputs:
+--   valid    ((tx), (actions))   the requests that pass, with their frontiers in canonical form
+--   invalid  ((tx), (index))     the others, each with its first action that fails
+
+type Batch = Empty | Inline List(int) | Blob List(int);
+type Clock = Free | Follows (int, int);
+type Action = Create ((int, int), List(int), int, List(List(int)), Clock)
+            | Append ((int, int), List(List(int)), List(List(int)), Batch, int);
+
+let requests = input 0 : ((int), (List(Action)));
+
+-- SHAPE: every time in a frontier has one width, and an append's lower is not empty.
+-- This uses no frontier comparison, so that the comparisons below never meet a ragged frontier.
+-- The result is the first misshapen action, or -1.
+let sized = requests | map((tx, (actions)) ->
+    let shapely = actions map (action -> action match (
+        Create ((_, _, width, start, _) ->
+            (width, start) cap_list map ((width, time) -> (time len, width) eq) fold_all),
+        Append ((_, lower, upper, _, _) ->
+            let width = lower map (time -> time len) fold_max in
+            ((lower len, 0) gt,
+             (width, lower) cap_list map ((width, time) -> (time len, width) eq) fold_all,
+             (width, upper) cap_list map ((width, time) -> (time len, width) eq) fold_all) all))) in
+    let first = ((0, -1), shapely) fold (((index, bad), ok) ->
+        ((index, 1) add, (((bad, 0) lt, (ok, 0) eq) all, index, bad) select)) in
+    (tx, (actions, first.1)));
+let misshapen = sized | filter((_, (_, bad)) -> (bad, 0) ge) | map((tx, (_, bad)) -> (tx, (bad)));
+
+-- ORDER AND BOUNDS: actions in order of (ledger, kind), and each append's lower strictly before its upper.
+-- So no ledger is created twice or appended twice in one transaction, and a `Create` comes before
+-- an `Append` of the same ledger.
+-- Frontiers are put in canonical form here, once; equal frontiers are then equal as values.
+let ordered = sized | filter((_, (_, bad)) -> (bad, 0) lt) | map((tx, (actions, _)) ->
+    let actions = actions map (action -> action match (
+        Create ((id, shape, width, start, clock) ->
+            (id, shape, width, start call frontier_normalize, clock) inject Create),
+        Append ((id, lower, upper, batch, seqno) ->
+            (id, lower call frontier_normalize, upper call frontier_normalize, batch, seqno) inject Append))) in
+    let first = ((((0, 0), 0), 0, 0, -1), actions) fold (((previous, seen, index, bad), action) ->
+        let (place, bounds) = action match (
+            Create ((id, _, _, _, _) -> ((id, 0), 1)),
+            Append ((id, lower, upper, _, _) -> ((id, 1), (lower, upper) call frontier_lt))) in
+        let ok = ((seen, (previous, place) lt, 1) select, bounds) all in
+        (place, 1, (index, 1) add, (((bad, 0) lt, (ok, 0) eq) all, index, bad) select)) in
+    (tx, (actions, first.3)));
+let disordered = ordered | filter((_, (_, bad)) -> (bad, 0) ge) | map((tx, (_, bad)) -> (tx, (bad)));
+
+output "valid" = ordered | filter((_, (_, bad)) -> (bad, 0) lt) | map((tx, (actions, _)) -> (tx, (actions)));
+output "invalid" = misshapen + disordered;

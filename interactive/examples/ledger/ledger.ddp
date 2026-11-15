@@ -1,0 +1,80 @@
+-- The state of a set of ledgers, and what is derived from it (see model.md).
+--
+-- A time is a list of ints, one per coordinate, and a frontier is a list of times.
+-- Ledger ids are two ints. Shapes are opaque bytes.
+--
+-- registrations : ((id), (shape, width, start, clock))
+-- spans         : ((id), (seqno, lower, upper, since, batch))
+--
+-- The views below are computed from these two collections and nothing else.
+-- The outputs after INVARIANTS must all be empty.
+
+type Batch = Empty | Inline List(int) | Blob List(int);
+type Clock = Free | Follows (int, int);
+
+let registrations = input 0 : (((int, int)), (List(int), int, List(List(int)), Clock));
+let spans = input 1 : (((int, int)), (int, List(List(int)), List(List(int)), List(List(int)), Batch));
+
+-- FOLLOWS: each ledger that follows a clock, and the clock it follows.
+let follows = registrations
+            | filter((_, (_, _, _, clock)) -> clock match (Free (_ -> 0), Follows (_ -> 1)))
+            | map((id, (_, _, _, clock)) -> (id, (clock match (Free (_ -> (0, 0)), Follows (c -> c)))));
+
+-- OWN: a ledger's version is the number of its spans, and its own upper is the upper
+-- of its last span, or its start if it has none. Marks sort by seqno, the start first.
+let marks = (registrations | map((id, (_, _, start, _)) -> (id, (-1, start))))
+          + (spans | map((id, (seqno, _, upper, _, _)) -> (id, (seqno, upper))));
+let own = marks | reduce((_, vals) ->
+    let entries = vals map ((mark, _) -> mark) in
+    let last = ((entries len, 1) sub enlist, entries) gather in
+    last map ((seqno, upper) -> (((seqno, 1) add, upper), 1)));
+
+-- WRITE FRONTIER: the join of a ledger's own upper with the write frontier of the clock
+-- it follows, which is in turn joined with that of the clock above it, and so on.
+wf: {
+    let lifted = follows | map(((id), (clock)) -> ((clock), (id)))
+                         | join(write, ((clock), (id), (frontier)) -> ((id), (frontier)));
+    set write = ((own | map((id, (_, upper)) -> (id, (upper)))) + lifted) | reduce((_, vals) ->
+        let none = [] : List(List(int)) in
+        let joined = ((0, none), vals) fold (((seen, sofar), ((frontier), _)) ->
+            (1, (seen, (sofar, frontier) call frontier_join, frontier) select)) in
+        ((joined.1), 1) enlist);
+}
+
+output "follows" = follows;
+output "own" = own;
+output "write" = wf::write;
+-- REGISTERED: each ledger's width and start. With `own` and `follows`, these are the indexes
+-- a resolver keeps beside the manifest, and can rebuild from it.
+output "registered" = registrations | map((id, (_, width, start, _)) -> (id, (width, start)));
+
+-- INVARIANTS: each of these must be empty.
+
+-- A span's lower is strictly before its upper.
+output "malformed" = spans | filter((_, (_, lower, upper, _, _)) -> ((lower, upper) call frontier_lt, 0) eq);
+
+-- Every span belongs to a registered ledger.
+output "orphaned" = spans - (spans | join(registrations, (id, span, _) -> (id, span)));
+
+-- A ledger's spans are numbered 0, 1, 2, and so on: no number twice, and none skipped.
+let numbered = spans | map(((id), (seqno, lower, upper, _, _)) -> ((id, seqno), (lower, upper)));
+output "forked" = numbered | reduce((_, vals) -> ((vals len), 1) enlist) | filter((_, (count)) -> (count, 1) gt);
+let present = numbered | map((key, _) -> (key, ())) | distinct;
+let wanted = numbered | filter(((_, seqno), _) -> (seqno, 0) gt)
+                      | map(((id, seqno), _) -> ((id, (seqno, 1) sub), ())) | distinct;
+output "skipped" = wanted - (wanted | join(present, (key, (), ()) -> (key, ())));
+
+-- Each span begins no earlier than the span before it ended, and the first no earlier than the start.
+-- Spans need not abut: a clock may have advanced the ledger in between.
+let ends = (numbered | map(((id, seqno), (_, upper)) -> ((id, (seqno, 1) add), (upper))))
+         + (registrations | map(((id), (_, _, start, _)) -> ((id, 0), (start))));
+output "early" = numbered | join(ends, (key, (lower, _), (end)) -> (key, (end, lower)))
+               | filter((_, (end, lower)) -> ((end, lower) call frontier_le, 0) eq);
+
+-- A followed clock is registered, and has its follower's width.
+let widths = registrations | map((id, (_, width, _, _)) -> (id, (width)));
+let clocked = follows | map(((id), (clock)) -> ((clock), (id)))
+                      | join(widths, ((clock), (id), (width)) -> ((id), (clock, width)));
+output "unclocked" = follows - (clocked | map((id, (clock, _)) -> (id, (clock))));
+output "mismatched" = clocked | join(widths, (id, (clock, theirs), (ours)) -> (id, (clock, theirs, ours)))
+                              | filter((_, (_, theirs, ours)) -> (theirs, ours) ne);

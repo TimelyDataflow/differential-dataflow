@@ -33,6 +33,7 @@ use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Valu
 
 pub(crate) mod print;
 pub(crate) mod normalize;
+mod frontiers;
 
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
 /// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
@@ -446,7 +447,7 @@ pub(crate) fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<corgi::
     }
 }
 
-/// The scope every DDIR program's lambdas start from: the Float functions, `bit_length`, and the
+/// The scope every DDIR program's lambdas start from: the Float and frontier functions, `bit_length`, and the
 /// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
 /// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
 /// payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its
@@ -465,6 +466,9 @@ pub(crate) fn base_scope() -> corgi::Scope {
         let input = b.input();
         let out = b.add(NumOp::Host(corgi::HostOp(std::sync::Arc::new(BitLength))), vec![input]);
         scope.word("bit_length", b.finish(out)).unwrap();
+        for function in frontiers::functions() {
+            scope.word(function.name(), function_word(function)).unwrap();
+        }
         scope.declare("enum Option = None () | Some").unwrap();
         scope.declare("enum Result = Ok | Err").unwrap();
         scope
@@ -476,7 +480,7 @@ pub(crate) fn base_scope() -> corgi::Scope {
 fn is_base_word(name: &str) -> bool { base_words().any(|word| word == name) }
 
 fn base_words() -> impl Iterator<Item = &'static str> {
-    FloatWord::all().map(|(name, _)| name).chain(["bit_length"])
+    FloatWord::all().map(|(name, _)| name).chain(["bit_length"]).chain(frontiers::NAMES)
 }
 
 /// The bit length of an Int viewed as a u64: zero gives 0, negative integers give 64.
