@@ -48,7 +48,7 @@ pub mod runtime;
 // The host: installing, feeding and reading programs.
 // `register`: the server's own diagnostics as `diag.*` collections, kept in a `Diagnostics`.
 pub mod diag;
-// `Server`, `evaluate`, `generated_shape`, and the host's time and container types.
+// `Server`, `evaluate`, and the host's time and container types.
 pub mod server;
 
 mod level;

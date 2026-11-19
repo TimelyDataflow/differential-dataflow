@@ -908,7 +908,7 @@ fn run(p: &Program, workers: usize, case: &Case) -> Result<Vec<Exports>, String>
 /// the first tick, each at its epoch's time. An epoch before an export's program is installed
 /// reads nothing of it.
 fn run_programs(programs: &[(String, Program, usize)], workers: usize, case: &Case, arranged: bool, ahead: bool) -> Result<Vec<Exports>, String> {
-    run_bound(programs, &[], workers, case, arranged, ahead, None)
+    run_with_options(programs, workers, case, RunOptions { arranged, ahead, cycle: None, passes: Config::all() })
 }
 
 struct RunOptions {
@@ -918,17 +918,9 @@ struct RunOptions {
     passes: Config,
 }
 
-/// [`run_programs`], and once the last program is installed, each `(trace, input)` of `binds`
-/// bound to that input of it. With `cycle`, `(d, r)`, the last program is dropped before epoch `d`
-/// and installed again before epoch `r`.
-fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, arranged: bool, ahead: bool, cycle: Option<(usize, usize)>) -> Result<Vec<Exports>, String> {
-    run_with_options(programs, binds, workers, case, RunOptions { arranged, ahead, cycle, passes: Config::all() })
-}
-
-fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usize)], workers: usize, case: &Case, options: RunOptions) -> Result<Vec<Exports>, String> {
+fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case: &Case, options: RunOptions) -> Result<Vec<Exports>, String> {
     let RunOptions { arranged, ahead, cycle, passes } = options;
     let programs = programs.to_vec();
-    let binds = binds.to_vec();
     let epochs = case.epochs.clone();
     let exports = case.exports();
     // Each output is published under the program that computes it, as `<program>::<output>`.
@@ -949,9 +941,6 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
         while installed < programs.len() && programs[installed].2 == 0 {
             server.install(worker, &programs[installed].0, &programs[installed].1)?;
             installed += 1;
-            if installed == programs.len() {
-                for (trace, input) in &binds { server.bind(worker, trace, &programs[installed - 1].0, *input)?; }
-            }
         }
         if ahead && worker.index() == 0 {
             for (time, epoch) in epochs.iter().enumerate() {
@@ -969,9 +958,6 @@ fn run_with_options(programs: &[(String, Program, usize)], binds: &[(String, usi
             while installed < programs.len() && programs[installed].2 <= e {
                 server.install(worker, &programs[installed].0, &programs[installed].1)?;
                 installed += 1;
-                if installed == programs.len() {
-                    for (trace, input) in &binds { server.bind(worker, trace, &programs[installed - 1].0, *input)?; }
-                }
             }
             if !ahead && worker.index() == 0 {
                 for (input, lines) in epoch {
@@ -1116,23 +1102,6 @@ fn asof_programs(case: &Case, optimize: bool) -> Result<Vec<(String, Program, us
     Ok(vec![("producer".into(), program(&producer, optimize)?, 0), ("consumer".into(), program(&consumer, optimize)?, late)])
 }
 
-/// [`split`], but the consumer reads the producer's collections through its own inputs, each bound
-/// to the trace the producer publishes; and the bindings.
-fn bound(case: &Case) -> Option<(String, String, Vec<(String, usize)>, usize)> {
-    let (_, before, after, named, late) = cut(case, 0xb1d5_eed5)?;
-    let mut producer = String::new();
-    render_stmts(before, false, "", &mut producer);
-    let mut consumer = format!("{SUM_DECL}\n");
-    let mut binds = Vec::new();
-    for (input, (name, key, val)) in named.iter().enumerate() {
-        writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
-        writeln!(consumer, "let {name} = input {input} : ({}, {});", key.text(), val.text()).unwrap();
-        binds.push((format!("producer::shared_{name}"), input));
-    }
-    render_stmts(after, false, "", &mut consumer);
-    Some((producer, consumer, binds, late))
-}
-
 /// The first export that differs between two runs, if any: its epoch, and the rows each run has
 /// that the other does not, in feed syntax.
 fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
@@ -1154,14 +1123,14 @@ fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Bind, Reinstall }
+enum Oracle { Panic, RoundTrip, Workers, Scratch, Optimize, Subset, SubsetAsOf, Plan, Delta, AsOf, Explain, Split, Ahead, Reinstall }
 
 impl Oracle {
     /// The oracles, by the names `DIFFTEST_ORACLES` takes.
-    const NAMED: [(&'static str, Oracle); 13] = [
+    const NAMED: [(&'static str, Oracle); 12] = [
         ("workers", Oracle::Workers), ("scratch", Oracle::Scratch), ("optimize", Oracle::Optimize),
         ("subset", Oracle::Subset), ("subset-asof", Oracle::SubsetAsOf), ("plan", Oracle::Plan), ("delta", Oracle::Delta), ("asof", Oracle::AsOf), ("ahead", Oracle::Ahead), ("split", Oracle::Split),
-        ("bind", Oracle::Bind), ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
+        ("reinstall", Oracle::Reinstall), ("explain", Oracle::Explain),
     ];
     fn all() -> Vec<Oracle> { Self::NAMED.iter().map(|(_, o)| *o).collect() }
     fn parse(s: &str) -> Oracle {
@@ -1222,39 +1191,19 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
                     let mut rng = Rng(case.seed ^ 0xd409);
                     let d = 1 + rng.below(case.epochs.len() - 2);
                     let r = d + 1 + rng.below(case.epochs.len() - d - 1);
-                    let mut seen = run_bound(&[("producer".to_string(), p, 0), ("consumer".to_string(), c, 0)], &[], 1, case, arranged, false, Some((d, r)))?;
+                    let mut seen = run_with_options(&[("producer".to_string(), p, 0), ("consumer".to_string(), c, 0)], 1, case, RunOptions { arranged, ahead: false, cycle: Some((d, r)), passes: Config::all() })?;
                     for (e, now) in seen.iter_mut().enumerate() { if (d..r).contains(&e) { *now = base[e].clone(); } }
                     Ok(seen)
                 }),
                 _ => continue,
             },
-            // A bound input mirrors its trace one epoch late, which a program that reads times sees.
-            Oracle::Bind if case.timed => continue,
-            Oracle::Bind => match bound(case) {
-                None => continue,
-                Some((producer, consumer, binds, late)) => program(&producer, true).and_then(|p| {
-                    let c = program(&consumer, true)?;
-                    let late = late.min(case.epochs.len().saturating_sub(1));
-                    let seen = run_bound(&[("producer".to_string(), p, 0), ("consumer".to_string(), c, late)], &binds, 1, case, true, false, None)?;
-                    // The consumer's epoch `e` mirrors the program's `e - 1`, once bound.
-                    Ok((0..seen.len()).map(|e| if e > late { seen[e].clone() } else { base[e.saturating_sub(1)].clone() }).collect::<Vec<_>>())
-                }).map(|shifted| {
-                    // Compare against the program one epoch earlier.
-                    let mut expected = vec![base[0].clone()];
-                    expected.extend(base.iter().take(base.len() - 1).cloned());
-                    (shifted, expected)
-                }).and_then(|(shifted, expected)| match differ(&expected, &shifted) {
-                    Some(d) => Err(d),
-                    None => Ok(base.clone()),
-                }),
-            },
             Oracle::Scratch if case.timed => continue,
             Oracle::Scratch => scratch(&opt, case),
             Oracle::Optimize => program(&src, false).and_then(|p| {
-                run_with_options(&[("p".to_string(), p, 0)], &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::none() })
+                run_with_options(&[("p".to_string(), p, 0)], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::none() })
             }),
             Oracle::Subset => program(&src, false).and_then(|p| {
-                run_with_options(&[("p".to_string(), p, 0)], &[], 1, case,
+                run_with_options(&[("p".to_string(), p, 0)], 1, case,
                     RunOptions { arranged: true, ahead: false, cycle: None, passes: subset(case.seed) })
             }),
             Oracle::Plan => match plan_round_trip(&src, subset(case.seed)) {
@@ -1273,8 +1222,8 @@ fn check(case: &Case, oracles: &[Oracle]) -> Outcome {
                 asof_programs(case, oracle == Oracle::AsOf).and_then(|programs| {
                     let passes = if oracle == Oracle::SubsetAsOf { subset(case.seed) }
                         else { Config { as_of_drop: false, ..Config::all() } };
-                    let on = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::all() })?;
-                    let off = run_with_options(&programs, &[], 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes })?;
+                    let on = run_with_options(&programs, 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes: Config::all() })?;
+                    let off = run_with_options(&programs, 1, case, RunOptions { arranged: true, ahead: false, cycle: None, passes })?;
                     match differ(&on, &off) {
                         Some(d) => Err(format!("all passes versus alternate late-install passes: {d}")),
                         None => Ok(base.clone()),
@@ -1401,7 +1350,7 @@ fn pass_names(config: Config) -> String {
 /// True only for the known repeated as-of insertion. Replanning without that insertion must
 /// match both the original final graph and its text; other changes are still failures.
 fn plan_round_trip(src: &str, config: Config) -> Result<bool, String> {
-    let source = |name: &str| server::generated_shape(name);
+    let source = |_: &str| None;
     let first = interactive::plan::report(src, &source, &config)?;
     let printed = first.emit_ddp().map_err(|e| format!("emit: {e}"))?;
     if printed.lambdas.graph_changed != 0 { return Err(format!("emit: {} changed scalar graphs", printed.lambdas.graph_changed)); }
@@ -1541,7 +1490,7 @@ fn tick() { LAST.store(now_secs(), std::sync::atomic::Ordering::Relaxed); }
 /// imports as of its install.
 #[test]
 fn late_install_regressions() {
-    let oracles = [Oracle::Split, Oracle::Bind, Oracle::Reinstall];
+    let oracles = [Oracle::Split, Oracle::Reinstall];
     for seed in [40000075, 40000160, 40000519] {
         match check(&generate(seed), &oracles) {
             Outcome::Pass => {}

@@ -68,7 +68,6 @@ impl Server {
                 root_width: 1,
                 now: host_time(self.epoch),
                 origin: Origin::Diagnostics,
-                generators: HashMap::new(),
             },
         );
     }

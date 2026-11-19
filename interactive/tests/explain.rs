@@ -86,11 +86,18 @@ fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     gen_edges_seeded(0, nodes, edges)
 }
 
+fn hash_u64(index: u64) -> u64 {
+    let mut x = index.wrapping_mul(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
+
 /// A different deterministic graph per seed (offset into the same hash space).
 fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges)
         .map(|e| seed.wrapping_mul(1_000_003).wrapping_add(e))
-        .map(|e| (row(&[0, 1].map(|col| interactive::server::gen_field_seeded(0, e, nodes, col))), unit()))
+        .map(|e| (row(&[0, 1].map(|col| (hash_u64(e.wrapping_mul(31).wrapping_add(col)) % nodes) as i64)), unit()))
         .collect()
 }
 

@@ -1,6 +1,0 @@
--- Counts the edges of the same generated random graph — a second consumer of
--- the SAME recipe, so the two programs share one generated source.
--- `map(_ -> ((), ()))` keys every row to unit; `count` then totals them.
-
-let edges = import "random:nodes=8,edges=12";
-output "edge_count" = edges | map(_ -> ((), ())) | count | value((_, n) -> (n));

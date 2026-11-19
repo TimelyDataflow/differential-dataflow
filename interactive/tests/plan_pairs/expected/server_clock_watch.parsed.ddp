@@ -1,1 +1,0 @@
-output "now" = import "clock" | inspect(clock);

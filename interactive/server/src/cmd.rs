@@ -80,7 +80,7 @@ pub enum Cmd {
     /// `id_hint` — the client-chosen name the dataflow is installed under.
     /// `bindings` — `name -> binding`, where the name is a root input's (as written,
     /// `input "name"`, or `input<N>` if unnamed) or an import's, and the binding is either a
-    /// published trace name or a builtin call (`random(...)`). A bound input becomes an import of
+    /// published trace name . A bound input becomes an import of
     /// the binding.
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
     /// from a file (`load <name> from <path>`).
@@ -126,8 +126,7 @@ pub enum Cmd {
         input: InputId,
         columns: Updates,
     },
-    /// Fill one program input from a source the server reads itself — a recipe
-    /// (`random:…`, `iota:N`), a published trace, or a file of integer rows —
+    /// Fill one program input from a source the server reads itself — a published trace or a file of integer rows —
     /// each worker taking its shard, so no row crosses the wire.
     /// `feed <prog> <in> from <source> [diff=<d>]`.
     Source {
@@ -135,19 +134,6 @@ pub enum Cmd {
         input: InputId,
         source: String,
         diff: Diff,
-    },
-    /// Bind a trace's changes into `prog`'s `input`, delivered at
-    /// each tick one epoch delayed — the write path for installed programs.
-    Bind {
-        trace: String,
-        prog: String,
-        input: InputId,
-    },
-    /// Remove a binding installed by `bind`.
-    Unbind {
-        trace: String,
-        prog: String,
-        input: InputId,
     },
     /// Advance ambient time by `n` (default 1).
     Tick { n: u64 },
@@ -250,8 +236,6 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
         Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
         Cmd::Source { prog, input, source, diff } => ServerCommand::Load { prog, input, source, diff },
-        Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
-        Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
         Cmd::Tick { n } => ServerCommand::Tick { n },
         Cmd::Exit => ServerCommand::Exit,
     };
@@ -269,40 +253,9 @@ fn apply_bindings(
             .iter_mut()
             .find(|import| import.name == *local)
             .ok_or_else(|| format!("binding names no input or import {:?}", local))?;
-        import.from = Source::Trace(random_binding(binding)?);
+        import.from = Source::Trace(binding.clone());
     }
     Ok(())
-}
-
-/// Translate the call spelling of a binding (`random(...)`) into its
-/// content-addressed source name.
-fn random_binding(binding: &str) -> Result<String, String> {
-    let Some(body) = binding
-        .strip_prefix("random(")
-        .and_then(|s| s.strip_suffix(')'))
-    else {
-        return Ok(binding.to_string());
-    };
-    let mut values: HashMap<&str, &str> = HashMap::new();
-    for field in body.split(',') {
-        let (key, value) = field
-            .trim()
-            .split_once('=')
-            .ok_or_else(|| format!("malformed random field {:?}", field))?;
-        values.insert(key.trim(), value.trim());
-    }
-    let nodes = values.remove("range").ok_or("random requires range")?;
-    let edges = values.remove("count").ok_or("random requires count")?;
-    let arity = values.remove("arity").unwrap_or("2");
-    let seed = values.remove("seed").unwrap_or("0");
-    let churn = values.remove("churn").unwrap_or("0");
-    if !values.is_empty() {
-        return Err(format!("unknown random fields: {:?}", values.keys()));
-    }
-    Ok(format!(
-        "random:nodes={},edges={},arity={},seed={},churn={}",
-        nodes, edges, arity, seed, churn
-    ))
 }
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
@@ -347,8 +300,7 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
-    "unbind",
+    "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -745,7 +697,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 };
                 return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input: InputId::parse(input), nbytes };
             }
-            // Syntax: `feed <prog> <in> from <recipe-trace-or-file> [diff=<d>]` — the server
+            // Syntax: `feed <prog> <in> from <trace-or-file> [diff=<d>]` — the server
             // sources the rows.
             if let [prog, input, "from", source, rest @ ..] = args {
                 let diff = match rest {
@@ -815,20 +767,6 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 return ParseOutcome::Err(format!("feed: {e}"));
             }
             ParseOutcome::Cmd(Cmd::Feed { prog, input, columns: row.finish(), time })
-        }
-        "bind" | "unbind" => {
-            // The input is `<prog> <in>` or `<prog>::<in>`, and `<in>` is its position or its name.
-            let (trace, prog, input) = match args {
-                [trace, prog, input] => (*trace, *prog, *input),
-                [trace, target] if target.contains("::") => { let (prog, input) = target.split_once("::").unwrap(); (*trace, prog, input) }
-                _ => return ParseOutcome::Err(format!("{cmd}: expected `<trace> <prog> <in>` or `<trace> <prog>::<in>`")),
-            };
-            let (trace, prog, input) = (trace.to_string(), prog.to_string(), InputId::parse(input));
-            if cmd == "bind" {
-                ParseOutcome::Cmd(Cmd::Bind { trace, prog, input })
-            } else {
-                ParseOutcome::Cmd(Cmd::Unbind { trace, prog, input })
-            }
         }
         "drop" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Drop { name: (*name).to_string() }),
@@ -938,11 +876,11 @@ mod tests {
     #[test]
     fn feed_from_sources_rows_server_side() {
         let mut p = LineParser::new(Catalog::default());
-        let out = feed_all(&mut p, &["r1 feed world 0 from iota:3\n"]);
+        let out = feed_all(&mut p, &["r1 feed world 0 from edges.txt\n"]);
         match &out[..] {
             [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1 }))] => {
                 assert_eq!(reqid.as_str(), "r1");
-                assert_eq!((prog.as_str(), input.clone(), source.as_str()), ("world", InputId::Position(0), "iota:3"));
+                assert_eq!((prog.as_str(), input.clone(), source.as_str()), ("world", InputId::Position(0), "edges.txt"));
             }
             other => panic!("unexpected parse: {other:?}"),
         }
@@ -953,7 +891,7 @@ mod tests {
         );
         let out = feed_all(&mut p, &["r4 feed bank 0 from retire diff=nope\n"]);
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad diff must be rejected: {out:?}");
-        let out = feed_all(&mut p, &["r2 feed world x from iota:3\n"]);
+        let out = feed_all(&mut p, &["r2 feed world x from edges.txt\n"]);
         assert!(matches!(&out[..], [(_, Ok(Cmd::Source { input: InputId::Name(name), .. }))] if name == "x"), "the workers resolve an input's name: {out:?}");
     }
 
@@ -1012,7 +950,7 @@ mod tests {
         let got = feed_all(
             &mut p,
             &[
-                "r0 load gen edges=random(seed=1) begin",
+                "r0 load gen edges=graph::edges begin",
                 "let edges = import \"edges/v1\";",
                 "output \"reach\" = edges;",
                 "r0 end-load",
@@ -1029,7 +967,7 @@ mod tests {
                 assert_eq!(id_hint, "gen");
                 assert_eq!(
                     bindings.get("edges").map(String::as_str),
-                    Some("random(seed=1)")
+                    Some("graph::edges")
                 );
                 assert!(program.contains("import \"edges/v1\""));
                 assert!(program.contains("output \"reach\""));
@@ -1067,7 +1005,7 @@ mod tests {
         std::fs::write(&ddp2, "output \"s\" = input 0;\n").unwrap();
         let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &[
-            &format!("r1 load p from {} explain=debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
+            &format!("r1 load p from {} explain=debug e=graph::edges\n", ddp.display()),
             &format!("r2 load q from {}\n", ddp2.display()),
             "r3 load p from /nonexistent/p.ddp\n",
             "r4 load p --explain begin\n",
@@ -1078,7 +1016,7 @@ mod tests {
                 assert_eq!(id_hint, "p");
                 assert_eq!(program, "output \"r\" = input 0;\n");
                 assert_eq!(*explain, Some(true));
-                assert_eq!(bindings.get("e").map(String::as_str), Some("random(seed=1,arity=2,range=8,count=12)"));
+                assert_eq!(bindings.get("e").map(String::as_str), Some("graph::edges"));
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -1243,22 +1181,6 @@ mod tests {
     }
 
     #[test]
-    fn bind_cmd() {
-        let mut p = LineParser::new(Catalog::default());
-        let got = feed_all(
-            &mut p,
-            &["r0 bind next counter 1", "r1 unbind next counter 1", "r2 bind next counter one"],
-        );
-        assert_eq!(got.len(), 3);
-        assert!(matches!(
-            &got[0].1,
-            Ok(Cmd::Bind { trace, prog, input: InputId::Position(1) }) if trace == "next" && prog == "counter"
-        ));
-        assert!(matches!(&got[1].1, Ok(Cmd::Unbind { input: InputId::Position(1), .. })));
-        assert!(matches!(&got[2].1, Ok(Cmd::Bind { input: InputId::Name(name), .. }) if name == "one"), "the workers resolve a name");
-    }
-
-    #[test]
     fn oversized_load_is_rejected_cleanly() {
         let mut p = LineParser::with_cap(64);
         assert!(p.feed("r0 load big begin").is_none());
@@ -1301,14 +1223,12 @@ mod tests {
         let load = Cmd::Load { id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
         prepare(load, &catalog).expect("the program lowers");
         let mut p = LineParser::new(catalog);
-        let got = feed_all(&mut p, &["r0 feed g roots 1", "r1 feed g::edges 1 val=2", "r2 feed g 1 1", "r3 feed g::e 1", "r4 bind g::reach g::roots", "r5 unbind g::reach g roots"]);
+        let got = feed_all(&mut p, &["r0 feed g roots 1", "r1 feed g::edges 1 val=2", "r2 feed g 1 1", "r3 feed g::e 1"]);
         let named = |input: &InputId, name: &str| *input == InputId::Name(name.into());
         assert!(matches!(&got[0].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "roots")), "{:?}", got[0]);
         assert!(matches!(&got[1].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "edges")), "{:?}", got[1]);
         assert!(matches!(&got[2].1, Ok(Cmd::Feed { input: InputId::Position(1), .. })), "{:?}", got[2]);
         assert!(matches!(&got[3].1, Err(e) if e.contains("no input named \"e\"")), "{:?}", got[3]);
-        assert!(matches!(&got[4].1, Ok(Cmd::Bind { trace, prog, input }) if trace == "g::reach" && prog == "g" && named(input, "roots")), "{:?}", got[4]);
-        assert!(matches!(&got[5].1, Ok(Cmd::Unbind { input, .. }) if named(input, "roots")), "{:?}", got[5]);
     }
 
     /// A load binds an input to a published trace: the input becomes an import of it, and is no

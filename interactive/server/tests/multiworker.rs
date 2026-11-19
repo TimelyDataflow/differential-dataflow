@@ -234,7 +234,7 @@ fn assert_commands_replay() {
         "r10",
         "r10 load counted begin\nlet rows = input 0 : ((int), ());\noutput \"counted\" = rows;\nr10 end-load\n",
     );
-    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
+    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 begin\n0\n1\n2\n3\n4\nr11 end-feed\n");
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
     let rows = request(&mut writer, &mut reader, "r13", "r13 peek counted::counted as corgi\n");
     assert_eq!(
@@ -640,7 +640,6 @@ fn refused_loads_do_not_redirect_named_inputs() {
     let refused = framed(&mut writer, &mut reader, "l2", &format!("l2 load g begin\n{}\nl2 end-load\n", program("b", "a")), &[]);
     assert!(matches!(&refused, Err(e) if e.contains("already installed")), "{refused:?}");
     request(&mut writer, &mut reader, "f", "f feed g a 7\n");
-    assert!(matches!(framed(&mut writer, &mut reader, "u", "u bind g::a g nope\n", &[]), Err(e) if e.contains("no input named \"nope\"")));
     request(&mut writer, &mut reader, "t", "t tick\n");
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek g::a\n"), ["tuple(7)"]);
     assert!(request(&mut writer, &mut reader, "q", "q peek g::b\n").is_empty());

@@ -301,7 +301,7 @@ fn reviewed_plan_pairs() {
             interactive::lambda::register(std::sync::Arc::new(Identity(corgi::Shape::Prod(vec![corgi::Shape::Int]))));
         }
         let text = fs::read_to_string(root.join(case.input)).unwrap();
-        let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
+        let source = |name: &str| catalog.get(name).cloned();
         let report = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
             plan::report_program(interactive::explain::explain(&program), &source, &Config::all())
@@ -372,7 +372,7 @@ fn all_pass_subsets() {
                 interactive::lambda::register(std::sync::Arc::new(Identity(corgi::Shape::Prod(vec![corgi::Shape::Int]))));
             }
             let text = fs::read_to_string(root.join(case.input)).unwrap();
-            let source = |name: &str| catalog.get(name).cloned().or_else(|| interactive::server::generated_shape(name));
+            let source = |name: &str| catalog.get(name).cloned();
             let report = if case.explain {
                 let p = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
                 plan::report_program(interactive::explain::explain(&p), &source, &config)

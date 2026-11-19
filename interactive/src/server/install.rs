@@ -9,11 +9,7 @@ impl Server {
     /// inputs are advanced to the current epoch so they are consistent with the
     /// traces they may already see.
     ///
-    /// A `Source::Trace` that names a *recipe* (e.g. `random:nodes=8,edges=12`)
-    /// is installed on demand if absent — generated sources are content-addressed,
-    /// so two importers of the same recipe share one source. Any other
-    /// unregistered import errors (install its producer first). Also errors if
-    /// the name is taken, empty, or contains `::`.
+    /// Diagnostic imports are installed on demand. Other imports need a published trace.
     pub fn install(
         &mut self,
         worker: &mut Worker,
@@ -57,37 +53,35 @@ impl Server {
                 ));
             }
         }
-        // Resolve trace imports against canonical names. A name that is not registered must be a
-        // generated source (`clock`, or a recipe such as `random:...`), installed on demand below.
-        // Everything is checked before anything is installed, so a rejected program leaves no trace.
-        let mut generated: Vec<String> = Vec::new();
+        // Validate every import before installing any diagnostic source.
+        let mut diagnostics = Vec::new();
         for imp in &prog.root.imports {
             if let st::Source::Trace(t) = &imp.from {
-                let key = canonical_source_name(t);
-                if let Some(output) = self.outputs.get(&key) {
+                let key = t;
+                if let Some(output) = self.outputs.get(key) {
                     if output.width > root_width {
                         return Err(format!("cannot import trace {key:?} of width {} into width {root_width}", output.width));
                     }
-                    if !output.since.less_equal(&as_of) || !self.traces.get_mut(&key).unwrap().get_logical_compaction().less_equal(&as_of) {
+                    if !output.since.less_equal(&as_of) || !self.traces.get_mut(key).unwrap().get_logical_compaction().less_equal(&as_of) {
                         return Err(format!("as-of {as_of:?} is before trace {key:?}'s compaction frontier"));
                     }
                 } else if !self.import_as_of().less_equal(&as_of) {
-                    return Err(format!("as-of {as_of:?} is before generated source {key:?}'s compaction frontier"));
+                    return Err(format!("as-of {as_of:?} is before diagnostic source {key:?}'s compaction frontier"));
                 }
-                if !self.is_published(&key) {
-                    if crate::diag::is_source(&key) && self.diagnostics.is_none() {
+                if !self.is_published(key) {
+                    if crate::diag::is_source(key) && self.diagnostics.is_none() {
                         return Err(format!(
                             "program {:?} imports {:?}, but diagnostics are off; start the server with DDIR_DIAGNOSTICS=1",
                             name, t
                         ));
                     }
-                    if key != "clock" && Recipe::parse(&key).is_none() && !crate::diag::is_source(&key) {
+                    if !crate::diag::is_source(key) {
                         return Err(format!(
                             "program {:?} imports unknown trace {:?}; install its producer first",
                             name, t
                         ));
                     }
-                    generated.push(key);
+                    diagnostics.push(key.clone());
                 }
             }
         }
@@ -104,18 +98,8 @@ impl Server {
         })).map_err(|_| format!("program {:?} panicked during preparation", name))?;
         let prog = &optimized;
         let (scope_shapes, export_shapes) = self.check_shapes(name, prog, root_width)?;
-        for key in generated {
-            if self.is_published(&key) {
-                continue; // imported twice
-            }
-            if key == "clock" {
-                self.install_clock(worker);
-            } else if crate::diag::is_source(&key) {
-                self.install_diagnostics(worker, &key);
-            } else {
-                let recipe = Recipe::parse(&key).expect("checked above");
-                self.install_generated(worker, &key, recipe);
-            }
+        for key in diagnostics {
+            if !self.is_published(&key) { self.install_diagnostics(worker, &key); }
         }
 
         let import_names: Vec<String> = prog
@@ -123,7 +107,7 @@ impl Server {
             .imports
             .iter()
             .filter_map(|imp| match &imp.from {
-                st::Source::Trace(t) => Some(canonical_source_name(t)),
+                st::Source::Trace(t) => Some(t.to_string()),
                 _ => None,
             })
             .collect();
@@ -170,8 +154,8 @@ impl Server {
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it, as
                             // of the program's start.
-                            let key = canonical_source_name(t);
-                            let trace = traces.get_mut(&key).expect("validated above");
+                            let key = t;
+                            let trace = traces.get_mut(key).expect("validated above");
                             debug_assert!(trace.get_logical_compaction().less_equal(&as_of), "an import as of {as_of:?}, before its trace's compaction frontier");
                             let arranged = trace.import(scope);
                             if arranged_imports {
@@ -235,7 +219,6 @@ impl Server {
                 root_width,
                 now,
                 origin: Origin::Program,
-                generators: HashMap::new(),
             },
         );
         Ok(())
