@@ -605,9 +605,12 @@ fn framed_feeds_on_three_workers() {
 fn planning_reads_live_exports_without_installing() {
     let (server, mut writer, mut reader) = start_server(2);
     request(&mut writer, &mut reader, "r0", "r0 load provider begin\noutput \"rows\" = input 0 : (int, int);\nr0 end-load\n");
+    request(&mut writer, &mut reader, "s", "s seal provider 0 8\n");
+    request(&mut writer, &mut reader, "t", "t trim provider::rows 7\n");
     let before = request(&mut writer, &mut reader, "before", "before list\n");
     let command = "p plan preview begin\noutput \"out\" = import \"provider::rows\" | distinct;\np end-plan\n";
     let plan = request(&mut writer, &mut reader, "p", command);
+    assert!(plan.iter().any(|line| line.contains("Imported histories advance to G = (7, [])")));
     assert!(plan.iter().any(|line| line.contains("reduce(")));
     assert!(!plan.iter().any(|line| line.contains("Unresolved import")));
     assert_eq!(plan, request(&mut writer, &mut reader, "p", command));
@@ -871,8 +874,6 @@ fn a_bound_consumer_follows_its_producer() {
     server.stop();
 }
 
-/// Each spin has to reply before the client can issue the next seal.
-/// start_server installs a read deadline, so waiting for that seal fails the test.
 #[test]
 fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
     let programs = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/server/programs");
@@ -902,6 +903,8 @@ fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
     }
 }
 
+/// Each spin has to reply before the client can issue the next seal.
+/// start_server installs a read deadline, so waiting for that seal fails the test.
 #[test]
 fn union_waits_only_for_commanded_progress() {
     let (server, mut writer, mut reader) = start_server(3);
@@ -962,8 +965,6 @@ fn union_waits_only_for_commanded_progress() {
     assert!(framed(&mut writer, &mut reader, "p", "p peek u::both as-of 12\n", &[]).is_err());
     assert!(framed(&mut writer, &mut reader, "t", "t trim u::both 12\n", &[]).is_err());
     assert!(framed(&mut writer, &mut reader, "w2", "w2 tail u::both\n", &[]).is_err());
-    // A legacy tick skips finished inputs and already released read holds.
-    request(&mut writer, &mut reader, "t", "t tick\n");
     drop(reader);
     drop(writer);
     server.stop();

@@ -16,14 +16,24 @@ impl Server {
 
     /// Install with this many root coordinates, starting at the imports’ read floors.
     pub fn install_with_width(&mut self, worker: &mut Worker, name: &str, prog: &st::Program, width: usize) -> Result<(), String> {
-        let mut as_of = host_time(0);
+        self.install_with_root(worker, name, prog, width, self.install_read_floor(prog))
+    }
+
+    /// Join the retained read floors of the program's imports. A new diagnostic
+    /// source starts at its next sample time. With no imports the floor is zero.
+    /// Installation separately validates that each named trace can be imported.
+    pub fn install_read_floor(&self, prog: &st::Program) -> HostTime {
+        let mut floor = host_time(0);
         for imp in &prog.root.imports {
-            if let st::Source::Trace(t) = &imp.from {
-                // A source that install creates on demand starts where the epoch is.
-                as_of = as_of.join(&self.trace_since(t).cloned().unwrap_or(self.import_as_of()));
+            if let st::Source::Trace(name) = &imp.from {
+                if let Some(since) = self.trace_since(name) {
+                    floor = floor.join(since);
+                } else if !self.is_published(name) && crate::diag::is_source(name) {
+                    floor = floor.join(&host_time(self.diagnostics_epoch));
+                }
             }
         }
-        self.install_with_root(worker, name, prog, width, as_of)
+        floor
     }
 
     /// Install with `root_width` root coordinates and an explicit import/read floor.
@@ -72,10 +82,7 @@ impl Server {
                     if !output.since.less_equal(&as_of) || !self.traces.get_mut(key).unwrap().get_logical_compaction().less_equal(&as_of) {
                         return Err(format!("as-of {} is before trace {key:?}'s compaction frontier", progress::coordinates(&as_of)));
                     }
-                } else if !self.import_as_of().less_equal(&as_of) {
-                    return Err(format!("as-of {} is before diagnostic source {key:?}'s compaction frontier", progress::coordinates(&as_of)));
-                }
-                if !self.is_published(key) {
+                } else {
                     if crate::diag::is_source(key) && self.diagnostics.is_none() {
                         return Err(format!(
                             "program {:?} imports {:?}, but diagnostics are off; start the server with DDIR_DIAGNOSTICS=1",
@@ -87,6 +94,9 @@ impl Server {
                             "program {:?} imports unknown trace {:?}; install its producer first",
                             name, t
                         ));
+                    }
+                    if !host_time(self.diagnostics_epoch).less_equal(&as_of) {
+                        return Err(format!("as-of {} is before diagnostic source {key:?}'s compaction frontier", progress::coordinates(&as_of)));
                     }
                     diagnostics.push(key.clone());
                 }
@@ -209,10 +219,9 @@ impl Server {
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
         }
-        let now = as_of.clone();
         let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
         for (pos, mut handle) in inputs {
-            handle.advance_to_point(&now);
+            handle.advance_to_point(&as_of);
             by_pos.insert(pos, handle);
         }
         self.programs.insert(
@@ -223,8 +232,6 @@ impl Server {
                 imports: import_names,
                 exports: export_names,
                 dataflow_id,
-                root_width,
-                now,
                 origin: Origin::Program,
             },
         );

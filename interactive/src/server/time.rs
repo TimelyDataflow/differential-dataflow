@@ -1,12 +1,12 @@
-//! The client-facing epoch and the single timestamp used by every host dataflow.
+//! Scalar client times and the timestamp used by host dataflows.
 
 use super::*;
 
-/// The host epoch: the server's clock, which `tick` advances.
+/// A point on a scalar input or output.
 pub type OuterTime = u64;
 
 /// The time programs and published traces run at: the first `k` coordinates are the root,
-/// followed by one per loop. The legacy epoch API uses `k = 1`. Trailing zeros are trimmed.
+/// followed by one per loop. Scalar inputs use `k = 1`. Trailing zeros are trimmed.
 pub type HostTime = crate::ir::Time;
 
 /// Epoch `e` as a program time, with trailing zeros trimmed.

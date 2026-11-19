@@ -24,7 +24,7 @@ impl CapabilityTrait<HostTime> for InputCapabilities {
     }
 }
 
-/// The number of rows an input converts to columns at once, and a generator emits at once.
+/// The number of rows an input converts to columns at once.
 pub(super) const COLUMN_BATCH: usize = 1 << 16;
 
 /// An installed program's positional `input N`, or a diagnostic source's: an input of corgi
@@ -69,11 +69,6 @@ impl ServerInput {
         }
     }
 
-    /// Hold the frontier at this epoch; dropping the input releases its capability.
-    pub(super) fn advance_to(&mut self, time: OuterTime) {
-        self.advance_to_point(&host_time(time));
-    }
-
     pub(super) fn frontier(&self) -> impl Iterator<Item = &HostTime> {
         self.capabilities.0.iter().map(|cap| cap.time())
     }
@@ -102,7 +97,7 @@ impl ServerInput {
 }
 
 impl Server {
-    /// Build a source's dataflow, one input arranged and published as trace `name` of `shape`, as
+    /// Build a diagnostic source's dataflow, one input arranged and published as trace `name` of `shape`, as
     /// corgi chunks. Returns the input, the dataflow's id, and the probe on its arrangement.
     pub(super) fn install_source(&mut self, worker: &mut Worker, name: &str, shape: RowShape) -> (ServerInput, usize, ProbeHandle<HostTime>) {
         let probe = ProbeHandle::new();
@@ -120,7 +115,7 @@ impl Server {
         self.traces.insert(name.to_string(), trace);
         let input = ServerInput::new(handle, shape.clone(), 1);
         self.shapes.insert(name.to_string(), shape);
-        self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), probe: probe.clone(), since: Antichain::from_elem(self.import_as_of()) });
+        self.outputs.insert(name.to_string(), Output { width: 1, owner: name.to_string(), probe: probe.clone(), since: Antichain::from_elem(host_time(self.diagnostics_epoch)) });
         (input, dataflow_id, probe)
     }
 }

@@ -1,4 +1,4 @@
-//! Per-input point capabilities and per-export progress. Program clocks are convenience only.
+//! Per-input write capabilities, per-export progress and read floors.
 
 use super::*;
 
@@ -20,11 +20,6 @@ pub(super) fn caught_up(probe: &ProbeHandle<HostTime>, point: &HostTime) -> bool
 }
 
 impl Server {
-    /// The default point for this program's next bulk advance.
-    pub fn now(&self, prog: &str) -> Result<&HostTime, String> {
-        Ok(&self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?.now)
-    }
-
     fn input(&self, prog: &str, input: usize) -> Result<&ServerInput, String> {
         let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
         installed.inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))
@@ -33,11 +28,6 @@ impl Server {
     /// All minimal times at which the input can still write. Empty means finished.
     pub fn write_frontier(&self, prog: &str, input: usize) -> Result<Antichain<HostTime>, String> {
         Ok(self.input(prog, input)?.frontier().cloned().collect())
-    }
-
-    /// Legacy singleton accessor for callers using point inputs.
-    pub fn input_frontier(&self, prog: &str, input: usize) -> Result<&HostTime, String> {
-        self.input_time(prog, input)
     }
 
     /// The time chosen by time=now. Incomparable capabilities require an explicit time.
@@ -92,39 +82,6 @@ impl Server {
         Ok(())
     }
 
-    /// Advance every input of one program, then wait for each of its outputs. Each input
-    /// must accept the point; a rejected advance changes nothing. Waits for the frontier
-    /// of local and imported inputs; imports are advanced separately. Keeps one system
-    /// epoch of history, all other coordinates.
-    pub fn advance_to(&mut self, worker: &mut Worker, prog: &str, point: &HostTime) -> Result<(), String> {
-        let name = prog.to_string();
-        let installed = self.programs.get(&name).ok_or_else(|| format!("no program {prog:?}"))?;
-        if point.len() > installed.root_width || !installed.now.less_equal(point) {
-            return Err(format!("invalid advance from {} to {}", coordinates(&installed.now), coordinates(point)));
-        }
-        let inputs: Vec<_> = installed.inputs.keys().copied().collect();
-        let exports = installed.exports.clone();
-        for &input in &inputs {
-            let frontier = self.write_frontier(&name, input)?;
-            if !frontier.less_equal(point) {
-                return Err(format!("cannot advance input {name:?}/{input} from frontier {} to requested target {}", frontier_text(frontier.iter()), coordinates(point)));
-            }
-            self.validate_feed(&name, input, point)?;
-        }
-        for input in inputs { self.advance_input(&name, input, point)?; }
-        self.programs.get_mut(&name).unwrap().now = point.clone();
-        let mut frontier = Antichain::new();
-        self.collect_frontier(&name, &mut std::collections::HashSet::new(), &mut frontier);
-        for export in exports {
-            self.wait_for_frontier(worker, &export, &frontier)?;
-            if let Some(floor) = self.trace_since(&export) {
-                let since = floor.join(&host_time(point.get(0).copied().unwrap_or(0).saturating_sub(1)));
-                self.compact(&export, &since)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Wait for an output to reach an antichain frontier. A widened import may remain
     /// at [s, 0] while a local input is at [s-1, e]; neither point subsumes the other.
     pub fn wait_for_frontier(&self, worker: &mut Worker, trace: &str, frontier: &Antichain<HostTime>) -> Result<(), String> {
@@ -141,14 +98,6 @@ impl Server {
         let installed = &self.programs[prog];
         for time in installed.inputs.values().flat_map(|input| input.frontier()) { frontier.insert(time.clone()); }
         for trace in &installed.imports { self.collect_frontier(&self.outputs[trace].owner, seen, frontier); }
-    }
-
-    /// Program tick: advance coordinate zero by one using per-input advances and output waits.
-    pub fn tick_program(&mut self, worker: &mut Worker, prog: &str) -> Result<(), String> {
-        let mut next = self.now(prog)?.to_vec();
-        if next.is_empty() { next.push(0); }
-        next[0] = next[0].checked_add(1).ok_or("epoch overflow")?;
-        self.advance_to(worker, prog, &HostTime::new(next.into()))
     }
 
     /// Discard distinctions before this point in one published trace. Collective and monotone.

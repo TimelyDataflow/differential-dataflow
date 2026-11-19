@@ -1,5 +1,5 @@
 //! Wiring the `diag.*` sources (see `crate::diag`): turning them on, noting which dataflow runs
-//! which program, and feeding them at each `tick`.
+//! which program, and feeding them at each sample.
 
 use super::*;
 
@@ -48,15 +48,14 @@ impl Server {
         self.process_diagnostics(worker);
         self.feed_diagnostics(self.diagnostics_epoch);
         for source in self.programs.values_mut().filter(|p| p.origin == Origin::Diagnostics) {
-            source.inputs.get_mut(&0).expect("diagnostic source input").advance_to(next);
-            source.now = host_time(next);
+            source.inputs.get_mut(&0).expect("diagnostic source input").advance_to_point(&host_time(next));
         }
         self.diagnostics_epoch = next;
         Ok(next)
     }
 
     /// Install diagnostics source `name` (see [`crate::diag`]): published like any source, fed by
-    /// each worker from its own logging at every `tick`. A source installed after others are
+    /// each worker from its own logging at each sample. A source installed after others are
     /// running starts from the whole of what it describes now: the installed sources first take
     /// the changes pending for them, so nothing is counted twice.
     pub(super) fn install_diagnostics(&mut self, worker: &mut Worker, name: &str) {
@@ -68,7 +67,7 @@ impl Server {
         if let Some(rows) = seed {
             input.give_columns(rows, self.diagnostics_epoch).expect("diagnostics rows have their source's shape");
         }
-        input.advance_to(self.diagnostics_epoch);
+        input.advance_to_point(&host_time(self.diagnostics_epoch));
 
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
@@ -80,8 +79,6 @@ impl Server {
                 imports: Vec::new(),
                 exports: vec![name.to_string()],
                 dataflow_id,
-                root_width: 1,
-                now: host_time(self.diagnostics_epoch),
                 origin: Origin::Diagnostics,
             },
         );

@@ -4,11 +4,11 @@ use super::*;
 use timely::PartialOrder;
 
 impl Server {
-    /// This worker's share of a width-one trace, consolidated as of the current epoch, read
+    /// This worker's share of a width-one trace, consolidated at its latest readable point, read
     /// from its batches without a dataflow. Uses the same read checks as [`Server::snapshot`].
     pub(crate) fn snapshot_local(&self, name: &str) -> Result<Updates, String> {
         use differential_dataflow::trace::TraceReader;
-        let point = self.latest(name)?;
+        let point = self.latest_readable(name)?;
         let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &self.shapes[name])); };
         self.readable(name, &point)?;
         let output = &self.outputs[name];
@@ -30,8 +30,8 @@ impl Server {
     /// Return the consolidated closed-past contents of a trace on worker 0, as columns.
     ///
     /// Builds a transient dataflow that imports the trace, **sends every
-    /// container whole to worker 0**, and consolidates them as of the current
-    /// epoch — so the result is the complete contents even when the trace is
+    /// container whole to worker 0**, and consolidates them at the latest readable
+    /// point — so the result is the complete contents even when the trace is
     /// sharded across workers, not each worker's slice, in key-then-value order.
     /// The other workers get no updates. The dataflow is dropped as soon as it
     /// has drained. Filtering and rendering are the caller's.
@@ -42,7 +42,7 @@ impl Server {
         worker: &mut Worker,
         name: &str,
     ) -> Result<Updates, String> {
-        match self.latest(name)? {
+        match self.latest_readable(name)? {
             Some(point) => self.snapshot_as_of(worker, name, &point),
             None => Ok(Updates::consolidate(Vec::new(), &self.shapes[name])),
         }
@@ -91,17 +91,8 @@ impl Server {
         Ok(Updates::consolidate(parts, &shape))
     }
 
-    fn latest(&self, name: &str) -> Result<Option<HostTime>, String> {
-        let requested = self.outputs.get(name).map_or(0, |o| self.programs[&o.owner].now.first().copied().unwrap_or(0));
-        self.latest_at(name, requested)
-    }
-
     /// Most recent complete, retained scalar point under the commanded input frontiers.
     pub fn latest_readable(&self, name: &str) -> Result<Option<HostTime>, String> {
-        self.latest_at(name, 0)
-    }
-
-    fn latest_at(&self, name: &str, requested: u64) -> Result<Option<HostTime>, String> {
         let output = self.outputs.get(name).ok_or_else(|| format!("no trace {name:?}"))?;
         if output.since.is_empty() { return Err(format!("trace {name:?} has released its history")); }
         if output.width > 1 {
@@ -111,9 +102,6 @@ impl Server {
         let Some(epoch) = frontier.elements().first().map(|t| t.get(0).copied().unwrap_or(0)) else {
             return Ok(Some(host_time(OuterTime::MAX)));
         };
-        // A program-wide advance can request a cut still held open by an import.
-        // Keep reporting that incomplete cut to callers of the legacy bulk API.
-        let epoch = epoch.max(requested);
         if epoch == 0 { return Ok(None); }
         // A program that imports other traces starts where they are read from, and has
         // nothing complete to read until its own inputs have moved past that.

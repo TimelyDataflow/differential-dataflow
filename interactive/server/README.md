@@ -19,7 +19,7 @@ For a first session, load a program, feed timestamped updates, seal the contribu
 | `peek P::OUT [KEY] [as-of T]` | Return a consolidated snapshot of the updates through T, optionally filtered to one key. T must be complete and retained. A successful read replies `ok as-of=T`, even for zero rows. A default scalar peek selects the latest complete retained time, or reports `err` if none exists. After all contributing inputs finish, a default scalar peek reads at `18446744073709551615` (the largest scalar timestamp). The returned point can be supplied to another peek. Multidimensional outputs require a point. |
 | `tail P::OUT` | Subscribe to a scalar output. Replay starts at its retained read floor and continues with timestamped changes, including retractions. Use `as corgi` for binary data and progress frames. |
 | `stop ID` | Cancel the tail started under request ID on this connection. |
-| `trim P::OUT T` | Seal the contributing inputs first so T is at or before every point of the output’s commanded write frontier. The server waits for this output to reach T, then releases reads before T. Existing importers retain independent holds. `[]` releases all future reads through this handle. |
+| `trim P::OUT T` | The floor T must be at or before every point of the output’s commanded write frontier. Seal the contributing inputs first. While a narrower import is open, the wider program sees zeros in the coordinates absent from that import, so the floor can advance only in coordinates the import shares. The server waits for this output to reach T, then releases reads before T. Existing importers retain independent holds. `[]` releases all future reads through this handle. |
 | `feed P I time=T from SOURCE [diff=D]` | Stamp the file rows or latest complete scalar trace snapshot with destination time T. T can be a product point. |
 | `feed P I time=now …` | Stage an untimed row, batch, zero-lane frame, or `from SOURCE` load at the input’s sole frontier element. With zero or multiple capabilities there is no unique write time and the command fails. |
 
@@ -36,6 +36,7 @@ A write frontier is the set of minimal times at which future writes are possible
 | `load P from PATH` or `load P [width=N] begin` | Install a program and publish its outputs under `P::OUT`. Both forms accept options. Width defaults to one. Inputs start at zero or the join of their imports’ read floors. `I=TRACE` at load time wires an input directly to a published trace and preserves its times. |
 | `plan P from PATH` or `plan P begin` | Inspect the preparation stages using the live catalog. The program name labels the report only. |
 | `list` | Show installed programs, imports and exports. |
+| `diag` | Sample the worker logs and advance the diagnostic inputs. Requires diagnostics to be enabled. |
 | `drop P` | Remove a program and its outputs. Release dependent imports and tails first. |
 | `exit` | Close the client session. On stdin this also shuts down the server. |
 
@@ -48,7 +49,7 @@ A write frontier is the set of minimal times at which future writes are possible
 | Release old snapshots | `trim` each output to its desired read floor. |
 | Sample diagnostics | With diagnostics enabled, `diag` samples worker logs and advances only diagnostic inputs. Peek at the resulting diagnostic views directly. |
 
-`tick diagnostics` is also accepted as `diag`. Global `tick` and omitted feed times remain available during migration. An omitted time uses the input’s sole frontier element.
+Every feed supplies its update times, either in the rows or on the header. Write `time=now` to use the input’s sole frontier element.
 
 ## Running the server
 
@@ -131,9 +132,8 @@ Add `--timings` as `plan <name> from <path> --timings` or
 call/change counts, and fixed-point rounds. Timings are a display option;
 ordinary plan replies remain deterministic.
 
-Planning always enables projection, assumes arranged imports, and uses the
-fixed placeholder as-of time `(1, [])` for epoch 2. These assumptions are printed;
-they do not change the server's settings or current time. Reports are not yet
+Planning uses the configured passes, assumes arranged imports, and derives its scalar
+as-of point from the read floors of the program’s imports, just as a scalar install does. Reports are not yet
 parseable DDP. Command-line load bindings and the explain transform are not
 options of `plan`. The report prints compiled lambda graphs.
 The command does not run the optional generated-row checks.

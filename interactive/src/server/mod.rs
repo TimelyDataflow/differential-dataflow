@@ -34,16 +34,12 @@
 //!   publishing its exports. The dataflow's id (`next_dataflow_index`) is kept
 //!   for teardown.
 //! - **feed** stages updates, as text read at the input's declared shapes or
-//!   as columns, at a chosen time (default: the input’s frontier), so inputs can
+//!   as columns, at a chosen time or explicitly at the input’s singleton frontier. Updates can
 //!   be scheduled into the future.
 //! - **load** fills an input from a file or a published trace.
-//! - **tick** advances all inputs to the next epoch, runs to quiescence, then
-//!   lets every trace compact (an importer's own handle holds the shared
-//!   `TraceBox` back to what it still needs).
 //! - **seal** moves one input’s write frontier or finishes the input.
 //! - **spin** waits for each export to reach its commanded write frontier.
 //! - **trim** releases readable history on one output.
-//! - **tick** is the deprecated global scalar clock used by demos.
 //! - **drop** evicts a program — gated on its published traces having no live
 //!   importer — and calls `worker.drop_dataflow`, which removes the operators
 //!   outright and frees their state immediately. The gate is what makes that
@@ -52,7 +48,7 @@
 //! # Layout
 //!
 //! This file holds the registry: [`Server`] and what it keeps per program, [`Command`], the
-//! published-trace handle [`Published`], and the lifecycle's ends, `tick` and `drop_program`.
+//! published-trace handle [`Published`], and program teardown ([`Server::drop_program`]).
 //! The rest is one file per concern, each adding methods to [`Server`]:
 //!
 //! - `time`: scalar and product timestamps ([`OuterTime`], [`HostTime`], [`host_dataflow`]);
@@ -107,8 +103,8 @@ pub fn output_name(program: &str, output: &str) -> String {
 pub struct Published(pub crate::backend::corgi::ExportTrace);
 
 impl Published {
-    /// Import into `scope` as containers, one per chunk of each batch, read as of `as_of` (see
-    /// [`Server::import_as_of`]), with the import's shutdown button. Each worker reads its own
+    /// Import into `scope` as containers, one per chunk of each batch, read as of `as_of`
+    /// (see [`Server::install_read_floor`]), with the import's shutdown button. Each worker reads its own
     /// share.
     pub fn import_containers<'s>(
         &mut self,
@@ -135,7 +131,7 @@ pub type HostContainer = crate::runtime::container::CorgiContainer<HostTime, Dif
 #[derive(Clone, Copy, PartialEq)]
 enum Origin {
     Program,
-    /// A `diag.*` source, fed from the server's own logging at each `tick` (see [`crate::diag`]).
+    /// A `diag.*` source, fed from the server's own logging at each sample (see [`crate::diag`]).
     Diagnostics,
 }
 
@@ -222,8 +218,6 @@ pub enum Command {
     SampleDiagnostics,
     /// Release the output's history before this time.
     Trim { trace: String, frontier: Option<HostTime> },
-    /// Close `n` epochs, running to quiescence after each one.
-    Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
     /// Report the registry. The driver assembles it from [`Server::program_info`],
@@ -245,10 +239,6 @@ struct Installed {
     exports: Vec<String>,
     /// The timely dataflow id, used to `drop_dataflow` on teardown.
     dataflow_id: usize,
-    /// Number of root time coordinates declared by this program.
-    root_width: usize,
-    /// Default point used by program-wide advances.
-    now: HostTime,
     /// Distinguishes writable program inputs from diagnostic sources.
     origin: Origin,
 
@@ -293,8 +283,6 @@ pub struct Server {
     shapes: HashMap<String, RowShape>,
     /// Trace name -> number of installed programs importing it (the drop gate).
     importers: HashMap<String, usize>,
-    /// Compatibility clock for the width-1 API and diagnostic sources.
-    epoch: OuterTime,
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
     arranged_imports: bool,
@@ -307,7 +295,7 @@ pub struct Server {
 }
 
 impl Server {
-    /// A fresh server with the host clock at epoch 0.
+    /// A fresh server with no installed programs.
     pub fn new() -> Self {
         Server {
             outputs: HashMap::new(),
@@ -317,7 +305,6 @@ impl Server {
             programs: HashMap::new(),
             shapes: HashMap::new(),
             importers: HashMap::new(),
-            epoch: 0,
             arranged_imports: true,
             passes: crate::passes::Config::default(),
             diagnostics_epoch: 0,
@@ -325,23 +312,6 @@ impl Server {
         }
     }
 
-    /// The current epoch (the open host time).
-    pub fn epoch(&self) -> OuterTime {
-        self.epoch
-    }
-
-    /// The time a program installed now, or a snapshot or tail started now, reads the
-    /// published traces it imports as of: the epoch before the current one, as a program time.
-    ///
-    /// [`Server::tick`] compacts every published trace to it, so their accumulations are correct
-    /// from it on; before it a trace's batches can hold counts no time had (a retraction advanced
-    /// to it beside the insertion it retracts), on which an iterative scope need not converge.
-    /// Every import advances the times it reads to it, as DD's `import_frontier` reads a trace.
-    pub fn import_as_of(&self) -> HostTime {
-        host_time(self.epoch.saturating_sub(1))
-    }
-
-    /// Whether `name` (canonical) is published.
     fn is_published(&self, name: &str) -> bool {
         self.traces.contains_key(name)
     }
@@ -490,50 +460,6 @@ impl Server {
         Ok(())
     }
 
-    /// Close the current epoch: advance every input to the next epoch, step the
-    /// worker until all exports have caught up, then let every trace compact.
-    /// Deprecated global scalar shortcut. New applications use seal, spin and trim.
-    pub fn tick(&mut self, worker: &mut Worker) {
-        let cur = self.epoch;
-        let next = cur + 1;
-        // Diagnostics of everything since the last tick enter at the epoch being closed.
-        if self.diagnostics.is_some() { self.sample_diagnostics(worker).expect("diagnostic clock overflow"); }
-        for installed in self.programs.values_mut().filter(|p| p.root_width == 1 && p.origin != Origin::Diagnostics) {
-            installed.now = installed.now.join(&host_time(next));
-            for handle in installed.inputs.values_mut() {
-                if let Some(time) = handle.time() { handle.advance_to_point(&time.join(&host_time(next))); }
-            }
-        }
-        self.epoch = next;
-
-        // Drain every scalar output through the closed epoch.
-        let epoch = self.epoch;
-        while self.outputs.values().filter(|o| o.width == 1).any(|o| !progress::caught_up(&o.probe, &host_time(epoch)))
-        {
-            // Remote data or progress wakes idle workers; do not busy-poll.
-            worker.step_or_park(None);
-        }
-
-        // Allow every published trace to compact up to the previous epoch. This
-        // is safe even while another program is importing the trace: each
-        // importer is a separate `TraceAgent` whose contribution holds the shared
-        // `TraceBox` compaction back to what it still needs (the meet across all
-        // handles), so the trace only sheds history no live reader requires.
-        //
-        // We hold one epoch back (`epoch - 1`, not `epoch`): `peek` reconstructs
-        // its snapshot from the closed past (`t < epoch`), so the trace must
-        // still distinguish times up to `epoch - 1`. Compacting to `[epoch]`
-        // would let a batch merge advance that closed-past history forward onto
-        // `epoch`, sliding it out of peek's window and leaving peek with only the
-        // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
-        // tick only runs at epoch >= 1.)
-        let names: Vec<_> = self.outputs.iter().filter(|(_, o)| o.width == 1).map(|(n, _)| n.clone()).collect();
-        for name in names {
-            if let Some(floor) = self.trace_since(&name) {
-                self.compact(&name, &floor.join(&self.import_as_of())).expect("monotone legacy compaction");
-            }
-        }
-    }
 }
 
 impl Default for Server {

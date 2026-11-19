@@ -156,8 +156,6 @@ pub enum Cmd {
     /// Sample and advance only diagnostic inputs.
     SampleDiagnostics,
     Trim { trace: String, frontier: Option<HostTime> },
-    /// Advance ambient time by `n` (default 1).
-    Tick { n: u64 },
     /// End the session.
     Exit,
 }
@@ -268,7 +266,6 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         Cmd::Trim { trace, frontier } => ServerCommand::Trim { trace, frontier },
         Cmd::Spin => ServerCommand::Spin,
         Cmd::SampleDiagnostics => ServerCommand::SampleDiagnostics,
-        Cmd::Tick { n } => ServerCommand::Tick { n },
         Cmd::Exit => ServerCommand::Exit,
     };
     Ok(PreparedCommand::Server(command))
@@ -276,6 +273,8 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
 
 /// Minimal row times for the whole frame. In two dimensions, sorting by x (then y)
 /// means a point is minimal exactly when its y is smaller than all preceding y's.
+/// With three or more coordinates, each row is inserted into an antichain.
+/// For N mutually incomparable row times, this takes O(N²) point comparisons.
 fn least_times(lanes: &[Vec<u64>], rows: usize) -> Vec<HostTime> {
     match lanes {
         [] if rows == 0 => Vec::new(),
@@ -356,7 +355,7 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed",
+    "load", "plan", "drop", "list", "peek", "tail", "stop", "exit", "feed",
     "seal", "trim", "spin", "diag",
 ];
 
@@ -503,7 +502,6 @@ impl LineParser {
                     }
                     Ok(())
                 }
-                (BatchTime::PerRow, None) if row == 1 => { pending.time = BatchTime::Shared(None); Ok(()) }
                 (BatchTime::PerRow, None) => Err("supply time=T on every row or on the batch header".into()),
                 (BatchTime::Shared(_), Some(_)) => Err("time= already supplied on the batch header".into()),
             });
@@ -568,7 +566,7 @@ impl LineParser {
         let mut toks = trimmed.split_whitespace();
         let first = toks.next()?;
         // If the line starts with a known command, mint a reqid so the
-        // user can type bare `list`, `tick 5`, `peek foo` without a
+        // user can type bare `list`, `spin`, `peek foo` without a
         // hand-rolled tag. The minted reqid is echoed in the response
         // so it can still be used with e.g. `stop <reqid>`.
         let (reqid, cmd) = if COMMAND_KEYWORDS.contains(&first) {
@@ -657,7 +655,7 @@ impl LineParser {
         Some((frame.reqid, columns.and_then(|(columns, times)| match (frame.time, times.is_empty()) {
             (BatchTime::PerRow, false) => Ok(Cmd::FeedTimed { prog, input, columns, times }),
             (BatchTime::Shared(time), true) => Ok(Cmd::FeedColumns { prog, input, columns, time }),
-            (BatchTime::PerRow, true) => Ok(Cmd::FeedColumns { prog, input, columns, time: None }),
+            (BatchTime::PerRow, true) => Err("feed: a frame without time lanes requires time=T or time=now on its header".into()),
             (BatchTime::Shared(_), false) => Err("feed: a frame with time lanes already supplies per-row times; omit the header time".into()),
         })))
     }
@@ -844,7 +842,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             if let [prog, input, "from", source, rest @ ..] = args {
                 let time = match time {
                     BatchTime::Shared(point) => point,
-                    BatchTime::PerRow => None, // Legacy source loads omit time=now.
+                    BatchTime::PerRow => return ParseOutcome::Err("feed from a source requires time=T or time=now".into()),
                 };
                 let diff = match rest {
                     [] => Ok(1),
@@ -895,7 +893,9 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     return ParseOutcome::Err(format!("feed: unrecognized argument {:?}", tok));
                 }
             }
-            let time = match time { BatchTime::Shared(point) => point, BatchTime::PerRow => None };
+            let BatchTime::Shared(time) = time else {
+                return ParseOutcome::Err("feed: a row requires time=T or time=now".into());
+            };
             let mut row = match catalog.decoder(&prog, &input) {
                 Ok(row) => row,
                 Err(e) => return ParseOutcome::Err(format!("feed: {e}")),
@@ -962,15 +962,6 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             _ => ParseOutcome::Err("spin: expected no arguments".into()),
         },
         "diag" if args.is_empty() => ParseOutcome::Cmd(Cmd::SampleDiagnostics),
-        "tick" => match args {
-            ["diagnostics"] => ParseOutcome::Cmd(Cmd::SampleDiagnostics),
-            [] => ParseOutcome::Cmd(Cmd::Tick { n: 1 }),
-            [n] => match n.parse::<u64>() {
-                Ok(n) => ParseOutcome::Cmd(Cmd::Tick { n }),
-                Err(_) => ParseOutcome::Err(format!("tick: bad count {:?}", n)),
-            },
-            _ => ParseOutcome::Err("tick: expected `[n]`".into()),
-        },
         "exit" => ParseOutcome::Cmd(Cmd::Exit),
         other => ParseOutcome::Err(format!("unknown command {:?}", other)),
     }
@@ -1040,6 +1031,39 @@ mod tests {
         assert_eq!(p.frame_bytes(), Some((64, false)));
         assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
         assert!(matches!(feed_all(&mut p, &["r7 feed world 0 time=now frame x"])[..], [(_, Err(_))]));
+    }
+
+    #[test]
+    fn diagnostics_have_their_own_command() {
+        let mut p = world();
+        assert!(matches!(p.feed("diag"), Some((_, Ok(Cmd::SampleDiagnostics)))));
+        for command in ["r tick", "r tick 3", "r tick diagnostics", "r diag extra"] {
+            assert!(matches!(p.feed(command), Some((_, Err(_)))), "{command}");
+        }
+    }
+
+    #[test]
+    fn feeds_require_a_shared_time_or_per_row_times() {
+        let mut p = world();
+        let records = feed_all(&mut p, &[
+            "r1 feed world 0 1,2",
+            "r2 feed world 0 begin", "1,2", "2,3 time=2", "end-feed",
+            "r3 feed world 0 begin", "1,2 time=2", "2,3", "end-feed",
+            "r4 feed world 0 from rows.txt", "r5 list",
+        ]);
+        assert_eq!(records.len(), 5);
+        assert!(records[0].1.as_ref().unwrap_err().contains("requires time=T"));
+        assert!(records[1].1.as_ref().unwrap_err().contains("row 1"));
+        assert!(records[2].1.as_ref().unwrap_err().contains("row 2"));
+        assert!(records[3].1.as_ref().unwrap_err().contains("requires time=T or time=now"));
+        assert!(matches!(records[4].1, Ok(Cmd::List)));
+
+        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        rows.push("tuple(1,2)", None, 1).unwrap();
+        let bytes = interactive::runtime::frame::encode(&rows.finish(), &[]);
+        assert!(p.feed(&format!("r6 feed world 0 frame {}", bytes.len())).is_none());
+        assert!(p.frame(&bytes).unwrap().1.unwrap_err().contains("without time lanes"));
+        assert!(matches!(p.feed("r7 list"), Some((_, Ok(Cmd::List)))));
     }
 
     /// A frame with a time lane, as a binary tail sends, is a timed batch: its updates, each at its own

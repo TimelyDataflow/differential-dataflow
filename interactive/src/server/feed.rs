@@ -10,8 +10,8 @@ impl Server {
     /// shapes as a feed reads them ([`crate::runtime::feed`]); blank lines and `#` comments are
     /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once the
     /// output's write frontier advances past `time`.
-    pub fn feed(&mut self, prog: &str, input: usize, rows: &str, time: impl Into<Option<OuterTime>>) -> Result<(), String> {
-        match time.into() { Some(t) => self.feed_at(prog, input, rows, &host_time(t)), None => self.feed_now(prog, input, rows) }
+    pub fn feed(&mut self, prog: &str, input: usize, rows: &str, time: OuterTime) -> Result<(), String> {
+        self.feed_at(prog, input, rows, &host_time(time))
     }
 
     /// Convenience for an open input with a single write capability.
@@ -36,8 +36,8 @@ impl Server {
     /// Stage rows already read into columns at `time`, each with
     /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
     /// otherwise.
-    pub fn feed_columns(&mut self, prog: &str, input: usize, columns: Updates, time: impl Into<Option<OuterTime>>) -> Result<(), String> {
-        match time.into() { Some(t) => self.feed_columns_at(prog, input, columns, &host_time(t)), None => self.feed_columns_now(prog, input, columns) }
+    pub fn feed_columns(&mut self, prog: &str, input: usize, columns: Updates, time: OuterTime) -> Result<(), String> {
+        self.feed_columns_at(prog, input, columns, &host_time(time))
     }
 
     /// Convenience for an open input with a single write capability.
@@ -169,7 +169,7 @@ impl Server {
     }
 
     /// [`Server::load`] from published trace `source`: this worker's share of its contents
-    /// before the current epoch, scaled by `diff`, into its own handle for `prog`'s `input`.
+    /// at its latest readable point, scaled by `diff`, into its own handle for `prog`'s `input`.
     fn load_trace(&mut self, prog: &str, input: usize, source: &str, diff: Diff, time: &HostTime) -> Result<u64, String> {
         let name = source;
         let declared = &self.programs[prog].inputs[&input].shape;

@@ -41,7 +41,7 @@ pub struct Stage {
 }
 
 /// Parse, lower, and run the passes `passes` switches on, as install would, without installing.
-/// `source` supplies published and generated trace shapes; a declaration alone does not resolve an import.
+/// `source` supplies published trace shapes; a declaration alone does not resolve an import.
 /// Lambdas use the same registered functions as the DDP parser. The default as-of is
 /// zero, matching a fresh server; use `report_at` for a different import frontier.
 pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
@@ -50,6 +50,16 @@ pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Co
 
 /// Plan with an explicit root as-of time, extended by zero lanes in nested scopes.
 pub fn report_at(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config, as_of: u64) -> Result<Report, String> {
+    report_with_read_floor(text, source, passes, |_| as_of)
+}
+
+/// Plan a scalar program at the read floor supplied for its imports.
+pub fn report_with_read_floor(
+    text: &str,
+    source: &dyn Fn(&str) -> Option<RowShape>,
+    passes: &Config,
+    read_floor: impl FnOnce(&Program) -> u64,
+) -> Result<Report, String> {
     caught_report(|| {
         let start = Instant::now();
         let parsed = crate::parse::pipe::parse(text);
@@ -63,6 +73,7 @@ pub fn report_at(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: 
         let context = ddp::Context::new(text);
         let mut context_time = Measurement::default();
         context_time.record(start.elapsed(), 0);
+        let as_of = read_floor(&program);
         let mut report = build_report(program, context, source, passes, as_of)?;
         report.parsing = parsing;
         report.timings.lowering = lowering;

@@ -7,7 +7,6 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
 use interactive::runtime::container::Updates;
@@ -107,7 +106,7 @@ pub fn run_worker(
     events: Option<Receiver<ControlEvent>>,
 ) {
     // With DDIR_DIAGNOSTICS=1 diagnostics own the worker's loggers, registered before any dataflow
-    // is built so that every operator is seen. Their events are only folded in at `tick`, so an
+    // is built so that every operator is seen. Their events are only folded in at `diag`, so an
     // idle server stays idle.
     let diagnostics = (std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1"))
         .then(|| interactive::diag::register(worker));
@@ -373,18 +372,10 @@ fn dispatch(
                             format!("trace name={:?} importers={}", name, importers),
                         );
                     }
-
                 }
-                Ok(format!("t={}", server.epoch()))
+                Ok(String::new())
             }
             ServerCommand::SampleDiagnostics => server.sample_diagnostics(worker).map(|t| format!("diagnostics t={t}")),
-            ServerCommand::Tick { n } => {
-                let timer = Instant::now();
-                for _ in 0..n {
-                    tick(server, tails, worker);
-                }
-                Ok(format!("t={} elapsed={:.2?}", server.epoch(), timer.elapsed()))
-            }
             ServerCommand::Exit => {
                 *shutdown = connection_id == 0;
                 Ok("bye".into())
@@ -394,7 +385,10 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.epoch().saturating_sub(1)).and_then(|report| {
+                interactive::plan::report_with_read_floor(
+                    &program, &|trace| server.source_shape(trace), &server.passes(),
+                    |program| server.install_read_floor(program).first().copied().unwrap_or(0),
+                ).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() })
                     })).map_err(|_| "plan printing panicked".to_string())?;
@@ -587,11 +581,6 @@ fn start_tail(
     Ok(())
 }
 
-fn tick(server: &mut Server, tails: &mut HashMap<TailKey, Tail>, worker: &mut Worker) {
-    server.tick(worker);
-    settle_tails(server, tails, worker);
-}
-
 /// Whether a reader's `probe` has yet to reach `target`, the frontier of the trace it reads.
 fn behind(probe: &ProbeHandle<HostTime>, target: &timely::progress::Antichain<HostTime>) -> bool {
     probe.with_frontier(|frontier| frontier.iter().any(|time| !target.less_equal(time)))
@@ -599,7 +588,7 @@ fn behind(probe: &ProbeHandle<HostTime>, target: &timely::progress::Antichain<Ho
 
 /// Run until every tail has sent the changes that the commands so far have made to its trace:
 /// those before the meet of its input frontiers.
-/// A `tick` or `spin` waits for this delivery; `seal` only moves its input.
+/// `spin` waits for this delivery. A seal only moves its input.
 fn settle_tails(server: &Server, tails: &HashMap<TailKey, Tail>, worker: &mut Worker) {
     let targets: Vec<_> = tails.values().map(|tail| (tail, server.target(&tail.trace).expect("a tailed trace is published"))).collect();
     while targets.iter().any(|(tail, target)| behind(&tail.probe, target)) {
