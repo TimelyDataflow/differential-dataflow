@@ -1,6 +1,8 @@
 //! Export taps hand over each export's changes as columns, once, each at the epoch it happened:
-//! summed over every tick, they are the export's contents, inserts and retractions of nested rows
+//! summed over every sealed time, they are the export's contents, inserts and retractions of nested rows
 //! alike.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::runtime::container::Updates;
 use interactive::server::Server;
 use interactive::{lower, parse};
@@ -23,10 +25,10 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
         let rows = |shift: i64, diff: i64| (0..257).map(|i| format!("{},{} diff={diff}", i % 11, i - 128 + shift)).collect::<Vec<_>>().join("\n");
         let mut taken_by_export: Vec<Vec<Updates>> = vec![Vec::new(); 3];
         // Two sets of rows, the first retracted and then added again.
-        for (shift, diff) in [(0, 1), (1000, 1), (0, -1), (0, 1)] {
-            let epoch = server.epoch();
-            server.feed("taps", 0, &rows(shift, diff), None).unwrap();
-            server.tick(worker);
+        for (epoch, (shift, diff)) in (0u64..).zip([(0, 1), (1000, 1), (0, -1), (0, 1)]) {
+            server.feed("taps", 0, &rows(shift, diff), epoch).unwrap();
+            server.seal("taps", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            server.spin(worker);
             for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
                 let changes = server.take_changes(&format!("taps::{name}"));
                 assert!(!changes.is_empty(), "{name}, shift {shift}, diff {diff}");

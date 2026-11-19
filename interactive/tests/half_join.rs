@@ -1,6 +1,8 @@
 //! `half_join`: a delta join, two half joins whose results are delayed to their data times, is the
 //! join, at the root and inside an iterative scope, as inputs change over several epochs.
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -64,10 +66,13 @@ fn run(workers: usize) -> Vec<[Vec<(String, String, i64)>; 4]> {
         for tick in 0..TICKS {
             if worker.index() == 0 {
                 for (input, k, v, d) in feeds(tick) {
-                    server.feed("p", input, &format!("{k},{v} diff={d}"), None).unwrap();
+                    server.feed("p", input, &format!("{k},{v} diff={d}"), tick).unwrap();
                 }
             }
-            server.tick(worker);
+            for input in [0, 1] {
+                server.seal("p", input, &Antichain::from_elem(host_time(tick + 1))).unwrap();
+            }
+            server.spin(worker);
             seen.push(["delta", "join", "reach_delta", "reach_join"].map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()));
         }
         seen

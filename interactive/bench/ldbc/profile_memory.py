@@ -122,7 +122,13 @@ def profile(args):
                 record['events'].append(dict(phase=label,elapsed_s=time.perf_counter()-tick_started,**metrics))
                 return replies
             def settle(label):
-                for _ in range(3): command(label,['tick'])
+                for _ in range(3):
+                    command(label,[
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
             def mark(label):
                 value = memory.sample()
                 if value is None: raise RuntimeError(server.failure or 'server exited')
@@ -138,18 +144,40 @@ def profile(args):
                     if actual != saved[label]: raise AssertionError(f'{name}/{label} differs from saved answer')
                     validation = 'matched-saved-validated-answer' if saved['validated'] else 'matched-saved-unvalidated-capture'
                 record['answer_validation'][label] = validation
-            command('install-inputs',[f'load graph begin\n{graph_program()}\n{{rid}} end-load','tick'])
+            command('install-inputs',[server.load('graph', graph_program()),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             for i,table in enumerate(data.SCHEMA):
                 rows = sorted(graph[table])
                 for offset in range(0,len(rows),1000):
-                    command('admit-inputs',[Server.feed('graph',i,rows[offset:offset+1000],1,shapes[i])])
-            command('settle-inputs',['tick'])
+                    command('admit-inputs',[server.feed('graph',i,rows[offset:offset+1000],1,shapes[i], epoch=server.epoch)])
+            command('settle-inputs',[
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             graph = rows = None
             gc.collect()
             settle('settle-base');mark('base_initial')
-            command('install-query',[f'load {name} begin\n{program}\n{{rid}} end-load','tick'] if query else ['tick'])
+            installation = [server.load(name, program)] if query else []
+            command('install-query', [*installation,
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             mark('query_installed')
-            command('bind',[Server.feed(name,0,binding,1,request_shape),'tick'] if query else ['tick'])
+            registration = [server.feed(name, 0, binding, 1, request_shape, epoch=server.epoch)] if query else []
+            command('bind', [*registration,
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             settle('settle-bound');mark('active_initial')
             if query: read('initial')
             replay_started = time.perf_counter()
@@ -163,14 +191,25 @@ def profile(args):
                             rows = changes[table][side]
                             count += len(rows)
                             for offset in range(0,len(rows),1000):
-                                commands.append(Server.feed('graph',i,rows[offset:offset+1000],diff,shapes[i]))
-                command('update',[*commands,'tick'])
+                                commands.append(server.feed('graph',i,rows[offset:offset+1000],diff,shapes[i], epoch=server.epoch))
+                command('update',[*commands,
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                server.epoch += 1
                 record['updates'].append(dict(epoch=batch['epoch'],wire_ms=record['events'][-1]['wire_ms']))
             record.update(replay_s=time.perf_counter()-replay_started,epochs=len(manifest['batches']),projected_changes=count)
             settle('settle-final');mark('active_final')
             if query: read('final')
             mark('before_retirement')
-            command('retire',[Server.feed(name,0,binding,-1,request_shape),'tick'] if query else ['tick'])
+            retraction = [server.feed(name, 0, binding, -1, request_shape, epoch=server.epoch)] if query else []
+            command('retire', [*retraction,
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             settle('settle-retired');mark('after_retirement')
             if query:
                 frames, = command('read-empty',[f'peek {name}::answer as corgi'])

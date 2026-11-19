@@ -107,20 +107,35 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                     if table in delta:
                         for side, diff in ((removed, -1), (added, 1)):
                             if delta[table][side]:
-                                result.append(Server.feed('graph', i, delta[table][side], diff, graph_shape[i]))
-                return [*result, 'tick']
+                                result.append(server.feed('graph', i, delta[table][side], diff, graph_shape[i], epoch=server.epoch))
+                return [*result,
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))]
             command(phase, commands)
+            server.epoch += 1
 
         for name, program in [('graph', graph_program()), *[(n, plans[n]['program']) for n in names]]:
-            command('install:' + name, lambda: [f'load {name} begin\n{program}\n{{rid}} end-load', 'tick'])
+            command('install:' + name, lambda: [server.load(name, program),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
         for i, table in enumerate(data.SCHEMA):
             rows = sorted(graph[table])
             for offset in range(0, len(rows), 1000):
-                command('load:' + table, lambda: [Server.feed('graph', i, rows[offset:offset+1000], 1, graph_shape[i])])
+                command('load:' + table, lambda: [server.feed('graph', i, rows[offset:offset+1000], 1, graph_shape[i], epoch=server.epoch)])
         for name in standing:
             active[name] = requests(name, plans[name]['parameters'], bank[name][0], 0)
-            command('standing:' + name, lambda: [Server.feed(name, 0, sorted(active[name]), 1, request_shape[name])])
-        command('initial_tick', lambda: ['tick'])
+            command('standing:' + name, lambda: [server.feed(name, 0, sorted(active[name]), 1, request_shape[name], epoch=server.epoch)])
+        command('initial_tick', lambda: [
+            *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+            *(['diag'] if server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+        server.epoch += 1
         read(graph)
 
         for cycle in range(args.warmup + args.rounds):
@@ -135,12 +150,22 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                         active[name] = binding(name, 2*cycle + int(state == 'changed'))
                     record['bindings'].append(dict(context, rows={n: sorted(active[n]) for n in dynamic}))
                     first = len(record['events'])
-                    command('bind', lambda: [Server.feed(n, 0, sorted(active[n]), 1, request_shape[n]) for n in dynamic] + ['tick'])
+                    command('bind', lambda: [server.feed(n, 0, sorted(active[n]), 1, request_shape[n], epoch=server.epoch) for n in dynamic] + [
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
                     read(current, dynamic)
                     totals = measure.total(record['events'][first:])
                     record['events'].append(dict(context, phase='batch_answers', **totals,
                                                   derived=True, requests=len(dynamic)*args.batch_size))
-                    command('release', lambda: [Server.feed(n, 0, sorted(active[n]), -1, request_shape[n]) for n in dynamic] + ['tick'])
+                    command('release', lambda: [server.feed(n, 0, sorted(active[n]), -1, request_shape[n], epoch=server.epoch) for n in dynamic] + [
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
                     for name in dynamic:
                         active[name] = set()
                     read(current, dynamic)
@@ -151,7 +176,12 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
             print(f'{backend}/{suffix}: round {cycle-args.warmup+1}/{args.rounds}, {len(names)} queries {action}', flush=True)
         context.update(state='retired', warmup=True)
         if standing:
-            command('retire', lambda: [Server.feed(n, 0, sorted(active[n]), -1, request_shape[n]) for n in standing] + ['tick'])
+            command('retire', lambda: [server.feed(n, 0, sorted(active[n]), -1, request_shape[n], epoch=server.epoch) for n in standing] + [
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             for name in standing:
                 active[name] = set()
             read(graph)

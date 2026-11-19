@@ -7,7 +7,7 @@
 -- and touches it at the keys this epoch reads or writes.
 --
 -- `delta` is the store change: each written key's latest committed write in,
--- the store's prior row for that key out. `feed store 0 from delta` applies it.
+-- the store's prior row for that key out. `feed store 0 time=now from res::delta` applies it.
 -- Nothing this program holds is ever retracted; dropping it frees it.
 
 let store = import "store::store" : ((int), (int, int));

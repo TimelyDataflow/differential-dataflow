@@ -300,15 +300,25 @@ def run_query(args, name, plan, manifest, report):
             graph_shape = [(parse_shape(source_shape(schema)), 'unit') if frames else None for schema in data.SCHEMA.values()]
             request_shape = (parse_shape(source_shape(plan['parameters'])), 'unit') if frames else None
             for program, text in [('graph', graph_program()), (name, plan['program'])]:
-                command('install', lambda:[f'load {program} begin\n{text}\n{{rid}} end-load','tick'])
+                command('install', lambda:[server.load(program, text),
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                server.epoch += 1
             record['snapshot_sort_ms'] = 0
             for i, table in enumerate(data.SCHEMA):
                 phase_started = time.perf_counter()
                 rows = sorted(graph[table])
                 record['snapshot_sort_ms'] += 1000*(time.perf_counter()-phase_started)
                 for offset in range(0,len(rows),1000):
-                    command('load', lambda:[Server.feed('graph',i,rows[offset:offset+1000],1,graph_shape[i])])
-            command('bind', lambda:[Server.feed(name,0,sorted(active),1,request_shape),'tick'])
+                    command('load', lambda:[server.feed('graph',i,rows[offset:offset+1000],1,graph_shape[i], epoch=server.epoch)])
+            command('bind', lambda:[server.feed(name,0,sorted(active),1,request_shape, epoch=server.epoch),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             record['initial'] = read('initial')
             print(f'{name}/initial: {record["initial"]["status"]}', flush=True)
             if deferred:
@@ -330,9 +340,14 @@ def run_query(args, name, plan, manifest, report):
                             for side,diff in (('removed',-1),('added',1)):
                                 rows = changes[table][side]
                                 for offset in range(0,len(rows),1000):
-                                    commands.append(Server.feed('graph',i,rows[offset:offset+1000],diff,graph_shape[i]))
-                    return [*commands,'tick']
+                                    commands.append(server.feed('graph',i,rows[offset:offset+1000],diff,graph_shape[i], epoch=server.epoch))
+                    return [*commands,
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))]
                 command('update', feed)
+                server.epoch += 1
                 metrics = record['events'][-1]
                 update = dict(epoch=batch['epoch'], day=batch['day'], update_class=batch['update_class'],
                               update_ms=metrics['wire_ms'], prepare_ms=metrics['prepare_ms'],
@@ -349,7 +364,12 @@ def run_query(args, name, plan, manifest, report):
             record['replay'] = replay_stats(record['updates'], replay_started,
                                             1000*(time.perf_counter()-started_query))
             record['replay']['includes_reference'] = not deferred
-            command('retire', lambda:[Server.feed(name,0,sorted(active),-1,request_shape),'tick'])
+            command('retire', lambda:[server.feed(name,0,sorted(active),-1,request_shape, epoch=server.epoch),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             actual, = command('empty', lambda:[f'peek {name}::answer as corgi'])
             compare(decode(actual), [], 'retired')
             record['retirement_checked'] = True

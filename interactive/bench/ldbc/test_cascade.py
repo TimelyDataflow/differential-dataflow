@@ -51,24 +51,39 @@ def typed(g):
 def mismatches(server, workers, steps):
     s = Server(server, Path('/tmp/test-cascade.log'), workers, 60, 4)
     try:
-        s.commands([f'load graph begin\n{cascade_program(export_live=True)}\n{{rid}} end-load', 'tick'])
+        s.commands([s.load('graph', cascade_program(export_live=True)),
+            *(f'seal {program} {slot} {s.epoch + 1}' for program, slot in s.input_ports),
+            *(['diag'] if s.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {s.epoch}' for trace in (*s.output_traces, *s.diagnostics))])
+        s.epoch += 1
         g = typed(graph())
         oracle = updates.State({n: set(v) for n, v in g.items()})
         for i, name in enumerate(RELATIONS):
             if g[name]:
-                s.commands([Server.feed('graph', i, sorted(g[name]), 1, SHAPES[i])])
-        s.commands(['tick'])
+                s.commands([s.feed('graph', i, sorted(g[name]), 1, SHAPES[i], epoch=s.epoch)])
+        s.commands([
+            *(f'seal {program} {slot} {s.epoch + 1}' for program, slot in s.input_ports),
+            *(['diag'] if s.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {s.epoch}' for trace in (*s.output_traces, *s.diagnostics))])
+        s.epoch += 1
         for t, (kind, rows) in enumerate(steps):
             oracle.apply(kind, rows)
             if kind.startswith('insert-'):
                 for name, new in project_rows(rows).items():
                     if new:
                         i = RELATIONS.index(name)
-                        s.commands([Server.feed('graph', i, sorted(new), 1, SHAPES[i])])
+                        s.commands([s.feed('graph', i, sorted(new), 1, SHAPES[i], epoch=s.epoch)])
             else:
                 i, row = delete_row(kind, rows, t)
-                s.commands([Server.feed('graph', i, [row], 1, SHAPES[i])])
-            s.commands(['tick'])
+                s.commands([s.feed('graph', i, [row], 1, SHAPES[i], epoch=s.epoch)])
+            s.commands([
+                *(f'seal {program} {slot} {s.epoch + 1}' for program, slot in s.input_ports),
+                *(['diag'] if s.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {s.epoch}' for trace in (*s.output_traces, *s.diagnostics))])
+            s.epoch += 1
         bad = []
         for name in RELATIONS:
             _, (lines,) = s.commands([f'peek graph::live.{name} as corgi'])

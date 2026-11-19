@@ -3,6 +3,8 @@
 //! a join inside an iterative scope, and the import read as rows, through additions and
 //! retractions of the shared trace, including for an importer installed late.
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -35,12 +37,12 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
     server.install(worker, name, &program).unwrap();
 }
 
-fn edge(server: &mut Server, src: i64, dst: i64, diff: i64) {
-    server.feed("prod", 0, &format!("{src},{dst} diff={diff}"), None).unwrap();
+fn edge(server: &mut Server, src: i64, dst: i64, diff: i64, time: u64) {
+    server.feed("prod", 0, &format!("{src},{dst} diff={diff}"), time).unwrap();
 }
 
-fn root(server: &mut Server, name: &str, node: i64) {
-    server.feed(name, 0, &node.to_string(), None).unwrap();
+fn root(server: &mut Server, name: &str, node: i64, time: u64) {
+    server.feed(name, 0, &node.to_string(), time).unwrap();
 }
 
 /// Snapshot each named export, each expected to be non-empty.
@@ -52,43 +54,57 @@ fn take(server: &mut Server, worker: &mut timely::worker::Worker, names: &[Strin
     }
 }
 
-/// Run the scenario, snapshotting every consumer export after each tick.
+/// Run the scenario, snapshotting every consumer export after each input change.
 fn scenario(arranged: bool) -> Vec<Snapshot> {
     timely::execute_directly(move |worker| {
         let mut snapshots = Vec::new();
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
         install(&mut server, worker, "prod", PRODUCER);
-        for (s, d) in [(1, 2), (2, 3), (3, 4), (5, 6), (2, 7)] { edge(&mut server, s, d, 1); }
-        server.tick(worker);
+        for (s, d) in [(1, 2), (2, 3), (3, 4), (5, 6), (2, 7)] { edge(&mut server, s, d, 1, 0); }
+        server.seal("prod", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
 
         let mut exports: Vec<String> = Vec::new();
 
         // An importer installed over an existing trace.
         install(&mut server, worker, "early", &consumer());
         exports.extend(["early::hop", "early::degree", "early::reach", "early::flipped"].map(String::from));
-        root(&mut server, "early", 1);
-        server.tick(worker);
+        root(&mut server, "early", 1, 1);
+        for name in ["prod", "early"] {
+            server.seal(name, 0, &Antichain::from_elem(host_time(2))).unwrap();
+        }
+        server.spin(worker);
         take(&mut server, worker, &exports, &mut snapshots);
 
         // The shared trace changes: an addition, and a retraction that cuts reachability.
-        edge(&mut server, 4, 5, 1);
-        edge(&mut server, 2, 3, -1);
-        server.tick(worker);
+        edge(&mut server, 4, 5, 1, 2);
+        edge(&mut server, 2, 3, -1, 2);
+        for name in ["prod", "early"] {
+            server.seal(name, 0, &Antichain::from_elem(host_time(3))).unwrap();
+        }
+        server.spin(worker);
+        server.trim(worker, "prod::edges", Some(&host_time(2))).unwrap();
         take(&mut server, worker, &exports, &mut snapshots);
 
         // An importer installed after the trace has history.
         install(&mut server, worker, "late", &consumer());
         exports.extend(["late::hop", "late::degree", "late::reach", "late::flipped"].map(String::from));
-        root(&mut server, "late", 2);
-        edge(&mut server, 2, 3, 1);
-        server.tick(worker);
+        root(&mut server, "late", 2, 3);
+        edge(&mut server, 2, 3, 1, 3);
+        for name in ["prod", "early", "late"] {
+            server.seal(name, 0, &Antichain::from_elem(host_time(4))).unwrap();
+        }
+        server.spin(worker);
         take(&mut server, worker, &exports, &mut snapshots);
 
-        for _ in 0..3 {
-            edge(&mut server, 6, 1, 1);
-            edge(&mut server, 6, 1, -1);
-            server.tick(worker);
+        for time in 4..7 {
+            edge(&mut server, 6, 1, 1, time);
+            edge(&mut server, 6, 1, -1, time);
+            for name in ["prod", "early", "late"] {
+                server.seal(name, 0, &Antichain::from_elem(host_time(time + 1))).unwrap();
+            }
+            server.spin(worker);
         }
         take(&mut server, worker, &exports, &mut snapshots);
         snapshots

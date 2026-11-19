@@ -10,8 +10,8 @@ use super::*;
 /// This is the data-in/data-out entry point the test suites build on, and it
 /// takes the same path a live install does — `install`, one `feed` of each
 /// positional input (`inputs[i]` holds input `i`'s rows, one feed line each,
-/// `<key> [val=<v>] [diff=<d>]`, dealt round-robin across the workers), one
-/// `tick`, then a `snapshot` of each export. `config` picks the worker group: `Config::process(n)` hands
+/// `<key> [val=<v>] [diff=<d>]`, dealt round-robin across the workers), then each input closes. Each export is read at zero.
+/// `config` picks the worker group: `Config::process(n)` hands
 /// exchanged containers between threads as typed values, while
 /// `CommunicationConfig::ProcessBinary(n)` sends every one through the wire
 /// format. The answer must not depend on either choice.
@@ -25,18 +25,23 @@ pub fn evaluate(
     let guards = timely::execute(config, move |worker| {
         let mut server = Server::new();
         server.install(worker, "evaluate", &program).expect("evaluate: install");
-        let has_input = |i: usize| program.root.imports.iter().any(|imp| matches!(imp.from, st::Source::Input(n) if n == i));
-        for (input, rows) in inputs.iter().enumerate().filter(|(i, _)| has_input(*i)) {
-            let shard: Vec<&str> = rows.iter().skip(worker.index()).step_by(worker.peers()).map(String::as_str).collect();
-            server.feed("evaluate", input, &shard.join("\n"), None).expect("evaluate: feed");
+        let positions: std::collections::BTreeSet<_> = program.root.imports.iter().filter_map(|imp| match imp.from {
+            st::Source::Input(input) => Some(input),
+            _ => None,
+        }).collect();
+        for input in positions {
+            if let Some(rows) = inputs.get(input) {
+                let shard: Vec<&str> = rows.iter().skip(worker.index()).step_by(worker.peers()).map(String::as_str).collect();
+                server.feed("evaluate", input, &shard.join("\n"), 0).expect("evaluate: feed");
+            }
+            server.seal("evaluate", input, &Antichain::new()).expect("evaluate: seal");
         }
-        server.tick(worker);
         // `snapshot` gathers to worker 0; the other workers' results are empty.
         program
             .root
             .exports
             .iter()
-            .map(|e| (e.name.clone(), server.snapshot(worker, &output_name("evaluate", &e.name)).expect("evaluate: snapshot")))
+            .map(|e| (e.name.clone(), server.snapshot_as_of(worker, &output_name("evaluate", &e.name), &host_time(0)).expect("evaluate: snapshot")))
             .collect()
     })
     .expect("evaluate: worker startup");

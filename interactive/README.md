@@ -179,7 +179,7 @@ The dataflow is up and running, but has nothing to do yet.
 # inject(0,tuple()), inject(1,tuple()), inject(2,tuple()) are Owner, Edit, View.
 
 # Input 1, `groups`: group 10 holds user 2 and group 11; group 11 holds user 3.
-feed demo 1 begin
+feed demo 1 time=0 begin
 10 val=inject(0,2)
 10 val=inject(1,11)
 11 val=inject(0,3)
@@ -193,7 +193,7 @@ There is also a binary columnar `feed` as well, but it is harder to read.
 ```
 # Input 0, `grants`: user 1 owns doc 100, group 10 can view doc 100 and edit
 # doc 200, and user 3 can edit doc 100.
-feed demo 0 begin
+feed demo 0 time=0 begin
 100 val=tuple(inject(0,1),inject(0,tuple()))
 100 val=tuple(inject(1,10),inject(2,tuple()))
 200 val=tuple(inject(1,10),inject(1,tuple()))
@@ -204,28 +204,29 @@ Further updates for the grants, putting us in a place where we could now expect 
 We have not introduced any blocks yet.
 
 ```
-# Apply the changes, then read every (member, doc) and its access.
-tick
-peek demo::access
+# Finish grants and groups. Close time 0 for blocks.
+seal demo 0 []
+seal demo 1 []
+seal demo 2 1
+initial peek demo::access as-of 0
 ```
 
-The `tick` advances all inputs to the next timestamp.
+Finishing the first two inputs lets the blocks input determine which times are complete.
 The `peek` asks for the contents of `demo::access`, the output `access` of the program we loaded as `demo`, in the row-oriented textual form.
 There is also a binary columnar version of `peek`, but it's also hard to read.
 ```
-_4 ok t=1 elapsed=446.33µs
-_5 data tuple(inject(0,1),100) val=inject(0,tuple())
-_5 data tuple(inject(0,2),100) val=inject(2,tuple())
-_5 data tuple(inject(0,2),200) val=inject(1,tuple())
-_5 data tuple(inject(0,3),100) val=inject(1,tuple())
-_5 data tuple(inject(0,3),200) val=inject(1,tuple())
-_5 data tuple(inject(1,10),100) val=inject(2,tuple())
-_5 data tuple(inject(1,10),200) val=inject(1,tuple())
-_5 data tuple(inject(1,11),100) val=inject(2,tuple())
-_5 data tuple(inject(1,11),200) val=inject(1,tuple())
-_5 ok t=1
+initial data tuple(inject(0,1),100) val=inject(0,tuple())
+initial data tuple(inject(0,2),100) val=inject(2,tuple())
+initial data tuple(inject(0,2),200) val=inject(1,tuple())
+initial data tuple(inject(0,3),100) val=inject(1,tuple())
+initial data tuple(inject(0,3),200) val=inject(1,tuple())
+initial data tuple(inject(1,10),100) val=inject(2,tuple())
+initial data tuple(inject(1,10),200) val=inject(1,tuple())
+initial data tuple(inject(1,11),100) val=inject(2,tuple())
+initial data tuple(inject(1,11),200) val=inject(1,tuple())
+initial ok as-of=0
 ```
-The responses are prefixed with a command identifier (the `_x`), telling us the `tick` took ~0.5ms.
+The read replies carry the request identifier `initial`.
 We then get the data we asked for, which is first pairs of users or groups and documents, and then the level of access.
 The first row says that user 1 can read document 100 with the highest level of access.
 
@@ -233,43 +234,41 @@ Now let's add a block to mess things up a bit.
 ```
 # Input 2, `blocks`: block group 10 on doc 100. It reaches users 2 and 3 through
 # groups 10 and 11, even past user 3's own grant.
-feed demo 2 100 val=inject(1,10)
-tick
-peek demo::access
+feed demo 2 100 val=inject(1,10) time=1
+seal demo 2 2
+blocked peek demo::access as-of 1
 ```
 ```
-_7 ok t=2 elapsed=481.25µs
-_8 data tuple(inject(0,1),100) val=inject(0,tuple())
-_8 data tuple(inject(0,2),200) val=inject(1,tuple())
-_8 data tuple(inject(0,3),200) val=inject(1,tuple())
-_8 data tuple(inject(1,10),200) val=inject(1,tuple())
-_8 data tuple(inject(1,11),200) val=inject(1,tuple())
-_8 ok t=2
+blocked data tuple(inject(0,1),100) val=inject(0,tuple())
+blocked data tuple(inject(0,2),200) val=inject(1,tuple())
+blocked data tuple(inject(0,3),200) val=inject(1,tuple())
+blocked data tuple(inject(1,10),200) val=inject(1,tuple())
+blocked data tuple(inject(1,11),200) val=inject(1,tuple())
+blocked ok as-of=1
 ```
 There are fewer rows now.
 
 ```
 # Read one key: user 3 on doc 100. Nothing comes back while the block holds.
-peek demo::access tuple(inject(0,3),100)
+lookup peek demo::access tuple(inject(0,3),100) as-of 1
 ```
 ```
-_9 ok t=2
+lookup ok as-of=1
 ```
-No row, but confirmation that the read is complete.
+The empty reply is a complete read at time 1. Supplying a key filters the full snapshot on worker 0. For repeated key requests, see the [server command reference](server/README.md#server-command-reference).
 
 ```
 # Remove the block by retracting the same row, and read the key again.
-feed demo 2 100 val=inject(1,10) diff=-1
-tick
-peek demo::access tuple(inject(0,3),100)
+feed demo 2 100 val=inject(1,10) diff=-1 time=2
+seal demo 2 3
+restored peek demo::access tuple(inject(0,3),100) as-of 2
 exit
 ```
 Retract the block and confirm that everything works again.
 ```
-_11 ok t=3 elapsed=488.42µs
-_12 data tuple(inject(0,3),100) val=inject(1,tuple())
-_12 ok t=3
-_13 ok bye
+restored data tuple(inject(0,3),100) val=inject(1,tuple())
+restored ok as-of=2
+_11 ok bye
 ```
 I didn't write it, but I find `ok bye` hilarious.
 
@@ -293,7 +292,7 @@ A program moves through four parts, each using only the ones before it.
    trait and `render_tree`, which turns the scope tree into operators. `runtime/` is today's
    backend: columnar containers and chunks, joins, reductions, half joins, exchange, and the feed
    and frame formats.
-4. **The host.** `server/` is the in-process registry: install, feed, tick, publish and peek,
+4. **The host.** `server/` is the in-process registry: install, feed, seal, publish and peek,
    one file per concern.
    `diag.rs` turns the server's own logging into the `diag.*` collections. The `ddir-server`
    crate in `server/` is the executable that drives it all.
@@ -318,20 +317,21 @@ the stack depending on it.
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
 The one executable is the server (the `ddir-server` crate in `server/`, documented in
 `server/README.md`; the session scripts in `examples/server/` show it at work); a program runs by
-loading it, feeding its inputs, and closing epochs. For example, feed a two-edge path and its root on four workers.
+loading it, feeding its inputs at a time, and sealing them past that time. For example, feed a two-edge path and its root on four workers.
 ```
 cd interactive
 printf 'load reach from examples/programs/reach.ddp
-feed reach 0 0,1
-feed reach 0 1,2
-feed reach 1 0
-tick
-peek reach::result
+feed reach 0 0,1 time=0
+feed reach 0 1,2 time=0
+feed reach 1 0 time=0
+seal reach 0 1
+seal reach 1 1
+peek reach::result as-of 0
 exit
 ' | DDIR_WORKERS=4 cargo run --release -p ddir-server
 ```
 
-For the full command vocabulary — `load`, `feed`, `tick`, `peek`, `tail`, and the rest — see
+For the full command vocabulary — `load`, `feed`, `seal`, `peek`, `tail`, and the rest — see
 [`examples/server/README.md`](examples/server/README.md), and `server/README.md` for the
 protocol and configuration.
 

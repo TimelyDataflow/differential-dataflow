@@ -1,3 +1,5 @@
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -19,7 +21,7 @@ const DECLARING: &str = r#"
 
 "#;
 
-/// Everything the server can read back, after the same installs, loads, feeds, and ticks.
+/// Everything the server can read back, after the same installs, loads, feeds, and seals.
 fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
@@ -29,10 +31,11 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         for epoch in 1..5i64 {
             if worker.index() == 0 {
                 for i in 0..10 {
-                    server.feed("undeclared", 0, &(i * epoch).to_string(), None).unwrap();
+                    server.feed("undeclared", 0, &(i * epoch).to_string(), epoch as u64 - 1).unwrap();
                 }
             }
-            server.tick(worker);
+            server.seal("undeclared", 0, &Antichain::from_elem(host_time(epoch as u64))).unwrap();
+            server.spin(worker);
             for name in ["undeclared::loose", "declaring::doubled"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());
             }
@@ -46,6 +49,6 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
 #[test]
 fn sources_read_alike_across_workers() {
     let want = run(1);
-    assert!(want[want.len() - 2..].iter().all(|s| !s.is_empty()), "every read has rows by the last tick");
+    assert!(want[want.len() - 2..].iter().all(|s| !s.is_empty()), "every read has rows by the last seal");
     assert_eq!(run(3), want, "3 workers");
 }

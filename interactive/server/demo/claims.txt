@@ -13,10 +13,10 @@ output "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min 
 world end-load
 
 # Client 1 and client 2 race for cell (1,1) in epoch 0: lower id wins.
-feed world 0 1,1 val=1,0
-feed world 0 1,1 val=2,0
-feed world 0 2,2 val=2,0
-tick
+feed world 0 1,1 val=1,0 time=0
+feed world 0 1,1 val=2,0 time=0
+feed world 0 2,2 val=2,0 time=0
+seal world 0 1
 
 # owner: (1,1) -> client 1 (won the race), (2,2) -> client 2 (uncontested).
 peek world::owner

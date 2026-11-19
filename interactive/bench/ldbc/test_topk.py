@@ -93,13 +93,23 @@ def check(server, output, workers):
              [((3, 0, 3000, 'a new group'), 1),
               ((1, -1, 1000, 'many equal copies'), -120)]]
     with Server(server, output/f'reducer-w{workers}.log', workers, 120, 6) as engine:
-        engine.commands([f'load test begin\n{program()}\n{{rid}} end-load', 'tick'])
+        engine.commands([engine.load('test', program()),
+            *(f'seal {program} {slot} {engine.epoch + 1}' for program, slot in engine.input_ports),
+            *(['diag'] if engine.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {engine.epoch}' for trace in (*engine.output_traces, *engine.diagnostics))])
+        engine.epoch += 1
         for epoch, delta in enumerate(ticks):
             commands = []
             for row, diff in delta:
                 state[row] += diff
-                commands.append(Server.feed('test', 0, [row], diff))
-            engine.commands([*commands, 'tick'])
+                commands.append(engine.feed('test', 0, [row], diff, epoch=engine.epoch))
+            engine.commands([*commands,
+                *(f'seal {program} {slot} {engine.epoch + 1}' for program, slot in engine.input_ports),
+                *(['diag'] if engine.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {engine.epoch}' for trace in (*engine.output_traces, *engine.diagnostics))])
+            engine.epoch += 1
             want = expected(state)
             for name in ('baseline', *VARIANTS):
                 frames, = engine.commands([f'peek test::{name} as corgi'])[1]

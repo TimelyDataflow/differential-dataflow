@@ -12,7 +12,7 @@ the profiler on the binary and machine in question.
 Every case starts a fresh server with one worker. First the harness loads and
 settles all 17 shared input tables. Then it installs the query and binds one
 request, replays all 521 prepared epochs (one update class per epoch), captures
-the final answer, and retracts the request. It runs three extra empty ticks after
+the final answer, and retracts the request. It runs three extra empty epochs with input seals, a completion wait, and output trims after
 loading, binding, replay and retirement. These are fixed observation points,
 not proof that every background allocation has reached its minimum.
 

@@ -1,5 +1,7 @@
 //! Diagnostics: the `diag.*` sources and the shipped views see the programs a server runs, and
 //! their state stays bounded while programs are installed and dropped.
+use timely::progress::Antichain;
+use interactive::server::host_time;
 use std::collections::BTreeMap;
 
 use interactive::scope_ir::Program;
@@ -57,9 +59,14 @@ fn views_see_programs_and_state_stays_bounded() {
         server.set_diagnostics(std::rc::Rc::clone(&diagnostics));
         server.install(worker, "diag", &program(DIAG)).unwrap();
         server.install(worker, "p", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
-        server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", None).unwrap();
-        server.tick(worker);
-        server.tick(worker);
+        server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", 0).unwrap();
+        server.seal("p", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
+        for _ in 0..2 {
+            server.sample_diagnostics(worker).unwrap();
+            server.spin(worker);
+        }
+        assert_eq!(server.input_time("p", 0).unwrap(), &host_time(1));
 
         let time = view(&mut server, worker, "diag::time_by_statement");
         assert!(time.iter().any(|(k, &ns)| k.contains("\"p\"") && k.contains("\"pairs\"") && ns > 0), "{time:#?}");
@@ -74,10 +81,19 @@ fn views_see_programs_and_state_stays_bounded() {
         let mut held = Vec::new();
         for round in 0..30 {
             server.install(worker, "q", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
-            server.feed("q", 0, "1,2\n2,3", None).unwrap();
-            server.tick(worker);
+            server.feed("q", 0, "1,2\n2,3", 0).unwrap();
+            server.seal("q", 0, &Antichain::from_elem(host_time(1))).unwrap();
+            server.spin(worker);
+            server.sample_diagnostics(worker).unwrap();
+            server.spin(worker);
             server.drop_program(worker, "q").unwrap();
-            server.tick(worker);
+            let upper = server.sample_diagnostics(worker).unwrap();
+            server.spin(worker);
+            for (trace, _) in server.trace_info() {
+                if trace.starts_with("diag.") || trace.starts_with("diag::") {
+                    server.trim(worker, &trace, Some(&host_time(upper - 1))).unwrap();
+                }
+            }
             if round == 9 || round == 29 {
                 let (ops, triples) = diagnostics.borrow().size();
                 let diag_records = diagnostics.borrow().records_by_program().get("diag").copied().unwrap_or(0);

@@ -1,6 +1,8 @@
 //! `lift`, `join_function`, and `delay`: each pinned to explicit rows, across workers, as inputs
 //! are added and retracted over several epochs.
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -38,10 +40,11 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         for tick in 0..3 {
             if worker.index() == 0 {
                 for (k, v, d) in feeds(tick) {
-                    server.feed("p", 0, &format!("{k},{v} diff={d}"), None).unwrap();
+                    server.feed("p", 0, &format!("{k},{v} diff={d}"), tick as u64).unwrap();
                 }
             }
-            server.tick(worker);
+            server.seal("p", 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            server.spin(worker);
         }
         NAMES.map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()).to_vec()
     })

@@ -204,7 +204,7 @@ plans through all 49 update-fixture states at one/four workers.
 A separate fresh server replays the same journal without a query as the input-only
 control. Queries also run in fresh servers, with one fixed request each. Compare
 query-active RSS with the control at the corresponding initial/final state; keep
-installation and retirement peaks separate. The three empty settling ticks after
+installation and retirement peaks separate. The three empty settling epochs after
 retirement can expose a later compaction peak that an immediately exiting server
 would miss.
 
@@ -245,8 +245,7 @@ Replay wall time includes decoding, command preparation, encoding, transport,
 acknowledgements, and checkpoint capture. Update wire time is the client's
 observed wait, not server CPU time. Python reference timings are separate.
 Projected changes count every inserted/retracted tuple, including cascades;
-they are not transaction counts. The standing request input advances with
-each `tick`, allowing logical/physical compaction of completed engine history.
+they are not transaction counts. Each batch seals the standing request input and all graph inputs to the next epoch. After `spin`, trimming the graph and answer outputs releases older snapshots.
 
 Defaults are 120-second command/reference deadlines, a sampled 6-GiB server
 limit, and a sampled 10-GiB combined Python/server limit (also physical footprint

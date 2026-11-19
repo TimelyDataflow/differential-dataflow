@@ -1,4 +1,6 @@
 //! Unread computations are removed while inputs and Inspect remain observable.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::{lower, parse, scope_ir::{Item, Program, Source}, server::Server};
 
 fn program(src: &str) -> Program { lower::lower_tree(parse::pipe::parse(src)) }
@@ -64,9 +66,12 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
         let mut server = Server::new();
         server.install(worker, "p", &p).unwrap();
         // The unread root input is still part of the client interface.
-        server.feed("p", 0, "3 val=4", None).unwrap();
-        server.feed("p", 1, "1 val=2", None).unwrap();
-        server.tick(worker);
+        server.feed("p", 0, "3 val=4", 0).unwrap();
+        server.feed("p", 1, "1 val=2", 0).unwrap();
+        for input in [0, 1] {
+            server.seal("p", input, &Antichain::from_elem(host_time(1))).unwrap();
+        }
+        server.spin(worker);
     });
 }
 

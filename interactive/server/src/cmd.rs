@@ -1085,7 +1085,7 @@ mod tests {
     #[test]
     fn feed_from_sources_rows_server_side() {
         let mut p = LineParser::new(Catalog::default());
-        let out = feed_all(&mut p, &["r1 feed world 0 from edges.txt\n"]);
+        let out = feed_all(&mut p, &["r1 feed world 0 time=now from edges.txt\n"]);
         match &out[..] {
             [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1, time: None }))] => {
                 assert_eq!(reqid.as_str(), "r1");
@@ -1100,7 +1100,7 @@ mod tests {
         );
         let out = feed_all(&mut p, &["r4 feed bank 0 time=now from retire diff=nope\n"]);
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad diff must be rejected: {out:?}");
-        let out = feed_all(&mut p, &["r2 feed world x from edges.txt\n"]);
+        let out = feed_all(&mut p, &["r2 feed world x time=now from edges.txt\n"]);
         assert!(matches!(&out[..], [(_, Ok(Cmd::Source { input: InputId::Name(name), .. }))] if name == "x"), "the workers resolve an input's name: {out:?}");
     }
 
@@ -1109,11 +1109,11 @@ mod tests {
         let mut p = LineParser::new(Catalog::default());
         let got = feed_all(
             &mut p,
-            &["r0 list", "r1 tick 5", "r2 drop 3", "r3 peek foo"],
+            &["r0 list", "r1 spin", "r2 drop 3", "r3 peek foo"],
         );
         assert_eq!(got.len(), 4);
         assert!(matches!(got[0].1, Ok(Cmd::List)));
-        assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
+        assert!(matches!(got[1].1, Ok(Cmd::Spin)));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
         assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, as_of: None, format: ReadFormat::Rows }) if name == "foo"));
     }
@@ -1262,14 +1262,14 @@ mod tests {
     #[test]
     fn auto_reqid_for_bare_command() {
         let mut p = LineParser::new(Catalog::default());
-        let got = feed_all(&mut p, &["list", "tick 3", "rA peek foo", "exit"]);
+        let got = feed_all(&mut p, &["list", "spin", "rA peek foo", "exit"]);
         assert_eq!(got.len(), 4);
         // Bare commands get auto-minted reqids; mixed-in explicit reqids
         // pass through unchanged.
         assert_eq!(got[0].0, "_1"); // list
         assert!(matches!(got[0].1, Ok(Cmd::List)));
-        assert_eq!(got[1].0, "_2"); // tick 3
-        assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
+        assert_eq!(got[1].0, "_2"); // spin
+        assert!(matches!(got[1].1, Ok(Cmd::Spin)));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
         assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, as_of: None, format: ReadFormat::Rows }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
@@ -1434,7 +1434,7 @@ mod tests {
         let load = Cmd::Load { width: 1, id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
         prepare(load, &catalog).expect("the program lowers");
         let mut p = LineParser::new(catalog);
-        let got = feed_all(&mut p, &["r0 feed g roots 1", "r1 feed g::edges 1 val=2", "r2 feed g 1 1", "r3 feed g::e 1"]);
+        let got = feed_all(&mut p, &["r0 feed g roots time=0 1", "r1 feed g::edges time=0 1 val=2", "r2 feed g 1 time=0 1", "r3 feed g::e time=0 1"]);
         let named = |input: &InputId, name: &str| *input == InputId::Name(name.into());
         assert!(matches!(&got[0].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "roots")), "{:?}", got[0]);
         assert!(matches!(&got[1].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "edges")), "{:?}", got[1]);

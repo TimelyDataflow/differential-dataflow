@@ -61,7 +61,7 @@ A one-off read is a question asked of loaded data, answered from scratch.
 - **DuckDB and Umbra:** load once, then for each binding one warmup and five runs; report
   the median. Every result is checked against the reference or the other systems.
 - **DDIR:** one server per query. The server installs the shared graph program and the
-  query, loads the snapshot, and settles; then each binding is fed, ticked and peeked,
+  query, loads the snapshot, and settles; then each binding is fed, sealed and read after completion,
   then released. Latency is the bind-plus-peek wire time, median of three runs after one
   warmup (`../authored/check.py` measures the generated and authored plans this way).
 - **Standing state:** DDIR computes each query's parameter-independent parts once, when
@@ -75,7 +75,7 @@ Per update batch, what does it cost to have every answer current again?
 
 - **DDIR:** `update_stream.py --check-mode replay` over all 521 epochs, one server per
   query with its suite-0 binding standing. The per-batch cost is the update's wire time
-  (feed plus tick), during which the standing answer is brought up to date. Answers are
+  (feed, seals, spin and trims), during which the standing answer is brought up to date. Answers are
   captured every 16 epochs and compared across systems afterwards.
 - **DuckDB and Umbra:** apply each epoch's deletions and insertions in one transaction,
   maintain `thread`, then re-run every query with its suite-0 binding

@@ -10,7 +10,7 @@ A system offers two calls, made from the driver's threads:
 - `read(read)`: answer one read; returns (rows, start_ms, end_ms). Each read
   worker thread calls it for one read at a time.
 
-DDIR runs both through one loop that ticks the server: a tick applies every
+DDIR groups these operations into scalar epochs. Each epoch applies every
 update batch and answers every read submitted since the previous tick began,
 and retracts the previous tick's reads. DuckDB applies each batch as one
 transaction on the update thread and answers each read on its worker's own
@@ -93,7 +93,12 @@ class Ddir:
         self.graph_shapes = self.graph_shapes[:17] + [(parse_shape(DELETES[i][1]), 'unit') for i in sorted(DELETES)]
         plan_dir = Path(os.environ.get('DDIR_PLAN_DIR', HERE.parent / 'authored' / 'plans'))
         program = graph_program() if self.cascade else cascade_program()
-        self.server.commands([f'load graph begin\n{program}\n{{rid}} end-load', 'tick'])
+        self.server.commands([self.server.load('graph', program),
+            *(f'seal {program} {slot} {self.server.epoch + 1}' for program, slot in self.server.input_ports),
+            *(['diag'] if self.server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
+        self.server.epoch += 1
         # Plans answered one-off: each read installs its own copy of the plan's one-off half,
         # which imports what the standing half publishes, and drops it at the next tick.
         self.oneoff = {}
@@ -102,13 +107,23 @@ class Ddir:
             stem = f'{name[:2]}{int(name[2:]):02}'
             standing = Path(oneoff_dir) / f'{stem}.standing.ddp'
             if standing.exists():
-                self.server.commands([f'load {name}s begin\n{standing.read_text()}\n{{rid}} end-load', 'tick'])
+                self.server.commands([self.server.load(f'{name}s', standing.read_text()),
+                    *(f'seal {program} {slot} {self.server.epoch + 1}' for program, slot in self.server.input_ports),
+                    *(['diag'] if self.server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
+                self.server.epoch += 1
             self.oneoff[name] = (Path(oneoff_dir) / f'{stem}.oneoff.ddp').read_text()
         for name in PLANS:
             if name in self.oneoff:
                 continue
             text = (plan_dir / f'{name[:2]}{int(name[2:]):02}.ddp').read_text()
-            self.server.commands([f'load {name} begin\n{text}\n{{rid}} end-load', 'tick'])
+            self.server.commands([self.server.load(name, text),
+                *(f'seal {program} {slot} {self.server.epoch + 1}' for program, slot in self.server.input_ports),
+                *(['diag'] if self.server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
+            self.server.epoch += 1
         if self.cascade:
             def chunks_of(name):
                 rows = sorted(graph[name])
@@ -118,8 +133,13 @@ class Ddir:
             chunks = snapshot_rows(args.data / 'initial_snapshot')
         for name, rows in chunks:
             i = self.relations.index(name)
-            self.server.commands([Server.feed('graph', i, rows, 1, self.graph_shapes[i])])
-        self.server.commands(['tick'])
+            self.server.commands([self.server.feed('graph', i, rows, 1, self.graph_shapes[i], epoch=self.server.epoch)])
+        self.server.commands([
+            *(f'seal {program} {slot} {self.server.epoch + 1}' for program, slot in self.server.input_ports),
+            *(['diag'] if self.server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
+        self.server.epoch += 1
         self.live, self.rid, self.ticks = [], 0, 0
         self.profile = Counter()   # client-side time per tick phase, ms, and operation counts
         self.cpu_start = cpu_seconds(self.server.process.pid)
@@ -192,7 +212,7 @@ class Ddir:
                 i = self.relations.index(name)
                 for side, diff in (('removed', -1), ('added', 1)):
                     if delta[side]:
-                        commands.append(Server.feed('graph', i, delta[side], diff, self.graph_shapes[i]))
+                        commands.append(self.server.feed('graph', i, delta[side], diff, self.graph_shapes[i], epoch=self.server.epoch))
         else:
             fed = defaultdict(list)
             for op in updates:
@@ -203,12 +223,12 @@ class Ddir:
                     i, row = delete_row(op.kind, op.rows, op.time)
                     fed[i].append(row)
             for i, rows in sorted(fed.items()):
-                commands.append(Server.feed('graph', i, sorted(rows), 1, self.graph_shapes[i]))
+                commands.append(self.server.feed('graph', i, sorted(rows), 1, self.graph_shapes[i], epoch=self.server.epoch))
         for plan, rows in self.live:
             if plan in self.plans:
-                commands.append(Server.feed(plan, 0, rows, -1, self.shapes[plan]))
+                commands.append(self.server.feed(plan, 0, rows, -1, self.shapes[plan], epoch=self.server.epoch))
             else:
-                commands.append(f'drop {plan}')   # a one-off program from the previous tick
+                commands.append(self.server.drop(plan))   # a one-off program from the previous tick
         live, rids, loads = [], [], []
         for read in reads:
             self.rid += 1
@@ -217,17 +237,22 @@ class Ddir:
             if read.plan in self.oneoff:
                 target = f'{read.plan}x{self.rid}'
                 text = self.oneoff[read.plan]
-                loads.append(f'load {target} begin\n{text}\n{{rid}} end-load')
-            commands.append(Server.feed(target, 0, rows, 1, self.shapes[read.plan]))
+                loads.append(self.server.load(target, text))
+            commands.append(self.server.feed(target, 0, rows, 1, self.shapes[read.plan], epoch=self.server.epoch))
             live.append((target, rows))
             rids.append(self.rid)
-        commands.append('tick')
+        commands.extend([
+            *(f'seal {program} {slot} {self.server.epoch + 1}' for program, slot in self.server.input_ports),
+            *(['diag'] if self.server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
         plans = sorted({target for target, _ in live})
         commands.extend(f'peek {p}::answer as corgi' for p in plans)
         t1 = time.perf_counter()
         if loads:
             self.server.commands(loads)
         _, replies = self.server.commands(commands)
+        self.server.epoch += 1
         t2 = time.perf_counter()
         self.live = live
         answers = defaultdict(list)

@@ -163,6 +163,13 @@ fn start_server(workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStrea
     (server, writer, reader)
 }
 
+/// Seal the inputs contributing to this test's read at `upper - 1`.
+fn seal_inputs(writer: &mut TcpStream, reader: &mut BufReader<TcpStream>, inputs: &[&str], upper: u64) {
+    for input in inputs {
+        request(writer, reader, "s", &format!("s seal {input} {upper}\n"));
+    }
+}
+
 fn assert_commands_replay() {
     let (server, mut writer, mut reader) = start_server(4);
 
@@ -176,9 +183,9 @@ fn assert_commands_replay() {
         &mut writer,
         &mut reader,
         "r1",
-        "r1 feed world 0 begin\n7 val=9\n7 val=3\nr1 end-feed\n",
+        "r1 feed world 0 time=0 begin\n7 val=9\n7 val=3\nr1 end-feed\n",
     );
-    request(&mut writer, &mut reader, "r3", "r3 tick\n");
+    request(&mut writer, &mut reader, "r3", "r3 seal world 0 1\n");
     let rows = request(&mut writer, &mut reader, "r4", "r4 peek world::rows as corgi\n");
     assert_eq!(
         rows,
@@ -199,7 +206,7 @@ fn assert_commands_replay() {
     );
 
     request(&mut writer, &mut reader, "r6", "r6 tail world::rows as corgi\n");
-    request(&mut writer, &mut reader, "r7", "r7 feed world 0 8 val=10\n");
+    request(&mut writer, &mut reader, "r7", "r7 feed world 0 time=1 8 val=10\n");
     reader
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(100)))
@@ -209,24 +216,21 @@ fn assert_commands_replay() {
         Err(error)
             if error.kind() == std::io::ErrorKind::WouldBlock
                 || error.kind() == std::io::ErrorKind::TimedOut => {}
-        result => panic!("tail advanced without an explicit tick: {result:?} {unexpected:?}"),
+        result => panic!("tail advanced without an input seal: {result:?} {unexpected:?}"),
     }
     reader
         .get_mut()
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     let mut tail_update = Vec::new();
-    request_observing(&mut writer, &mut reader, "r8", "r8 tick\n", |line, payload| {
+    request_observing(&mut writer, &mut reader, "r8", "advance seal world 0 2\nr8 spin\n", |line, payload| {
         if let (true, Some(payload)) = (line.starts_with("r6 frame data "), payload) {
             tail_update.extend(frame_rows(payload));
         }
     });
     assert_eq!(tail_update, vec!["time=1 diff=1 key=tuple(8) val=tuple(10)"]);
 
-    // Server-side sourcing: every worker feeds its shard of the recipe, so the
-    // union is the source exactly once however many workers there are. Its own
-    // program, because a recipe's rows carry a unit value and `world`'s carry
-    // an integer, and one input holds one shape.
+    // Every worker receives its share of a text batch. Each supplied row appears once.
     request(&mut writer, &mut reader, "r9", "r9 stop r6\n");
     request(
         &mut writer,
@@ -234,8 +238,8 @@ fn assert_commands_replay() {
         "r10",
         "r10 load counted begin\nlet rows = input 0 : ((int), ());\noutput \"counted\" = rows;\nr10 end-load\n",
     );
-    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 begin\n0\n1\n2\n3\n4\nr11 end-feed\n");
-    request(&mut writer, &mut reader, "r12", "r12 tick\n");
+    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 time=0 begin\n0\n1\n2\n3\n4\nr11 end-feed\n");
+    request(&mut writer, &mut reader, "r12", "r12 seal counted 0 1\n");
     let rows = request(&mut writer, &mut reader, "r13", "r13 peek counted::counted as corgi\n");
     assert_eq!(
         rows,
@@ -261,14 +265,14 @@ fn peek_rows_feed_another_program() {
     for (id, program, export) in [("a", "first", "original"), ("b", "second", "copied")] {
         request(&mut writer, &mut reader, id, &format!("{id} load {program} begin\n{declaration}\noutput \"{export}\" = rows;\n{id} end-load\n"));
     }
-    request(&mut writer, &mut reader, "f", "f feed first 0 begin\ntuple(inject(0,tuple()),list(inject(1,3))) val=inject(1,8)\ntuple(inject(1,-2),list()) val=inject(0,tuple())\nf end-feed\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed first 0 time=0 begin\ntuple(inject(0,tuple()),list(inject(1,3))) val=inject(1,8)\ntuple(inject(1,-2),list()) val=inject(0,tuple())\nf end-feed\n");
+    request(&mut writer, &mut reader, "t", "t seal first 0 1\n");
     let rows = request(&mut writer, &mut reader, "p", "p peek first::original\n");
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().any(|line| line.contains("inject(0,tuple())")));
     let body = rows.join("\n");
-    request(&mut writer, &mut reader, "f", &format!("f feed second 0 begin\n{body}\nf end-feed\n"));
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", &format!("f feed second 0 time=0 begin\n{body}\nf end-feed\n"));
+    request(&mut writer, &mut reader, "t", "t seal second 0 1\n");
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek second::copied\n"), rows);
     drop(reader);
     drop(writer);
@@ -281,15 +285,15 @@ fn text_tail_rows_keep_epochs_and_retractions() {
     request(&mut writer, &mut reader, "l", "l load source begin\nlet rows = input 0 : ((int), ());\noutput \"changes\" = rows;\nl end-load\n");
     request(&mut writer, &mut reader, "w", "w tail source::changes\n");
     request(&mut writer, &mut reader, "c", "c tail source::changes as columns\n");
-    request(&mut writer, &mut reader, "f", "f feed source 0 tuple(7)\n");
+    request(&mut writer, &mut reader, "f", "f feed source 0 time=0 tuple(7)\n");
     let mut changes = Vec::new();
     let mut columns = Vec::new();
-    request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, _| {
+    request_observing(&mut writer, &mut reader, "t", "advance seal source 0 1\nt spin\n", |line, _| {
         if let Some(row) = line.strip_prefix("w data ") { changes.push(row.to_string()); }
         if let Some(batch) = line.strip_prefix("c data ") { columns.push(batch.to_string()); }
     });
-    request(&mut writer, &mut reader, "f", "f feed source 0 tuple(7) diff=-1\n");
-    request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, _| {
+    request(&mut writer, &mut reader, "f", "f feed source 0 time=1 tuple(7) diff=-1\n");
+    request_observing(&mut writer, &mut reader, "t", "advance seal source 0 2\nt spin\n", |line, _| {
         if let Some(row) = line.strip_prefix("w data ") { changes.push(row.to_string()); }
         if let Some(batch) = line.strip_prefix("c data ") { columns.push(batch.to_string()); }
     });
@@ -310,13 +314,13 @@ fn assert_typed_sources() {
     // Neither a first empty list nor a never-populated sum lane can supply
     // its encoding by example. Both the producer and imported trace use the
     // declared shape, without sentinel rows or altered data.
-    request(&mut writer, &mut reader, "f", "f feed graph 0 tuple(1,list(),inject(0,tuple()))\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed graph 0 time=0 tuple(1,list(),inject(0,tuple()))\n");
+    request(&mut writer, &mut reader, "t", "t seal graph 0 1\n");
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek copy::typed.copy as corgi\n"),
         vec!["diff=1 key=tuple(1,list(),inject(0,tuple())) val=tuple()"]);
-    request(&mut writer, &mut reader, "f2", "f2 feed graph 0 tuple(2,list(97),inject(1,list()))\n");
-    request(&mut writer, &mut reader, "f3", "f3 feed graph 0 tuple(1,list(),inject(0,tuple())) diff=-1\n");
-    request(&mut writer, &mut reader, "t2", "t2 tick\n");
+    request(&mut writer, &mut reader, "f2", "f2 feed graph 0 time=1 tuple(2,list(97),inject(1,list()))\n");
+    request(&mut writer, &mut reader, "f3", "f3 feed graph 0 time=1 tuple(1,list(),inject(0,tuple())) diff=-1\n");
+    request(&mut writer, &mut reader, "t2", "t2 seal graph 0 2\n");
     assert_eq!(request(&mut writer, &mut reader, "p2", "p2 peek copy::typed.copy as corgi\n"),
         vec!["diff=1 key=tuple(2,list(97),inject(1,list())) val=tuple()"]);
     drop(reader);
@@ -354,15 +358,15 @@ fn assert_shared_import_requests(workers: usize) {
         &mut writer,
         &mut reader,
         "f",
-        "f feed graph 0 begin\n1 val=2\n1 val=3\n2 val=4\nf end-feed\n",
+        "f feed graph 0 time=0 begin\n1 val=2\n1 val=3\n2 val=4\nf end-feed\n",
     );
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 1);
     for name in ["a", "b"] {
         assert!(request(
             &mut writer,
             &mut reader,
             "p",
-            &format!("p peek {name}::answer as corgi\n")
+            &format!("p peek {name}::answer as-of 0 as corgi\n")
         )
         .is_empty());
     }
@@ -372,66 +376,66 @@ fn assert_shared_import_requests(workers: usize) {
         &mut writer,
         &mut reader,
         "f",
-        "f feed a 0 begin\n10,1\n11,1\n12,99\nf end-feed\n",
+        "f feed a 0 time=1 begin\n10,1\n11,1\n12,99\nf end-feed\n",
     );
-    request(&mut writer, &mut reader, "f", "f feed b 0 20,2\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed b 0 time=1 20,2\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 2);
     let answer = |rid, node| format!("diff=1 key=tuple({rid}) val=tuple({node})");
     assert_eq!(
-        request(&mut writer, &mut reader, "p", "p peek a::answer as corgi\n"),
+        request(&mut writer, &mut reader, "p", "p peek a::answer as-of 1 as corgi\n"),
         vec![answer(10, 2), answer(10, 3), answer(11, 2), answer(11, 3)]
     );
     assert_eq!(
-        request(&mut writer, &mut reader, "p", "p peek b::answer as corgi\n"),
+        request(&mut writer, &mut reader, "p", "p peek b::answer as-of 1 as corgi\n"),
         vec![answer(20, 4)]
     );
 
     // Retract one request without removing the other equal binding. Graph
     // changes maintain active requests in both independently installed plans.
-    request(&mut writer, &mut reader, "f", "f feed a 0 10,1 diff=-1\n");
+    request(&mut writer, &mut reader, "f", "f feed a 0 time=2 10,1 diff=-1\n");
     request(
         &mut writer,
         &mut reader,
         "f",
-        "f feed graph 0 begin\n1 val=3 diff=-1\n1 val=5\n2 val=4 diff=-1\n2 val=6\nf end-feed\n",
+        "f feed graph 0 time=2 begin\n1 val=3 diff=-1\n1 val=5\n2 val=4 diff=-1\n2 val=6\nf end-feed\n",
     );
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 3);
     assert_eq!(
-        request(&mut writer, &mut reader, "p", "p peek a::answer as corgi\n"),
+        request(&mut writer, &mut reader, "p", "p peek a::answer as-of 2 as corgi\n"),
         vec![answer(11, 2), answer(11, 5)]
     );
     assert_eq!(
-        request(&mut writer, &mut reader, "p", "p peek b::answer as corgi\n"),
+        request(&mut writer, &mut reader, "p", "p peek b::answer as-of 2 as corgi\n"),
         vec![answer(20, 6)]
     );
     request(
         &mut writer,
         &mut reader,
         "f",
-        "f feed a 0 begin\n11,1 diff=-1\n12,99 diff=-1\nf end-feed\n",
+        "f feed a 0 time=3 begin\n11,1 diff=-1\n12,99 diff=-1\nf end-feed\n",
     );
-    request(&mut writer, &mut reader, "f", "f feed b 0 20,2 diff=-1\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed b 0 time=3 20,2 diff=-1\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 4);
     for name in ["a", "b"] {
         assert!(request(
             &mut writer,
             &mut reader,
             "p",
-            &format!("p peek {name}::answer as corgi\n")
+            &format!("p peek {name}::answer as-of 3 as corgi\n")
         )
         .is_empty());
     }
     // Reuse an id with a different parameter against the changed graph. No
     // program reinstall and no retained answer from its previous binding.
-    request(&mut writer, &mut reader, "f", "f feed a 0 10,2\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed a 0 time=4 10,2\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 5);
     assert_eq!(
-        request(&mut writer, &mut reader, "p", "p peek a::answer as corgi\n"),
+        request(&mut writer, &mut reader, "p", "p peek a::answer as-of 4 as corgi\n"),
         vec![answer(10, 6)]
     );
-    request(&mut writer, &mut reader, "f", "f feed a 0 10,2 diff=-1\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
-    assert!(request(&mut writer, &mut reader, "p", "p peek a::answer as corgi\n").is_empty());
+    request(&mut writer, &mut reader, "f", "f feed a 0 time=5 10,2 diff=-1\n");
+    seal_inputs(&mut writer, &mut reader, &["graph 0", "a 0", "b 0"], 6);
+    assert!(request(&mut writer, &mut reader, "p", "p peek a::answer as-of 5 as corgi\n").is_empty());
     request(&mut writer, &mut reader, "d", "d drop a\n");
     request(&mut writer, &mut reader, "d", "d drop b\n");
     request(&mut writer, &mut reader, "d", "d drop graph\n");
@@ -458,23 +462,24 @@ fn keep_frame(frames: &mut Vec<(String, Vec<u8>)>, reqid: &str, line: &str, payl
     }
 }
 
-/// A binary tail starts with a `schema` frame, and its `data` frames, summed over every tick from
-/// the replay on, are a binary peek's answer after each tick. Its `progress` frames say how far
+/// A binary tail starts with a `schema` frame, and its `data` frames, summed through each sealed cut from
+/// the replay on, are a binary peek's answer at that cut. Its `progress` frames say how far
 /// it has sent. Lists and sums included.
 fn assert_tail_frames_sum_to_peeks(workers: usize) {
     use interactive::runtime::frame;
     use std::collections::BTreeMap;
     let (server, mut writer, mut reader) = start_server(workers);
     request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)), Option(int));\noutput \"rows\" = rows | arrange;\ng end-load\n");
-    request(&mut writer, &mut reader, "f", "f feed graph 0 begin\ntuple(1,list(2,3)) val=inject(1,7)\ntuple(2,list()) val=inject(0,tuple())\nf end-feed\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed graph 0 time=0 begin\ntuple(1,list(2,3)) val=inject(1,7)\ntuple(2,list()) val=inject(0,tuple())\nf end-feed\n");
+    request(&mut writer, &mut reader, "t", "t seal graph 0 1\n");
     let mut frames = Vec::new();
     request_observing(&mut writer, &mut reader, "w", "w tail graph::rows as corgi\n", |line, payload| keep_frame(&mut frames, "w", line, payload));
     assert_eq!(frames.first().map(|f| f.0.as_str()), Some("schema"));
     let feeds = ["tuple(3,list(4)) val=inject(1,-1)", "tuple(1,list(2,3)) val=inject(1,7) diff=-1", "tuple(2,list()) val=inject(0,tuple()) diff=2"];
     for (round, feed) in feeds.into_iter().enumerate() {
-        request(&mut writer, &mut reader, "f", &format!("f feed graph 0 begin\n{feed}\nf end-feed\n"));
-        request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, payload| keep_frame(&mut frames, "w", line, payload));
+        let time = round + 1;
+        request(&mut writer, &mut reader, "f", &format!("f feed graph 0 time={time} begin\n{feed}\nf end-feed\n"));
+        request_observing(&mut writer, &mut reader, "t", &format!("advance seal graph 0 {}\nt spin\n", time + 1), |line, payload| keep_frame(&mut frames, "w", line, payload));
         let mut changes: BTreeMap<(String, String), i64> = BTreeMap::new();
         for (_, payload) in frames.iter().filter(|f| f.0 == "data") {
             for (key, val, diff) in frame::decode(payload).unwrap().0.rows() {
@@ -483,7 +488,7 @@ fn assert_tail_frames_sum_to_peeks(workers: usize) {
         }
         changes.retain(|_, diff| *diff != 0);
         let mut peeked = Vec::new();
-        request_observing(&mut writer, &mut reader, "p", "p peek graph::rows as corgi\n", |line, payload| keep_frame(&mut peeked, "p", line, payload));
+        request_observing(&mut writer, &mut reader, "p", &format!("p peek graph::rows as-of {time} as corgi\n"), |line, payload| keep_frame(&mut peeked, "p", line, payload));
         let (updates, _) = frame::decode(&peeked.iter().find(|f| f.0 == "data").unwrap().1).unwrap();
         let answer: BTreeMap<(String, String), i64> = updates.rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect();
         assert_eq!(changes, answer, "round {round}, {workers} workers");
@@ -554,31 +559,31 @@ fn assert_framed_feeds(workers: usize) {
     let rows: Vec<(String, Option<String>, i64)> = (0..10).map(|i| (format!("tuple({i},list({}))", "7,".repeat(i as usize).trim_end_matches(',')), Some(format!("tuple({})", 300 * i - 1000)), i + 1)).collect();
     let rows: Vec<(&str, Option<&str>, i64)> = rows.iter().map(|(k, v, d)| (k.as_str(), v.as_deref(), *d)).collect();
     let bytes = feed_frame(&shape, &rows);
-    framed(&mut writer, &mut reader, "r1", &format!("r1 feed fed 0 frame {}\n", bytes.len()), &bytes).unwrap();
-    request(&mut writer, &mut reader, "r2", "r2 tick\n");
+    framed(&mut writer, &mut reader, "r1", &format!("r1 feed fed 0 time=0 frame {}\n", bytes.len()), &bytes).unwrap();
+    request(&mut writer, &mut reader, "r2", "r2 seal fed 0 1\n");
     let fed = request(&mut writer, &mut reader, "r3", "r3 peek fed::fed as corgi\n");
     // The same rows fed as text, to another program, are the reference.
     request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)), (int));\noutput \"text\" = rows;\nr4 end-load\n");
     let body: String = rows.iter().map(|(k, v, d)| format!("{k} val={} diff={d}\n", v.unwrap())).collect();
-    request(&mut writer, &mut reader, "r5", &format!("r5 feed text 0 begin\n{body}r5 end-feed\n"));
-    request(&mut writer, &mut reader, "r6", "r6 tick\n");
+    request(&mut writer, &mut reader, "r5", &format!("r5 feed text 0 time=0 begin\n{body}r5 end-feed\n"));
+    request(&mut writer, &mut reader, "r6", "r6 seal text 0 1\n");
     let text = request(&mut writer, &mut reader, "r7", "r7 peek text::text as corgi\n");
     assert_eq!(fed.len(), 10);
     assert_eq!(fed, text);
 
     // Another shape: the value is not a one-field tuple.
     let other = feed_frame(&declared("((int, List(int)), int)"), &[("tuple(1,list())", Some("5"), 1)]);
-    let error = framed(&mut writer, &mut reader, "r8", &format!("r8 feed fed 0 frame {}\n", other.len()), &other).unwrap_err();
+    let error = framed(&mut writer, &mut reader, "r8", &format!("r8 feed fed 0 time=1 frame {}\n", other.len()), &other).unwrap_err();
     assert!(error.contains("shape"), "{error}");
     // Cut short: its header counts the bytes sent, but they are not a whole frame.
     let short = &bytes[..bytes.len() - 8];
-    assert!(framed(&mut writer, &mut reader, "r9", &format!("r9 feed fed 0 frame {}\n", short.len()), short).is_err());
+    assert!(framed(&mut writer, &mut reader, "r9", &format!("r9 feed fed 0 time=1 frame {}\n", short.len()), short).is_err());
     // More bytes than a feed may hold, and an input with no declared shape: read past, refused.
-    let too_large = framed(&mut writer, &mut reader, "r10", &format!("r10 feed fed 0 frame {}\n", 17 << 20), &vec![0; 17 << 20]).unwrap_err();
+    let too_large = framed(&mut writer, &mut reader, "r10", &format!("r10 feed fed 0 time=1 frame {}\n", 17 << 20), &vec![0; 17 << 20]).unwrap_err();
     assert!(too_large.contains("exceeds"), "{too_large}");
-    assert!(framed(&mut writer, &mut reader, "r11", &format!("r11 feed fed 3 frame {}\n", bytes.len()), &bytes).is_err());
+    assert!(framed(&mut writer, &mut reader, "r11", &format!("r11 feed fed 3 time=1 frame {}\n", bytes.len()), &bytes).is_err());
     // The session reads on: nothing refused reached the program.
-    request(&mut writer, &mut reader, "r12", "r12 tick\n");
+    request(&mut writer, &mut reader, "r12", "r12 seal fed 0 2\n");
     assert_eq!(request(&mut writer, &mut reader, "r13", "r13 peek fed::fed as corgi\n"), fed);
 
     drop(reader);
@@ -643,8 +648,8 @@ fn refused_loads_do_not_redirect_named_inputs() {
     request(&mut writer, &mut reader, "l1", &format!("l1 load g begin\n{}\nl1 end-load\n", program("a", "b")));
     let refused = framed(&mut writer, &mut reader, "l2", &format!("l2 load g begin\n{}\nl2 end-load\n", program("b", "a")), &[]);
     assert!(matches!(&refused, Err(e) if e.contains("already installed")), "{refused:?}");
-    request(&mut writer, &mut reader, "f", "f feed g a 7\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed g a time=0 7\n");
+    seal_inputs(&mut writer, &mut reader, &["g a", "g b"], 1);
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek g::a\n"), ["tuple(7)"]);
     assert!(request(&mut writer, &mut reader, "q", "q peek g::b\n").is_empty());
     drop(reader);
@@ -659,12 +664,12 @@ fn loads_bind_inputs_to_published_outputs() {
     let (server, mut writer, mut reader) = start_server(2);
     request(&mut writer, &mut reader, "g", "g load g begin\nlet e = input \"e\" : ((int), (int));\noutput \"edges\" = e | arrange;\ng end-load\n");
     request(&mut writer, &mut reader, "q", "q load q edges=g::edges begin\nlet edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));\nq end-load\n");
-    request(&mut writer, &mut reader, "f", "f feed g e begin\n1 val=2\n1 val=3\n4 val=5\nf end-feed\n");
-    request(&mut writer, &mut reader, "r", "r feed q roots 1\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed g e time=0 begin\n1 val=2\n1 val=3\n4 val=5\nf end-feed\n");
+    request(&mut writer, &mut reader, "r", "r feed q roots time=0 1\n");
+    seal_inputs(&mut writer, &mut reader, &["g e", "q roots"], 1);
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek q::hop\n"), ["tuple(tuple(2))", "tuple(tuple(3))"]);
-    request(&mut writer, &mut reader, "f", "f feed g::e 1 val=3 diff=-1\n");
-    request(&mut writer, &mut reader, "t", "t tick\n");
+    request(&mut writer, &mut reader, "f", "f feed g::e time=1 1 val=3 diff=-1\n");
+    seal_inputs(&mut writer, &mut reader, &["g e", "q roots"], 2);
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek q::hop\n"), ["tuple(tuple(2))"]);
     drop(reader);
     drop(writer);

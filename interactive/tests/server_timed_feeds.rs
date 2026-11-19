@@ -2,6 +2,7 @@
 //! with no `tick`. The program's outputs are complete before the least of the times its inputs
 //! stand at. A reader can revisit completed times down to the explicitly chosen read floor.
 
+use timely::progress::Antichain;
 use interactive::runtime::container::Updates;
 use interactive::runtime::feed::FeedDecoder;
 use interactive::server::{host_time, HostTime, Server};
@@ -36,12 +37,12 @@ fn stepping_and_spinning_an_ordinary_program() {
         let (rows, times) = batch(&[(1, 10, 0, 1), (2, 20, 4, 1)]);
         server.feed_timed("p", 0, rows, times).unwrap();
 
-        server.advance_input("p", 0, &host_time(10)).unwrap();
+        server.seal("p", 0, &Antichain::from_elem(host_time(10))).unwrap();
         worker.step();
         assert_eq!(server.input_time("p", 1).map(first), Ok(0));
         assert!(server.snapshot_as_of(worker, trace, &host_time(0)).is_err());
 
-        server.advance_input("p", 1, &host_time(5)).unwrap();
+        server.seal("p", 1, &Antichain::from_elem(host_time(5))).unwrap();
         worker.step();
         server.wait_for(worker, trace, &host_time(5)).unwrap();
         assert_eq!(server.trace_since(trace).map(first), Some(0));
@@ -49,7 +50,7 @@ fn stepping_and_spinning_an_ordinary_program() {
         assert_eq!(server.snapshot_as_of(worker, trace, &host_time(4)).unwrap().len(), 2);
 
         // The host can give up old reads independently of either writer.
-        server.compact(trace, &host_time(1)).unwrap();
+        server.trim(worker, trace, Some(&host_time(1))).unwrap();
         assert!(server.snapshot_as_of(worker, trace, &host_time(0)).is_err());
         assert_eq!(server.snapshot_as_of(worker, trace, &host_time(1)).unwrap().len(), 1);
         assert_eq!(server.input_time("p", 0).map(first), Ok(10));
@@ -67,7 +68,6 @@ fn stepping_and_spinning_an_ordinary_program() {
 #[test]
 fn one_container_can_use_incomparable_capabilities() {
     use interactive::server::HostContainer;
-    use timely::progress::Antichain;
 
     let point = |x, y| HostTime::new(smallvec::smallvec![x, y]);
     let guards = timely::execute(timely::Config::process(3), move |worker| {
@@ -98,7 +98,7 @@ fn one_container_can_use_incomparable_capabilities() {
             let snapshot = server.snapshot_as_of(worker, "p::rows", &cut).unwrap();
             if worker.index() == 0 { assert_eq!(&*snapshot.diffs, &[expected]); }
         }
-        server.advance_input("p", 0, &point(3, 3)).unwrap();
+        server.seal("p", 0, &Antichain::from_elem(point(3, 3))).unwrap();
         server.seal("p", 0, &Antichain::new()).unwrap();
         server.spin(worker);
         assert!(server.write_frontier("p", 0).unwrap().is_empty());

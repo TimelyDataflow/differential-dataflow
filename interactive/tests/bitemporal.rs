@@ -6,10 +6,11 @@
 //! The query is account balances (a `count` whose multiplicities are the amounts), each owner's
 //! total (a join then a count), each owner's least-balance account (a join then a `min`), and
 //! the accounts reachable over links from accounts in credit (a loop). The server is driven as
-//! a client would drive it: feeds at `(s, e)` times, `tick` for system time, `advance` for event
+//! a client would drive it: feeds at `(s, e)` times and per-input seals advancing system or event
 //! time, and `snapshot_as_of` at a point. The oracle recomputes each export from the fed rows at
 //! or before the point.
 
+use timely::progress::Antichain;
 use std::collections::{BTreeMap, BTreeSet};
 
 use interactive::server::{HostTime, Server};
@@ -36,9 +37,9 @@ enum Step {
     Feed { input: usize, rows: Vec<(Vec<i64>, i64)>, time: Point },
     /// A feed below `now`, which the server must refuse.
     Refused { input: usize, rows: Vec<(Vec<i64>, i64)>, time: Point },
-    /// `tick`: system time forward by one.
-    Tick,
-    /// `advance 1`: event time forward by `by`.
+    /// Seal the next system day.
+    NextDay,
+    /// Seal event time forward by `by`.
     AdvanceEvent(u64),
 }
 
@@ -136,7 +137,7 @@ impl Fed {
 }
 
 /// Run `steps` on a server with root time `(system, event)` on `workers` workers, and after
-/// every `tick` or `advance` check each export at every readable point of a small grid against
+/// every change to the input frontiers check each export at every readable point of a small grid against
 /// the oracle. Feeds are issued by worker 0 only, as the server binary does; every worker runs
 /// the clock commands and the reads (a snapshot is a small dataflow that gathers to worker 0,
 /// which every worker takes part in), and worker 0 compares. Returns the number of
@@ -160,7 +161,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 Step::Feed { input, rows, time } => {
                     if w0 {
                         if shared && *input == 1 && time.1 == 0 {
-                            server.feed("seed", 0, &feed_text(*input, rows), Some(time.0)).unwrap();
+                            server.feed("seed", 0, &feed_text(*input, rows), time.0).unwrap();
                         } else {
                             server.feed_at("bank", *input, &feed_text(*input, rows), &at(*time)).unwrap();
                         }
@@ -169,26 +170,32 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 }
                 Step::Refused { input, rows, time } => {
                     let result = server.feed_at("bank", *input, &feed_text(*input, rows), &at(*time));
-                    assert!(result.is_err(), "a feed at {time:?} below now {:?} was accepted", server.now("bank").unwrap());
+                    assert!(result.is_err(), "a feed at {time:?} below its input frontier {:?} was accepted", server.input_time("bank", *input).unwrap());
                 }
-                Step::Tick => {
-                    if shared { server.tick(worker); }
-                    server.tick_program(worker, "bank").unwrap();
-                },
-                Step::AdvanceEvent(by) => {
-                    let now = server.now("bank").unwrap();
-                    let next = at((lane(now, 0), lane(now, 1) + by));
+                Step::NextDay | Step::AdvanceEvent(_) => {
+                    let current = server.input_time("bank", 0).unwrap();
+                    let (s, e) = (lane(current, 0), lane(current, 1));
+                    let next = match step {
+                        Step::AdvanceEvent(by) => (s, e + by),
+                        _ => (s + 1, e),
+                    };
                     if shared {
-                        server.advance_input("seed", 0, &at((lane(now, 0) + 1, 0))).unwrap();
+                        server.seal("seed", 0, &Antichain::from_elem(at((s + 1, 0)))).unwrap();
                     }
-                    server.advance_to(worker, "bank", &next).unwrap();
-                },
+                    let frontier = Antichain::from_elem(at(next));
+                    for input in 0..3 { server.seal("bank", input, &frontier).unwrap(); }
+                    server.spin(worker);
+                    let floor = at((next.0.saturating_sub(1), 0));
+                    for export in EXPORTS {
+                        server.trim(worker, &format!("bank::{export}"), Some(&floor)).unwrap();
+                    }
+                }
             }
-            if !matches!(step, Step::Tick | Step::AdvanceEvent(_)) { continue; }
-            // Every point of the grid that is closed and not compacted away, by the server's own
-            // rule: the last closed epoch at every event time, and the open epoch below its event
+            if !matches!(step, Step::NextDay | Step::AdvanceEvent(_)) { continue; }
+            // Every point of the grid that is closed and not compacted away, under the chosen
+            // read floor: the last closed epoch at every event time, and the open epoch below its event
             // time.
-            let now = server.now("bank").unwrap().clone();
+            let now = server.input_time("bank", 0).unwrap().clone();
             let s = lane(&now, 0);
             let mut points: Vec<Point> = (0..=max_event + 1).chain([u64::MAX]).flat_map(|ev| [(s.saturating_sub(1), ev), (s, ev)]).collect();
             points.retain(|p| !now.less_equal(&at(*p))
@@ -197,7 +204,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 let expected = fed.expected(point);
                 for export in EXPORTS {
                     // Reads conservatively require the whole program and its imports to close the point.
-                    if shared && server.input_frontier("seed", 0).unwrap().less_equal(&at(point)) { continue; }
+                    if shared && server.input_time("seed", 0).unwrap().less_equal(&at(point)) { continue; }
                     let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at(point)).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     if !w0 { continue; }
@@ -207,7 +214,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             }
         }
         // A point compacted away is refused.
-        let now = server.now("bank").unwrap().clone();
+        let now = server.input_time("bank", 0).unwrap().clone();
         if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "bank::balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
             let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "bank::balance";"#));
@@ -233,27 +240,27 @@ fn hand_scenario() -> Vec<Step> {
         Step::Feed { input: 0, rows: vec![row(&[1], 100), row(&[3], 70)], time: (0, 1) },
         Step::Feed { input: 0, rows: vec![row(&[2], 50)], time: (0, 2) },
         Step::Feed { input: 0, rows: vec![row(&[4], -20)], time: (0, 3) },
-        Step::Tick,
+        Step::NextDay,
         // Late: event time 1 is below the event time 3 already seen.
         Step::Feed { input: 0, rows: vec![row(&[2], 5)], time: (1, 1) },
         Step::Feed { input: 0, rows: vec![row(&[1], -30)], time: (1, 3) },
         // Account 3 changes owner from event time 2 on; the link 2 -> 3 is cut from event time 2 on.
         Step::Feed { input: 1, rows: vec![row(&[3, 20], -1), row(&[3, 10], 1)], time: (1, 2) },
         Step::Feed { input: 2, rows: vec![row(&[2, 3], -1)], time: (1, 2) },
-        Step::Tick,
+        Step::NextDay,
         Step::AdvanceEvent(2),
         Step::Refused { input: 0, rows: vec![row(&[1], 1)], time: (2, 1) },
         Step::Feed { input: 0, rows: vec![row(&[1], 1)], time: (2, 2) },
         Step::Feed { input: 0, rows: vec![row(&[4], 40)], time: (2, 5) },
-        Step::Tick,
+        Step::NextDay,
         // Account 2's balance cancels to zero from event time 2 at system time 3.
         Step::Feed { input: 0, rows: vec![row(&[2], -55)], time: (3, 2) },
-        Step::Tick,
-        Step::Tick,
+        Step::NextDay,
+        Step::NextDay,
     ]
 }
 
-/// Random feeds at random event times, late ones included, with ticks and event advances.
+/// Random feeds at random event times, late ones included, with advances in system and event time.
 fn random_scenario(seed: u64, rounds: usize) -> Vec<Step> {
     let mut state = seed;
     let mut next = |n: u64| { state ^= state << 13; state ^= state >> 7; state ^= state << 17; state % n };
@@ -284,7 +291,7 @@ fn random_scenario(seed: u64, rounds: usize) -> Vec<Step> {
                 }
             }
         }
-        if next(4) == 0 { e += 1; steps.push(Step::AdvanceEvent(1)); } else { s += 1; steps.push(Step::Tick); }
+        if next(4) == 0 { e += 1; steps.push(Step::AdvanceEvent(1)); } else { s += 1; steps.push(Step::NextDay); }
     }
     steps
 }
@@ -314,18 +321,18 @@ fn demo_scenario() -> Vec<(&'static str, Vec<Step>)> {
             Step::Feed { input: 1, rows: vec![row(&[1, 10], 1), row(&[2, 10], 1), row(&[3, 20], 1)], time: (0, 0) },
             Step::Feed { input: 0, rows: vec![row(&[1], 100), row(&[3], 70)], time: (0, 1) },
             Step::Feed { input: 0, rows: vec![row(&[2], 50)], time: (0, 2) },
-            Step::Tick,
+            Step::NextDay,
         ]),
         ("Day 1: a late deposit of 5 to account 2, dated day 1 (day 2 was already booked); a withdrawal of 30 from account 1, dated day 3.", vec![
             Step::Feed { input: 0, rows: vec![row(&[2], 5)], time: (1, 1) },
             Step::Feed { input: 0, rows: vec![row(&[1], -30)], time: (1, 3) },
-            Step::Tick,
+            Step::NextDay,
         ]),
         ("Day 2: the 70 deposited to account 3 on day 1 was booked in error; it is reversed, dated day 1.", vec![
             Step::Feed { input: 0, rows: vec![row(&[3], -70)], time: (2, 1) },
-            Step::Tick,
+            Step::NextDay,
         ]),
-        ("Day 3: nothing new is learned.", vec![Step::Tick]),
+        ("Day 3: nothing new is learned.", vec![Step::NextDay]),
     ]
 }
 
@@ -375,13 +382,21 @@ fn bitemporal_demo() {
                             fed_json.push(format!("{{\"input\": {input}, \"fields\": {fields:?}, \"diff\": {diff}, \"system\": {}, \"event\": {}}}", time.0, time.1));
                         }
                     }
-                    Step::Tick => server.tick_program(worker, "bank").unwrap(),
+                    Step::NextDay => {
+                        let day = lane(server.input_time("bank", 0).unwrap(), 0);
+                        let frontier = Antichain::from_elem(at((day + 1, 0)));
+                        for input in 0..3 { server.seal("bank", input, &frontier).unwrap(); }
+                        server.spin(worker);
+                        for export in EXPORTS {
+                            server.trim(worker, &format!("bank::{export}"), Some(&at((day, 0)))).unwrap();
+                        }
+                    }
                     other => panic!("not in the demo: {other:?}"),
                 }
             }
             // The day just closed is readable at every event time; read it, check it, keep it.
-            let closed = lane(server.now("bank").unwrap(), 0) - 1;
-            println!("\n== {label}\n   (now: bookkeeping day {} open)", lane(server.now("bank").unwrap(), 0));
+            let closed = lane(server.input_time("bank", 0).unwrap(), 0) - 1;
+            println!("\n== {label}\n   (now: bookkeeping day {} open)", lane(server.input_time("bank", 0).unwrap(), 0));
             for export in DEMO_EXPORTS {
                 let row: Vec<Rows> = events.iter().map(|&(_, e)| {
                     let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at((closed, e))).unwrap().rows().into_iter()
@@ -455,21 +470,22 @@ fn independent_inputs_and_time_shapes() {
                 server.feed_at("split", 0, "7 val=1", &at((0, 0))).unwrap();
                 server.feed_at("split", 0, "8 val=1", &at((0, 5))).unwrap();
             }
-            server.advance_input("split", 0, &at((1, 0))).unwrap();
+            server.seal("split", 0, &Antichain::from_elem(at((1, 0)))).unwrap();
             server.wait_for(worker, "split::left", &at((1, 0))).unwrap();
             // Input 1 and the exports using it remain open at the minimum.
             let error = server.snapshot(worker, "split::left").unwrap_err();
             assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
             assert_eq!(server.peek(worker, "split::left", None).unwrap_err(), error);
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
-            server.advance_input("split", 0, &at((5, 0))).unwrap();
-            let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
-            assert_eq!(error, "cannot advance input \"split\"/0 from frontier 5 to requested target [3,7]");
-            assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
+            assert_eq!(server.input_time("split", 1).unwrap(), &at((0, 0)));
+            server.seal("split", 0, &Antichain::from_elem(at((5, 0)))).unwrap();
+            let error = server.seal("split", 0, &Antichain::from_elem(at((3, 7)))).unwrap_err();
+            assert_eq!(error, "cannot seal input \"split\"/0 to [3,7] from 5 at width 2");
+            assert_eq!(server.input_time("split", 0).unwrap(), &at((5, 0)));
+            assert_eq!(server.input_time("split", 1).unwrap(), &at((0, 0)), "a rejected seal leaves the other input alone");
             assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
             assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
             if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
-            server.advance_input("split", 1, &at((2, 0))).unwrap();
+            server.seal("split", 1, &Antichain::from_elem(at((2, 0)))).unwrap();
             for export in ["split::left", "split::seen", "split::delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
             let left = server.snapshot_as_of(worker, "split::left", &at((0, u64::MAX))).unwrap();
             let seen = server.snapshot_as_of(worker, "split::seen", &at((0, u64::MAX))).unwrap();
@@ -485,9 +501,13 @@ fn independent_inputs_and_time_shapes() {
                 let rows: Rows = delta.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                 assert_eq!(rows, vec![(vec![7], vec![1, 2, 0, 0], 1)]);
             }
-            server.compact("split::left", &at((0, 3))).unwrap();
+            // Both contributing input frontiers must dominate the new read floor.
+            assert!(server.trim(worker, "split::left", Some(&at((0, 3)))).is_err());
+            server.seal("split", 0, &Antichain::from_elem(at((5, 3)))).unwrap();
+            server.seal("split", 1, &Antichain::from_elem(at((2, 3)))).unwrap();
+            server.trim(worker, "split::left", Some(&at((0, 3)))).unwrap();
             assert!(server.snapshot_as_of(worker, "split::left", &at((0, 2))).is_err());
-            assert!(server.compact("split::left", &at((0, 1))).is_err());
+            assert!(server.trim(worker, "split::left", Some(&at((0, 1)))).is_err());
             let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "split::left" | lift;"#));
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
@@ -503,18 +523,26 @@ fn independent_inputs_and_time_shapes() {
             server.install(worker, "producer", &producer).unwrap();
             for width in [1, 2] {
                 let name = format!("consumer{width}");
-                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = import \"producer::lagging\";")));
+                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = (input 0 : (int, int)) + (import \"producer::lagging\");")));
                 server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
-                server.advance_to(worker, &name, &at((3, 0))).unwrap();
+                server.seal(&name, 0, &Antichain::from_elem(at((3, 0)))).unwrap();
+                server.spin(worker);
                 let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };
                 let error = server.snapshot_as_of(worker, &format!("{name}::{name}"), &point).unwrap_err();
                 assert!(error.contains("not closed") && error.contains("input/import frontier"), "{error}");
                 assert_eq!(server.peek_as_of(worker, &format!("{name}::{name}"), None, &point).unwrap_err(), error);
-                let default_error = server.snapshot(worker, &format!("{name}::{name}")).unwrap_err();
-                assert_eq!(server.peek(worker, &format!("{name}::{name}"), None).unwrap_err(), default_error);
-                // Loading a published trace calls snapshot_local, with the same read checks.
-                assert_eq!(server.load(worker, "split", 1, &format!("{name}::{name}"), 1).unwrap_err(), default_error);
-                if width == 1 { assert_eq!(default_error, error); }
+                let trace = format!("{name}::{name}");
+                if width == 1 {
+                    // A scalar latest read sees the closed past of the lagging producer.
+                    assert!(server.snapshot(worker, &trace).unwrap().is_empty());
+                    assert!(server.peek(worker, &trace, None).unwrap().is_empty());
+                    assert_eq!(server.load(worker, "split", 1, &trace, 1).unwrap(), 0);
+                } else {
+                    let default_error = server.snapshot(worker, &trace).unwrap_err();
+                    assert!(default_error.contains("width 2"), "{default_error}");
+                    assert_eq!(server.peek(worker, &trace, None).unwrap_err(), default_error);
+                    assert_eq!(server.load(worker, "split", 1, &trace, 1).unwrap_err(), default_error);
+                }
             }
         }).unwrap();
         for result in guards.join() { result.unwrap(); }

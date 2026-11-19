@@ -56,7 +56,7 @@ Run `cargo run -p ddir-server`, then connect a line-oriented client to TCP port
 7777. The same protocol is available
 over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
 defaults. `DDIR_DIAGNOSTICS=1` turns on diagnostics: the server's own logging
-becomes the `diag.*` collections, fed at each `tick` (see `interactive/src/diag.rs`), and
+becomes the `diag.*` collections, sampled by `diag` (see `interactive/src/diag.rs`), and
 the views in [`diag.ddp`](diag.ddp) are installed as program `diag`, so
 `peek diag::time_by_statement` reads time by program statement like any other
 trace. `DDIR_WORKERS` selects the number of worker
@@ -93,8 +93,7 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
+`load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
@@ -105,16 +104,16 @@ file of integer rows. Each worker feeds its shard. The source may also be a publ
 input the rows a program outputs as no longer needed (see
 [`bench/txn`](../bench/txn/README.md)). `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
-and `tick [n]` reports the epoch reached and the wall-clock time it took. `load` also accepts
+and `seal` advances a single input. `load` also accepts
 an inline pipe-syntax program:
 
     load graph begin
     let edges = input 0 : ((int, int), ());
     output "edges" = edges;
     graph end-load
-    feed graph 0 1,2
-    tail graph::edges
-    tick
+    feed graph 0 1,2 time=0
+    seal graph 0 1
+    peek graph::edges as-of 0
 
 A load may bind its program's inputs and imports, as `load <name> from <path> <param>=<trace> ...`.
 A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by the name it imports.

@@ -1,3 +1,5 @@
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -18,13 +20,15 @@ fn feed_validates_before_staging_one_epoch() {
         server.install(worker, "world", &program).unwrap();
         let rows = "1 val=10\n2 val=20";
 
-        assert!(server.feed("world", 1, rows, None).is_err());
-        server.tick(worker);
+        assert!(server.feed("world", 1, rows, 0).is_err());
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         assert!(server.snapshot(worker, "world::rows").unwrap().is_empty());
 
-        server.feed("world", 0, rows, None).unwrap();
+        server.feed("world", 0, rows, 1).unwrap();
         assert!(server.snapshot(worker, "world::rows").unwrap().is_empty());
-        server.tick(worker);
+        server.seal("world", 0, &Antichain::from_elem(host_time(2))).unwrap();
+        server.spin(worker);
         assert_eq!(
             server.snapshot(worker, "world::rows").unwrap().rows(),
             vec![(tup(&[1]), tup(&[10]), 1), (tup(&[2]), tup(&[20]), 1),]
@@ -32,9 +36,9 @@ fn feed_validates_before_staging_one_epoch() {
     });
 }
 
-/// Ticks and transient snapshots must wake for delayed remote rows and progress.
+/// Spins and transient snapshots must wake for delayed remote rows and progress.
 #[test]
-fn delayed_peers_wake_ticks_and_snapshots() {
+fn delayed_peers_wake_spins_and_snapshots() {
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
@@ -52,9 +56,10 @@ fn delayed_peers_wake_ticks_and_snapshots() {
                 if worker.index() == epoch % 3 {
                     std::thread::sleep(Duration::from_millis(20));
                     let diff = if epoch < 3 { 1 } else { -1 };
-                    server.feed("world", 0, &format!("{} diff={diff}", epoch % 3), None).unwrap();
+                    server.feed("world", 0, &format!("{} diff={diff}", epoch % 3), epoch as u64).unwrap();
                 }
-                server.tick(worker);
+                server.seal("world", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+                server.spin(worker);
                 barrier.wait();
                 if worker.index() == (epoch + 1) % 3 {
                     std::thread::sleep(Duration::from_millis(20));
@@ -104,8 +109,9 @@ fn split_feeds_keep_their_shapes() {
         install(&mut server, worker, r#"output "rows" = input 0 : ((int, List(int)), ());"#);
         let columns = decoded(&listed_shape(), &["tuple(1,list(7))", "tuple(2,list())"]);
         let mine: Vec<usize> = (worker.index()..columns.len()).step_by(worker.peers()).collect();
-        server.feed_columns("world", 0, columns.select(&mine), None).unwrap();
-        server.tick(worker);
+        server.feed_columns("world", 0, columns.select(&mine), 0).unwrap();
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         server.snapshot(worker, "world::rows").unwrap().rows()
     }).unwrap();
     let rows = guards.join().into_iter().next().unwrap().unwrap();
@@ -119,10 +125,11 @@ fn misshaped_columns_are_refused() {
         let mut server = Server::new();
         install(&mut server, worker, r#"output "rows" = input 0 : ((int, List(int)), ());"#);
         let pair = corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int]);
-        let refused = server.feed_columns("world", 0, decoded(&pair, &["1,2"]), None).unwrap_err();
+        let refused = server.feed_columns("world", 0, decoded(&pair, &["1,2"]), 0).unwrap_err();
         assert_eq!(refused, "a feed of shape ((Int, Int), ()) reached an input of shape ((Int, List<Int>), ())");
-        server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), None).unwrap();
-        server.tick(worker);
+        server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), 0).unwrap();
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         assert_eq!(server.snapshot(worker, "world::rows").unwrap().rows(), vec![(listed(1, &[]), "tuple()".to_string(), 1)]);
     });
 }
@@ -137,13 +144,17 @@ fn fed_sums_arrive_at_their_time() {
             output "rows" = input 0 : (Node, ());
         "#);
         let node = corgi::Shape::Sum(vec![corgi::Shape::Int, corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::Int])]);
-        server.feed_columns("world", 0, decoded(&node, &["inject(1,tuple(1,2))"]), None).unwrap();
-        server.feed_columns("world", 0, decoded(&node, &["inject(0,7)"]), Some(2)).unwrap();
-        server.tick(worker);
+        server.feed_columns("world", 0, decoded(&node, &["inject(1,tuple(1,2))"]), 0).unwrap();
+        server.feed_columns("world", 0, decoded(&node, &["inject(0,7)"]), 2).unwrap();
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         let pair = "inject(1,tuple(1,2))".to_string();
         assert_eq!(server.snapshot(worker, "world::rows").unwrap().rows(), vec![(pair.clone(), "tuple()".to_string(), 1)]);
-        server.tick(worker);
-        server.tick(worker);
+        server.seal("world", 0, &Antichain::from_elem(host_time(2))).unwrap();
+        server.spin(worker);
+        assert_eq!(server.snapshot(worker, "world::rows").unwrap().len(), 1);
+        server.seal("world", 0, &Antichain::from_elem(host_time(3))).unwrap();
+        server.spin(worker);
         let leaf = "inject(0,7)".to_string();
         let mut rows = server.snapshot(worker, "world::rows").unwrap().rows();
         rows.sort();
@@ -159,8 +170,9 @@ fn peek_by_key_reads_reference_keys() {
         let mut server = Server::new();
         install(&mut server, worker, r#"output "rows" = input 0 : (List(int), ()) | map((k, ()) -> (k ref, ()));"#);
         let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
-        server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
-        server.tick(worker);
+        server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), 0).unwrap();
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         let mut rows = |key: &str| server.peek(worker, "world::rows", Some(key)).map(|u| u.rows());
         assert_eq!(rows("list(1,2)").unwrap(), vec![("list(1,2)".to_string(), "tuple()".to_string(), 1)]);
         assert_eq!(rows("list()").unwrap(), vec![("list()".to_string(), "tuple()".to_string(), 1)]);

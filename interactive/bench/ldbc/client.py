@@ -98,21 +98,25 @@ def _encode_column(shape, values, out):
 
 
 def declared_inputs(program):
-    """The declared shapes of a program's unit-valued inputs, by index, as `Server.feed` takes
+    """The declared shapes of a program's unit-valued inputs, by index, as the client takes
     them to send frames: `input N : (shape, ())` becomes `{N: (parse_shape(shape), 'unit')}`."""
     return {int(n): (parse_shape(shape), 'unit')
             for n, shape in re.findall(r'input (\d+) : \((.*)(?:,| ;) \(\)\)', program)}
 
 
-def encode_frame(shape, keys, diffs, vals=None):
-    """A `data` frame of updates, as `feed … frame` reads it: `rows | 0 | keys | vals | diffs`,
-    with no time lanes (see `interactive::runtime::frame`). `shape` is the input's declared
-    `(key, val)` shapes, parsed; `vals` defaults to units."""
+def encode_frame(shape, keys, diffs, vals=None, *, times=None):
+    """Encode keys, values, signed diffs, then a little-endian u64 time for each row.
+    With times=None the frame has zero lanes and needs a shared timestamp on its header."""
+    rows = len(diffs)
+    if len(keys) != rows or (vals is not None and len(vals) != rows) or (times is not None and len(times) != rows):
+        raise ValueError('frame columns have different row counts')
     key_shape, val_shape = shape
-    out = bytearray(struct.pack('<2Q', len(diffs), 0))
+    out = bytearray(struct.pack('<2Q', rows, int(times is not None)))
     _encode_column(key_shape, keys, out)
-    _encode_column(val_shape, vals if vals is not None else [()] * len(keys), out)
-    out += struct.pack(f'<{len(diffs)}q', *diffs)
+    _encode_column(val_shape, vals if vals is not None else [()] * rows, out)
+    out += struct.pack(f'<{rows}q', *diffs)
+    if times is not None:
+        out += struct.pack(f'<{rows}Q', *times)
     return bytes(out)
 
 
@@ -195,9 +199,17 @@ def decode(frames):
     return sorted(result, key=lambda r: r[0])
 
 
+def diagnostic_exports(lines):
+    """Trace names published by the server before any benchmark programs are installed."""
+    return [match[1] for line in lines
+            if (match := re.match(r'trace name="([^"]+)"', line))]
+
+
 class Server:
     def __init__(self, binary, log, workers, timeout, max_rss_gib):
         self.timeout, self.counter = timeout, 0
+        self.epoch = 0
+        self.interfaces = {}
         self.stream = self.reader = None
         self.log = log.open('wb')
         self.peak_rss = 0
@@ -241,11 +253,32 @@ class Server:
                     time.sleep(0.02)
             self.stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.reader = self.stream.makefile('rb')
+            self.diagnostics = ()
+            if env['DDIR_DIAGNOSTICS'] == '1':
+                _, (lines,) = self.commands(['list'])
+                self.diagnostics = diagnostic_exports(lines)
         except BaseException:
             self.close()
             raise
 
     def commands(self, commands):
+        """Time spin on its own round trip after all preceding seals are acknowledged."""
+        if 'spin' not in commands:
+            return self._exchange(commands)
+        wait = commands.index('spin')
+        before, after = commands[:wait], commands[wait + 1:]
+        groups = []
+        if before:
+            groups.append(self._exchange(before))
+        spin, response = self._exchange(['spin'])
+        groups.append((spin, response))
+        if after:
+            groups.append(self._exchange(after))
+        totals = {key: sum(metrics[key] for metrics, _ in groups) for key in spin}
+        totals['spin_ms'] = spin['wire_ms']
+        return totals, [reply for _, replies in groups for reply in replies]
+
+    def _exchange(self, commands):
         start = time.perf_counter()
         ids, payload = [], []
         for command in commands:
@@ -295,15 +328,36 @@ class Server:
         return dict(encode_ms=1000*(encoded-start), wire_ms=1000*(end-encoded),
                     bytes_sent=len(wire), bytes_received=received), [replies[rid] for rid in ids]
 
+    def load(self, name, program):
+        """Collect the installed plan’s feed positions and named outputs for seals and trims."""
+        source = re.sub(r'--[^\n]*', '', program)
+        positions = re.findall(r'\binput(?:\s+(\d+)|\s+"[^"]+")?\s*:', source)
+        inputs = sorted({int(number) if number else position for position, number in enumerate(positions)})
+        outputs = re.findall(r'\boutput\s+"([^"]+)"', source)
+        self.interfaces[name] = inputs, outputs
+        return f'load {name} begin\n{program}\n{{rid}} end-load'
+
+    def drop(self, name):
+        del self.interfaces[name]
+        return f'drop {name}'
+
+    @property
+    def input_ports(self):
+        return [(program, index) for program, (inputs, _) in self.interfaces.items() for index in inputs]
+
+    @property
+    def output_traces(self):
+        return [f'{program}::{output}' for program, (_, outputs) in self.interfaces.items() for output in outputs]
+
     @staticmethod
-    def feed(program, index, rows, diff, shape=None):
+    def feed(program, index, rows, diff, shape=None, *, epoch):
         """Rows with unit values for `program`'s input `index`, each at `diff`: as text, or as one
         binary frame when `shape` (the input's declared shapes, parsed) is given."""
         if shape is not None:
-            frame = encode_frame(shape, list(rows), [diff] * len(rows))
+            frame = encode_frame(shape, list(rows), [diff] * len(rows), times=[epoch] * len(rows))
             return f'feed {program} {index} frame {len(frame)}', frame
         body = '\n'.join(term(row) + f' diff={diff}' for row in rows)
-        return f'feed {program} {index} begin\n{body}\n{{rid}} end-feed'
+        return f'feed {program} {index} time={epoch} begin\n{body}\n{{rid}} end-feed'
 
     def close(self):
         self.stop_monitor.set()

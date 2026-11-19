@@ -15,26 +15,23 @@ and the final store is compared in full.
 
 **Maintained** ([`maintained.ddp`](maintained.ddp)). One program over a log of
 intents. The store is not a separate collection: it is the log's current
-committed writes, which keep their transaction ids. After a tick seals the
-epoch's ids, everything else in the log (reads, rejected writes, superseded
+committed writes, which keep their transaction ids. After the client seals the input and waits for `spin`, everything else in the log (reads, rejected writes, superseded
 writes) is `log - store`, exported as `retire`, and
 
-    feed bank 0 from bank::retire diff=-1
+    feed bank 0 time=now from bank::retire diff=-1
 
-leaves the log equal to the store. A second tick applies the deletions. That
-tick is the cost of the design: every row of the batch goes into the
+leaves the log equal to the store. A second seal and completion wait applies the deletions. This work enters the maintenance timing: every row of the batch goes into the
 resolver's joins, `min`, and recursion, and then comes back out.
 
 **One-off** ([`store.ddp`](store.ddp), [`resolve.ddp`](resolve.ddp)). The store
 is its own program: `((key), (txn id, value))`. Each epoch installs a resolver
 that imports it, takes only that epoch's intents, and exports `rollback` and
 `delta` (each written key's latest committed write in, its prior store row
-out). The client reads `rollback`, runs `feed store 0 from delta`, and drops
+out). The client reads `rollback`, runs `feed store 0 time=now from res::delta`, and drops
 the resolver. Nothing the resolver holds is ever retracted. Imports arrive as
 the producer's arrangement (#918), and the resolver reads the store only in
 joins outside the recursion, so it touches the store at the keys its batch
-reads or writes. The store change takes effect at the next tick, together with
-the next batch, so one tick per cycle; its merge work is counted there.
+reads or writes. The client seals both the store and resolver inputs for each decision. The pending store change takes effect when the next batch closes, so its merge work is counted there. Each completion phase measures input seals, a separate `spin` round trip and trims of every live output to the time just closed. The default binary feed writes each intent’s scalar epoch in its frame time lane. Text batches use a shared header time. The JSON report records the separate resolution and maintenance spin round trips in `spin_means_ms`; both are included in their respective phase totals. The historical timings below used the former tick command.
 [`resolve_by_key.ddp`](resolve_by_key.ddp) is the same resolver with each key
 answered by one reduce (below).
 
