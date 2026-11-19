@@ -3,7 +3,7 @@
 
 Sessions are trusted (identity by convention, no ownership gates): two
 clients race stamped-by-convention claims on one cell and the program's
-min-policy settles it deterministically; any session may bind into or drop
+min-policy settles it deterministically; any session may drop
 any program; the one intake gate (program size) rejects oversized loads.
 
 Run from the repo root (release binary must be built):
@@ -123,14 +123,6 @@ def main():
             owned.get((2, 2)) == [2],
             str(owned),
         )
-
-        # Sessions are trusted: B may bind into (and later drop) A's program.
-        b.send("b1 bind world::claims world 0")
-        status, body, _ = b.expect("b1")
-        check("B binds into A's world (trusted sessions)", status == "ok", body)
-        b.send("b2 unbind world::claims world 0")
-        status, body, _ = b.expect("b2")
-        check("B unbinds it again", status == "ok", body)
 
         # The one gate: an oversized program body is swallowed, one error.
         big = "load big begin\n" + ("let x = input 0; -- pad\n" * 300) + "big end-load\n"

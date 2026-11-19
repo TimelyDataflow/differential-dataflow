@@ -97,7 +97,7 @@ jobs:
       # that reads an import at its stored times can hang (no progress for 120 s) or disagree.
       - name: Late-install difftest sweep
         run: |
-          DIFFTEST_SEED=40000000 DIFFTEST_CASES=500 DIFFTEST_ORACLES=split,bind,reinstall \
+          DIFFTEST_SEED=40000000 DIFFTEST_CASES=500 DIFFTEST_ORACLES=split,reinstall \
             cargo test --release -p interactive --test difftest -- --ignored --nocapture
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric

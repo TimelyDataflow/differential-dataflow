@@ -9,12 +9,12 @@ pub(super) fn caught_up(probe: &ProbeHandle<HostTime>, point: &HostTime) -> bool
 impl Server {
     /// The default point for this program's next bulk advance.
     pub fn now(&self, prog: &str) -> Result<&HostTime, String> {
-        Ok(&self.programs.get(&canonical_source_name(prog)).ok_or_else(|| format!("no program {prog:?}"))?.now)
+        Ok(&self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?.now)
     }
 
     /// This input's earliest accepted point; other inputs may have different frontiers.
     pub fn input_frontier(&self, prog: &str, input: usize) -> Result<&HostTime, String> {
-        let installed = self.programs.get(&canonical_source_name(prog)).ok_or_else(|| format!("no program {prog:?}"))?;
+        let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
         Ok(installed.inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))?.time())
     }
 
@@ -22,7 +22,7 @@ impl Server {
     /// Points are trimmed: omitted coordinates are zero, not inferred from the clock.
     pub fn advance_input(&mut self, prog: &str, input: usize, point: &HostTime) -> Result<(), String> {
         self.validate_feed(prog, input, point)?;
-        self.programs.get_mut(&canonical_source_name(prog)).unwrap().inputs.get_mut(&input).unwrap().advance_to_point(point);
+        self.programs.get_mut(prog).unwrap().inputs.get_mut(&input).unwrap().advance_to_point(point);
         Ok(())
     }
 
@@ -39,7 +39,7 @@ impl Server {
     /// of local and imported inputs; imports are advanced separately. Keeps one system
     /// epoch of history, all other coordinates.
     pub fn advance_to(&mut self, worker: &mut Worker, prog: &str, point: &HostTime) -> Result<(), String> {
-        let name = canonical_source_name(prog);
+        let name = prog.to_string();
         let installed = self.programs.get(&name).ok_or_else(|| format!("no program {prog:?}"))?;
         if point.len() > installed.root_width || !installed.now.less_equal(point) {
             return Err(format!("invalid advance from {:?} to {point:?}", installed.now));
@@ -68,7 +68,7 @@ impl Server {
     /// Wait for an output to reach an antichain frontier. A widened import may remain
     /// at [s, 0] while a local input is at [s-1, e]; neither point subsumes the other.
     pub fn wait_for_frontier(&self, worker: &mut Worker, trace: &str, frontier: &Antichain<HostTime>) -> Result<(), String> {
-        let output = self.outputs.get(&canonical_source_name(trace)).ok_or_else(|| format!("no trace {trace:?}"))?;
+        let output = self.outputs.get(trace).ok_or_else(|| format!("no trace {trace:?}"))?;
         if frontier.elements().iter().any(|t| t.len() > output.width) { return Err("frontier exceeds trace width".into()); }
         while output.probe.with_frontier(|f| f.iter().any(|t| !frontier.less_equal(t))) { worker.step_or_park(None); }
         Ok(())
@@ -94,7 +94,7 @@ impl Server {
     /// Discard distinctions before this point in one published trace. Collective and monotone.
     /// Readers/importers retain their own compaction holds. Reads below this floor are refused.
     pub fn compact(&mut self, trace: &str, since: &HostTime) -> Result<(), String> {
-        let name = canonical_source_name(trace);
+        let name = trace.to_string();
         let output = self.output(&name, since)?;
         if !output.since.less_equal(since) { return Err("compaction must advance monotonically".into()); }
         let frontier = Antichain::from_elem(since.clone());
@@ -107,15 +107,15 @@ impl Server {
 
     /// The declared width and readable history are independent of the stored point's length.
     pub fn trace_width(&self, trace: &str) -> Option<usize> {
-        self.outputs.get(&canonical_source_name(trace)).map(|o| o.width)
+        self.outputs.get(trace).map(|o| o.width)
     }
 
     pub fn trace_since(&self, trace: &str) -> Option<&HostTime> {
-        self.outputs.get(&canonical_source_name(trace)).map(|o| &o.since)
+        self.outputs.get(trace).map(|o| &o.since)
     }
 
     pub(super) fn output(&self, name: &str, point: &HostTime) -> Result<&Output, String> {
-        let output = self.outputs.get(&canonical_source_name(name)).ok_or_else(|| format!("no trace {name:?}"))?;
+        let output = self.outputs.get(name).ok_or_else(|| format!("no trace {name:?}"))?;
         if point.len() > output.width { return Err(format!("point {point:?} exceeds trace {name:?}'s width {}", output.width)); }
         Ok(output)
     }

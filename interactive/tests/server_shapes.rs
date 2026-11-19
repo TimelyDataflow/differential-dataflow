@@ -111,35 +111,6 @@ fn conflicting_shapes_reject_the_install() {
 }
 
 #[test]
-fn generated_sources_have_shapes() {
-    timely::execute_directly(move |worker| {
-        let mut server = Server::new();
-        let src = r#"let r = import "random:nodes=8,edges=12,arity=3"; let i = import "iota:4"; let c = import "clock"; output "out" = r + i + c;"#;
-        let err = server.install(worker, "mixed", &program(src)).unwrap_err();
-        assert!(err.contains("concat"), "{err}");
-        let src = r#"output "out" = import "iota:4" + import "clock";"#;
-        server.install(worker, "fine", &program(src)).unwrap();
-        assert_eq!(server.trace_shape("iota:4"), Some((ints(1), Shape::Unit)));
-        assert_eq!(server.trace_shape("clock"), Some((ints(1), Shape::Unit)));
-        assert_eq!(server.trace_shape("fine::out"), Some((ints(1), Shape::Unit)));
-    });
-}
-
-#[test]
-fn bindings_and_recipe_loads_must_match_declared_inputs() {
-    timely::execute_directly(move |worker| {
-        let mut server = Server::new();
-        server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "target", &program(r#"output "t" = input 0 : ((int, int), ());"#)).unwrap();
-        let err = server.bind(worker, "producer::edges", "target", 0).unwrap_err();
-        assert!(err.contains("published as"), "{err}");
-        let err = server.load(worker, "target", 0, "random:nodes=8,edges=12,arity=3", 1).unwrap_err();
-        assert!(err.contains("generates"), "{err}");
-        server.load(worker, "target", 0, "random:nodes=8,edges=12", 1).unwrap();
-    });
-}
-
-#[test]
 fn declared_exports_publish_their_shapes() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();

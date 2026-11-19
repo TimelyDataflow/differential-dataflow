@@ -1,3 +1,0 @@
-output "clock" = input 0 : ((int), ());
-output "iota:12" = input 1 : ((int), ());
-output "random:nodes=8,edges=12" = input 2 : ((int, int), ());

@@ -333,12 +333,6 @@ fn dispatch(
                     }
                 })
             }),
-            ServerCommand::Bind { trace, prog, input } => server.input_position(&prog, &input).and_then(|input| server
-                .bind(worker, &trace, &prog, input)
-                .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input))),
-            ServerCommand::Unbind { trace, prog, input } => server.input_position(&prog, &input).and_then(|input| server
-                .unbind(worker, &trace, &prog, input)
-                .map(|()| format!("unbound {:?} -> {:?} input {}", trace, prog, input))),
             ServerCommand::List => {
                 if let Some(response) = response.as_ref() {
                     for program in server.program_info() {
@@ -364,17 +358,7 @@ fn dispatch(
                             format!("trace name={:?} importers={}", name, importers),
                         );
                     }
-                    for (source, target, input) in server.binding_info() {
-                        send(
-                            response,
-                            reqid,
-                            "data",
-                            format!(
-                                "binding source={:?} target={:?} input={}",
-                                source, target, input
-                            ),
-                        );
-                    }
+
                 }
                 Ok(format!("t={}", server.epoch()))
             }

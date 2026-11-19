@@ -1,7 +1,3 @@
-//! Generated sources, recipe loads, and fed inputs, held as corgi columns, read the same at any
-//! number of workers: through `snapshot`, through a program's `import`, and through `bind`, across
-//! ticks of churn.
-
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -10,22 +6,6 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
     interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
-
-const RANDOM: &str = "random:nodes=20,edges=60,churn=7";
-
-const SOURCES: &str = r#"
-    let edges = import "random:nodes=20,edges=60,churn=7" | map(((src, dst), ()) -> (src, dst));
-    let iota = import "iota:12";
-    let clock = import "clock";
-    output "degrees" = edges | count;
-    output "small" = iota | filter(((n), ()) -> (n, 5) lt);
-    output "now" = clock;
-"#;
-
-const LOADED: &str = r#"
-    let triples = input 0 : ((int, int, int), ());
-    output "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
-"#;
 
 /// A fed input, read through another program's import.
 const LOOSE: &str = r#"
@@ -39,22 +19,12 @@ const DECLARING: &str = r#"
 
 "#;
 
-/// An input bound to "doubled", so it mirrors it one tick behind.
-const MIRROR: &str = r#"
-    output "mirror" = input 0 : ((int), ());
-"#;
-
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.
 fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
-        install(&mut server, worker, "sources", SOURCES);
-        install(&mut server, worker, "loaded", LOADED);
         install(&mut server, worker, "undeclared", LOOSE);
         install(&mut server, worker, "declaring", DECLARING);
-        install(&mut server, worker, "mirror", MIRROR);
-        server.bind(worker, "declaring::doubled", "mirror", 0).unwrap();
-        server.load(worker, "loaded", 0, "random:nodes=5,edges=40,arity=3,churn=4", 1).unwrap();
         let mut seen = Vec::new();
         for epoch in 1..5i64 {
             if worker.index() == 0 {
@@ -63,7 +33,7 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
                 }
             }
             server.tick(worker);
-            for name in [RANDOM, "iota:12", "clock", "sources::degrees", "sources::small", "sources::now", "loaded::sums", "declaring::doubled", "mirror::mirror"] {
+            for name in ["undeclared::loose", "declaring::doubled"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());
             }
         }
@@ -76,6 +46,6 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
 #[test]
 fn sources_read_alike_across_workers() {
     let want = run(1);
-    assert!(want[want.len() - 9..].iter().all(|s| !s.is_empty()), "every read has rows by the last tick");
+    assert!(want[want.len() - 2..].iter().all(|s| !s.is_empty()), "every read has rows by the last tick");
     assert_eq!(run(3), want, "3 workers");
 }

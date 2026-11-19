@@ -14,23 +14,13 @@ fn program(src: &str) -> Program {
 fn a_rejected_install_leaves_no_generated_sources() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
-        let recipe = "random:nodes=8,edges=12";
-        server.install(worker, "first", &program(r#"output "taken" = input 0 : ((int), ());"#)).unwrap();
-
-        // The recipe would be generated, but the program name is taken.
-        let clash = program(&format!(r#"let e = import "{recipe}"; output "taken" = e;"#));
-        assert!(server.install(worker, "first", &clash).is_err());
-        assert!(server.snapshot(worker, recipe).is_err());
-
-        // The recipe would be generated, but the other import is unknown.
-        let unknown = program(&format!(r#"let e = import "{recipe}"; let f = import "nope"; output "x" = e + f;"#));
-        assert!(server.install(worker, "third", &unknown).is_err());
-        assert!(server.snapshot(worker, recipe).is_err());
-
-        // Accepted, the program installs the recipe as a source.
-        let fine = program(&format!(r#"let e = import "{recipe}"; output "fresh" = e;"#));
-        server.install(worker, "fourth", &fine).unwrap();
-        assert!(server.snapshot(worker, recipe).is_ok());
+        let valid = program(r#"output "taken" = input 0 : ((int), ());"#);
+        server.install(worker, "first", &valid).unwrap();
+        assert!(server.install(worker, "first", &valid).is_err());
+        let invalid = program(r#"output "x" = import "first::taken" + import "nope";"#);
+        assert!(server.install(worker, "second", &invalid).is_err());
+        assert!(server.trace_shape("second::x").is_none());
+        server.drop_program(worker, "first").unwrap();
     });
 }
 
@@ -44,12 +34,7 @@ fn unread_imports_are_validated_before_passes() {
             let error = server.install(worker, "invalid", &invalid).unwrap_err();
             assert!(error.contains("imports unknown trace \"nope\""), "{error}");
 
-            let clock = lower::lower_tree(parse::pipe::parse(r#"let dead = import "clock";"#));
-            server.install(worker, "clock_owner", &clock).unwrap();
-            assert!(server.trace_shape("clock").is_some());
-            assert!(server.drop_program(worker, "clock").is_err());
-            server.drop_program(worker, "clock_owner").unwrap();
-            assert!(server.trace_shape("clock").is_none());
+
         }
     });
 }

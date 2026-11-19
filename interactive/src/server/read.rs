@@ -8,13 +8,12 @@ impl Server {
     /// from its batches without a dataflow. Uses the same read checks as [`Server::snapshot`].
     pub(crate) fn snapshot_local(&self, name: &str) -> Result<Updates, String> {
         use differential_dataflow::trace::TraceReader;
-        let name = canonical_source_name(name);
-        let point = self.latest(&name)?;
-        let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &self.shapes[&name])); };
-        self.readable(&name, &point)?;
-        let output = &self.outputs[&name];
+        let point = self.latest(name)?;
+        let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &self.shapes[name])); };
+        self.readable(name, &point)?;
+        let output = &self.outputs[name];
         if output.probe.less_equal(&point) { return Err(format!("trace {name:?} is not complete at {point:?}")); }
-        let mut trace = self.traces[&name].clone();
+        let mut trace = self.traces[name].clone();
         let upper = output.probe.with_frontier(|f| f.to_owned());
         let batches = trace.batches_through(upper.borrow()).ok_or_else(|| format!("trace {name:?} has no readable cut"))?;
         let parts = crate::backend::corgi::batch_containers(batches)
@@ -25,7 +24,7 @@ impl Server {
                 if before.len() == part.len() { part } else { part.select(&before) }
             })
             .collect();
-        Ok(Updates::consolidate(parts, &self.shapes[&name]))
+        Ok(Updates::consolidate(parts, &self.shapes[name]))
     }
 
     /// Return the consolidated closed-past contents of a trace on worker 0, as columns.
@@ -43,10 +42,9 @@ impl Server {
         worker: &mut Worker,
         name: &str,
     ) -> Result<Updates, String> {
-        let name = canonical_source_name(name);
-        match self.latest(&name)? {
-            Some(point) => self.snapshot_as_of(worker, &name, &point),
-            None => Ok(Updates::consolidate(Vec::new(), &self.shapes[&name])),
+        match self.latest(name)? {
+            Some(point) => self.snapshot_as_of(worker, name, &point),
+            None => Ok(Updates::consolidate(Vec::new(), &self.shapes[name])),
         }
     }
 
@@ -57,11 +55,10 @@ impl Server {
         use timely::dataflow::operators::Probe;
         use timely::dataflow::operators::generic::Operator;
 
-        let name = canonical_source_name(name);
 
-        let mut published = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
-        let as_of = self.outputs[&name].since.clone();
-        let shape = self.shapes[&name].clone();
+        let mut published = self.published(name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let as_of = self.outputs[name].since.clone();
+        let shape = self.shapes[name].clone();
         let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
         let parts_in = parts.clone();
         let mut probe = ProbeHandle::new();
@@ -132,7 +129,7 @@ impl Server {
 
     fn filter_key(&self, name: &str, key: Option<&str>, updates: Updates) -> Result<Updates, String> {
         let Some(text) = key else { return Ok(updates) };
-        let (kshape, _) = self.shapes[&canonical_source_name(name)].clone();
+        let (kshape, _) = self.shapes[name].clone();
         let mut decoder = crate::runtime::feed::FeedDecoder::new(&kshape, &corgi::Shape::Unit);
         decoder.push(text, None, 1)?;
         let wanted = decoder.finish().keys;

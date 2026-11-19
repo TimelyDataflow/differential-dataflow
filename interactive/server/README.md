@@ -23,7 +23,7 @@ round, removing unread computations and bindings while keeping root inputs.
 
 Installed programs render on the Corgi backend, and their data stays in Corgi
 columns: fed text is read into columns at each input's declared shape, exports are
-kept as traces of Corgi chunks, and imports, binds, `peek` and `tail` read the
+kept as traces of Corgi chunks, and imports, `peek` and `tail` read the
 chunks as containers.
 
 Worker 0 admits one FIFO control stream and routes one ordered record to every
@@ -46,30 +46,27 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
+The useful commands are `load`, `drop`, `list`, `feed`,
 `peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
 the one after the program's own, its rows `(key, (val, q))`, and the demand
 sets are `peek`able exports. `feed <prog> <in> from <source>` fills an input from a
-source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
-or `iota:N`, or a file of integer rows — with each worker taking its shard, so
-no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
-`tick`. The source may also be a published trace, read as its contents before
+file of integer rows. Each worker feeds its shard. The source may also be a published trace, read as its contents before
 the current epoch, each worker reading its own share of the arrangement, and
 `diff=<d>` scales every row: `feed bank 0 from bank::retire diff=-1` deletes from an
 input the rows a program outputs as no longer needed (see
-[`bench/txn`](../bench/txn/README.md)). Unlike `bind`, this is one delivery of the
-trace's contents, not a standing mirror of its changes. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
+[`bench/txn`](../bench/txn/README.md)). `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
 and `tick [n]` reports the epoch reached and the wall-clock time it took. `load` also accepts
 an inline pipe-syntax program:
 
     load graph begin
-    let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
+    let edges = input 0 : ((int, int), ());
     output "edges" = edges;
     graph end-load
+    feed graph 0 1,2
     tail graph::edges
     tick
 
@@ -77,9 +74,6 @@ A load may bind its program's inputs and imports, as `load <name> from <path> <p
 A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by the name it imports.
 A bound input reads the trace as an import does, checked against the shape the input declares, and is no longer fed.
 For example, `load reach from reach_import.ddp edges=prod::edges` reads `prod`'s output `edges` as `reach`'s input `edges`.
-A binding may also be spelled as a call, so `edges=random(seed=1,arity=2,range=8,count=12,churn=1)` binds `edges` to the same content-addressed source as the `random:...` form.
-Such a source is deterministic: it begins with a fixed-size window into an infinite hash-derived sequence and replaces `churn` rows on every tick.
-
 `plan <name> from <path>` prints the same four preparation stages as
 `ddir-plan`, using the server's currently published import shapes. The inline
 form is `plan <name> begin`, DDP lines, then `<name> end-plan`. Each report line
@@ -219,25 +213,6 @@ Insert the request, `tick`, `peek` its answer, then retract the request and
 need an output row as a completion marker. Keeping the binding instead gives
 a standing query whose answer follows later graph changes.
 
-## Feedback: `bind`
-
-    bind <trace> <prog> <in>        unbind <trace> <prog> <in>
-
-From then on, every `tick` delivers the trace's *changes* into that input at
-the next epoch, so the input mirrors the trace one epoch delayed. This is the
-write path for *programs*: an installed dataflow can act on the world — or on
-itself — with no client in the loop, one well-founded recursion step per tick.
-
-The state-machine idiom (see `demo/counter.txt` and the `server_bind` tests):
-give the program a seed input and a dedicated feedback input,
-
-    let state = seed + feedback;
-
-and bind the export `f(state) + (seed | negate)` to the feedback input; then
-`state(t) = f(state(t-1))`, while later seed feeds still inject as
-perturbations. A bound source cannot be dropped (it holds an importer), nor
-can the bound target (unbind first).
-
 ## Intake gates
 
 Multi-line intake is bounded: `DDIR_MAX_PROGRAM_BYTES` (default 65536) caps a
@@ -252,7 +227,6 @@ fronting proxy if a deployment ever needs one.
 
     cargo run -p ddir-server --release
     # then, or piped straight to stdin:
-    ./target/release/ddir_server < interactive/server/demo/counter.txt
     ./target/release/ddir_server < interactive/server/demo/claims.txt
     ./target/release/ddir_server < interactive/server/demo/txn.txt
     python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP

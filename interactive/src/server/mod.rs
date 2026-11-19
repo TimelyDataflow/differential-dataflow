@@ -36,9 +36,7 @@
 //! - **feed** stages updates, as text read at the input's declared shapes or
 //!   as columns, at a chosen time (default: the current epoch), so inputs can
 //!   be scheduled into the future.
-//! - **load** fills an input in bulk from a recipe or a file, each worker
-//!   feeding its own shard; a churning recipe then changes the input on every
-//!   tick, which is how a program is run under standing change.
+//! - **load** fills an input from a file or a published trace.
 //! - **tick** advances all inputs to the next epoch, runs to quiescence, then
 //!   lets every trace compact (an importer's own handle holds the shared
 //!   `TraceBox` back to what it still needs).
@@ -54,10 +52,9 @@
 //! The rest is one file per concern, each adding methods to [`Server`]:
 //!
 //! - `time`: the host epoch and the program time ([`OuterTime`], [`HostTime`], [`host_dataflow`]);
-//! - `sources`: positional inputs, the `random:`/`iota:` recipes and the `clock`;
+//! - `sources`: positional inputs and diagnostic sources;
 //! - `install`: installing a program;
 //! - `feed`: feeding and loading inputs;
-//! - `bind`: bindings from published traces to inputs;
 //! - `read`: snapshots, peeks and export taps;
 //! - `diagnostics`: the `diag.*` sources' wiring;
 //! - `evaluate`: [`evaluate`], the test suites' entry point.
@@ -79,7 +76,6 @@ use crate::runtime::container::Updates;
 use crate::ir::Diff;
 use crate::scope_ir as st;
 
-mod bind;
 mod diagnostics;
 mod evaluate;
 mod feed;
@@ -90,16 +86,12 @@ mod time;
 mod progress;
 
 pub use self::evaluate::evaluate;
-pub use self::sources::gen_field_seeded;
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
-use self::bind::Binding;
-use self::sources::{canonical_source_name, clock_rows, InputContainer, Recipe, ServerInput, COLUMN_BATCH};
-pub use self::sources::generated_shape;
+use self::sources::{InputContainer, ServerInput, COLUMN_BATCH};
 
 /// The name an installed program's output is published under: `<program>::<output>`. Every
 /// program has its own namespace, so two programs may name their outputs alike, and one program
-/// text may be installed several times under different names. Generated sources (`clock`,
-/// recipes such as `random:...`, and the `diag.*` sources) belong to no program and keep their
+/// text may be installed several times under different names. Diagnostic sources (`diag.*`) belong to no program and keep their
 /// own names.
 pub fn output_name(program: &str, output: &str) -> String {
     format!("{program}::{output}")
@@ -136,12 +128,9 @@ pub type RowShape = (corgi::Shape, corgi::Shape);
 pub type HostContainer = crate::runtime::container::CorgiContainer<HostTime, Diff>;
 
 /// Where an installed entry came from. Only `Program` is writable by `feed`;
-/// `Clock` additionally has its single row advanced each `tick`.
 #[derive(Clone, Copy, PartialEq)]
 enum Origin {
     Program,
-    Generated,
-    Clock,
     /// A `diag.*` source, fed from the server's own logging at each `tick` (see [`crate::diag`]).
     Diagnostics,
 }
@@ -207,8 +196,7 @@ pub enum Command {
         input: InputId,
         columns: Updates,
     },
-    /// Fill `input` of `prog` from `source` — a recipe name, a
-    /// published trace, or a file path — at the current epoch, each row's
+    /// Fill `input` of `prog` from `source` — a published trace or a file path — at the current epoch, each row's
     /// multiplicity scaled by `diff`. Collective: every worker feeds its own
     /// shard of the rows (see [`Server::load`]).
     Load {
@@ -221,20 +209,8 @@ pub enum Command {
     Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
-    /// Bind trace `trace`'s changes into input `input` of `prog` at each tick.
-    Bind {
-        trace: String,
-        prog: String,
-        input: InputId,
-    },
-    /// Remove a binding installed by `Bind`.
-    Unbind {
-        trace: String,
-        prog: String,
-        input: InputId,
-    },
     /// Report the registry. The driver assembles it from [`Server::program_info`],
-    /// [`Server::trace_info`] and [`Server::binding_info`].
+    /// [`Server::trace_info`].
     List,
     /// Stop the server.
     Exit,
@@ -256,14 +232,9 @@ struct Installed {
     root_width: usize,
     /// Default point used by program-wide advances.
     now: HostTime,
-    /// Whether this is a user program, a generated source, or the clock — see
-    /// [`Origin`]. Generated/clock entries advance and drop like any program but
-    /// are not writable by `feed`.
+    /// Distinguishes writable program inputs from diagnostic sources.
     origin: Origin,
-    /// Per input: the recipe whose rows it holds and the next row to retract,
-    /// for inputs that churn each `tick` (a generated `random:` source's own
-    /// input, or a program input bulk-loaded from such a recipe).
-    generators: HashMap<usize, (Recipe, u64)>,
+
 }
 
 /// Progress and read validity belong to each export, including shared sources.
@@ -288,10 +259,6 @@ pub struct ProgramInfo {
     pub origin: &'static str,
 }
 
-/// A binding's captured changes: the containers of its source trace, whose times `tick`
-/// replaces.
-type Captured = Rc<RefCell<Vec<HostContainer>>>;
-
 /// A live registry of installed programs and the traces they publish.
 pub struct Server {
     outputs: HashMap<String, Output>,
@@ -305,14 +272,11 @@ pub struct Server {
     /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
     /// Published trace name -> the shape of its rows: inferred from its producer's program, or
-    /// fixed by its recipe for a generated source.
+    /// fixed by the diagnostic schema.
     shapes: HashMap<String, RowShape>,
     /// Trace name -> number of installed programs importing it (the drop gate).
-    /// Bindings count here too: a bound source cannot be dropped.
     importers: HashMap<String, usize>,
-    /// Live export→input bindings, drained by each `tick`.
-    bindings: Vec<Binding>,
-    /// Compatibility clock for the width-1 API and shared generated sources.
+    /// Compatibility clock for the width-1 API and diagnostic sources.
     epoch: OuterTime,
     /// Hand published traces to importing programs as arrangements, so an importer shares the
     /// producer's trace instead of copying it.
@@ -334,7 +298,6 @@ impl Server {
             programs: HashMap::new(),
             shapes: HashMap::new(),
             importers: HashMap::new(),
-            bindings: Vec::new(),
             epoch: 0,
             arranged_imports: true,
             passes: crate::passes::Config::default(),
@@ -347,7 +310,7 @@ impl Server {
         self.epoch
     }
 
-    /// The time a program installed now, or a binding, snapshot or tail started now, reads the
+    /// The time a program installed now, or a snapshot or tail started now, reads the
     /// published traces it imports as of: the epoch before the current one, as a program time.
     ///
     /// [`Server::tick`] compacts every published trace to it, so their accumulations are correct
@@ -390,18 +353,17 @@ impl Server {
 
     /// A reader for published trace `name`, for a transient peek or subscription dataflow.
     pub fn published(&self, name: &str) -> Option<Published> {
-        self.traces.get(&canonical_source_name(name)).cloned().map(Published)
+        self.traces.get(name).cloned().map(Published)
     }
 
     /// The shape of a published trace's rows.
     pub fn trace_shape(&self, name: &str) -> Option<RowShape> {
-        self.shapes.get(&canonical_source_name(name)).cloned()
+        self.shapes.get(name).cloned()
     }
 
     /// The shape of a published trace or a source install can create on demand.
     pub fn source_shape(&self, name: &str) -> Option<RowShape> {
-        let key = canonical_source_name(name);
-        self.shapes.get(&key).cloned().or_else(|| generated_shape(&key)).or_else(|| crate::diag::shape(&key))
+        self.trace_shape(name).or_else(|| crate::diag::shape(name))
     }
 
     /// The position of `prog`'s `input`, resolving a name against the program installed.
@@ -409,7 +371,7 @@ impl Server {
         match input {
             InputId::Position(n) => Ok(*n),
             InputId::Name(name) => {
-                let installed = self.programs.get(&canonical_source_name(prog)).ok_or_else(|| format!("no program {prog:?}"))?;
+                let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
                 installed.input_names.get(name).copied().ok_or_else(|| format!("program {prog:?} has no input named {name:?}"))
             }
         }
@@ -430,8 +392,6 @@ impl Server {
                     exports: installed.exports.clone(),
                     origin: match installed.origin {
                         Origin::Program => "program",
-                        Origin::Generated => "generated",
-                        Origin::Clock => "clock",
                         Origin::Diagnostics => "diagnostics",
                     },
                 }
@@ -459,14 +419,6 @@ impl Server {
     /// `worker.drop_dataflow`, which removes the operators and frees their state
     /// at once. Safe because the gate guarantees no live dataflow still reads it.
     pub fn drop_program(&mut self, worker: &mut Worker, name: &str) -> Result<(), String> {
-        if let Some(binding) = self.bindings.iter().find(|b| b.target == name) {
-            return Err(format!(
-                "cannot drop {:?}: its input {} is bound from trace {:?}; unbind first",
-                name, binding.input, binding.source
-            ));
-        }
-        let canon = canonical_source_name(name);
-        let name = canon.as_str();
         let installed = self
             .programs
             .get(name)
@@ -498,7 +450,7 @@ impl Server {
         // still exist), then remove the dataflow outright.
         drop(installed);
         worker.drop_dataflow(id);
-        // Generated sources are installed on demand and have no independent
+        // Diagnostic sources are installed on demand and have no independent
         // owner. Reclaim any whose last importing program was just removed.
         let garbage: Vec<_> = self
             .programs
@@ -523,35 +475,10 @@ impl Server {
     pub fn tick(&mut self, worker: &mut Worker) {
         let cur = self.epoch;
         let next = cur + 1;
-        let w0 = worker.index() == 0;
-        let (index, peers) = (worker.index(), worker.peers());
-        let mine = |e: &u64| (*e as usize) % peers == index;
         // Diagnostics of everything since the last tick enter at the epoch being closed.
         self.process_diagnostics(worker);
         self.feed_diagnostics(cur);
         for installed in self.programs.values_mut().filter(|p| p.root_width == 1) {
-            // The clock's single row advances by one each tick (worker 0 owns
-            // it): retract the current epoch, add the next — an O(1) change.
-            if w0 && installed.origin == Origin::Clock {
-                if let Some(h) = installed.inputs.get_mut(&0) {
-                    h.give_columns(clock_rows(&[(cur, -1), (next, 1)]), next).expect("clock rows have the clock's shape");
-                }
-            }
-            // A random source denotes an infinite deterministic row stream.
-            // Each tick replaces `churn` members of its fixed-size window.
-            for (input, (recipe, cursor)) in installed.generators.iter_mut() {
-                let recipe = *recipe;
-                if let Recipe::Random { edges, churn, .. } = recipe {
-                    if let Some(h) = installed.inputs.get_mut(input) {
-                        // Retract rows `cursor ..` of the window, and add the rows `edges` later.
-                        let window = *cursor .. *cursor + churn;
-                        let time = cur.max(h.time().get(0).copied().unwrap_or(0));
-                        h.generate(recipe, window.clone().filter(mine), time, -1);
-                        h.generate(recipe, window.map(|e| e + edges).filter(mine), time, 1);
-                        *cursor += churn;
-                    }
-                }
-            }
             installed.now = installed.now.join(&host_time(next));
             for handle in installed.inputs.values_mut() {
                 handle.advance_to_point(&handle.time().join(&host_time(next)));
@@ -559,39 +486,12 @@ impl Server {
         }
         self.epoch = next;
 
-        // Wait for every live width-1 export to catch up. Per-export probes mean a
-        // dropped program leaves nothing behind to wait on. Binding taps are
-        // waited on too, so each buffer holds every change through the epoch
-        // just closed before it is drained below.
+        // Drain every scalar output through the closed epoch.
         let epoch = self.epoch;
         while self.outputs.values().filter(|o| o.width == 1).any(|o| !progress::caught_up(&o.probe, &host_time(epoch)))
-            || self.bindings.iter().any(|b| b.probe.less_than(&host_time(epoch)))
         {
             // Remote data or progress wakes idle workers; do not busy-poll.
             worker.step_or_park(None);
-        }
-
-        // Feedback: deliver each binding's buffered source changes into its
-        // target input at the (new, open) epoch — they become visible when
-        // the NEXT tick closes it. One-epoch delay is what makes the loop
-        // well-founded: each tick performs exactly one step of any
-        // program-to-program (or program-to-self) recursion.
-        let bindings = &self.bindings;
-        let programs = &mut self.programs;
-        for binding in bindings {
-            let handle = programs
-                .get_mut(&binding.target)
-                .and_then(|p| p.inputs.get_mut(&binding.input));
-            // The target vanished; drop_program refuses while bound, so
-            // this is unreachable — but never let the buffer grow.
-            match handle {
-                Some(handle) => {
-                    for container in binding.buffer.borrow_mut().drain(..) {
-                        handle.give_at(container, epoch.max(handle.time().get(0).copied().unwrap_or(0)));
-                    }
-                }
-                None => binding.buffer.borrow_mut().clear(),
-            }
         }
 
         // Allow every published trace to compact up to the previous epoch. This
