@@ -34,12 +34,16 @@
 //!   publishing its exports. The dataflow's id (`next_dataflow_index`) is kept
 //!   for teardown.
 //! - **feed** stages updates, as text read at the input's declared shapes or
-//!   as columns, at a chosen time (default: the current epoch), so inputs can
+//!   as columns, at a chosen time (default: the input’s frontier), so inputs can
 //!   be scheduled into the future.
 //! - **load** fills an input from a file or a published trace.
 //! - **tick** advances all inputs to the next epoch, runs to quiescence, then
 //!   lets every trace compact (an importer's own handle holds the shared
 //!   `TraceBox` back to what it still needs).
+//! - **seal** moves one input’s write frontier or finishes the input.
+//! - **spin** waits for each export to reach its commanded write frontier.
+//! - **trim** releases readable history on one output.
+//! - **tick** is the deprecated global scalar clock used by demos.
 //! - **drop** evicts a program — gated on its published traces having no live
 //!   importer — and calls `worker.drop_dataflow`, which removes the operators
 //!   outright and frees their state immediately. The gate is what makes that
@@ -51,7 +55,7 @@
 //! published-trace handle [`Published`], and the lifecycle's ends, `tick` and `drop_program`.
 //! The rest is one file per concern, each adding methods to [`Server`]:
 //!
-//! - `time`: the host epoch and the program time ([`OuterTime`], [`HostTime`], [`host_dataflow`]);
+//! - `time`: scalar and product timestamps ([`OuterTime`], [`HostTime`], [`host_dataflow`]);
 //! - `sources`: positional inputs and diagnostic sources;
 //! - `install`: installing a program;
 //! - `feed`: feeding and loading inputs;
@@ -175,36 +179,49 @@ impl From<usize> for InputId {
     fn from(position: usize) -> Self { InputId::Position(position) }
 }
 
+/// Update times for a batch. Every shard of a per-row batch retains its global admission bounds.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum FeedTimes {
+    /// One explicit point or, for `time=now`, the input’s sole frontier element.
+    Shared(Option<HostTime>),
+    /// One lane per coordinate, accompanied by the least points and width of the whole batch.
+    PerRow { lanes: Vec<Vec<u64>>, least: Vec<HostTime>, width: usize },
+}
+
 /// Serializable so worker 0 can circulate it to every worker; the workers
 /// execute it without any further parsing.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     /// Install `program` under `name`.
-    Install { name: String, program: st::Program },
+    Install { name: String, program: st::Program, width: usize },
     /// Update `input` of `prog` with one row, read into columns, at
-    /// `time` (default the current epoch when `None`).
+    /// `time` (`None` for `time=now`).
     Feed {
         prog: String,
         input: InputId,
         columns: Updates,
-        time: Option<OuterTime>,
+        time: Option<HostTime>,
     },
-    /// Stage several rows, read into columns, into one input at the
-    /// current epoch.
-    FeedColumns {
-        prog: String,
-        input: InputId,
-        columns: Updates,
-    },
-    /// Fill `input` of `prog` from `source` — a published trace or a file path — at the current epoch, each row's
+    /// Stage one batch of updates, partitioned across the workers.
+    FeedBatch { prog: String, input: InputId, columns: Updates, times: FeedTimes },
+    /// Move `input` of program `prog` to `frontier` (see [`Server::seal`]).
+    Seal { prog: String, input: InputId, frontier: Antichain<HostTime> },
+    /// Fill `input` of `prog` from `source` — a published trace or a file path — at the given destination time (the sole input frontier point for `time=now`), each row's
     /// multiplicity scaled by `diff`. Collective: every worker feeds its own
     /// shard of the rows (see [`Server::load`]).
     Load {
         prog: String,
         input: InputId,
+        time: Option<HostTime>,
         source: String,
         diff: Diff,
     },
+    /// Run until every program's outputs have caught up with their inputs (see [`Server::spin`]).
+    Spin,
+    /// Sample the diagnostics inputs and advance their clock.
+    SampleDiagnostics,
+    /// Release the output's history before this time.
+    Trim { trace: String, frontier: Option<HostTime> },
     /// Close `n` epochs, running to quiescence after each one.
     Tick { n: u64 },
     /// Drop the named program.
@@ -245,8 +262,8 @@ struct Output {
     owner: String,
     /// This worker's observed frontier of the export arrangement.
     probe: ProbeHandle<HostTime>,
-    /// Earliest readable point, advanced by logical compaction.
-    since: HostTime,
+    /// Logical compaction frontier. Empty once the publisher releases its history.
+    since: Antichain<HostTime>,
 }
 
 /// A stable, transport-friendly description of one installed dataflow.
@@ -283,6 +300,8 @@ pub struct Server {
     arranged_imports: bool,
     /// The passes install runs on programs installed afterwards (default all except projection).
     passes: crate::passes::Config,
+    /// Next epoch for a sample of worker diagnostics.
+    diagnostics_epoch: OuterTime,
     /// This worker's diagnostics, when they are on: the source of the `diag.*` collections.
     diagnostics: Option<Rc<RefCell<crate::diag::Diagnostics>>>,
 }
@@ -301,6 +320,7 @@ impl Server {
             epoch: 0,
             arranged_imports: true,
             passes: crate::passes::Config::default(),
+            diagnostics_epoch: 0,
             diagnostics: None,
         }
     }
@@ -472,16 +492,16 @@ impl Server {
 
     /// Close the current epoch: advance every input to the next epoch, step the
     /// worker until all exports have caught up, then let every trace compact.
+    /// Deprecated global scalar shortcut. New applications use seal, spin and trim.
     pub fn tick(&mut self, worker: &mut Worker) {
         let cur = self.epoch;
         let next = cur + 1;
         // Diagnostics of everything since the last tick enter at the epoch being closed.
-        self.process_diagnostics(worker);
-        self.feed_diagnostics(cur);
-        for installed in self.programs.values_mut().filter(|p| p.root_width == 1) {
+        if self.diagnostics.is_some() { self.sample_diagnostics(worker).expect("diagnostic clock overflow"); }
+        for installed in self.programs.values_mut().filter(|p| p.root_width == 1 && p.origin != Origin::Diagnostics) {
             installed.now = installed.now.join(&host_time(next));
             for handle in installed.inputs.values_mut() {
-                handle.advance_to_point(&handle.time().join(&host_time(next)));
+                if let Some(time) = handle.time() { handle.advance_to_point(&time.join(&host_time(next))); }
             }
         }
         self.epoch = next;
@@ -509,8 +529,9 @@ impl Server {
         // tick only runs at epoch >= 1.)
         let names: Vec<_> = self.outputs.iter().filter(|(_, o)| o.width == 1).map(|(n, _)| n.clone()).collect();
         for name in names {
-            let since = self.outputs[&name].since.join(&self.import_as_of());
-            self.compact(&name, &since).expect("monotone legacy compaction");
+            if let Some(floor) = self.trace_since(&name) {
+                self.compact(&name, &floor.join(&self.import_as_of())).expect("monotone legacy compaction");
+            }
         }
     }
 }

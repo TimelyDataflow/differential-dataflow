@@ -1,5 +1,8 @@
 # The DDIR server
 
+[Server command reference](../../server/README.md#server-command-reference)
+
+
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
 at a time; each may `import` traces other dataflows `output`, so a

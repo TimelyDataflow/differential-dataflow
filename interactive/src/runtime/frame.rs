@@ -6,17 +6,17 @@
 //!
 //! Every quantity is little-endian. `keys` and `vals` are each one column in corgi's
 //! self-describing encoding ([`corgi::bytes`]), so a decoder reads their shapes from the bytes.
-//! The times are `lanes` columns of `rows` words, one after the other: a `peek`'s frame holds the
-//! consolidated contents and no times, and a `tail`'s frames hold changes, each at its time, one
-//! lane; a frame holds no more (`MAX_LANES`). Every section is a whole number of 64-bit words.
+//! The times are `lanes` columns of `rows` words, one per coordinate. A timestamped feed
+//! supplies one point per row. Scalar tails use one lane. Snapshots and time=now use zero.
+//! Every section is a whole number of 64-bit words.
 
 use corgi::Shape;
 
 use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
-/// The most time lanes a frame holds: a server's frames carry host times, one lane, or none.
-const MAX_LANES: u64 = 1;
+/// Bound the number of time lanes even for an empty frame, where lanes occupy no payload bytes.
+pub const MAX_LANES: u64 = 64;
 
 /// `updates`, each at its time in `lanes` (one column per time coordinate; none for no times), as
 /// a frame's payload.
@@ -68,16 +68,14 @@ pub fn decode(bytes: &[u8]) -> Result<(Updates, Vec<Vec<u64>>), String> {
     Ok((Updates { keys, vals, diffs }, times))
 }
 
-/// The updates of a frame fed to an input whose declared shapes are `key` and `val`: a frame with
-/// no time lanes (a feed's rows take the time it is fed at), whose keys and values have exactly
-/// those shapes, whatever their storage. A column can name more rows than its bytes hold (a `Unit`
-/// says how many it has), so a frame naming more than `max_rows` rows anywhere is refused before
-/// any work is done per row.
-pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> Result<Updates, String> {
+/// The updates of a frame fed to an input whose declared shapes are `key` and `val`, whose keys
+/// and values have exactly those shapes, whatever their storage, and the time of each if the frame
+/// has a time lane, as a `tail`'s frames have: a frame with no time lane is a feed whose rows take
+/// the time it is fed at. A column can name more rows than its bytes hold (a `Unit` says how many
+/// it has), so a frame naming more than `max_rows` rows anywhere is refused before any work is
+/// done per row.
+pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> Result<(Updates, Vec<Vec<u64>>), String> {
     let (updates, lanes) = decode(bytes)?;
-    if !lanes.is_empty() {
-        return Err(format!("frame: a feed's rows take the time they are fed at, but this frame has {} time lanes", lanes.len()));
-    }
     let named = corgi::bytes::declared_rows(&updates.keys).max(corgi::bytes::declared_rows(&updates.vals));
     if named > max_rows {
         return Err(format!("frame: a column names {named} rows, more than the {max_rows} a feed may"));
@@ -86,7 +84,7 @@ pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> 
     if shapes.0 != *key || shapes.1 != *val {
         return Err(format!("frame: rows of shape ({}, {}), but the input's are ({key}, {val})", shapes.0, shapes.1));
     }
-    Ok(updates)
+    Ok((updates, lanes))
 }
 
 #[cfg(test)]
@@ -111,8 +109,8 @@ mod tests {
         assert!(decode(&short).is_err(), "a frame cut short");
     }
 
-    /// A feed frame is read only at its input's shapes, with no times, and naming no more rows than
-    /// a feed may.
+    /// A feed frame is read only at its input's shapes, with its times if it has them, and naming
+    /// no more rows than a feed may.
     #[test]
     fn feed_frames_are_checked() {
         let shape = (Shape::Prod(vec![Shape::Int, Shape::List(Box::new(Shape::Int))]), Shape::Unit);
@@ -120,8 +118,8 @@ mod tests {
         decoder.push("tuple(1,list(104,105))", None, 3).unwrap();
         decoder.push("tuple(-7,list())", None, -1).unwrap();
         let updates = decoder.finish();
-        assert_eq!(decode_feed(&encode(&updates, &[]), &shape, 1 << 20).unwrap(), updates);
-        assert!(decode_feed(&encode(&updates, &[vec![4, 9]]), &shape, 1 << 20).is_err(), "a frame with times");
+        assert_eq!(decode_feed(&encode(&updates, &[]), &shape, 1 << 20).unwrap(), (updates.clone(), vec![]));
+        assert_eq!(decode_feed(&encode(&updates, &[vec![4, 9]]), &shape, 1 << 20).unwrap(), (updates.clone(), vec![vec![4, 9]]), "a frame with times");
         assert!(decode_feed(&encode(&updates, &[]), &(Shape::Int, Shape::Unit), 1 << 20).is_err(), "another shape");
         let units = Updates { keys: corgi::Value::Unit(5), vals: corgi::Value::Unit(5), diffs: vec![1; 5] };
         let unit = (Shape::Unit, Shape::Unit);

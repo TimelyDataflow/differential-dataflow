@@ -8,13 +8,13 @@
 //!   - `end` — terminator of a `tail` stream, once it is stopped
 //!
 //! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
-//! DDIR through `end-load`, while `feed <prog> <in> begin` accepts row updates
+//! DDIR through `end-load`, while `feed <prog> <in> time=T begin` accepts row updates
 //! through `end-feed` and becomes one non-interleavable server command.
 //!
 //! `feed <prog> <in> frame <nbytes>` is followed by exactly `nbytes` bytes: the
 //! updates as columns, in the binary frame format `peek … as corgi` answers with
-//! (`interactive::runtime::frame`), with no time lanes. On WebSocket the header
-//! line and its bytes are one binary message.
+//! (`interactive::runtime::frame`). A frame carries a time per row, as in `tail … as corgi`.
+//! Use `time=now` for a frame with no time lane. On WebSocket the header line and its bytes are one binary message.
 
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
@@ -26,7 +26,9 @@ use interactive::runtime::container::Updates;
 use interactive::runtime::feed::FeedDecoder;
 use interactive::ir::Diff;
 use interactive::scope_ir::{Program, Source};
-use interactive::server::{Command as ServerCommand, InputId, OuterTime, RowShape};
+use interactive::server::{Command as ServerCommand, host_time, FeedTimes, HostTime, InputId, RowShape};
+
+use timely::progress::Antichain;
 
 pub type ReqId = String;
 
@@ -89,6 +91,7 @@ pub enum Cmd {
     /// input is the one after the program's own, the demand sets its exports.
     Load {
         id_hint: String,
+        width: usize,
         bindings: BTreeMap<String, String>,
         program: String,
         explain: Option<bool>,
@@ -102,13 +105,13 @@ pub enum Cmd {
     List,
     /// One-shot snapshot of a named trace, optionally of one key (text, read at the trace's key
     /// shape): one text line per row, columns with `as columns`, or binary frames with `as corgi`.
-    Peek { name: String, key: Option<String>, format: ReadFormat },
+    Peek { name: String, key: Option<String>, as_of: Option<HostTime>, format: ReadFormat },
     /// Persistent subscription to a named trace in the same formats as `peek`.
     Tail { name: String, format: ReadFormat },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
     /// Update `input` of `prog` with one row, read into columns at
-    /// the input's declared shapes, at `time` (default the current epoch).
+    /// the input's declared shapes, at `time` (None for `time=now`).
     /// Identity and ordering of writes are convention, not enforcement:
     /// cooperating clients include their session name and an ordering id in
     /// the data, and programs resolve contention over those facts (see
@@ -117,24 +120,42 @@ pub enum Cmd {
         prog: String,
         input: InputId,
         columns: Updates,
-        time: Option<OuterTime>,
+        time: Option<HostTime>,
     },
     /// Atomically stage many rows, read into columns at the input's declared
-    /// shapes, into one program input at the current epoch.
+    /// shapes, into one program input at the supplied time or the `time=now` frontier.
     FeedColumns {
         prog: String,
         input: InputId,
         columns: Updates,
+        time: Option<HostTime>,
     },
+    /// Stage many rows, read into columns at the input's declared shapes, into one
+    /// program input, each at its own time: a framed feed whose frame has a time lane.
+    FeedTimed {
+        prog: String,
+        input: InputId,
+        columns: Updates,
+        times: Vec<Vec<u64>>,
+    },
+    /// Advance one input’s write frontier.
+    /// `seal <prog> <in> <frontier>`.
+    Seal { prog: String, input: InputId, frontier: Antichain<HostTime> },
     /// Fill one program input from a source the server reads itself — a published trace or a file of integer rows —
     /// each worker taking its shard, so no row crosses the wire.
-    /// `feed <prog> <in> from <source> [diff=<d>]`.
+    /// `feed <prog> <in> time=<point|now> from <source> [diff=<d>]`.
     Source {
         prog: String,
         input: InputId,
+        time: Option<HostTime>,
         source: String,
         diff: Diff,
     },
+    /// Wait until every program's outputs have caught up with their inputs. `spin`.
+    Spin,
+    /// Sample and advance only diagnostic inputs.
+    SampleDiagnostics,
+    Trim { trace: String, frontier: Option<HostTime> },
     /// Advance ambient time by `n` (default 1).
     Tick { n: u64 },
     /// End the session.
@@ -148,7 +169,7 @@ pub enum Cmd {
 pub enum PreparedCommand {
     Server(ServerCommand),
     Plan { name: String, program: String, timings: bool },
-    Peek { name: String, key: Option<String>, format: ReadFormat },
+    Peek { name: String, key: Option<String>, as_of: Option<HostTime>, format: ReadFormat },
     Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
 }
@@ -206,6 +227,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
     let command = match command {
         Cmd::Load {
             id_hint,
+            width,
             bindings,
             program,
             explain,
@@ -224,22 +246,56 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
             catalog.record(&id_hint, &program);
             ServerCommand::Install {
                 name: id_hint,
+                width,
                 program,
             }
         }
         Cmd::Plan { name, program, timings } => return Ok(PreparedCommand::Plan { name, program, timings }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
-        Cmd::Peek { name, key, format } => return Ok(PreparedCommand::Peek { name, key, format }),
+        Cmd::Peek { name, key, as_of, format } => return Ok(PreparedCommand::Peek { name, key, as_of, format }),
         Cmd::Tail { name, format } => return Ok(PreparedCommand::Tail { name, format }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
-        Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
-        Cmd::Source { prog, input, source, diff } => ServerCommand::Load { prog, input, source, diff },
+        Cmd::FeedColumns { prog, input, columns, time } => ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::Shared(time) },
+        Cmd::FeedTimed { prog, input, columns, times } => {
+            let width = times.iter().rposition(|lane| lane.iter().any(|&x| x != 0)).map_or(0, |i| i + 1);
+            let least = least_times(&times[..width], columns.len());
+            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes: times, least, width } }
+        },
+        Cmd::Seal { prog, input, frontier } => ServerCommand::Seal { prog, input, frontier },
+        Cmd::Source { prog, input, source, diff, time } => ServerCommand::Load { prog, input, source, diff, time },
+        Cmd::Trim { trace, frontier } => ServerCommand::Trim { trace, frontier },
+        Cmd::Spin => ServerCommand::Spin,
+        Cmd::SampleDiagnostics => ServerCommand::SampleDiagnostics,
         Cmd::Tick { n } => ServerCommand::Tick { n },
         Cmd::Exit => ServerCommand::Exit,
     };
     Ok(PreparedCommand::Server(command))
+}
+
+/// Minimal row times for the whole frame. In two dimensions, sorting by x (then y)
+/// means a point is minimal exactly when its y is smaller than all preceding y's.
+fn least_times(lanes: &[Vec<u64>], rows: usize) -> Vec<HostTime> {
+    match lanes {
+        [] if rows == 0 => Vec::new(),
+        [] => vec![host_time(0)],
+        [lane] => vec![host_time(*lane.iter().min().expect("nonzero lane"))],
+        [xs, ys] => {
+            let mut points: Vec<_> = xs.iter().copied().zip(ys.iter().copied()).collect();
+            points.sort_unstable();
+            let mut best_y = None;
+            points.into_iter().filter_map(|(x, y)| {
+                if best_y.is_some_and(|best| best <= y) { return None; }
+                best_y = Some(y);
+                Some(HostTime::new([x, y].into_iter().collect()))
+            }).collect()
+        }
+        _ => {
+            let mut least: Antichain<_> = (0..rows).map(|i| HostTime::new(lanes.iter().map(|lane| lane[i]).collect())).collect();
+            least.drain().collect()
+        }
+    }
 }
 
 fn apply_bindings(
@@ -301,6 +357,7 @@ pub struct LineParser {
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
     "load", "plan", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed",
+    "seal", "trim", "spin", "diag",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -328,6 +385,7 @@ struct PendingLoad {
     timings: bool,
     reqid: ReqId,
     id_hint: String,
+    width: usize,
     bindings: BTreeMap<String, String>,
     explain: Option<bool>,
     body: String,
@@ -337,7 +395,15 @@ struct PendingLoad {
     poisoned: Option<String>,
 }
 
+/// Where a batch obtains its update times. A shared `None` resolves on the workers.
+enum BatchTime {
+    Shared(Option<HostTime>),
+    PerRow,
+}
+
 struct PendingFeed {
+    time: BatchTime,
+    times: Vec<Vec<u64>>,
     reqid: ReqId,
     prog: String,
     input: InputId,
@@ -351,6 +417,7 @@ struct PendingFeed {
 
 /// A `feed … frame <nbytes>` whose bytes are still to come.
 struct PendingFrame {
+    time: BatchTime,
     reqid: ReqId,
     prog: String,
     input: InputId,
@@ -386,7 +453,7 @@ impl LineParser {
     /// the result with a per-connection response sender to form a
     /// `Request`.
     pub fn feed(&mut self, line: &str) -> Option<(ReqId, Result<Cmd, String>)> {
-        // A framed feed fixes its target once, then accepts compact rows until
+        // A text batch fixes its target once, then accepts compact rows until
         // `end-feed`. Parse and buffer the whole body on the session thread so
         // the worker group sees either one complete command or no command.
         if let Some(ref mut pending) = self.pending_feed {
@@ -406,7 +473,11 @@ impl LineParser {
                 }
                 let columns = done.rows.expect("an unpoisoned feed has its input's shapes").finish();
                 let (prog, input) = (done.prog, done.input);
-                return Some((done.reqid, Ok(Cmd::FeedColumns { prog, input, columns })));
+                let command = match done.time {
+                    BatchTime::PerRow => Cmd::FeedTimed { prog, input, columns, times: done.times },
+                    BatchTime::Shared(time) => Cmd::FeedColumns { prog, input, columns, time },
+                };
+                return Some((done.reqid, Ok(command)));
             }
 
             pending.bytes = pending.bytes.saturating_add(line.len() + 1);
@@ -422,7 +493,21 @@ impl LineParser {
             }
             let rows = pending.rows.as_mut().expect("an unpoisoned feed has its input's shapes");
             let row = rows.len() + 1;
-            if let Err(error) = rows.push_line(trimmed) {
+            let result = rows.push_line_with_time(trimmed).and_then(|time| match (&pending.time, time) {
+                (BatchTime::Shared(_), None) => Ok(()),
+                (BatchTime::PerRow, Some(t)) => {
+                    let point = parse_point(t)?;
+                    pending.times.resize_with(pending.times.len().max(point.len()), || vec![0; row - 1]);
+                    for (coord, lane) in pending.times.iter_mut().enumerate() {
+                        lane.push(point.get(coord).copied().unwrap_or(0));
+                    }
+                    Ok(())
+                }
+                (BatchTime::PerRow, None) if row == 1 => { pending.time = BatchTime::Shared(None); Ok(()) }
+                (BatchTime::PerRow, None) => Err("supply time=T on every row or on the batch header".into()),
+                (BatchTime::Shared(_), Some(_)) => Err("time= already supplied on the batch header".into()),
+            });
+            if let Err(error) = result {
                 pending.poisoned = Some(format!("feed row {row}: {error}"));
                 pending.rows = None;
             }
@@ -451,6 +536,7 @@ impl LineParser {
                         } else {
                             Cmd::Load {
                                 id_hint: done.id_hint,
+                                width: done.width,
                                 bindings: done.bindings,
                                 program: done.body,
                                 explain: done.explain,
@@ -504,6 +590,7 @@ impl LineParser {
                 plan,
                 timings,
                 id_hint,
+                width,
                 bindings,
                 explain,
             } => {
@@ -512,6 +599,7 @@ impl LineParser {
                     timings,
                     reqid,
                     id_hint,
+                    width,
                     bindings,
                     explain,
                     body: String::new(),
@@ -519,22 +607,24 @@ impl LineParser {
                 });
                 None
             }
-            ParseOutcome::BeginFeed { prog, input } => {
+            ParseOutcome::BeginFeed { prog, input, time } => {
                 // A feed to an input with no declared shapes is read through to its end, then refused.
                 let (rows, poisoned) = match self.catalog.decoder(&prog, &input) {
                     Ok(rows) => (Some(rows), None),
                     Err(error) => (None, Some(format!("feed: {error}"))),
                 };
-                self.pending_feed = Some(PendingFeed { reqid, prog, input, rows, bytes: 0, poisoned });
+                let (time, poisoned) = match time { Ok(time) => (time, poisoned), Err(error) => (BatchTime::PerRow, Some(error)) };
+                self.pending_feed = Some(PendingFeed { reqid, prog, input, time, times: Vec::new(), rows, bytes: 0, poisoned });
                 None
             }
-            ParseOutcome::BeginFrame { prog, input, nbytes } => {
-                let shape = if nbytes > self.max_feed_bytes {
+            ParseOutcome::BeginFrame { prog, input, nbytes, time } => {
+                let (time, error) = match time { Ok(time) => (time, None), Err(e) => (BatchTime::PerRow, Some(e)) };
+                let shape = if let Some(error) = error { Err(error) } else if nbytes > self.max_feed_bytes {
                     Err(format!("feed: a frame of {nbytes} bytes exceeds {} bytes (DDIR_MAX_FEED_BYTES)", self.max_feed_bytes))
                 } else {
                     self.catalog.shape(&prog, &input).map_err(|error| format!("feed: {error}"))
                 };
-                self.pending_frame = Some(PendingFrame { reqid, prog, input, nbytes, shape });
+                self.pending_frame = Some(PendingFrame { reqid, prog, input, nbytes, shape, time });
                 None
             }
         }
@@ -564,7 +654,12 @@ impl LineParser {
             interactive::runtime::frame::decode_feed(payload, &shape, self.max_feed_bytes as u64).map_err(|error| format!("feed: {error}"))
         });
         let (prog, input) = (frame.prog, frame.input);
-        Some((frame.reqid, columns.map(|columns| Cmd::FeedColumns { prog, input, columns })))
+        Some((frame.reqid, columns.and_then(|(columns, times)| match (frame.time, times.is_empty()) {
+            (BatchTime::PerRow, false) => Ok(Cmd::FeedTimed { prog, input, columns, times }),
+            (BatchTime::Shared(time), true) => Ok(Cmd::FeedColumns { prog, input, columns, time }),
+            (BatchTime::PerRow, true) => Ok(Cmd::FeedColumns { prog, input, columns, time: None }),
+            (BatchTime::Shared(_), false) => Err("feed: a frame with time lanes already supplies per-row times; omit the header time".into()),
+        })))
     }
 }
 
@@ -575,14 +670,17 @@ enum ParseOutcome {
         plan: bool,
         timings: bool,
         id_hint: String,
+        width: usize,
         bindings: BTreeMap<String, String>,
         explain: Option<bool>,
     },
     BeginFeed {
+        time: Result<BatchTime, String>,
         prog: String,
         input: InputId,
     },
     BeginFrame {
+        time: Result<BatchTime, String>,
         prog: String,
         input: InputId,
         nbytes: usize,
@@ -597,6 +695,29 @@ fn read_format<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], ReadFormat) {
         [rest @ .., "as", "corgi"] => (rest, ReadFormat::Corgi),
         _ => (args, ReadFormat::Rows),
     }
+}
+
+/// A scalar denotes the first coordinate. A vector names a point in product time.
+fn parse_point(text: &str) -> Result<HostTime, String> {
+    if let Ok(t) = text.parse() { return Ok(host_time(t)); }
+    let coords: Vec<u64> = serde_json::from_str(text).map_err(|_| format!("invalid point {text:?}"))?;
+    if !(1..=64).contains(&coords.len()) { return Err("a point needs 1 to 64 coordinates".into()); }
+    Ok(HostTime::new(coords.into()))
+}
+
+fn write_frontier(text: &str) -> Result<Antichain<HostTime>, String> {
+    if text == "[]" { return Ok(Antichain::new()); }
+    if text.starts_with("[[") {
+        let points: Vec<Vec<u64>> = serde_json::from_str(text).map_err(|_| format!("invalid frontier {text:?}"))?;
+        if points.iter().any(|p| !(1..=64).contains(&p.len())) { return Err("a frontier point needs 1 to 64 coordinates".into()); }
+        return Ok(points.into_iter().map(|coords| HostTime::new(coords.into())).collect());
+    }
+    parse_point(text).map(Antichain::from_elem)
+}
+
+/// Published readers currently retain history from a single point, or release it with [].
+fn read_floor(text: &str) -> Result<Option<HostTime>, String> {
+    if text == "[]" { Ok(None) } else { parse_point(text).map(Some) }
 }
 
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
@@ -616,7 +737,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
-                    plan: true, timings, id_hint: name.into(), bindings: BTreeMap::new(), explain: None,
+                    plan: true, timings, id_hint: name.into(), width: 1, bindings: BTreeMap::new(), explain: None,
                 },
             }
         },
@@ -637,6 +758,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             };
             let mut bindings = BTreeMap::new();
             let mut explain = None;
+            let mut width = None;
             for tok in options {
                 match *tok {
                     "explain" => { explain = Some(false); continue; }
@@ -645,14 +767,23 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 }
                 let Some((k, v)) = tok.split_once('=') else {
                     return ParseOutcome::Err(format!(
-                        "load: argument {:?} must be `explain`, `explain=debug`, or `name=binding`",
+                        "load: argument {:?} must be `width=N`, `explain`, `explain=debug`, or `name=binding`",
                         tok
                     ));
                 };
+                if k == "width" && v.bytes().all(|c| c.is_ascii_digit()) {
+                    let limit = interactive::runtime::frame::MAX_LANES as usize;
+                    let Some(n) = v.parse::<usize>().ok().filter(|n| (1..=limit).contains(n)) else {
+                        return ParseOutcome::Err(format!("load: width must be in 1..={limit}"));
+                    };
+                    if width.replace(n).is_some() { return ParseOutcome::Err("load: duplicate width".into()); }
+                    continue;
+                }
                 if bindings.insert(k.to_string(), v.to_string()).is_some() {
                     return ParseOutcome::Err(format!("load: duplicate binding for {:?}", k));
                 }
             }
+            let width = width.unwrap_or(1);
             let id_hint = id_hint.to_string();
             match path {
                 // A file the server reads itself is not an upload, so the program-size
@@ -660,6 +791,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 Some(path) => match std::fs::read_to_string(path) {
                     Ok(program) => ParseOutcome::Cmd(Cmd::Load {
                         id_hint,
+                        width,
                         bindings,
                         program,
                         explain,
@@ -670,6 +802,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     plan: false,
                     timings: false,
                     id_hint,
+                    width,
                     bindings,
                     explain,
                 },
@@ -686,20 +819,33 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 }
                 _ => args,
             };
+            let [prog, input, body @ ..] = args else {
+                return ParseOutcome::Err("feed: expected a program and input".into());
+            };
+            let mut options = body.iter().filter_map(|s| s.strip_prefix("time="));
+            let time = match (options.next(), options.next()) {
+                (_, Some(_)) => Err("feed: time= supplied twice".into()),
+                (Some("now"), None) => Ok(BatchTime::Shared(None)),
+                (Some(t), None) => parse_point(t).map(|p| BatchTime::Shared(Some(p))),
+                (None, None) => Ok(BatchTime::PerRow),
+            };
+            let args: Vec<_> = [*prog, *input].into_iter().chain(body.iter().copied().filter(|s| !s.starts_with("time="))).collect();
+            let args = args.as_slice();
             if let [prog, input, "begin"] = args {
-                return ParseOutcome::BeginFeed { prog: (*prog).to_string(), input: InputId::parse(input) };
+                return ParseOutcome::BeginFeed { prog: (*prog).into(), input: InputId::parse(input), time };
             }
-            // Syntax: `feed <prog> <in> frame <nbytes>`, then exactly `nbytes` bytes: a binary frame.
-            // A bad `<in>` still has its bytes read past; a bad `<nbytes>` leaves none to find.
             if let [prog, input, "frame", nbytes] = args {
                 let Ok(nbytes) = nbytes.parse() else {
                     return ParseOutcome::Err(format!("feed: <nbytes> must be a number, got {nbytes:?}"));
                 };
-                return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input: InputId::parse(input), nbytes };
+                return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input: InputId::parse(input), nbytes, time };
             }
-            // Syntax: `feed <prog> <in> from <trace-or-file> [diff=<d>]` — the server
-            // sources the rows.
+            let time = match time { Ok(time) => time, Err(error) => return ParseOutcome::Err(error) };
             if let [prog, input, "from", source, rest @ ..] = args {
+                let time = match time {
+                    BatchTime::Shared(point) => point,
+                    BatchTime::PerRow => None, // Legacy source loads omit time=now.
+                };
                 let diff = match rest {
                     [] => Ok(1),
                     [arg] => arg
@@ -712,39 +858,29 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     Ok(diff) => ParseOutcome::Cmd(Cmd::Source {
                         prog: (*prog).to_string(),
                         input: InputId::parse(input),
+                        time,
                         source: (*source).to_string(),
                         diff,
                     }),
                     Err(error) => ParseOutcome::Err(error),
                 };
             }
-            // Syntax: `feed <prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]`
+            // Syntax: `feed <prog> <in> <key> [val=<v>] time=<t> [diff=<d>]`
             // A `<v>`/`<key>` is a value of the input's declared shape, written
             // without spaces (see `interactive::runtime::feed`).
             if args.len() < 3 {
                 return ParseOutcome::Err(
-                    "feed: expected `<prog> <in> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
+                    format!("{cmd}: expected a program, input and row"),
                 );
             }
             let prog = args[0].to_string();
             let input = InputId::parse(args[1]);
             let key = args[2];
             let mut val = None;
-            let mut time = None;
             let mut diff: Diff = 1;
             for tok in &args[3..] {
                 if let Some(v) = tok.strip_prefix("val=") {
                     val = Some(v);
-                } else if let Some(t) = tok.strip_prefix("time=") {
-                    time = match t.parse() {
-                        Ok(t) => Some(t),
-                        Err(_) => {
-                            return ParseOutcome::Err(format!(
-                                "feed: time= must be a number, got {:?}",
-                                t
-                            ))
-                        }
-                    };
                 } else if let Some(d) = tok.strip_prefix("diff=") {
                     diff = match d.parse() {
                         Ok(d) => d,
@@ -759,6 +895,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     return ParseOutcome::Err(format!("feed: unrecognized argument {:?}", tok));
                 }
             }
+            let time = match time { BatchTime::Shared(point) => point, BatchTime::PerRow => None };
             let mut row = match catalog.decoder(&prog, &input) {
                 Ok(row) => row,
                 Err(e) => return ParseOutcome::Err(format!("feed: {e}")),
@@ -767,6 +904,18 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 return ParseOutcome::Err(format!("feed: {e}"));
             }
             ParseOutcome::Cmd(Cmd::Feed { prog, input, columns: row.finish(), time })
+        }
+        "seal" => {
+            // The input is `<prog> <in>` or `<prog>::<in>`, and `<in>` is its position or its name.
+            let (prog, input, time) = match args {
+                [prog, input, time] => (*prog, *input, *time),
+                [target, time] if target.contains("::") => { let (prog, input) = target.split_once("::").unwrap(); (prog, input, *time) }
+                _ => return ParseOutcome::Err(format!("{cmd}: expected `<prog> <in> <frontier>` or `<prog>::<in> <frontier>`")),
+            };
+            match write_frontier(time) {
+                Ok(frontier) => ParseOutcome::Cmd(Cmd::Seal { prog: prog.to_string(), input: InputId::parse(input), frontier }),
+                Err(error) => ParseOutcome::Err(format!("{cmd}: {error}")),
+            }
         }
         "drop" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Drop { name: (*name).to_string() }),
@@ -778,10 +927,17 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
         },
         "peek" => {
             let (args, format) = read_format(args);
+            let (args, as_of) = match args {
+                [rest @ .., "as-of", time] => match parse_point(time) {
+                    Ok(point) => (rest, Some(point)),
+                    Err(_) => return ParseOutcome::Err(format!("peek: invalid as-of time {time:?}")),
+                },
+                _ => (args, None),
+            };
             match args {
-                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, format }),
-                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), format }),
-                _ => ParseOutcome::Err("peek: expected `<name> [key] [as columns|corgi]`".into()),
+                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, as_of, format }),
+                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), as_of, format }),
+                _ => ParseOutcome::Err("peek: expected `<name> [key] [as-of <time>] [as columns|corgi]`".into()),
             }
         }
         "tail" => match read_format(args) {
@@ -794,7 +950,20 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             }),
             _ => ParseOutcome::Err("stop: expected `<tail-reqid>`".into()),
         },
+        "trim" => match args {
+            [trace, time] => match read_floor(time) {
+                Ok(frontier) => ParseOutcome::Cmd(Cmd::Trim { trace: (*trace).into(), frontier }),
+                Err(error) => ParseOutcome::Err(format!("trim: {error}")),
+            },
+            _ => ParseOutcome::Err("trim: expected `<trace> <frontier>`".into()),
+        },
+        "spin" => match args {
+            [] => ParseOutcome::Cmd(Cmd::Spin),
+            _ => ParseOutcome::Err("spin: expected no arguments".into()),
+        },
+        "diag" if args.is_empty() => ParseOutcome::Cmd(Cmd::SampleDiagnostics),
         "tick" => match args {
+            ["diagnostics"] => ParseOutcome::Cmd(Cmd::SampleDiagnostics),
             [] => ParseOutcome::Cmd(Cmd::Tick { n: 1 }),
             [n] => match n.parse::<u64>() {
                 Ok(n) => ParseOutcome::Cmd(Cmd::Tick { n }),
@@ -821,7 +990,7 @@ mod tests {
             output "ones" = input 3 : ((int), (int));
         "#;
         let catalog = Catalog::default();
-        let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
+        let load = Cmd::Load { width: 1, id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
         prepare(load, &catalog).expect("the program lowers");
         LineParser::new(catalog)
     }
@@ -847,30 +1016,70 @@ mod tests {
         rows.push("tuple(3,-4)", None, 2).unwrap();
         let columns = rows.finish();
         let bytes = interactive::runtime::frame::encode(&columns, &[]);
-        assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
+        assert!(p.feed(&format!("r1 feed world 0 time=now frame {}", bytes.len())).is_none());
         assert_eq!(p.frame_bytes(), Some((bytes.len(), true)));
         match p.frame(&bytes) {
-            Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got }))) => {
+            Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got, time: None }))) => {
                 assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Position(0)));
                 assert_eq!(got, columns);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
         assert!(p.frame_bytes().is_none(), "the frame is complete");
-        assert!(p.feed(&format!("r2 feed world 1 frame {}", bytes.len())).is_none());
+        assert!(p.feed(&format!("r2 feed world 1 time=now frame {}", bytes.len())).is_none());
         assert!(matches!(p.frame(&bytes), Some((_, Err(e))) if e.contains("shape")));
-        assert!(p.feed(&format!("r3 feed world 0 frame {}", bytes.len())).is_none());
+        assert!(p.feed(&format!("r3 feed world 0 time=now frame {}", bytes.len())).is_none());
         assert!(matches!(p.frame(&bytes[..bytes.len() - 8]), Some((_, Err(_)))), "cut short");
-        assert!(p.feed("r4 feed world 0 frame 999999999999").is_none());
+        assert!(p.feed("r4 feed world 0 time=now frame 999999999999").is_none());
         assert_eq!(p.frame_bytes(), Some((999999999999, false)));
         assert!(matches!(p.frame(&[]), Some((_, Err(e))) if e.contains("exceeds")));
-        assert!(p.feed("r5 feed world 9 frame 64").is_none());
+        assert!(p.feed("r5 feed world 9 time=now frame 64").is_none());
         assert_eq!(p.frame_bytes(), Some((64, false)));
         assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
-        assert!(p.feed("r6 feed world x frame 64").is_none(), "a bad input index still reads past its bytes");
+        assert!(p.feed("r6 feed world x time=now frame 64").is_none(), "a bad input index still reads past its bytes");
         assert_eq!(p.frame_bytes(), Some((64, false)));
         assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
-        assert!(matches!(feed_all(&mut p, &["r7 feed world 0 frame x"])[..], [(_, Err(_))]));
+        assert!(matches!(feed_all(&mut p, &["r7 feed world 0 time=now frame x"])[..], [(_, Err(_))]));
+    }
+
+    /// A frame with a time lane, as a binary tail sends, is a timed batch: its updates, each at its own
+    /// time. The frame's shapes are checked as any feed's.
+    #[test]
+    fn framed_feeds_with_times_preserve_row_times() {
+        let mut p = world();
+        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        rows.push("tuple(1,2)", None, 1).unwrap();
+        rows.push("tuple(3,-4)", None, 2).unwrap();
+        let columns = rows.finish();
+        let bytes = interactive::runtime::frame::encode(&columns, &[vec![5, 9]]);
+        assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
+        match p.frame(&bytes) {
+            Some((reqid, Ok(Cmd::FeedTimed { prog, input, columns: got, times }))) => {
+                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Position(0)));
+                assert_eq!((got, times), (columns, vec![vec![5, 9]]));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        assert!(p.feed(&format!("r2 feed world 1 frame {}", bytes.len())).is_none());
+        assert!(matches!(p.frame(&bytes), Some((_, Err(e))) if e.contains("shape")));
+    }
+
+    /// A named or positional input can be sealed after an ordinary load.
+    #[test]
+    fn loads_and_seals_parse() {
+        let mut p = LineParser::new(Catalog::default());
+        let got = feed_all(&mut p, &[
+            "r1 load p e=other::rows begin", "output \"r\" = input 0 : ((int), ());", "r1 end-load",
+            "r2 seal p 0 7", "r3 seal p::rows 12", "seal p rows 3",
+            "r5 seal p 0", "r6 seal p 0 soon", "r7 seal p 0 -1",
+        ]);
+        assert!(matches!(&got[0].1, Ok(Cmd::Load { bindings, .. }) if bindings.len() == 1));
+        assert!(matches!(&got[1].1, Ok(Cmd::Seal { prog, input: InputId::Position(0), frontier }) if prog == "p" && frontier == &Antichain::from_elem(host_time(7))));
+        assert!(matches!(&got[2].1, Ok(Cmd::Seal { prog, input: InputId::Name(name), frontier }) if prog == "p" && name == "rows" && frontier == &Antichain::from_elem(host_time(12))));
+        assert!(matches!(&got[3].1, Ok(Cmd::Seal { input: InputId::Name(name), frontier, .. }) if name == "rows" && frontier == &Antichain::from_elem(host_time(3))), "a bare command gets a reqid");
+        assert!(matches!(&got[4].1, Err(e) if e.contains("expected")));
+        assert!(matches!(&got[5].1, Err(e) if e.contains("invalid point")));
+        assert!(matches!(&got[6].1, Err(e) if e.contains("invalid point")));
     }
 
     #[test]
@@ -878,18 +1087,18 @@ mod tests {
         let mut p = LineParser::new(Catalog::default());
         let out = feed_all(&mut p, &["r1 feed world 0 from edges.txt\n"]);
         match &out[..] {
-            [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1 }))] => {
+            [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1, time: None }))] => {
                 assert_eq!(reqid.as_str(), "r1");
                 assert_eq!((prog.as_str(), input.clone(), source.as_str()), ("world", InputId::Position(0), "edges.txt"));
             }
             other => panic!("unexpected parse: {other:?}"),
         }
-        let out = feed_all(&mut p, &["r3 feed bank 0 from retire diff=-1\n"]);
+        let out = feed_all(&mut p, &["r3 feed bank 0 time=now from retire diff=-1\n"]);
         assert!(
             matches!(&out[..], [(_, Ok(Cmd::Source { source, diff: -1, .. }))] if source == "retire"),
             "a trace feed carries its scale: {out:?}"
         );
-        let out = feed_all(&mut p, &["r4 feed bank 0 from retire diff=nope\n"]);
+        let out = feed_all(&mut p, &["r4 feed bank 0 time=now from retire diff=nope\n"]);
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad diff must be rejected: {out:?}");
         let out = feed_all(&mut p, &["r2 feed world x from edges.txt\n"]);
         assert!(matches!(&out[..], [(_, Ok(Cmd::Source { input: InputId::Name(name), .. }))] if name == "x"), "the workers resolve an input's name: {out:?}");
@@ -906,7 +1115,7 @@ mod tests {
         assert!(matches!(got[0].1, Ok(Cmd::List)));
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
-        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
+        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, as_of: None, format: ReadFormat::Rows }) if name == "foo"));
     }
 
     #[test]
@@ -960,10 +1169,12 @@ mod tests {
         match &got[0].1 {
             Ok(Cmd::Load {
                 id_hint,
+                width,
                 bindings,
                 program,
                 explain,
             }) => {
+                assert_eq!(*width, 1);
                 assert_eq!(id_hint, "gen");
                 assert_eq!(
                     bindings.get("edges").map(String::as_str),
@@ -987,7 +1198,7 @@ mod tests {
         let prepared = prepare(parsed.expect("protocol parse succeeds"), &Catalog::default())
             .expect("DDIR parsing and lowering succeed");
         match prepared {
-            PreparedCommand::Server(ServerCommand::Install { name, program }) => {
+            PreparedCommand::Server(ServerCommand::Install { name, program, width: 1 }) => {
                 assert_eq!(name, "world");
                 assert_eq!(program.root.exports[0].name, "rows");
             }
@@ -1012,7 +1223,7 @@ mod tests {
             &format!("r5 load p from {} explain\n", ddp.display()),
         ]);
         match &got[0].1 {
-            Ok(Cmd::Load { id_hint, bindings, program, explain }) => {
+            Ok(Cmd::Load { id_hint, bindings, program, explain, width: 1 }) => {
                 assert_eq!(id_hint, "p");
                 assert_eq!(program, "output \"r\" = input 0;\n");
                 assert_eq!(*explain, Some(true));
@@ -1060,7 +1271,7 @@ mod tests {
         assert_eq!(got[1].0, "_2"); // tick 3
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
-        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, format: ReadFormat::Rows }) if name == "foo"));
+        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, as_of: None, format: ReadFormat::Rows }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
     }
@@ -1071,30 +1282,30 @@ mod tests {
         let got = feed_all(
             &mut p,
             &[
-                "r0 feed world 0 1,2",
+                "r0 feed world 0 time=now 1,2",
                 "r1 feed world 1 3,4 val=7,8 time=5 diff=-1",
-                "r2 feed world 2 _ val=inject(2,tuple(3,4))",
-                "r3 feed world zero 1,2",     // bad input index
-                "r4 feed world 0 1,2 wat=7",  // unknown argument
-                "r5 feed world 0 tuple(1,",   // malformed value
-                "r6 feed world 0 1,2 val=3",  // a value where the input has unit
-                "r7 feed world 9 1,2",        // an input the program does not have
-                "r8 feed nowhere 0 1,2",      // a program never loaded
-                "r9 feed world 0 tuple(1,2)",
+                "r2 feed world 2 time=now _ val=inject(2,tuple(3,4))",
+                "r3 feed world zero time=now 1,2",     // bad input index
+                "r4 feed world 0 time=now 1,2 wat=7",  // unknown argument
+                "r5 feed world 0 time=now tuple(1,",   // malformed value
+                "r6 feed world 0 time=now 1,2 val=3",  // a value where the input has unit
+                "r7 feed world 9 time=now 1,2",        // an input the program does not have
+                "r8 feed nowhere 0 time=now 1,2",      // a program never loaded
+                "r9 feed world 0 time=now tuple(1,2)",
             ],
         );
         assert_eq!(got.len(), 10);
         let Ok(Cmd::Feed { columns: wrapped, .. }) = &got[9].1 else { panic!("expected Feed, got {:?}", got[9].1) };
         match &got[0].1 {
             Ok(Cmd::Feed { prog, input, columns, time }) => {
-                assert_eq!((prog.as_str(), input.clone(), *time), ("world", InputId::Position(0), None));
+                assert_eq!((prog.as_str(), input.clone(), time.as_ref()), ("world", InputId::Position(0), None));
                 assert_eq!((&columns.keys, &columns.diffs), (&wrapped.keys, &vec![1]));
             }
             other => panic!("expected Feed, got {:?}", other),
         }
         match &got[1].1 {
             Ok(Cmd::Feed { time, columns, .. }) => {
-                assert_eq!(*time, Some(5));
+                assert_eq!(*time, Some(host_time(5)));
                 assert_eq!(columns.diffs, vec![-1]);
             }
             other => panic!("expected Feed, got {:?}", other),
@@ -1111,7 +1322,7 @@ mod tests {
     #[test]
     fn framed_feed_becomes_one_typed_command() {
         let mut p = world();
-        assert!(p.feed("r0 feed world 3 begin").is_none());
+        assert!(p.feed("r0 feed world 3 time=now begin").is_none());
         assert!(p.awaiting_body());
         assert!(p.feed("# rows use the enclosing command's epoch").is_none());
         assert!(p.feed("1 val=10").is_none());
@@ -1121,10 +1332,10 @@ mod tests {
         assert!(!p.awaiting_body());
 
         let prepared = prepare(parsed.expect("protocol parse succeeds"), &Catalog::default()).unwrap();
-        let PreparedCommand::Server(ServerCommand::FeedColumns {
+        let PreparedCommand::Server(ServerCommand::FeedBatch {
             prog,
             input,
-            columns,
+            columns, times: FeedTimes::Shared(None),
         }) = prepared
         else {
             panic!("expected prepared columnar feed, got {prepared:?}");
@@ -1132,7 +1343,7 @@ mod tests {
         assert_eq!((prog.as_str(), input), ("world", InputId::Position(3)));
         assert_eq!(columns.diffs, vec![1, -1]);
         // The same rows, written out in full.
-        let wrapped = feed_all(&mut p, &["r1 feed world 3 begin", "tuple(1) val=tuple(10)", "tuple(2) val=tuple(-20) diff=-1", "end-feed"]);
+        let wrapped = feed_all(&mut p, &["r1 feed world 3 time=now begin", "tuple(1) val=tuple(10)", "tuple(2) val=tuple(-20) diff=-1", "end-feed"]);
         let [(_, Ok(Cmd::FeedColumns { columns: wrapped, .. }))] = &wrapped[..] else { panic!("expected a feed, got {wrapped:?}") };
         assert_eq!((&columns.keys, &columns.vals), (&wrapped.keys, &wrapped.vals));
     }
@@ -1141,19 +1352,19 @@ mod tests {
     #[test]
     fn framed_feed_refuses_a_misfit_row() {
         let mut p = world();
-        let got = feed_all(&mut p, &["r0 feed world 3 begin", "1 val=10", "2 val=inject(0,3)", "3 val=30", "r0 end-feed"]);
+        let got = feed_all(&mut p, &["r0 feed world 3 time=now begin", "1 val=10", "2 val=inject(0,3)", "3 val=30", "r0 end-feed"]);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].1.as_ref().unwrap_err(), r#"feed row 2: val "inject(0,3)": expected `tuple(` at byte 0, found `inject(0,3)`"#);
-        let elsewhere = feed_all(&mut p, &["r1 feed elsewhere 0 begin", "1 val=10", "end-feed"]);
+        let elsewhere = feed_all(&mut p, &["r1 feed elsewhere 0 time=now begin", "1 val=10", "end-feed"]);
         assert_eq!(elsewhere[0].1.as_ref().unwrap_err(), r#"feed: no program "elsewhere""#);
     }
 
     #[test]
     fn malformed_framed_feed_is_rejected_atomically() {
         let mut p = world();
-        assert!(p.feed("r0 feed world 3 begin").is_none());
+        assert!(p.feed("r0 feed world 3 time=now begin").is_none());
         assert!(p.feed("1 val=10").is_none());
-        assert!(p.feed("2 time=3").is_none());
+        assert!(p.feed("2 val=9 time=3").is_none());
         // Once poisoned, otherwise command-looking lines are body and cannot
         // leak a partial batch or desynchronize the protocol.
         assert!(p.feed("r1 list").is_none());
@@ -1161,14 +1372,14 @@ mod tests {
         assert_eq!(reqid, "r0");
         assert!(result
             .as_ref()
-            .is_err_and(|error| error.contains("time= is not allowed")));
+            .is_err_and(|error| error.contains("time= supplied twice") || error.contains("time= already supplied")));
         assert!(matches!(p.feed("r2 list"), Some((_, Ok(Cmd::List)))));
     }
 
     #[test]
     fn oversized_framed_feed_is_rejected_cleanly() {
         let mut p = LineParser { max_feed_bytes: 32, ..world() };
-        assert!(p.feed("r0 feed world 3 begin").is_none());
+        assert!(p.feed("r0 feed world 3 time=now begin").is_none());
         for key in 0..16 {
             assert!(p.feed(&format!("{key} val={key}")).is_none());
         }
@@ -1220,7 +1431,7 @@ mod tests {
     fn inputs_are_fed_by_name() {
         let catalog = Catalog::default();
         let program = "let e = input \"edges\" : ((int), (int));\nlet r = input \"roots\" : ((int), ());\noutput \"reach\" = r | join(e, (_, (), d) -> (d, ()));";
-        let load = Cmd::Load { id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
+        let load = Cmd::Load { width: 1, id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
         prepare(load, &catalog).expect("the program lowers");
         let mut p = LineParser::new(catalog);
         let got = feed_all(&mut p, &["r0 feed g roots 1", "r1 feed g::edges 1 val=2", "r2 feed g 1 1", "r3 feed g::e 1"]);
@@ -1238,17 +1449,17 @@ mod tests {
         let catalog = Catalog::default();
         let text = "let edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));";
         let bindings: BTreeMap<String, String> = [("edges".to_string(), "g::edges".to_string())].into();
-        let load = Cmd::Load { id_hint: "q".into(), bindings, program: text.into(), explain: None };
+        let load = Cmd::Load { width: 1, id_hint: "q".into(), bindings, program: text.into(), explain: None };
         let Ok(PreparedCommand::Server(ServerCommand::Install { program, .. })) = prepare(load, &catalog) else { panic!("the program lowers") };
         let edges = program.root.imports.iter().find(|i| i.name == "edges").expect("an import named edges");
         assert_eq!(edges.from, Source::Trace("g::edges".into()));
         assert!(edges.shape.is_some(), "the input's declared shape is checked against the trace's");
         let mut p = LineParser::new(catalog);
-        let got = feed_all(&mut p, &["r0 feed q roots 1", "r1 feed q edges 1 val=2"]);
+        let got = feed_all(&mut p, &["r0 feed q roots time=now 1", "r1 feed q edges time=now 1 val=2"]);
         assert!(matches!(&got[0].1, Ok(Cmd::Feed { input: InputId::Name(name), .. }) if name == "roots"), "{:?}", got[0]);
         assert!(matches!(&got[1].1, Err(e) if e.contains("no input named \"edges\"")), "{:?}", got[1]);
         let bindings: BTreeMap<String, String> = [("paths".to_string(), "g::edges".to_string())].into();
-        let load = Cmd::Load { id_hint: "r".into(), bindings, program: text.into(), explain: None };
+        let load = Cmd::Load { width: 1, id_hint: "r".into(), bindings, program: text.into(), explain: None };
         assert!(matches!(prepare(load, &Catalog::default()), Err(e) if e.contains("binding names no input or import \"paths\"")));
     }
 }

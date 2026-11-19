@@ -61,6 +61,15 @@ impl FeedDecoder {
     /// Append one row written as a line of a framed feed: `<key> [val=<v>] [diff=<d>]`. The
     /// enclosing feed supplies its time, so a line names none.
     pub fn push_line(&mut self, line: &str) -> Result<(), String> {
+        if self.push_line_with_time(line)?.is_some() {
+            return Err("time= already supplied for these rows".into());
+        }
+        Ok(())
+    }
+
+    /// Decode one row and return its optional timestamp token for the command parser.
+    pub fn push_line_with_time<'a>(&mut self, line: &'a str) -> Result<Option<&'a str>, String> {
+        let mut time = None;
         let mut args = line.split_whitespace();
         let Some(key) = args.next() else {
             return Err("expected `<key> [val=<v>] [diff=<d>]`".into());
@@ -71,13 +80,14 @@ impl FeedDecoder {
                 val = Some(value);
             } else if let Some(value) = arg.strip_prefix("diff=") {
                 diff = value.parse().map_err(|_| format!("diff= must be an integer, got {value:?}"))?;
-            } else if arg.starts_with("time=") {
-                return Err("time= is not allowed; a feed of several rows takes one time".into());
+            } else if let Some(t) = arg.strip_prefix("time=") {
+                if time.replace(t).is_some() { return Err("time= supplied twice on one row".into()); }
             } else {
                 return Err(format!("unrecognized argument {arg:?}"));
             }
         }
-        self.push(key, val, diff)
+        self.push(key, val, diff)?;
+        Ok(time)
     }
 
     pub fn len(&self) -> usize {

@@ -12,7 +12,7 @@ impl Server {
         let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &self.shapes[name])); };
         self.readable(name, &point)?;
         let output = &self.outputs[name];
-        if output.probe.less_equal(&point) { return Err(format!("trace {name:?} is not complete at {point:?}")); }
+        if output.probe.less_equal(&point) { return Err(format!("trace {name:?} is not complete at {}", progress::coordinates(&point))); }
         let mut trace = self.traces[name].clone();
         let upper = output.probe.with_frontier(|f| f.to_owned());
         let batches = trace.batches_through(upper.borrow()).ok_or_else(|| format!("trace {name:?} has no readable cut"))?;
@@ -57,7 +57,7 @@ impl Server {
 
 
         let mut published = self.published(name).ok_or_else(|| format!("no trace {:?}", name))?;
-        let as_of = self.outputs[name].since.clone();
+        let as_of = self.trace_since(name).expect("point is readable").clone();
         let shape = self.shapes[name].clone();
         let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
         let parts_in = parts.clone();
@@ -92,24 +92,44 @@ impl Server {
     }
 
     fn latest(&self, name: &str) -> Result<Option<HostTime>, String> {
+        let requested = self.outputs.get(name).map_or(0, |o| self.programs[&o.owner].now.first().copied().unwrap_or(0));
+        self.latest_at(name, requested)
+    }
+
+    /// Most recent complete, retained scalar point under the commanded input frontiers.
+    pub fn latest_readable(&self, name: &str) -> Result<Option<HostTime>, String> {
+        self.latest_at(name, 0)
+    }
+
+    fn latest_at(&self, name: &str, requested: u64) -> Result<Option<HostTime>, String> {
         let output = self.outputs.get(name).ok_or_else(|| format!("no trace {name:?}"))?;
+        if output.since.is_empty() { return Err(format!("trace {name:?} has released its history")); }
         if output.width > 1 {
             return Err(format!("trace {name:?} has root width {}; name a point with snapshot_as_of or peek_as_of", output.width));
         }
-        let epoch = self.programs[&output.owner].now.get(0).copied().unwrap_or(0);
+        let frontier = self.target(name)?;
+        let Some(epoch) = frontier.elements().first().map(|t| t.get(0).copied().unwrap_or(0)) else {
+            return Ok(Some(host_time(OuterTime::MAX)));
+        };
+        // A program-wide advance can request a cut still held open by an import.
+        // Keep reporting that incomplete cut to callers of the legacy bulk API.
+        let epoch = epoch.max(requested);
         if epoch == 0 { return Ok(None); }
+        // A program that imports other traces starts where they are read from, and has
+        // nothing complete to read until its own inputs have moved past that.
+        if !output.since.less_equal(&host_time(epoch - 1)) { return Ok(None); }
         Ok(Some(host_time(epoch - 1)))
     }
 
     fn readable(&self, name: &str, point: &HostTime) -> Result<(), String> {
         let output = self.output(name, point)?;
-        if !output.since.less_equal(point) { return Err(format!("point {point:?} is before trace {name:?}'s read floor {:?}", output.since)); }
+        if !output.since.less_equal(point) { return Err(format!("point {} is before trace {name:?}'s read floor {}", progress::coordinates(point), progress::frontier_text(output.since.iter()))); }
         // Commanded capabilities are identical across workers. A local probe alone can lag
         // on some workers, causing them to refuse while others enter the collective gather.
         let mut frontier = Antichain::new();
         self.collect_frontier(&output.owner, &mut std::collections::HashSet::new(), &mut frontier);
         if frontier.less_equal(point) {
-            return Err(format!("trace {name:?} is not closed at {point:?}: input/import frontier {:?}; advance its inputs and imports before reading", frontier.elements()));
+            return Err(format!("trace {name:?} is not closed at {}: input/import frontier {}; advance its inputs and imports before reading", progress::coordinates(point), progress::frontier_text(frontier.iter())));
         }
         Ok(())
     }

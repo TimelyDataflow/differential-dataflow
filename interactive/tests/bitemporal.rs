@@ -464,7 +464,7 @@ fn independent_inputs_and_time_shapes() {
             assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)));
             server.advance_input("split", 0, &at((5, 0))).unwrap();
             let error = server.advance_to(worker, "split", &at((3, 7))).unwrap_err();
-            assert_eq!(error, format!("cannot advance input \"split\"/0 from frontier {:?} to requested target {:?}", at((5, 0)), at((3, 7))));
+            assert_eq!(error, "cannot advance input \"split\"/0 from frontier 5 to requested target [3,7]");
             assert_eq!(server.input_frontier("split", 1).unwrap(), &at((0, 0)), "bulk rejection is atomic");
             assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
             assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());

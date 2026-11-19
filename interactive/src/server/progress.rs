@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// A time as a client writes it: its first coordinate alone when the others are zero.
+pub(super) fn coordinates(time: &HostTime) -> String {
+    if time.len() <= 1 { time.get(0).copied().unwrap_or(0).to_string() } else { format!("[{}]", time.iter().map(u64::to_string).collect::<Vec<_>>().join(",")) }
+}
+
+pub(super) fn frontier_text<'a>(times: impl Iterator<Item = &'a HostTime>) -> String {
+    let points: Vec<_> = times.collect();
+    match points.as_slice() {
+        [t] => coordinates(t),
+        ts => format!("[{}]", ts.iter().map(|t| format!("[{}]", t.iter().map(u64::to_string).collect::<Vec<_>>().join(","))).collect::<Vec<_>>().join(",")),
+    }
+}
+
 pub(super) fn caught_up(probe: &ProbeHandle<HostTime>, point: &HostTime) -> bool {
     probe.with_frontier(|frontier| frontier.iter().all(|t| point.less_equal(t)))
 }
@@ -12,18 +25,63 @@ impl Server {
         Ok(&self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?.now)
     }
 
-    /// This input's earliest accepted point; other inputs may have different frontiers.
-    pub fn input_frontier(&self, prog: &str, input: usize) -> Result<&HostTime, String> {
+    fn input(&self, prog: &str, input: usize) -> Result<&ServerInput, String> {
         let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        Ok(installed.inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))?.time())
+        installed.inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))
     }
 
-    /// Advance just one positional input. Collective across workers; does not wait.
-    /// Points are trimmed: omitted coordinates are zero, not inferred from the clock.
+    /// All minimal times at which the input can still write. Empty means finished.
+    pub fn write_frontier(&self, prog: &str, input: usize) -> Result<Antichain<HostTime>, String> {
+        Ok(self.input(prog, input)?.frontier().cloned().collect())
+    }
+
+    /// Legacy singleton accessor for callers using point inputs.
+    pub fn input_frontier(&self, prog: &str, input: usize) -> Result<&HostTime, String> {
+        self.input_time(prog, input)
+    }
+
+    /// The time chosen by time=now. Incomparable capabilities require an explicit time.
+    pub fn input_time(&self, prog: &str, input: usize) -> Result<&HostTime, String> {
+        let handle = self.input(prog, input)?;
+        handle.time().ok_or_else(|| if handle.frontier().next().is_none() {
+            format!("input {prog:?}/{input} is sealed to []")
+        } else {
+            format!("input {prog:?}/{input} has multiple frontier elements; supply an explicit time")
+        })
+    }
+
+    /// Advance one input to a singleton frontier.
     pub fn advance_input(&mut self, prog: &str, input: usize, point: &HostTime) -> Result<(), String> {
-        self.validate_feed(prog, input, point)?;
-        self.programs.get_mut(prog).unwrap().inputs.get_mut(&input).unwrap().advance_to_point(point);
+        self.seal(prog, input, &Antichain::from_elem(point.clone()))
+    }
+
+    /// Lower bound on the write frontier after all preceding commands take effect.
+    pub fn target(&self, trace: &str) -> Result<Antichain<HostTime>, String> {
+        let name = trace.to_string();
+        let output = self.outputs.get(&name).ok_or_else(|| format!("no trace {trace:?}"))?;
+        let mut frontier = Antichain::new();
+        self.collect_frontier(&output.owner, &mut std::collections::HashSet::new(), &mut frontier);
+        Ok(frontier)
+    }
+
+    /// Advance one input to a reachable antichain. An empty frontier finishes it permanently.
+    pub fn seal(&mut self, prog: &str, input: usize, frontier: &Antichain<HostTime>) -> Result<(), String> {
+        let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {prog:?}"))?;
+        if installed.origin != Origin::Program { return Err(format!("source {prog:?} is not writable")); }
+        let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))?;
+        if frontier.iter().any(|point| point.len() > handle.width || !handle.frontier().any(|t| t.less_equal(point))) {
+            return Err(format!("cannot seal input {prog:?}/{input} to {} from {} at width {}", frontier_text(frontier.iter()), frontier_text(handle.frontier()), handle.width));
+        }
+        handle.advance_to_frontier(frontier);
         Ok(())
+    }
+
+    /// Drive each export to or beyond the meet of its input and import frontiers.
+    pub fn spin(&self, worker: &mut Worker) {
+        for name in self.outputs.keys() {
+            let target = self.target(name).expect("published output");
+            self.wait_for_frontier(worker, name, &target).expect("input frontiers fit the output width");
+        }
     }
 
     /// Wait for this export alone to reach a point frontier. Advance all of its producers
@@ -42,14 +100,14 @@ impl Server {
         let name = prog.to_string();
         let installed = self.programs.get(&name).ok_or_else(|| format!("no program {prog:?}"))?;
         if point.len() > installed.root_width || !installed.now.less_equal(point) {
-            return Err(format!("invalid advance from {:?} to {point:?}", installed.now));
+            return Err(format!("invalid advance from {} to {}", coordinates(&installed.now), coordinates(point)));
         }
         let inputs: Vec<_> = installed.inputs.keys().copied().collect();
         let exports = installed.exports.clone();
         for &input in &inputs {
-            let frontier = installed.inputs[&input].time();
+            let frontier = self.write_frontier(&name, input)?;
             if !frontier.less_equal(point) {
-                return Err(format!("cannot advance input {name:?}/{input} from frontier {frontier:?} to requested target {point:?}"));
+                return Err(format!("cannot advance input {name:?}/{input} from frontier {} to requested target {}", frontier_text(frontier.iter()), coordinates(point)));
             }
             self.validate_feed(&name, input, point)?;
         }
@@ -59,8 +117,10 @@ impl Server {
         self.collect_frontier(&name, &mut std::collections::HashSet::new(), &mut frontier);
         for export in exports {
             self.wait_for_frontier(worker, &export, &frontier)?;
-            let since = self.outputs[&export].since.join(&host_time(point.get(0).copied().unwrap_or(0).saturating_sub(1)));
-            self.compact(&export, &since)?;
+            if let Some(floor) = self.trace_since(&export) {
+                let since = floor.join(&host_time(point.get(0).copied().unwrap_or(0).saturating_sub(1)));
+                self.compact(&export, &since)?;
+            }
         }
         Ok(())
     }
@@ -79,7 +139,7 @@ impl Server {
     pub(super) fn collect_frontier(&self, prog: &str, seen: &mut std::collections::HashSet<String>, frontier: &mut Antichain<HostTime>) {
         if !seen.insert(prog.to_string()) { return; }
         let installed = &self.programs[prog];
-        for input in installed.inputs.values() { frontier.insert(input.time().clone()); }
+        for time in installed.inputs.values().flat_map(|input| input.frontier()) { frontier.insert(time.clone()); }
         for trace in &installed.imports { self.collect_frontier(&self.outputs[trace].owner, seen, frontier); }
     }
 
@@ -92,16 +152,44 @@ impl Server {
     }
 
     /// Discard distinctions before this point in one published trace. Collective and monotone.
-    /// Readers/importers retain their own compaction holds. Reads below this floor are refused.
+    /// This low-level logical hold can move ahead of writes. Physical compaction is limited
+    /// to batches already in the trace. Readers and importers retain their own holds.
     pub fn compact(&mut self, trace: &str, since: &HostTime) -> Result<(), String> {
+        self.output(trace, since)?;
+        self.compact_to(trace, Antichain::from_elem(since.clone()))
+    }
+
+    /// Advance the published read floor after this output reaches the point. Its inputs and
+    /// imports must already have promised enough progress. None releases this handle immediately.
+    pub fn trim(&mut self, worker: &mut Worker, trace: &str, since: Option<&HostTime>) -> Result<(), String> {
+        if let Some(point) = since {
+            let target = self.target(trace)?;
+            if !target.iter().all(|t| point.less_equal(t)) {
+                return Err(format!("cannot trim trace {trace:?} to {}: commanded write frontier is {}; seal its contributing inputs first",
+                    coordinates(point), frontier_text(target.iter())));
+            }
+            self.wait_for(worker, trace, point)?;
+            self.compact(trace, point)
+        } else {
+            self.compact_to(trace, Antichain::new())
+        }
+    }
+
+    fn compact_to(&mut self, trace: &str, frontier: Antichain<HostTime>) -> Result<(), String> {
         let name = trace.to_string();
-        let output = self.output(&name, since)?;
-        if !output.since.less_equal(since) { return Err("compaction must advance monotonically".into()); }
-        let frontier = Antichain::from_elem(since.clone());
+        let output = self.outputs.get_mut(&name).ok_or_else(|| format!("no trace {trace:?}"))?;
+        if !PartialOrder::less_equal(&output.since, &frontier) { return Err("compaction must advance monotonically".into()); }
         let trace = self.traces.get_mut(&name).unwrap();
         trace.set_logical_compaction(frontier.borrow());
-        trace.set_physical_compaction(frontier.borrow());
-        self.outputs.get_mut(&name).unwrap().since = since.clone();
+        // A new join starts by replaying the committed batches. Its physical hold must
+        // never pass their upper, even when a Rust caller moves its logical hold ahead.
+        let mut physical = Antichain::new();
+        if let [floor] = frontier.elements() {
+            trace.read_upper(&mut physical);
+            physical.insert(floor.clone());
+        }
+        trace.set_physical_compaction(physical.borrow());
+        output.since = frontier;
         Ok(())
     }
 
@@ -111,12 +199,12 @@ impl Server {
     }
 
     pub fn trace_since(&self, trace: &str) -> Option<&HostTime> {
-        self.outputs.get(trace).map(|o| &o.since)
+        self.outputs.get(trace).and_then(|o| o.since.elements().first())
     }
 
     pub(super) fn output(&self, name: &str, point: &HostTime) -> Result<&Output, String> {
         let output = self.outputs.get(name).ok_or_else(|| format!("no trace {name:?}"))?;
-        if point.len() > output.width { return Err(format!("point {point:?} exceeds trace {name:?}'s width {}", output.width)); }
+        if point.len() > output.width { return Err(format!("point {} exceeds trace {name:?}'s width {}", coordinates(point), output.width)); }
         Ok(output)
     }
 }

@@ -6,22 +6,29 @@ impl Server {
     /// Install `prog` under `name`: build its dataflow in `worker`, wiring each
     /// root `Source::Trace` to a registered trace and registering each output's
     /// trace for later imports, as `<name>::<output>` (see [`output_name`]). New
-    /// inputs are advanced to the current epoch so they are consistent with the
-    /// traces they may already see.
+    /// inputs start at the join of their imports’ read floors, or at zero for a
+    /// program with no imports.
     ///
     /// Diagnostic imports are installed on demand. Other imports need a published trace.
-    pub fn install(
-        &mut self,
-        worker: &mut Worker,
-        name: &str,
-        prog: &st::Program,
-    ) -> Result<(), String> {
-        self.install_with_root(worker, name, prog, 1, self.import_as_of())
+    pub fn install(&mut self, worker: &mut Worker, name: &str, prog: &st::Program) -> Result<(), String> {
+        self.install_with_width(worker, name, prog, 1)
+    }
+
+    /// Install with this many root coordinates, starting at the imports’ read floors.
+    pub fn install_with_width(&mut self, worker: &mut Worker, name: &str, prog: &st::Program, width: usize) -> Result<(), String> {
+        let mut as_of = host_time(0);
+        for imp in &prog.root.imports {
+            if let st::Source::Trace(t) = &imp.from {
+                // A source that install creates on demand starts where the epoch is.
+                as_of = as_of.join(&self.trace_since(t).cloned().unwrap_or(self.import_as_of()));
+            }
+        }
+        self.install_with_root(worker, name, prog, width, as_of)
     }
 
     /// Install with `root_width` root coordinates and an explicit import/read floor.
     /// Wider imports are refused; narrower imports share their trace unchanged.
-    /// New inputs start at `as_of` (at the compatibility epoch for width 1).
+    /// New inputs start at `as_of`.
     pub fn install_with_root(
         &mut self, worker: &mut Worker, name: &str, prog: &st::Program,
         root_width: usize, as_of: HostTime,
@@ -63,10 +70,10 @@ impl Server {
                         return Err(format!("cannot import trace {key:?} of width {} into width {root_width}", output.width));
                     }
                     if !output.since.less_equal(&as_of) || !self.traces.get_mut(key).unwrap().get_logical_compaction().less_equal(&as_of) {
-                        return Err(format!("as-of {as_of:?} is before trace {key:?}'s compaction frontier"));
+                        return Err(format!("as-of {} is before trace {key:?}'s compaction frontier", progress::coordinates(&as_of)));
                     }
                 } else if !self.import_as_of().less_equal(&as_of) {
-                    return Err(format!("as-of {as_of:?} is before diagnostic source {key:?}'s compaction frontier"));
+                    return Err(format!("as-of {} is before diagnostic source {key:?}'s compaction frontier", progress::coordinates(&as_of)));
                 }
                 if !self.is_published(key) {
                     if crate::diag::is_source(key) && self.diagnostics.is_none() {
@@ -195,14 +202,14 @@ impl Server {
             self.shapes.insert(output_name(name, &export_name), shape);
         }
         for (export_name, trace, tap) in published {
-            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), probe: output_probes.remove(&export_name).unwrap(), since: as_of.clone() });
+            self.outputs.insert(export_name.clone(), Output { width: root_width, owner: name.to_string(), probe: output_probes.remove(&export_name).unwrap(), since: Antichain::from_elem(as_of.clone()) });
             if let Some(tap) = tap { self.taps.insert(export_name.clone(), tap); }
             self.traces.insert(export_name, trace);
         }
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
         }
-        let now = if root_width == 1 { as_of.join(&host_time(self.epoch)) } else { as_of.clone() };
+        let now = as_of.clone();
         let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
         for (pos, mut handle) in inputs {
             handle.advance_to_point(&now);
