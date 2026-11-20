@@ -103,26 +103,40 @@ To add a whole pipeline, parenthesize it.
 
 Each operator's per-row logic is a lambda, written `(pattern -> body)`; see [Lambdas](#lambdas).
 
-### Row by row
+Each group of operators below has one reference form, and the other operators in the group are sugar for it.
+A sugar's expansion is shown next to it, and writing the expansion gives the same result.
 
-| Operator | Result |
+### Linear operators
+
+The reference form is `join_function((k, v) -> list)`.
+Each row becomes the lambda's `List` of `((key, value), time, diff)`, at the row's time joined with `time`, with the two diffs multiplied.
+The `time` is in the shape of the scope's time (see [Time](#time-and-scopes)), and a coordinate of `0` leaves that coordinate as it is.
+
+| Sugar | Expansion |
 |---|---|
-| `map((k, v) -> (k2, v2))` | each row reshaped to the lambda's `(key, value)` |
-| `value((k, v) -> v2)` | each row's value replaced, keeping its key |
-| `filter((k, v) -> mask)` | the rows where the lambda gives a nonzero `int` |
-| `flatmap((k, v) -> list)` | any number of rows per row: the lambda's `List` of `(key, value)` |
-| `negate` | every diff negated |
-| `a + b` | the union of updates, adding diffs |
-| `a - b` | `a + (b \| negate)` |
+| `map((k, v) -> (k2, v2))` | `join_function((k, v) -> ((k2, v2), 0, 1) enlist)` |
+| `value((k, v) -> v2)` | `map((k, v) -> (k, v2))` |
+| `filter((k, v) -> mask)` | `join_function((k, v) -> (mask, ((k, v), 0, 1)) enlist filter)` |
+| `flatmap((k, v) -> rows)` | `join_function((k, v) -> rows map (r -> (r, 0, 1)))` |
+| `negate` | `join_function((k, v) -> ((k, v), 0, -1) enlist)` |
+| `delay((k, v) -> t)` | `join_function((k, v) -> ((k, v), t, 1) enlist)` |
+
+A `filter` keeps the rows where `mask` is a nonzero `int`.
+Inside a nested scope each `0` above is a time of every coordinate, such as `(0, 0)` one level down.
+
+`delay` retracts rows after a fixed time ([`retention`](examples/recipes/retention.ddp)) and orders work within a loop ([`connected_components`](examples/recipes/connected_components.ddp), [`shortest_paths`](examples/recipes/shortest_paths.ddp)).
+
+`a + b` is the union of two collections, adding diffs.
+It is its own operator, as it reads two inputs, and `a - b` is sugar for `a + (b | negate)`.
+
+The operators in this group are functions of data: a result at time `t` depends only on the input's rows at `t`, not on when they arrived.
 
 ### Joins
 
-| Operator | Result |
-|---|---|
-| `join(other, (k, v1, v2) -> (k2, v3))` | for each key, every pair of a row on the left and a row on the right; diffs multiply |
-| `half_join(other, strict, (k, v1, v2) -> (k2, v3))` | for a lifted stream `(k, (v, t))`: each update meets `other`'s rows whose times come before `t` (strictly when `strict` is 1); `other`'s own changes produce nothing |
+The reference form is `join(other, (k, v1, v2) -> (k2, v3))`.
+For each key it pairs every row on the left with every row on the right, and multiplies their diffs.
 
-`half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/recipes/triangles.ddp) recipe.
+[Join fragments](#join-fragments) are sugar for a chain of `join`s.
 
 #### Join fragments
 
@@ -141,32 +155,37 @@ Fragments are experimental: the parser expands them into plain joins, and they m
 
 ### Reductions
 
-Each reduction groups rows by key and gives each key's result.
+The reference form is `reduce((k, vals) -> out)`, or `reduce(limit n, (k, vals) -> out)`.
+It groups rows by key.
+`vals` is the key's `List` of `(value, diff)` in value order, the values whose diffs do not sum to zero, and only the first `n` of them with a limit.
+`out` is a `List` of `(value, diff)`, the key's result, and a key whose `out` is empty has no row.
 
-| Operator | Result per key |
-|---|---|
-| `count` | the sum of the diffs of the key's rows |
-| `min` | the least value |
-| `distinct` | each present `(key, value)` row once |
-| `collect` | a `List` of the values, each repeated by its count |
-| `reduce((k, vals) -> out)` | the lambda's `out`, a `List` of `(value, diff)`, from `vals`, the key's `List` of `(value, diff)` in value order |
-| `reduce(limit n, (k, vals) -> out)` | the same, with `vals` only the key's first `n` values |
+| Sugar | Result per key | Expansion |
+|---|---|---|
+| `min` | the least value | `reduce(limit 1, (k, vals) -> (vals head .0, 1) enlist)` |
+| `count` | the sum of the diffs | `reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter)` |
+| `distinct` | each present value once | `reduce((k, vals) -> vals map ((v, _) -> (v, 1)))` |
+| `collect` | a `List` of the values, each repeated by its count | `reduce((k, vals) -> (vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) flatten .1, 1) enlist)` |
+
+`distinct` is lowered by whole record rather than by key when that is cheaper; the result is the same.
 
 `count` adds diffs, which makes it the way to sum integers: move the value into the diff with `join_function`, then `count` ([`sum`](examples/recipes/sum.ddp)).
 A key whose diffs sum to zero has no row, so a total of zero is absent.
 There is no `max` or top-k operator; negate the value and use `min` or `reduce(limit n, ...)`, through a tree of groups for large inputs ([`top_k`](examples/recipes/top_k.ddp)).
 
-### Time
+### Operators that read time
+
+These operators are not functions of data alone: their results depend on the times at which rows arrived, and not only on the rows present at each time.
+None of them is sugar.
 
 | Operator | Result |
 |---|---|
 | `lift` | each value paired with its row's time: `(k, (v, t))` |
-| `delay((k, v) -> t)` | each row moved to at least time `t` |
-| `join_function((k, v) -> list)` | each row replaced by the lambda's `List` of `((key, value), time, diff)`, at the row's time joined with `time`, diffs multiplied |
 | `lift_iter` | each value paired with the innermost loop's round |
+| `half_join(other, strict, (k, v1, v2) -> (k2, v3))` | for a lifted stream `(k, (v, t))`: each update meets `other`'s rows whose times come before `t` (strictly when `strict` is 1); `other`'s own changes produce nothing |
 
-`delay` and `join_function` take times in the shape of the scope's time (see [Time](#time-and-scopes)); a coordinate of `0` leaves that coordinate as it is.
-`delay` retracts rows after a fixed time ([`retention`](examples/recipes/retention.ddp)), orders work within a loop ([`connected_components`](examples/recipes/connected_components.ddp), [`shortest_paths`](examples/recipes/shortest_paths.ddp)), and with `lift` makes an input row count at its own time only ([`upsert`](examples/recipes/upsert.ddp)).
+`half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/recipes/triangles.ddp) recipe.
+`lift` with `delay` makes an input row count at its own time only ([`upsert`](examples/recipes/upsert.ddp)).
 
 ### Arrangements and inspection
 
