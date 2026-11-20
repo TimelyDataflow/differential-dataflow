@@ -27,38 +27,43 @@ impl Server {
         Ok(Updates::consolidate(parts, &self.shapes[name]))
     }
 
-    /// Return the consolidated closed-past contents of a trace on worker 0, as columns.
-    ///
-    /// Builds a transient dataflow that imports the trace, **sends every
-    /// container whole to worker 0**, and consolidates them at the latest readable
-    /// point — so the result is the complete contents even when the trace is
-    /// sharded across workers, not each worker's slice, in key-then-value order.
-    /// The other workers get no updates. The dataflow is dropped as soon as it
-    /// has drained. Filtering and rendering are the caller's.
+    /// Return the latest complete, retained scalar snapshot, consolidated on worker 0.
     /// Programs wider than one coordinate must name a point with [`Server::snapshot_as_of`].
-    /// An unclosed point is refused without waiting for inputs or imports to advance.
-    pub fn snapshot(
-        &mut self,
-        worker: &mut Worker,
-        name: &str,
-    ) -> Result<Updates, String> {
-        match self.latest_readable(name)? {
-            Some(point) => self.snapshot_as_of(worker, name, &point),
-            None => Ok(Updates::consolidate(Vec::new(), &self.shapes[name])),
-        }
+    pub fn snapshot(&mut self, worker: &mut Worker, name: &str) -> Result<Updates, String> {
+        self.peek(worker, name, None)
     }
 
     /// Accumulate updates <= `point`. Refuses points not closed by the program's input and
     /// import frontiers. Collective across workers; drains work already issued by the caller.
     pub fn snapshot_as_of(&mut self, worker: &mut Worker, name: &str, point: &HostTime) -> Result<Updates, String> {
-        self.readable(name, point)?;
+        self.peek_as_of(worker, name, None, point)
+    }
+
+    /// Read the latest scalar snapshot, optionally looking up one key in the arrangement.
+    pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<&str>) -> Result<Updates, String> {
+        let point = self.latest_readable(name)?;
+        self.read_snapshot(worker, name, key, point.as_ref())
+    }
+
+    /// Read at an explicit point, with the same progress and history rules for keyed and full reads.
+    pub fn peek_as_of(&mut self, worker: &mut Worker, name: &str, key: Option<&str>, point: &HostTime) -> Result<Updates, String> {
+        self.read_snapshot(worker, name, key, Some(point))
+    }
+
+    fn read_snapshot(&mut self, worker: &mut Worker, name: &str, key: Option<&str>, point: Option<&HostTime>) -> Result<Updates, String> {
         use timely::dataflow::operators::Probe;
         use timely::dataflow::operators::generic::Operator;
 
-
-        let mut published = self.published(name).ok_or_else(|| format!("no trace {:?}", name))?;
-        let as_of = self.trace_since(name).expect("point is readable").clone();
+        if let Some(point) = point { self.readable(name, point)?; }
         let shape = self.shapes[name].clone();
+        // Parse on every worker before building the collective dataflow.
+        let request = key.map(|text| {
+            let mut decoder = crate::runtime::feed::FeedDecoder::new(&shape.0, &corgi::Shape::Unit);
+            decoder.push(text, None, 1).map(|()| decoder.finish())
+        }).transpose()?;
+        let Some(point) = point else { return Ok(Updates::consolidate(Vec::new(), &shape)); };
+        let mut published = self.published(name).expect("validated snapshot trace");
+        let as_of = self.trace_since(name).expect("point is readable").clone();
         let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
         let parts_in = parts.clone();
         let mut probe = ProbeHandle::new();
@@ -66,7 +71,11 @@ impl Server {
         host_dataflow(worker, |scope| {
             let point = point.clone();
             // The dataflow is dropped once drained, which releases the import.
-            let (containers, _shutdown) = published.import_containers(scope, "SnapshotImport", as_of);
+            let containers = if let Some(request) = request {
+                published.lookup(scope, request, &point, &shape)
+            } else {
+                published.import_containers(scope, "SnapshotImport", as_of).0
+            };
             containers
                 .inner
                 .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::runtime::exchange::GatherPact, "Snapshot", move |_, _| {
@@ -122,31 +131,6 @@ impl Server {
         Ok(())
     }
 
-    /// [`Server::snapshot`], with only the updates whose key is `key`, if one is given: text read
-    /// at the trace's key shape, as a feed reads a key.
-    pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<&str>) -> Result<Updates, String> {
-        let updates = self.snapshot(worker, name)?;
-        self.filter_key(name, key, updates)
-    }
-
-    /// A keyed peek at an explicit point, with the same progress and history rules as a snapshot.
-    pub fn peek_as_of(&mut self, worker: &mut Worker, name: &str, key: Option<&str>, point: &HostTime) -> Result<Updates, String> {
-        let updates = self.snapshot_as_of(worker, name, point)?;
-        self.filter_key(name, key, updates)
-    }
-
-    fn filter_key(&self, name: &str, key: Option<&str>, updates: Updates) -> Result<Updates, String> {
-        let Some(text) = key else { return Ok(updates) };
-        let (kshape, _) = self.shapes[name].clone();
-        let mut decoder = crate::runtime::feed::FeedDecoder::new(&kshape, &corgi::Shape::Unit);
-        decoder.push(text, None, 1)?;
-        let wanted = decoder.finish().keys;
-        let rows: Vec<usize> = (0..updates.len()).collect();
-        let equal = corgi::arrange::equal_idx(&updates.keys, &wanted, &rows, &vec![0; rows.len()]);
-        let keep: Vec<usize> = rows.into_iter().filter(|&row| equal[row] == 0).collect();
-        Ok(updates.select(&keep))
-    }
-
     /// The changes to export `name` that this worker's share of its arrangement has produced
     /// since the last call, one container per chunk (with [`Server::set_export_taps`]). Each worker
     /// drains its own.
@@ -155,5 +139,37 @@ impl Server {
             Some(tap) => crate::backend::corgi::batch_containers(std::mem::take(&mut *tap.borrow_mut())),
             None => Vec::new(),
         }
+    }
+}
+
+impl Published {
+    /// Join one request at `point` against this arrangement. A match at time `t` emerges
+    /// at the join of `t` and `point`, so the snapshot includes it exactly when `t <= point`.
+    fn lookup<'s>(
+        &mut self,
+        scope: timely::dataflow::Scope<'s, HostTime>,
+        request: Updates,
+        point: &HostTime,
+        shape: &RowShape,
+    ) -> differential_dataflow::Collection<'s, HostTime, HostContainer> {
+        use crate::backend::{Backend, corgi::{Arr, CorgiBackend}};
+        use differential_dataflow::AsCollection;
+        use timely::container::CapacityContainerBuilder;
+        use timely::dataflow::operators::generic::operator::source;
+
+        let Updates { keys, vals, diffs } = request;
+        let row = HostContainer { keys, vals, times: std::iter::once(point).collect(), diffs };
+        let stream = source::<_, CapacityContainerBuilder<HostContainer>, _, _>(scope, "PeekKey", |cap, _| {
+            let mut request = (scope.worker().index() == 0).then_some((cap, row));
+            move |output| {
+                if let Some((cap, mut row)) = request.take() {
+                    output.session(&cap).give_container(&mut row);
+                }
+            }
+        });
+        let keys = CorgiBackend::arrange(stream.as_collection());
+        let target = Arr { arranged: self.0.import_named(scope, "PeekImport"), since: point.clone() };
+        let project = crate::ir::Lambda::new("let (k, _, v) = input in (k, v)".into(), &corgi::Scope::default());
+        CorgiBackend::join(keys, target, &project, ((shape.0.clone(), corgi::Shape::Unit), shape.clone()))
     }
 }

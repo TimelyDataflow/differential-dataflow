@@ -970,6 +970,28 @@ fn union_waits_only_for_commanded_progress() {
     server.stop();
 }
 
+/// Each worker participates in the lookup, but a request contributes its weight only once.
+#[test]
+fn keyed_peek_matches_the_snapshot_at_product_times() {
+    let (server, mut writer, mut reader) = start_server(3);
+    let mut run = |command: &str| request(&mut writer, &mut reader, "r", &format!("r {command}\n"));
+    run("load p width=2 begin\noutput \"rows\" = input 0 : (int, int);\nr end-load");
+    run("feed p 0 begin\n7 val=10 diff=2 time=[1,0]\n7 val=11 time=[1,0]\n7 val=10 diff=-2 time=[1,1]\n7 val=20 diff=-1 time=[0,1]\n8 val=30 time=[0,0]\nend-feed");
+    run("seal p 0 [[2,0],[0,2]]");
+    for point in ["[1,0]", "[0,1]", "[1,1]"] {
+        let snapshot = run(&format!("peek p::rows as-of {point}"));
+        for key in ["7", "8", "9"] {
+            let expected: Vec<_> = snapshot.iter().filter(|row| row.split_whitespace().next() == Some(key)).cloned().collect();
+            assert_eq!(run(&format!("peek p::rows {key} as-of {point}")), expected, "key {key} at {point}");
+        }
+    }
+    run("seal p 0 []");
+    run("trim p::rows [1,1]");
+    assert_eq!(run("peek p::rows 7 as-of [1,1] as corgi"), ["diff=1 key=7 val=11", "diff=-1 key=7 val=20"]);
+    assert!(framed(&mut writer, &mut reader, "r", "r peek p::rows 7 as-of [1,0]\n", &[]).unwrap_err().contains("read floor"));
+    server.stop();
+}
+
 #[test]
 fn mixed_time_frame_under_an_antichain() {
     let (server, mut writer, mut reader) = start_server(3);
