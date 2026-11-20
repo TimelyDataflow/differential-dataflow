@@ -549,6 +549,54 @@ fn feed_frame(shape: &interactive::server::RowShape, rows: &[(&str, Option<&str>
     interactive::runtime::frame::encode(&decoder.finish(), &[])
 }
 
+/// Send `wire`, then `z spin`, and return every line answered before the spin's answer.
+fn answers(writer: &mut TcpStream, reader: &mut BufReader<TcpStream>, wire: &str) -> Vec<String> {
+    writer.write_all(format!("{wire}z spin\n").as_bytes()).unwrap();
+    writer.flush().unwrap();
+    let mut lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "server disconnected");
+        let line = line.trim_end();
+        if line.starts_with("z ") {
+            assert!(line.starts_with("z ok"), "{line}");
+            return lines;
+        }
+        lines.push(line.to_string());
+    }
+}
+
+/// A group runs its commands back to back, each row of a batch once however many workers there
+/// are, and answers once, on the reqid of its `open`. A refused group runs none of its commands.
+fn assert_groups(workers: usize) {
+    let (server, mut writer, mut reader) = start_server(workers);
+    request(&mut writer, &mut reader, "r0", "r0 load world begin\nlet rows = input \"rows\" : (int, ());\nlet more = input \"more\" : (int, ());\noutput \"both\" = rows + more;\nr0 end-load\n");
+    let group = "g1 open\nm1 feed world rows time=0 begin\n0\n1\n2\n3\n4\nm1 end-feed\nm2 feed world more 9 time=0\nm3 seal world rows 1\nm4 seal world more 1\nm5 spin\ng1 shut\n";
+    assert_eq!(answers(&mut writer, &mut reader, group), vec!["g1 ok ran 5 commands"]);
+    let both = request(&mut writer, &mut reader, "r1", "r1 peek world::both as-of 0\n");
+    assert_eq!(both, vec!["0", "1", "2", "3", "4", "9"]);
+
+    // A peek is not a command a group holds: the feed before it never runs.
+    let lines = answers(&mut writer, &mut reader, "g2 open\nfeed world rows 7 time=1\npeek world::both\nseal world rows 2\ng2 shut\n");
+    assert!(matches!(&lines[..], [line] if line.starts_with("g2 err command 2:")), "{lines:?}");
+    seal_inputs(&mut writer, &mut reader, &["world rows", "world more"], 2);
+    assert_eq!(request(&mut writer, &mut reader, "r2", "r2 peek world::both as-of 1\n"), both);
+
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
+#[test]
+fn groups_on_one_worker() {
+    assert_groups(1);
+}
+
+#[test]
+fn groups_on_three_workers() {
+    assert_groups(3);
+}
+
 /// `feed … frame` stages columns, each row once however many workers there are; a frame of
 /// another shape, one cut short, and one too large for a feed are refused, and the session reads
 /// on past each.

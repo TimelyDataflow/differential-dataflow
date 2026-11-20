@@ -19,6 +19,7 @@ For a first session, load a program, feed timestamped updates, seal the contribu
 | `peek P::OUT [KEY] [as-of T]` | Return a consolidated snapshot of the updates through T, optionally filtered to one key. T must be complete and retained. A successful read replies `ok as-of=T`, even for zero rows. A default scalar peek selects the latest complete retained time, or reports `err` if none exists. After all contributing inputs finish, a default scalar peek reads at `18446744073709551615` (the largest scalar timestamp). The returned point can be supplied to another peek. Multidimensional outputs require a point. |
 | `tail P::OUT` | Subscribe to a scalar output. Replay starts at its retained read floor and continues with timestamped changes, including retractions. Use `as corgi` for binary data and progress frames. |
 | `stop ID` | Cancel the tail started under request ID on this connection. |
+| `open` … `shut` | Run the commands between as one request, back to back, with one answer. A group holds `feed`, `seal`, `trim` and `spin`. [Groups](#groups-open-and-shut) |
 | `trim P::OUT T` | The floor T must be at or before every point of the output’s commanded write frontier. Seal the contributing inputs first. While a narrower import is open, the wider program sees zeros in the coordinates absent from that import, so the floor can advance only in coordinates the import shares. The server waits for this output to reach T, then releases reads before T. Existing importers retain independent holds. `[]` releases all future reads through this handle. |
 | `feed P I time=T from SOURCE [diff=D]` | Stamp the file rows or latest complete scalar trace snapshot with destination time T. T can be a product point. |
 | `feed P I time=now …` | Stage an untimed row, batch, zero-lane frame, or `from SOURCE` load at the input’s sole frontier element. With zero or multiple capabilities there is no unique write time and the command fails. |
@@ -241,6 +242,27 @@ recursive view, see `demo/txn.txt`). Racing writes settle identically on
 every replay. Identity is convention, not enforcement: we are not defending
 against adversarial clients yet, and server-side attribution is deliberately
 deferred until a deployment needs it.
+
+## Groups: `open` and `shut`
+
+```text
+g open
+feed u a 42 time=7
+seal u a 10
+seal u b 10
+spin
+g shut
+```
+
+The commands between `open` and `shut` reach the workers as one request and run back to back.
+A group may hold `feed`, `seal`, `trim` and `spin`.
+No other session's command runs between them, and no worker steps its dataflows between them, other than where a command waits (`spin`, `trim`, `feed … from` a trace).
+The group answers once, on the reqid of its `open`, with `ok ran N commands`.
+Its commands' own reqids receive no answer.
+A `shut` may repeat the reqid of its `open`.
+
+A group holding a malformed command, any other command, or another `open` is refused whole at its `shut`, and none of it runs.
+A command that fails on the workers does not stop the group: each command runs as it would on its own, and the answer is `err`, naming the first failure.
 
 ## Worked example: a union of two inputs
 

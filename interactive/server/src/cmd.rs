@@ -15,6 +15,11 @@
 //! updates as columns, in the binary frame format `peek … as corgi` answers with
 //! (`interactive::runtime::frame`). A frame carries a time per row, as in `tail … as corgi`.
 //! Use `time=now` for a frame with no time lane. On WebSocket the header line and its bytes are one binary message.
+//!
+//! `open` starts a group of commands and `shut` ends it. The commands between, each a `feed`,
+//! `seal`, `trim` or `spin`, reach the workers as one request and run back to back, with one
+//! answer on the reqid of the `open`. A group holding a malformed or other command is refused
+//! whole at its `shut`, and none of it reaches the workers.
 
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
@@ -158,6 +163,8 @@ pub enum Cmd {
     Trim { trace: String, frontier: Option<HostTime> },
     /// End the session.
     Exit,
+    /// The commands between `open` and `shut`, run back to back with one answer.
+    Group { members: Vec<Cmd> },
 }
 
 /// A command ready to broadcast to the worker group. Protocol-only tail
@@ -166,6 +173,8 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
+    /// A group's commands, in order.
+    Group(Vec<ServerCommand>),
     Plan { name: String, program: String, timings: bool },
     Peek { name: String, key: Option<String>, as_of: Option<HostTime>, format: ReadFormat },
     Tail { name: String, format: ReadFormat },
@@ -267,6 +276,14 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         Cmd::Spin => ServerCommand::Spin,
         Cmd::SampleDiagnostics => ServerCommand::SampleDiagnostics,
         Cmd::Exit => ServerCommand::Exit,
+        Cmd::Group { members } => {
+            let members = members.into_iter().enumerate().map(|(position, member)| match prepare(member, catalog) {
+                Ok(PreparedCommand::Server(prepared)) => Ok(prepared),
+                Ok(_) => Err(format!("command {}: a group holds only feed, seal, trim and spin", position + 1)),
+                Err(error) => Err(format!("command {}: {error}", position + 1)),
+            }).collect::<Result<_, _>>()?;
+            return Ok(PreparedCommand::Group(members));
+        }
     };
     Ok(PreparedCommand::Server(command))
 }
@@ -347,6 +364,7 @@ pub struct LineParser {
     pending_load: Option<PendingLoad>,
     pending_feed: Option<PendingFeed>,
     pending_frame: Option<PendingFrame>,
+    pending_group: Option<PendingGroup>,
     auto_reqid_counter: u64,
     max_load_bytes: usize,
     max_feed_bytes: usize,
@@ -356,7 +374,7 @@ pub struct LineParser {
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
     "load", "plan", "drop", "list", "peek", "tail", "stop", "exit", "feed",
-    "seal", "trim", "spin", "diag",
+    "seal", "trim", "spin", "diag", "open", "shut",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -426,6 +444,29 @@ struct PendingFrame {
     shape: Result<RowShape, String>,
 }
 
+/// An `open` whose `shut` is still to come: the commands read since.
+struct PendingGroup {
+    reqid: ReqId,
+    members: Vec<Cmd>,
+    /// Why the group will be refused at its `shut`. Later commands are read and dropped, so the
+    /// lines of a refused group are never read as commands of their own.
+    poisoned: Option<String>,
+}
+
+impl PendingGroup {
+    /// Add the group's next command, or refuse the group.
+    fn push(&mut self, command: Result<Cmd, String>) {
+        if self.poisoned.is_some() { return; }
+        let position = self.members.len() + 1;
+        match command {
+            Ok(member @ (Cmd::Feed { .. } | Cmd::FeedColumns { .. } | Cmd::FeedTimed { .. } | Cmd::Source { .. }
+                | Cmd::Seal { .. } | Cmd::Trim { .. } | Cmd::Spin)) => self.members.push(member),
+            Ok(_) => self.poisoned = Some(format!("command {position}: a group holds only feed, seal, trim and spin")),
+            Err(error) => self.poisoned = Some(format!("command {position}: {error}")),
+        }
+    }
+}
+
 impl LineParser {
     pub fn new(catalog: Catalog) -> Self {
         LineParser {
@@ -450,8 +491,51 @@ impl LineParser {
     /// completes a command (single-line or end of a multi-line body),
     /// else `None` to indicate more input is required. The caller pairs
     /// the result with a per-connection response sender to form a
-    /// `Request`.
+    /// `Request`. Between `open` and `shut` the command completed is the
+    /// group, at its `shut`.
     pub fn feed(&mut self, line: &str) -> Option<(ReqId, Result<Cmd, String>)> {
+        let parsed = self.read_command(line)?;
+        self.gather(parsed)
+    }
+
+    /// Inside a group, a completed command joins the group rather than going to the workers.
+    fn gather(&mut self, parsed: (ReqId, Result<Cmd, String>)) -> Option<(ReqId, Result<Cmd, String>)> {
+        match &mut self.pending_group {
+            Some(group) => { group.push(parsed.1); None }
+            None => Some(parsed),
+        }
+    }
+
+    /// `open`: the commands up to `shut` form a group. An `open` inside a group refuses it.
+    fn open_group(&mut self, reqid: ReqId, args: &[&str]) {
+        match &mut self.pending_group {
+            Some(group) => group.push(Err("a group cannot open inside another".into())),
+            None => {
+                let poisoned = (!args.is_empty()).then(|| "open: expected no arguments".to_string());
+                self.pending_group = Some(PendingGroup { reqid, members: Vec::new(), poisoned });
+            }
+        }
+    }
+
+    /// `shut`: the group, answered on the reqid of its `open`. A `shut` may repeat that reqid.
+    fn shut_group(&mut self, reqid: ReqId, explicit: bool, args: &[&str]) -> Option<(ReqId, Result<Cmd, String>)> {
+        let Some(group) = self.pending_group.take() else {
+            return Some((reqid, Err("shut: no group is open".into())));
+        };
+        let refusal = group.poisoned.or_else(|| {
+            if !args.is_empty() {
+                Some("shut: expected no arguments".into())
+            } else if explicit && reqid != group.reqid {
+                Some(format!("shut: {reqid:?} is not the group, which opened as {:?}", group.reqid))
+            } else {
+                None
+            }
+        });
+        Some((group.reqid, refusal.map_or(Ok(Cmd::Group { members: group.members }), Err)))
+    }
+
+    /// One line, as [`feed`](Self::feed) reads it, but without gathering groups.
+    fn read_command(&mut self, line: &str) -> Option<(ReqId, Result<Cmd, String>)> {
         // A text batch fixes its target once, then accepts compact rows until
         // `end-feed`. Parse and buffer the whole body on the session thread so
         // the worker group sees either one complete command or no command.
@@ -569,7 +653,8 @@ impl LineParser {
         // user can type bare `list`, `spin`, `peek foo` without a
         // hand-rolled tag. The minted reqid is echoed in the response
         // so it can still be used with e.g. `stop <reqid>`.
-        let (reqid, cmd) = if COMMAND_KEYWORDS.contains(&first) {
+        let bare = COMMAND_KEYWORDS.contains(&first);
+        let (reqid, cmd) = if bare {
             self.auto_reqid_counter += 1;
             (format!("_{}", self.auto_reqid_counter), first)
         } else {
@@ -581,6 +666,11 @@ impl LineParser {
             (first.to_string(), cmd)
         };
         let rest: Vec<&str> = toks.collect();
+        match cmd {
+            "open" => { self.open_group(reqid, &rest); return None; }
+            "shut" => return self.shut_group(reqid, !bare, &rest),
+            _ => {}
+        }
         match parse_cmd(cmd, &rest, &self.catalog) {
             ParseOutcome::Cmd(c) => Some((reqid, Ok(c))),
             ParseOutcome::Err(e) => Some((reqid, Err(e))),
@@ -644,6 +734,12 @@ impl LineParser {
     /// Complete a pending `feed … frame` with its bytes (none, for one read past): the updates,
     /// checked against the input's declared shapes, as one command, or why they are refused.
     pub fn frame(&mut self, payload: &[u8]) -> Option<(ReqId, Result<Cmd, String>)> {
+        let parsed = self.read_frame(payload)?;
+        self.gather(parsed)
+    }
+
+    /// A frame's bytes, as [`frame`](Self::frame) reads them, but without gathering groups.
+    fn read_frame(&mut self, payload: &[u8]) -> Option<(ReqId, Result<Cmd, String>)> {
         let frame = self.pending_frame.take()?;
         let columns = frame.shape.and_then(|shape| {
             if payload.len() != frame.nbytes {
@@ -1031,6 +1127,47 @@ mod tests {
         assert_eq!(p.frame_bytes(), Some((64, false)));
         assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
         assert!(matches!(feed_all(&mut p, &["r7 feed world 0 time=now frame x"])[..], [(_, Err(_))]));
+    }
+
+    /// The commands between `open` and `shut` are one command, on the reqid of the `open`. A
+    /// group holding a malformed command, a command other than feed, seal, trim and spin, or
+    /// another `open` is refused whole at its `shut`; nothing in it is answered on its own.
+    #[test]
+    fn groups_gather_into_one_command() {
+        let mut p = world();
+        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        rows.push("tuple(1,2)", None, 1).unwrap();
+        let bytes = interactive::runtime::frame::encode(&rows.finish(), &[]);
+        let header = format!("feed world 0 time=now frame {}", bytes.len());
+        let lines = ["g open", "m1 feed world 0 1,2 time=3", "feed world 0 time=4 begin", "1,2", "end-feed", &header];
+        assert!(feed_all(&mut p, &lines).is_empty());
+        assert!(p.frame(&bytes).is_none(), "a frame joins the group");
+        match &feed_all(&mut p, &["seal world 0 5", "trim world::pairs 4", "spin", "g shut"])[..] {
+            [(reqid, Ok(Cmd::Group { members }))] => {
+                assert_eq!(reqid, "g");
+                assert!(matches!(&members[..], [Cmd::Feed { .. }, Cmd::FeedColumns { .. }, Cmd::FeedColumns { .. },
+                    Cmd::Seal { .. }, Cmd::Trim { .. }, Cmd::Spin]), "{members:?}");
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        // A `shut` may repeat the reqid of its `open`, and a group may be empty.
+        assert!(matches!(&feed_all(&mut p, &["h open", "h shut"])[..], [(r, Ok(Cmd::Group { members }))] if r == "h" && members.is_empty()));
+        // Each refused whole at its `shut`; the session reads on.
+        for (group, error) in [
+            (&["g open", "seal world 0 5", "feed world 0 time=4 begin", "1,2,3", "end-feed", "spin", "shut"][..], "command 2: feed row 1"),
+            (&["g open", "seal world 0 5", "peek world::pairs", "shut"][..], "command 2: a group holds only"),
+            (&["g open", "load x begin", "spin", "x end-load", "shut"][..], "command 1: a group holds only"),
+            (&["g open", "open", "shut"][..], "command 1: a group cannot open inside another"),
+            (&["g open extra", "spin", "shut"][..], "open: expected no arguments"),
+            (&["g open", "spin", "k shut"][..], "is not the group"),
+            (&["shut"][..], "no group is open"),
+        ] {
+            match &feed_all(&mut p, group)[..] {
+                [(_, Err(e))] => assert!(e.contains(error), "{group:?}: {e}"),
+                other => panic!("{group:?}: unexpected parse: {other:?}"),
+            }
+        }
+        assert!(matches!(feed_all(&mut p, &["spin"])[..], [(_, Ok(Cmd::Spin))]));
     }
 
     #[test]

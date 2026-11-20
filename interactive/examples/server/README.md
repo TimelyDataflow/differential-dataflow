@@ -52,6 +52,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 | `seal <prog> <in> <frontier>` | advance an input’s write frontier; a scalar frontier of 1 closes time 0 |
 | `spin` | wait for the commanded progress of outputs and tails |
 | `trim <trace> <frontier>` | release older snapshots of the output |
+| `open` … `shut` | run the `feed`, `seal`, `trim` and `spin` commands between as one request, with one answer |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
 | `peek <trace> [key] [as-of <t>]` | print a closed, retained snapshot (consolidated across workers), one `data` line per row |
 | `tail <trace>` / `stop <reqid>` | follow timestamped changes as the contributing inputs advance |

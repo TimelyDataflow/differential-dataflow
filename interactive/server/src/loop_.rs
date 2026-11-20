@@ -53,6 +53,14 @@ enum Work {
         /// Original logical row count retained when a batch is sharded.
         logical_count: Option<usize>,
     },
+    /// One worker's part of a group: each command as `Request` would carry it, run back to back
+    /// with one answer.
+    Group {
+        token: u64,
+        reqid: String,
+        connection_id: ConnectionId,
+        members: Vec<(ServerCommand, Option<usize>)>,
+    },
     SessionEnded(ConnectionId),
     Shutdown,
 }
@@ -83,6 +91,26 @@ impl Work {
                         token, reqid: reqid.clone(), command: Ok(PreparedCommand::Server(command)),
                         connection_id, logical_count: Some(columns.len()),
                     })
+                }).collect()
+            }
+            // Each worker receives its whole part of a group as one record, so that no worker
+            // steps its dataflows between the group's commands.
+            Work::Request { token, reqid, connection_id, command: Ok(PreparedCommand::Group(members)), .. } => {
+                let mut parts: Vec<Vec<_>> = (0..peers).map(|_| Vec::with_capacity(members.len())).collect();
+                for command in members {
+                    let member = Work::Request {
+                        token, reqid: reqid.clone(), command: Ok(PreparedCommand::Server(command)),
+                        connection_id, logical_count: None,
+                    };
+                    for (target, part) in member.distribute(peers) {
+                        let Work::Request { command: Ok(PreparedCommand::Server(shard)), logical_count, .. } = part else {
+                            unreachable!("a command distributes as commands");
+                        };
+                        parts[target as usize].push((shard, logical_count));
+                    }
+                }
+                parts.into_iter().enumerate().map(|(target, part)| {
+                    (target as u64, Work::Group { token, reqid: reqid.clone(), connection_id, members: part })
                 }).collect()
             }
             work => (0..peers)
@@ -179,6 +207,15 @@ pub fn run_worker(
                         logical_count,
                     );
                 }
+                Work::Group { token, reqid, connection_id, members } => {
+                    let response = if worker.index() == 0 {
+                        responses.remove(&token)
+                    } else {
+                        None
+                    };
+                    let result = execute_group(members, connection_id, &reqid, &mut server, &mut tails, worker, &mut shutdown);
+                    answer(response.as_ref(), &reqid, result);
+                }
                 Work::SessionEnded(connection) => {
                     stop_connection(connection, &mut tails, worker);
                 }
@@ -246,6 +283,7 @@ pub fn run_worker(
     }
 }
 
+/// Run one command, and answer it on worker 0.
 #[allow(clippy::too_many_arguments)]
 fn dispatch(
     command: Result<PreparedCommand, String>,
@@ -258,7 +296,66 @@ fn dispatch(
     shutdown: &mut bool,
     logical_count: Option<usize>,
 ) {
-    let result = match command {
+    let result = execute(command, connection_id, reqid, response.clone(), server, tails, worker, shutdown, logical_count);
+    answer(response.as_ref(), reqid, result);
+}
+
+/// Run a group's commands back to back: one answer, which names the first that failed. Every
+/// command runs, as it would on its own: some refusals are decided on worker 0 alone (a one-row
+/// feed's time), and stopping there would leave the workers at different commands.
+fn execute_group(
+    members: Vec<(ServerCommand, Option<usize>)>,
+    connection_id: ConnectionId,
+    reqid: &str,
+    server: &mut Server,
+    tails: &mut HashMap<TailKey, Tail>,
+    worker: &mut Worker,
+    shutdown: &mut bool,
+) -> Result<String, String> {
+    let count = members.len();
+    let mut failures = Vec::new();
+    for (position, (command, logical_count)) in members.into_iter().enumerate() {
+        let word = match &command {
+            ServerCommand::Feed { .. } | ServerCommand::FeedBatch { .. } | ServerCommand::Load { .. } => "feed",
+            ServerCommand::Seal { .. } => "seal",
+            ServerCommand::Trim { .. } => "trim",
+            ServerCommand::Spin => "spin",
+            _ => "command",
+        };
+        if let Err(error) = execute(Ok(PreparedCommand::Server(command)), connection_id, reqid, None, server, tails, worker, shutdown, logical_count) {
+            failures.push(format!("command {} ({word}): {error}", position + 1));
+        }
+    }
+    match &failures[..] {
+        [] => Ok(format!("ran {count} commands")),
+        [first, ..] => Err(format!("{} of {count} commands failed, the others ran; {first}", failures.len())),
+    }
+}
+
+/// Answer a command, on the worker holding its response channel.
+fn answer(response: Option<&Sender<Out>>, reqid: &str, result: Result<String, String>) {
+    if let Some(response) = response {
+        match result {
+            Ok(body) => send(response, reqid, "ok", body),
+            Err(body) => send(response, reqid, "err", body),
+        }
+    }
+}
+
+/// Run one command. Only the worker holding `response` sends its data.
+#[allow(clippy::too_many_arguments)]
+fn execute(
+    command: Result<PreparedCommand, String>,
+    connection_id: ConnectionId,
+    reqid: &str,
+    response: Option<Sender<Out>>,
+    server: &mut Server,
+    tails: &mut HashMap<TailKey, Tail>,
+    worker: &mut Worker,
+    shutdown: &mut bool,
+    logical_count: Option<usize>,
+) -> Result<String, String> {
+    match command {
         Err(error) => Err(error),
         Ok(PreparedCommand::Server(command)) => match command {
             ServerCommand::Install { name, program, width } => server.install_with_width(worker, &name, &program, width)
@@ -449,13 +546,7 @@ fn dispatch(
                 None => Err(format!("no tail {:?} in this session", tail_reqid)),
             }
         }
-    };
-
-    if let Some(response) = response.as_ref() {
-        match result {
-            Ok(body) => send(response, reqid, "ok", body),
-            Err(body) => send(response, reqid, "err", body),
-        }
+        Ok(PreparedCommand::Group(_)) => unreachable!("a group reaches the workers as `Work::Group`"),
     }
 }
 
