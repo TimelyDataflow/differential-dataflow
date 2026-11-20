@@ -36,6 +36,8 @@
 //! - `| join(other, (k, v, v1) -> (k', v'))` — equijoin on the key.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `distinct` keeps each `(key, val)`
 //!   record once, and `collect` is NEST (gather a key's values into a `List`).
+//! - `| sum` — sum integer values per key, weighted by their signed diffs. A zero total has no row.
+//!   For example, `(deposits - debits) | sum` maintains balances from `(account, amount)` rows.
 //! - `| reduce((k, vals) -> out)` — reduce by a lambda: `vals` is the key's values with their
 //!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
 //!   `List` of `(val, diff)`. `| reduce(limit n, (k, vals) -> out)` hands the lambda only each
@@ -679,6 +681,18 @@ impl Parser {
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
+            Token::Ident(name) if name == "sum" => {
+                self.next();
+                // Move the integer value into the diff before arranging by key. Joining the
+                // update's time with itself preserves every coordinate, including inside loops.
+                let weight = Lambda::new(
+                    "let (k, (v, t)) = input in ((k, ()), t, v) enlist".into(),
+                    &corgi::Scope::default(),
+                );
+                let timed = Expr::Lift(Box::new(lhs));
+                let weighted = Expr::JoinFunction(Box::new(timed), weight);
+                Expr::Reduce(Box::new(weighted), Reducer::Count)
+            },
             Token::Ident(name) if name == "reduce" => {
                 self.next(); self.expect(&Token::LParen);
                 // `reduce(limit k, (k, vals) -> …)`: the lambda is handed each key's first `k` values.
