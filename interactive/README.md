@@ -66,7 +66,8 @@ let blocks = input 2 : (int, Member);             -- doc -> blocked member
 The shape of records is load bearing when we perform joins and other data-parallel operations.
 The pair structure `(key, val)` calls out first how the data are organized, and then any associated values.
 For each pair of matches `(k, l)` and `(k, r)`, `left | join(right)` produces `(k, (l, r))`.
-You can project that row inside the join: `left | join(right, f)` computes the same collection as `left | join(right) | map(f)`.
+`left | join(right, f)` computes the same collection as `left | join(right) | map(f)`.
+Passing `f` to the join lets it emit the projected fields directly. A separate `map` can require the full joined row as an intermediate result.
 Existing three-field join patterns migrate from `(k, l, r) -> …` to `(k, (l, r)) -> …`.
 
 A currently unfortunate amount of symbolic load is in shuffling around fields of collection elements.

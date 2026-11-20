@@ -68,7 +68,7 @@
  let jobs_idx3 = jobs_join3 | arrange;
  let jobs = jobs_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
  let found_idx3 = found | arrange;
- let with1_join = found_idx3 | join(emails, row -> row);
+ let with1_join = found_idx3 | join(emails);
 -let found_idx4 = found | arrange;
 -let with1_join2 = found_idx4 | join(emails, (key, (row, _)) -> (key, row));
 +let with1_join2 = found_idx3 | join(emails, (key, (row, _)) -> (key, row));

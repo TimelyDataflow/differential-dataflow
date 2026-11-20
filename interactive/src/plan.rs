@@ -411,6 +411,7 @@ fn node(node: &Node, names: &Names) -> String {
         Node::Linear { input, ops } => format!("{} | linear [ {} ]", names.of(input), ops.iter().map(linear).collect::<Vec<_>>().join(" | ")),
         Node::Concat(refs) => format!("concat({})", refs.iter().map(|r| names.of(r)).collect::<Vec<_>>().join(", ")),
         Node::Arrange(input) => format!("{} | arrange", names.of(input)),
+        Node::Join { left, right, projection } if projection.returns_input() => format!("{} | join({})", names.of(left), names.of(right)),
         Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), source_lambda(projection)),
         Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), source_lambda(projection)),
         Node::Reduce { input, reducer: r, limit } => format!("{} | {}", names.of(input), reducer(r, *limit)),
@@ -442,7 +443,7 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
             let Node::Linear { input, .. } = node else { unreachable!() };
             format!("{} | linear [ {} ]", names.of(input), printed.join(" | "))
         }
-        Node::Join { left, right, projection } => {
+        Node::Join { left, right, projection } if !projection.returns_input() => {
             let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
             format!("{} | join({}, {})", names.of(left), names.of(right), slots.lambda(projection, input, &format!("{at}/join")))
         }

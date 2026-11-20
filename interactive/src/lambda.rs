@@ -84,6 +84,11 @@ impl Lambda {
         if let Some(e) = error { lambda.graph = Err(e); }
         lambda
     }
+    /// A bare join's implicit projection. Check the whole graph so an unused shape
+    /// assertion or other computation is never discarded by printing it as a bare join.
+    pub(crate) fn returns_input(&self) -> bool {
+        self.graph().is_ok_and(|g| g.node_count() == 1 && matches!(g.nodes().next(), Some(corgi::NodeRef::Input)))
+    }
     /// Apply a join projection to the three columns supplied by the arrangements.
     pub(crate) fn on_join_columns(&self) -> Self {
         Self::compose("(k, l, r)", &[(self, "(k, (l, r))".into())], |out| out[0].clone())

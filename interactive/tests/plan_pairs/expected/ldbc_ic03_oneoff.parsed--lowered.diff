@@ -73,7 +73,7 @@
 +let in_y_map = in_y_filter | map((key, _) -> (key, ()));
 +let in_y_idx = in_y_map | arrange;
 +let in_y = in_y_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
- let counts = in_x | join(in_y, row -> row);
+ let counts = in_x | join(in_y);
 -let ranked = counts | map(((rid, node), (nx, ny)) -> (node, (rid, nx, ny))) | join(person, (node, ((rid, nx, ny), (first, last, _, _, _, _, _, _, _, _, _))) -> (rid, (((nx, ny) add neg, node), (first, last, nx, ny)))) | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten);
 +let ranked_map = counts | map(((rid, node), (nx, ny)) -> (node, (rid, nx, ny)));
 +let ranked_idx = ranked_map | arrange;

@@ -409,6 +409,7 @@ impl Printer<'_> {
             }
             Node::Concat(refs) => refs.iter().map(|r| names.of(r)).collect::<Vec<_>>().join(" + "),
             Node::Arrange(r) => format!("{} | arrange", names.of(r)),
+            Node::Join { left, right, projection } if projection.returns_input() => format!("{} | join({})", names.of(left), names.of(right)),
             Node::Join { left, right, projection } => {
                 let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
                 format!("{} | join({}, {})", names.of(left), names.of(right), self.lambda(projection, input)?)
@@ -540,6 +541,25 @@ mod tests {
             let alias = answer;
             output "out" = alias;
         "#);
+    }
+
+    #[test]
+    fn identity_joins_print_without_a_projection() {
+        for (args, explicit) in [
+            ("b", false),
+            ("b, x -> x", false),
+            ("b, (k, (l, r)) -> (k, (r, l))", true),
+        ] {
+            let text = format!(r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
+                output "out" = a | join({args});"#);
+            let report = plan(&text);
+            for stage in DdpStage::ALL {
+                let printed = report.emit_ddp_at(stage).unwrap().text;
+                let join_args = printed.split_once("| join(").unwrap().1.split_once(';').unwrap().0;
+                assert_eq!(join_args.contains(" -> "), explicit, "{stage:?}: {printed}");
+                assert!(report.compare_final(&plan(&printed)).is_empty(), "{stage:?}: {printed}");
+            }
+        }
     }
 
     #[test]
