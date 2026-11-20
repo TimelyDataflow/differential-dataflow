@@ -206,13 +206,6 @@ impl Builder {
         }
     }
 
-    fn lift_iter(&mut self, from: &Site, input: &Site) {
-        self.key_identity(from, input);
-        for (&out, &src) in from.val.iter().zip(&input.val) {
-            self.edge(out, src);
-        }
-    }
-
     fn lift(&mut self, from: &Site, input: &Site) {
         self.key_identity(from, input);
         if let Some(&value) = from.val.first() {
@@ -502,7 +495,6 @@ fn build_scope(
                                     builder.scalar_lambda(&after, &[&before], lambda);
                                 }
                                 LinearOp::Negate => builder.identity(&after, &before),
-                                LinearOp::LiftIter => builder.lift_iter(&after, &before),
                                 LinearOp::Lift => builder.lift(&after, &before),
                                 LinearOp::FlatMap(lambda) => {
                                     builder.presence(&after, &before);

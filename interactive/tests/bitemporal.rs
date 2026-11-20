@@ -457,7 +457,7 @@ fn independent_inputs_and_time_shapes() {
                 let b = input 1 : (int, int);
                 s: {
                     let seen = a | delay((_, v) -> (0, 0, (256, v call bit_length) mul)) | lift
-                        | map((k, (_, (s, e, i))) -> (k, (s, e, i, i)));
+                        | map((k, (_, (s, e, i))) -> (k, (s, e, i)));
                 }
                 output "left" = a;
                 output "right" = b;
@@ -494,7 +494,7 @@ fn independent_inputs_and_time_shapes() {
                 assert_eq!(left.len(), 2);
                 assert_eq!(keyed.rows(), vec![("7".into(), "1".into(), 1)]);
                 let rows: Rows = seen.rows().into_iter().map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
-                assert_eq!(sorted(rows), vec![(vec![7], vec![0, 0, 256, 256], 1), (vec![8], vec![0, 5, 256, 256], 1)]);
+                assert_eq!(sorted(rows), vec![(vec![7], vec![0, 0, 256], 1), (vec![8], vec![0, 5, 256], 1)]);
             }
             let delta = server.snapshot_as_of(worker, "split::delta", &at((0, u64::MAX))).unwrap();
             if worker.index() == 0 {

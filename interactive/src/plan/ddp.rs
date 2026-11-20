@@ -399,7 +399,7 @@ impl Printer<'_> {
                         LinearOp::Project(l) => ("map", Some(l)), LinearOp::Filter(l) => ("filter", Some(l)),
                         LinearOp::FlatMap(l) => ("flatmap", Some(l)),
                         LinearOp::JoinFunction(l) => ("join_function", Some(l)), LinearOp::Negate => ("negate", None),
-                        LinearOp::Lift => ("lift", None), LinearOp::LiftIter => ("lift_iter", None),
+                        LinearOp::Lift => ("lift", None),
                     };
                     expr += &format!(" | {word}");
                     if let Some(l) = lambda { expr += &format!("({})", self.lambda(l, shape)?); }

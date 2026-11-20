@@ -40,7 +40,8 @@ pub(crate) fn expand_by_shape(
     };
     for (i, mut item) in std::mem::take(&mut scope.items).into_iter().enumerate() {
         let site = if sites.peek().map(|s| s.0) == Some(i) { sites.next().map(|s| s.1) } else { None };
-        let by_record = site.is_some() && match &item {
+        // Whether the reduce's values are not unit: count then drops them, and distinct keys by the whole record.
+        let valued = site.is_some() && match &item {
             Item::Op(Node::Reduce { input, .. }) => !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit),
             _ => false,
         };
@@ -80,20 +81,20 @@ pub(crate) fn expand_by_shape(
         };
         if site == Some(ByShape::Count) {
             let Item::Op(Node::Reduce { input, reducer, limit }) = item else { unreachable!() };
-            let input = if by_record {
+            let input = if valued {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, _) = input in (k, ())".into(), &corgi::Scope::default()))] })
             } else { input };
             push(Node::Reduce { input, reducer, limit });
         } else if site == Some(ByShape::Distinct) {
             let Item::Op(Node::Reduce { input, .. }) = item else { unreachable!() };
-            let input = if by_record {
+            let input = if valued {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, v) = input in ((k, v), ())".into(), &corgi::Scope::default()))] })
             } else { input };
             // Both paths now have unit values: either they were known to be unit,
             // or the map above keyed the collection by its whole record.
             let reducer = Reducer::Expr(unit_distinct());
             let output = push(Node::Reduce { input, reducer, limit: None });
-            if by_record {
+            if valued {
                 push(Node::Linear { input: output, ops: vec![LinearOp::Project(Lambda::new("let (kv, ()) = input in kv".into(), &corgi::Scope::default()))] });
             }
         } else if let Item::Op(node) = item {

@@ -1,4 +1,4 @@
--- The slots that take one lambda: `map` (the value as written, with no tuple around it),
+-- The slots that take one lambda: `map` (a row to a row),
 -- `filter`, `flatmap` (complete rows, with positions explicitly zipped here) and `delay` (a row
 -- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment
 -- may sit inside a lambda written over several lines. Declared types and the built-in `Option`

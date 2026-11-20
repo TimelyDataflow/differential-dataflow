@@ -31,7 +31,7 @@ pub(super) fn drop_dead_as_of(prog: &mut Program, as_of: &Time, root: usize) -> 
 /// half join that makes its updates at the as-of time dead.
 fn keeps_times(op: &LinearOp) -> bool {
     match op {
-        LinearOp::Project(_) | LinearOp::Filter(_) | LinearOp::Negate | LinearOp::LiftIter | LinearOp::FlatMap(_) | LinearOp::Lift => true,
+        LinearOp::Project(_) | LinearOp::Filter(_) | LinearOp::Negate | LinearOp::FlatMap(_) | LinearOp::Lift => true,
         LinearOp::JoinFunction(_) => false,
     }
 }
@@ -74,7 +74,7 @@ fn drop_in_scope(s: &mut Scope, level: Level, as_of: &Time) -> usize {
         if !ops[at + 1..].iter().all(keeps_times) || uses[i].is_empty() { continue; }
         let dead: Vec<Use> = uses[i].iter().copied().filter(|u| dead_on(*u, &covered)).collect();
         // The edge filter reads the time from the row value written by `lift`. Filter and Negate
-        // leave that value intact. Project, FlatMap, LiftIter and other tails may move or drop it;
+        // leave that value intact. Project, FlatMap and other tails may move or drop it;
         // handling them needs tracking time through lambdas or splitting the node and duplicating
         // its tail on dead edges, adding work every tick and losing the "never worse" property.
         if dead.len() == uses[i].len() {

@@ -35,14 +35,6 @@ pub enum LinearOp {
     Filter(Lambda),
     /// Negate the diff.
     Negate,
-    /// Append the current user-iter coord (at the row's scope depth) to
-    /// the value. Time itself is unchanged. Only explain writes it; the language has no spelling.
-    ///
-    /// Discipline, which nothing checks: the result of `LiftIter` should not be referenced inside the same
-    /// scope it appears in — only from an enclosing scope, after the
-    /// implicit leave. This preserves the "loop body is a time-invariant
-    /// function" property; in-scope use risks defeating the fixpoint.
-    LiftIter,
     /// Each row becomes the lambda's list of complete `(key, val)` rows.
     FlatMap(Lambda),
     /// Pair each value with its whole time: `(key, val)` becomes `(key, (val, time))`.

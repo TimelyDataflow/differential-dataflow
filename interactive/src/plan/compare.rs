@@ -80,7 +80,7 @@ fn linear(a: &LinearOp, b: &LinearOp, input: Option<&corgi::Shape>) -> bool {
         (LinearOp::Project(a), LinearOp::Project(b)) | (LinearOp::Filter(a), LinearOp::Filter(b))
         | (LinearOp::FlatMap(a), LinearOp::FlatMap(b))
         | (LinearOp::JoinFunction(a), LinearOp::JoinFunction(b)) => lambda(a, b, input),
-        (LinearOp::Negate, LinearOp::Negate) | (LinearOp::Lift, LinearOp::Lift) | (LinearOp::LiftIter, LinearOp::LiftIter) => true,
+        (LinearOp::Negate, LinearOp::Negate) | (LinearOp::Lift, LinearOp::Lift) => true,
         _ => false,
     }
 }
