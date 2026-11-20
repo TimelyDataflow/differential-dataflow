@@ -704,12 +704,19 @@ fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lam
     let Some(&value_fact) = output.val.first() else {
         return None;
     };
+    // A unit value has nothing to mask, though the half join keeps a fact for it.
+    // Masking it again would count a change each round, and never converge.
+    let (value_shape, value_facts) = if parts[0] == Shape::Unit {
+        (Some(&parts[0]), &[][..])
+    } else {
+        (None, std::slice::from_ref(&value_fact))
+    };
     mask_lambda(
         original,
         &output.shape.0,
         &output.key,
-        None,
-        &[value_fact],
+        value_shape,
+        value_facts,
         live,
     )
 }
@@ -756,7 +763,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             (Item::Op(Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
                 if let Some(new) = mask_half_join(projection, output, live) {
                     masked += output.key.iter().filter(|&&id| !live[id]).count();
-                    masked += usize::from(!live[output.val[0]]);
+                    let unit = matches!(&output.shape.1, Shape::Prod(parts) if parts[0] == Shape::Unit);
+                    masked += usize::from(!unit && !live[output.val[0]]);
                     *projection = new;
                 }
             }
@@ -1165,11 +1173,10 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x))
-                    | reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);";
+                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 4);
         let (_, check) = shapes::infer(&program, &|_| None, 1);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
     }
@@ -1182,12 +1189,11 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x))
-                    | reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);";
+                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
-        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 4);
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();
