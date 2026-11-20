@@ -38,7 +38,7 @@ A write frontier is the set of minimal times at which future writes are possible
 | `list` | Show installed programs, imports and exports. |
 | `diag` | Sample the worker logs and advance the diagnostic inputs. Requires diagnostics to be enabled. |
 | `drop P` | Remove a program and its outputs. Release dependent imports and tails first. |
-| `exit` | Close the client session. On stdin this also shuts down the server. |
+| `exit` | Close the client session. On stdin this also shuts down the server, as does the end of stdin. |
 
 ### Replacing global tick
 

@@ -181,6 +181,8 @@ pub fn run_worker(
                 }
                 Work::SessionEnded(connection) => {
                     stop_connection(connection, &mut tails, worker);
+                    // Stdin is connection 0: its end stops the server, as `exit` on stdin does.
+                    if connection == 0 { shutdown = true; }
                 }
                 Work::Shutdown => {
                     shutdown = true;

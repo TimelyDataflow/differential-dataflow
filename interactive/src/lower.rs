@@ -478,7 +478,10 @@ fn lower_scope_tree(
                 sets.push((n, e));
             },
             Stmt::Scope(n, b)=> { assert!(child_bodies.insert(n.clone(), b.as_slice()).is_none(), "scope `{n}` defined twice"); order.push((ItemKind::Scope, n.clone())); },
-            Stmt::Output(n, s, e) => { export_stmts.push((n.as_str(), s, e)); },
+            Stmt::Output(n, s, e) => {
+                assert!(export_stmts.iter().all(|(m, _, _)| *m != n.as_str()), "output `{n}` defined twice");
+                export_stmts.push((n.as_str(), s, e));
+            },
         }
     }
 
@@ -721,6 +724,8 @@ mod tree_tests {
             ("s: { let x = input 0; set x = x; }", "set `x` conflicts"),
             ("s: { x: {} set x = x; }", "set `x` conflicts"),
             ("s: { var x; child: { set x = x; } }", "var `x` has no set"),
+            ("output \"a\" = input 0; output \"a\" = input 1;", "output `a` defined twice"),
+            ("s: { set x = x; output \"a\" = x; output \"a\" = x; }", "output `a` defined twice"),
         ] {
             let err = std::panic::catch_unwind(|| lower_tree(parse(src))).unwrap_err();
             let message = err.downcast_ref::<String>().expect("string panic");

@@ -15,7 +15,16 @@ impl ServerProcess {
         let stdin = self.child.stdin.as_mut().expect("server stdin is piped");
         stdin.write_all(b"exit\n").unwrap();
         stdin.flush().unwrap();
+        self.wait_for_exit();
+    }
 
+    /// Close stdin without `exit`: the end of stdin stops the server too.
+    fn close_stdin(mut self) {
+        drop(self.child.stdin.take().expect("server stdin is piped"));
+        self.wait_for_exit();
+    }
+
+    fn wait_for_exit(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
@@ -901,6 +910,29 @@ fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
         assert_eq!(request(&mut writer, &mut reader, "p", "p peek reach::result as-of 3\n"), ["1", "2"]);
         server.stop();
     }
+}
+
+/// The end of stdin stops the server, even while a TCP session is open.
+#[test]
+fn end_of_stdin_stops_the_server() {
+    for workers in [1, 3] {
+        let (server, mut writer, mut reader) = start_server(workers);
+        request(&mut writer, &mut reader, "l", "l load p begin\noutput \"o\" = input 0 : (int, ());\nl end-load\n");
+        server.close_stdin();
+    }
+}
+
+/// Two outputs with one name are refused at load, and the server keeps serving.
+#[test]
+fn duplicate_output_names_are_refused() {
+    let (server, mut writer, mut reader) = start_server(3);
+    let error = framed(&mut writer, &mut reader, "d", "d load p begin\noutput \"a\" = input 0 : (int, ());\noutput \"a\" = input 1 : (int, ());\nd end-load\n", &[]).unwrap_err();
+    assert!(error.contains("output `a` defined twice"), "{error}");
+    request(&mut writer, &mut reader, "l", "l load p begin\noutput \"a\" = input 0 : (int, ());\nl end-load\n");
+    request(&mut writer, &mut reader, "f", "f feed p 0 7 time=0\n");
+    request(&mut writer, &mut reader, "s", "s seal p 0 1\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek p::a\n"), ["7"]);
+    server.stop();
 }
 
 /// Each spin has to reply before the client can issue the next seal.
