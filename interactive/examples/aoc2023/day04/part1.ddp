@@ -9,5 +9,5 @@ let points = dups
 
 output "result" = points
     | map((_, p) -> ((), p)) | collect
-    | value((_, ps) -> ps fold_add)
+    | map((k, ps) -> (k, ps fold_add))
     | arrange | inspect(part1);

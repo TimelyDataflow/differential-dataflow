@@ -9,13 +9,23 @@ pub(crate) fn unit_distinct() -> Lambda {
     Lambda::new("let (_, vals) = input in vals map (((), _) -> ((), 1))".into(), &corgi::Scope::default())
 }
 
-/// Finish lowering distinct once the tree's shapes are known. A unit-valued input
-/// is already keyed by its whole record. Otherwise write the record key and its
-/// inverse into the IR, where arrangements, projections and readers can see them.
-pub(crate) fn expand_distinct(
+/// A reduce sugar whose lowering waits for its input's shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ByShape {
+    /// Keyed by the whole record, so that a key's values are not read together.
+    Distinct,
+    /// Values projected away, so that a key's values are not read together.
+    Count,
+}
+
+/// Finish lowering distinct and count once the tree's shapes are known. A unit-valued input
+/// needs nothing. Otherwise distinct writes the record key and its inverse into the IR, and
+/// count writes the projection to a unit value, where arrangements, projections and readers
+/// can see them.
+pub(crate) fn expand_by_shape(
     scope: &mut crate::scope_ir::Scope,
     shapes: &crate::shapes::ScopeShapes,
-    pending: &std::collections::HashMap<Vec<String>, Vec<usize>>,
+    pending: &std::collections::HashMap<Vec<String>, Vec<(usize, ByShape)>>,
     path: &mut Vec<String>,
 ) {
     use crate::scope_ir::{Item, Node, Ref, Source};
@@ -29,9 +39,8 @@ pub(crate) fn expand_distinct(
         if let Ref::Local(i) | Ref::ChildExport(i, _) = r { *i = remap[*i]; }
     };
     for (i, mut item) in std::mem::take(&mut scope.items).into_iter().enumerate() {
-        let distinct = sites.peek() == Some(&i);
-        if distinct { sites.next(); }
-        let by_record = distinct && match &item {
+        let site = if sites.peek().map(|s| s.0) == Some(i) { sites.next().map(|s| s.1) } else { None };
+        let by_record = site.is_some() && match &item {
             Item::Op(Node::Reduce { input, .. }) => !shapes.of(input).is_some_and(|s| s.val == corgi::Shape::Unit),
             _ => false,
         };
@@ -40,7 +49,7 @@ pub(crate) fn expand_distinct(
             Item::Sub(child) => {
                 let crate::shapes::ItemShapes::Sub(shapes) = &shapes.items[i] else { unreachable!() };
                 path.push(child.name.clone());
-                expand_distinct(child, shapes, pending, path);
+                expand_by_shape(child, shapes, pending, path);
                 path.pop();
                 for import in &mut child.imports {
                     if let Source::Parent(r) = &mut import.from { remap_ref(r, &remap); }
@@ -69,7 +78,13 @@ pub(crate) fn expand_distinct(
             labels.push(scope.labels[i].clone());
             r
         };
-        if distinct {
+        if site == Some(ByShape::Count) {
+            let Item::Op(Node::Reduce { input, reducer, limit }) = item else { unreachable!() };
+            let input = if by_record {
+                push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, _) = input in (k, ())".into(), &corgi::Scope::default()))] })
+            } else { input };
+            push(Node::Reduce { input, reducer, limit });
+        } else if site == Some(ByShape::Distinct) {
             let Item::Op(Node::Reduce { input, .. }) = item else { unreachable!() };
             let input = if by_record {
                 push(Node::Linear { input, ops: vec![LinearOp::Project(Lambda::new("let (k, v) = input in ((k, v), ())".into(), &corgi::Scope::default()))] })

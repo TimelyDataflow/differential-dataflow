@@ -17,7 +17,7 @@
 -let wrote = cands | map(((rid, who, node), _) -> (node, (rid, who))) | join(posts, (node, ((rid, who), m)) -> ((rid, who, node, m), ()));
 -let liked = wrote | map(((rid, who, node, m), ()) -> (m, (rid, who, node))) | join(tags_of, (m, ((rid, who, node), t)) -> ((who, t), (rid, node, m))) | join(likes, ((who, _), ((rid, node, m), ())) -> ((rid, who, node, m), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 -let points = (liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1))) + (wrote + (liked | negate) | map(((rid, who, node, _), ()) -> ((rid, who, node), -1)));
--let summed = points | join_function((key, p) -> ((key, ()), 0, p) enlist) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-let summed = points | join_function((key, p) -> ((key, ()), 0, p) enlist) | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 +let hop1_map = request | map(((rid, who, month), ()) -> (who, (rid, who, month)));
 +let hop1_idx = hop1_map | arrange;
 +let friend_idx = friend | arrange;

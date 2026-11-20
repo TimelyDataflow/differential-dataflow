@@ -1050,7 +1050,8 @@ mod tests {
         let distinct = format!("{source}output \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
         let mut distinct = lower::lower_tree(parse::pipe::parse(&distinct));
-        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 0);
+        // Count projects its values away as it is lowered, so the map's value goes unread.
+        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 2);
         assert_eq!(pushdown(&mut distinct, &|_| None).unwrap(), 0);
     }
 
@@ -1164,7 +1165,8 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+                    | half_join(b, 0, (k, x, yz) -> (k, x))
+                    | reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
@@ -1180,7 +1182,8 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+                    | half_join(b, 0, (k, x, yz) -> (k, x))
+                    | reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter);";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();

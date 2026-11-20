@@ -60,14 +60,6 @@ pub enum Expr {
     Reduce(Box<Expr>, Reducer),
     Filter(Box<Expr>, Lambda),
     Negate(Box<Expr>),
-    /// Append the current user-iter coord (at the operator's scope depth)
-    /// to each row's value. Time itself is unchanged.
-    ///
-    /// Discipline, which nothing checks: the result of `LiftIter` should not be referenced inside the same
-    /// scope it appears in — only from an enclosing scope, after the
-    /// implicit leave. This preserves the "loop body is a time-invariant
-    /// function" property; in-scope use risks defeating the fixpoint.
-    LiftIter(Box<Expr>),
     /// Replace each row with the lambda's list of complete `(key, val)` rows.
     FlatMap(Box<Expr>, Lambda),
     /// Pair each row's value with its whole time. See `LinearOp::Lift`.

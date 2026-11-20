@@ -614,7 +614,7 @@ mod tests {
             nested: { let both = (a + b) + (a | negate); }
             let x = nested::both + (b | map((k, v) -> (v, k)));
             output "all" = x | map((k, v) -> (v, k));
-            output "other" = a | value((_, v) -> (v, 1) add);
+            output "other" = a | map((k, v) -> (k, (v, 1) add));
         "#;
         let before = plan(source);
         let parsed = before.emit_ddp_at(DdpStage::Parsed).unwrap();

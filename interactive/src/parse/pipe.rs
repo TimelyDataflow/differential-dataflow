@@ -32,7 +32,6 @@
 //! Operators chain with `|`; a slot is written `(pat -> body)`:
 //!
 //! - `| map((k, v) -> (k', v'))` — reshape each row to the `(key, val)` the lambda gives.
-//! - `| value((k, v) -> v')` — replace the value, keeping the key.
 //! - `| join(other)` — equijoin on the key, yielding `(k, (v, v1))`.
 //! - `| join(other, f)` — project the joined row, as in `| join(other) | map(f)`.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `distinct` keeps each `(key, val)`
@@ -47,8 +46,7 @@
 //! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
 //! - `| flatmap((k, v) -> list)` — any number of complete `(key, val)` rows.
 //!   For positions, write `((0, l len) range, l) zip`; keys are chosen by the lambda.
-//! - `| negate` · `| arrange` · `| inspect(label)` ·
-//!   `| lift_iter`.
+//! - `| negate` · `| arrange` · `| inspect(label)`.
 //! - `| lift` — pair each value with its whole time, `(key, (val, time))`, the time a tuple
 //!   of the epoch and every scope coordinate.
 //! - `| join_function((k, v) -> list)` — replace each row by the lambda's list of
@@ -151,7 +149,7 @@ mod fragment;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Set, Output, Type, Enum,
-    Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, LiftIter, FlatMap, Inspect,
+    Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
@@ -345,7 +343,6 @@ fn keyword(ident: &str) -> Option<Token> {
         "flatmap" => Token::FlatMap,
         "arrange" => Token::Arrange, "negate" => Token::Negate,
         "filter" => Token::Filter, "inspect" => Token::Inspect,
-        "lift_iter" => Token::LiftIter,
         _ => return None,
     })
 }
@@ -672,11 +669,6 @@ impl Parser {
     fn parse_pipe_op(&mut self, lhs: Expr) -> Expr {
         match self.peek().clone() {
             Token::Map => { self.next(); Expr::Map(Box::new(lhs), self.slot()) },
-            Token::Ident(name) if name == "value" => {
-                self.next();
-                let val = self.slot();
-                Expr::Map(Box::new(lhs), Lambda::compose("(k, v)", &[(&val, "(k, v)".into())], |r| format!("(k, {})", r[0])))
-            },
             Token::Join => {
                 self.next();
                 self.expect(&Token::LParen);
@@ -726,7 +718,6 @@ impl Parser {
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
             Token::Filter => { self.next(); Expr::Filter(Box::new(lhs), self.slot()) },
-            Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
             Token::Ident(name) if name == "half_join" => {
                 self.next(); self.expect(&Token::LParen);

@@ -456,8 +456,8 @@ fn independent_inputs_and_time_shapes() {
                 let a = input 0 : (int, int);
                 let b = input 1 : (int, int);
                 s: {
-                    let seen = a | delay((_, v) -> (0, 0, (256, v call bit_length) mul)) | lift_iter | lift
-                        | map((k, ((v, iter), (s, e, i))) -> (k, (s, e, i, iter)));
+                    let seen = a | delay((_, v) -> (0, 0, (256, v call bit_length) mul)) | lift
+                        | map((k, (_, (s, e, i))) -> (k, (s, e, i, i)));
                 }
                 output "left" = a;
                 output "right" = b;

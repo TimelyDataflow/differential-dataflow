@@ -14,5 +14,5 @@ let calib = first | join(last, (line, (f, l)) -> (line, ((f, 10) mul, l) add));
 
 output "result" = calib
     | map((_, v) -> ((), v)) | collect
-    | value((_, vs) -> vs fold_add)
+    | map((k, vs) -> (k, vs fold_add))
     | arrange | inspect(part1);

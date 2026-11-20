@@ -643,8 +643,8 @@ fn lambda_explanations_sufficient_small() {
 const SCALARS: &str = r#"
     let pairs = input 0 : (int, int);
     let counted = pairs | filter((_, v) -> (v, 3) gt) | count;
-    let lists = pairs | value((_, v) -> (v, 2) mul) | collect;
-    let flat = lists | flatmap((k, l) -> (k, l) cap_list) | value((_, x) -> x);
+    let lists = pairs | map((k, v) -> (k, (v, 2) mul)) | collect;
+    let flat = lists | flatmap((k, l) -> (k, l) cap_list) | map((k, x) -> (k, x));
     inner: {
         set low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
     }
