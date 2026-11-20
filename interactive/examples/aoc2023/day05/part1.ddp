@@ -9,7 +9,7 @@ let entries = input 1 : ((int, int, int, int), ()) | map(((stage, dst, src, len)
 chain: {
     let cur = active | filter(((stage, _), _) -> (stage, 6) le);
     let cands = cur | map(((stage, idx), _) -> (stage, idx))
-        | join(entries, (stage, idx, (dst, src, len)) -> ((stage, idx, dst, src, len), ()))
+        | join(entries, (stage, (idx, (dst, src, len))) -> ((stage, idx, dst, src, len), ()))
         | filter(((_, idx, _, src, len), _) -> ((src, idx) le, (idx, (src, len) add) lt) all);
     -- key (stage, idx, dst, src, len)
     let mapped  = cands | map(((stage, idx, dst, src, _), _) -> (((stage, 1) add, ((idx, dst) add, src) sub), ()));

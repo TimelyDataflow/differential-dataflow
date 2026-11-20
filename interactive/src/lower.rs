@@ -636,7 +636,7 @@ mod tree_tests {
         let producer = "min";
         let text = format!(r#"
             let rows = input 0 : (int, ()) | {producer};
-            output "join" = rows | join(rows, (k, _, _) -> (k, ()));
+            output "join" = rows | join(rows, (k, (_, _)) -> (k, ()));
             output "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
             output "reduce" = rows | min;
             output "distinct" = rows | distinct;
@@ -655,7 +655,7 @@ mod tree_tests {
     fn arranges_consumers_of_whole_record_distinct() {
         let program = lower_tree(parse(r#"
             let rows = input 0 : (int, int) | distinct;
-            output "join" = rows | join(rows, (k, a, _) -> (k, a));
+            output "join" = rows | join(rows, (k, (a, _)) -> (k, a));
             output "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
             output "reduce" = rows | min;
             output "distinct" = rows | distinct;
@@ -739,7 +739,7 @@ mod tree_tests {
             let edges = input 0 | map(((src, dst), ()) -> (src, dst));\n\
             let roots = input 1 | map(((n), ()) -> (n, ()));\n\
             reach: {\n\
-                let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));\n\
+                let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));\n\
                 set reach = roots + proposals | distinct;\n\
             }\n\
             output \"result\" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);";
@@ -1003,8 +1003,8 @@ mod optimize_tests {
         let src = "\
             let a = input 0 | map(((a, b), ()) -> (a, b));\n\
             let b = input 0 | map(((a, b), ()) -> (b, a));\n\
-            let j1 = a | join(b, (_, x, y) -> (x, y));\n\
-            let j2 = a | join(b, (_, x, y) -> (y, x));\n\
+            let j1 = a | join(b, (_, (x, y)) -> (x, y));\n\
+            let j2 = a | join(b, (_, (x, y)) -> (y, x));\n\
             output \"result\" = j1 + j2;";
         let mut p = lower_tree(parse(src));
         crate::passes::optimize(&mut p);
@@ -1018,7 +1018,7 @@ mod optimize_tests {
         let src = "\
             let a = input 0 | map(((a, b), ()) -> (a, b)) | distinct;\n\
             let b = input 0 | map(((a, b), ()) -> (a, b));\n\
-            output \"result\" = a | join(b, (_, x, _) -> (x, ()));";
+            output \"result\" = a | join(b, (_, (x, _)) -> (x, ()));";
         let mut p = lower_tree(parse(src));
         crate::passes::optimize(&mut p);
         // No Arrange may target a Reduce item.
@@ -1050,7 +1050,7 @@ mod optimize_tests {
     /// written; others keep `input{n}`, whatever `let` they are bound to.
     #[test]
     fn inputs_take_positions_and_names() {
-        let p = lower_tree(parse("let e = input \"edges\" : ((int), (int));\nlet roots = input : ((int), ());\noutput \"out\" = roots | join(e, (_, (), d) -> (d, ()));"));
+        let p = lower_tree(parse("let e = input \"edges\" : ((int), (int));\nlet roots = input : ((int), ());\noutput \"out\" = roots | join(e, (_, ((), d)) -> (d, ()));"));
         let named: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
         assert!(named.contains(&("edges", st::Source::Input(0))), "{named:?}");
         assert!(named.contains(&("input1", st::Source::Input(1))), "{named:?}");

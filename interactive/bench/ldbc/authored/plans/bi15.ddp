@@ -14,11 +14,11 @@ let friend  = import "graph::friend" : (int, (int, int));             -- (person
 -- Only friendships the search crosses are looked up here, so no friendship filter.
 let replies = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq)
                       | map((child, (_, _, from, _, _, _, _, _, _, parent, _, _, _)) -> (parent, (child, from)));
-let reply   = replies | join(message, (_, (child, from), (kind, _, to, _, _, _, _, _, _, _, _, _, _)) -> (child, (from, to, ((kind, 0) eq, 2, 1) select)))
+let reply   = replies | join(message, (_, ((child, from), (kind, _, to, _, _, _, _, _, _, _, _, _, _))) -> (child, (from, to, ((kind, 0) eq, 2, 1) select)))
                       | filter((_, (from, to, _)) -> (from, to) ne);
-let dated   = reply | join(root, (_, row, top) -> (top, row))
-                    | join(message, (_, row, (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> (f, row))
-                    | join(forum, (_, (from, to, score), (_, when, _)) -> ((from, to), (when, score)));
+let dated   = reply | join(root, (_, (row, top)) -> (top, row))
+                    | join(message, (_, (row, (_, _, _, _, _, _, _, _, f, _, _, _, _))) -> (f, row))
+                    | join(forum, (_, ((from, to, score), (_, when, _))) -> ((from, to), (when, score)));
 let scored  = dated + (dated | map(((from, to), v) -> ((to, from), v)));
 
 let window  = request | map(((rid, _, _, start, end), ()) -> (rid, (start, end)));
@@ -30,29 +30,29 @@ search: {
     -- The best meeting so far: least cost0 + cost1 over nodes both sides reached.
     let side0  = search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, c), ()) -> ((rid, node), c));
     let side1  = search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, c), ()) -> ((rid, node), c));
-    let best   = side0 | join(side1, ((rid, _), c0, c1) -> (rid, (c0, c1) add)) | min;
+    let best   = side0 | join(side1, ((rid, _), (c0, c1)) -> (rid, (c0, c1) add)) | min;
 
     -- A row keeps growing until its request has met, then only while 2·cost < best.
     let by_rid = search | map(((rid, side, node, c), ()) -> (rid, (side, node, c)));
     let met    = best | map((rid, _) -> (rid, ()));
-    let open   = by_rid - (by_rid | join(met, (rid, row, ()) -> (rid, row)));
-    let near   = by_rid | join(best, (rid, (side, node, c), b) -> (rid, (side, node, c, b)))
+    let open   = by_rid - (by_rid | join(met, (rid, (row, ())) -> (rid, row)));
+    let near   = by_rid | join(best, (rid, ((side, node, c), b)) -> (rid, (side, node, c, b)))
                         | filter((_, (_, _, c, b)) -> ((c, c) add, b) lt)
                         | map((rid, (side, node, c, _)) -> (rid, (side, node, c)));
     let steps  = (open + near) | map((rid, (side, node, c)) -> (node, (rid, side, c)))
-                               | join(friend, (node, (rid, side, c), (next, _)) -> ((rid, node, next), (side, c)));
+                               | join(friend, (node, ((rid, side, c), (next, _))) -> ((rid, node, next), (side, c)));
 
     -- Cost only the friendships being crossed: sum scores inside the request's window.
     let wanted = steps | map((key, _) -> (key, ())) | distinct;
     let inside = wanted | map(((rid, a, b), ()) -> ((a, b), rid))
-                        | join(scored, (pair, rid, (when, score)) -> (rid, (pair, when, score)))
-                        | join(window, (rid, ((a, b), when, score), (start, end)) -> ((rid, a, b), (when, score, start, end)))
+                        | join(scored, (pair, (rid, (when, score))) -> (rid, (pair, when, score)))
+                        | join(window, (rid, (((a, b), when, score), (start, end))) -> ((rid, a, b), (when, score, start, end)))
                         | filter((_, (when, _, start, end)) -> ((when, start) ge, (when, end) le) all)
                         | map((key, (_, score, _, _)) -> (key, score));
     let summed = inside | join_function((key, score) -> ((key, ()), (0, 0), score) enlist) | count;
-    let scores = summed + ((wanted - (wanted | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
+    let scores = summed + ((wanted - (wanted | join(summed, (key, ((), _)) -> (key, ())))) | map((key, ()) -> (key, 0)));
     let cost   = scores | map((key, s) -> (key, (2.0, (s, 2) add to_float) div));
-    let grow   = steps | join(cost, ((rid, _, next), (side, c), w) -> ((rid, side, next, (c, w) add), ()));
+    let grow   = steps | join(cost, ((rid, _, next), ((side, c), w)) -> ((rid, side, next, (c, w) add), ()));
 
     set search = (starts + search + grow) | map(((rid, side, node, c), ()) -> ((rid, side, node), c)) | min
                                           | map(((rid, side, node), c) -> ((rid, side, node, c), ()));
@@ -60,10 +60,10 @@ search: {
 
 let side0  = search::search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, c), ()) -> ((rid, node), c));
 let side1  = search::search | filter(((_, side, _, _), ()) -> (side, 1) eq) | map(((rid, _, node, c), ()) -> ((rid, node), c));
-let best   = side0 | join(side1, ((rid, _), c0, c1) -> (rid, (c0, c1) add)) | min;
+let best   = side0 | join(side1, ((rid, _), (c0, c1)) -> (rid, (c0, c1) add)) | min;
 
 let asked  = request | map(((rid, _, _, _, _), ()) -> (rid, ()));
-let never  = asked - (asked | join(best, (rid, (), _) -> (rid, ())));
+let never  = asked - (asked | join(best, (rid, ((), _)) -> (rid, ())));
 let answer = (best | map((rid, c) -> ((rid, 0), (c)))) + (never | map((rid, ()) -> ((rid, 0), (-1 to_float))));
 
 output "answer" = answer | arrange;

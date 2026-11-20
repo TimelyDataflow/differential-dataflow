@@ -96,8 +96,8 @@ def graph_program():
     lines.append('''-- Friendships in both directions, between people who exist: (person, (friend, since)).
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | distinct;
 let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
-let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t)))
-                     | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | distinct
+let friends = either | join(exists, (a, ((b, t), ())) -> (b, (a, t)))
+                     | join(exists, (b, ((a, t), ())) -> ((a, b, t), ())) | distinct
                      | map(((a, b, t), ()) -> (a, (b, t)));
 output "friend" = friends | arrange;
 output "friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
@@ -108,7 +108,7 @@ let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), (
                       | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
 thread: {
     let below  = thread | map(((mid, root), ()) -> (mid, root))
-                        | join(replies, (_, root, child) -> ((child, root), ()));
+                        | join(replies, (_, (root, child)) -> ((child, root), ()));
     set thread = (posts + below) | distinct;
 }
 output "message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;

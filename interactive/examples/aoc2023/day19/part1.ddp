@@ -9,7 +9,7 @@ let parts = input 1 : ((int, int, int, int), ()) | map(((x, m, a, s), ()) -> ((0
 
 move: {
     let mtch = mv | map(((st, x, m, a, s), ()) -> (st, (x, m, a, s)))
-        | join(rulesbys, (st, (x, m, a, s), (prio, f, cmp, v, nx)) ->
+        | join(rulesbys, (st, ((x, m, a, s), (prio, f, cmp, v, nx))) ->
             let sel = ((f, 0) eq, x, ((f, 1) eq, m, ((f, 2) eq, a, s) select) select) select in
             ((st, x, m, a, s), (((cmp, 0) eq, (sel, v) lt, (sel, v) gt) select, prio, nx)))
         | filter((_, (hit, _, _)) -> (hit, 1) eq) | map((k, (_, prio, nx)) -> (k, (prio, nx)))

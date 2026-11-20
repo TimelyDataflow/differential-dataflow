@@ -13,14 +13,14 @@ let liked_by = import "graph::likes.by_message"  : (int, (int, int));       -- (
 -- The request's tagged messages and their authors: (message, (rid, author)).
 -- Tag names are unique and (message, tag) pairs are a set, so each message appears once.
 let written  = request | map(((rid, name), ()) -> (name, rid))
-                       | join(tag_id, (_, rid, tag) -> (tag, rid))
-                       | join(tagged, (_, rid, m) -> (m, rid))
-                       | join(message, (m, rid, (_, _, author, _, _, _, _, _, _, _, _, _, _)) -> (m, (rid, author)));
+                       | join(tag_id, (_, (rid, tag)) -> (tag, rid))
+                       | join(tagged, (_, (rid, m)) -> (m, rid))
+                       | join(message, (m, (rid, (_, _, author, _, _, _, _, _, _, _, _, _, _))) -> (m, (rid, author)));
 
 -- Count each author's tagged messages (kind 0), replies to them (1) and likes on them (2).
 let as_message = written | map((_, (rid, author)) -> ((rid, author, 0), ()));
-let as_like    = written | join(liked_by, (_, (rid, author), _) -> ((rid, author, 2), ()));
-let as_reply   = written | join(replies, (_, (rid, author), _) -> ((rid, author, 1), ()));
+let as_like    = written | join(liked_by, (_, ((rid, author), _)) -> ((rid, author, 2), ()));
+let as_reply   = written | join(replies, (_, ((rid, author), _)) -> ((rid, author, 1), ()));
 let tally      = (as_message + as_reply + as_like) | count;
 
 -- Pivot the (at most three) counts per author into (messages, replies, likes).

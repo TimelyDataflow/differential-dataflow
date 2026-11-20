@@ -1591,7 +1591,7 @@ mod tests {
     #[test]
     fn inputs_are_fed_by_name() {
         let catalog = Catalog::default();
-        let program = "let e = input \"edges\" : ((int), (int));\nlet r = input \"roots\" : ((int), ());\noutput \"reach\" = r | join(e, (_, (), d) -> (d, ()));";
+        let program = "let e = input \"edges\" : ((int), (int));\nlet r = input \"roots\" : ((int), ());\noutput \"reach\" = r | join(e, (_, ((), d)) -> (d, ()));";
         let load = Cmd::Load { width: 1, id_hint: "g".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
         prepare(load, &catalog).expect("the program lowers");
         let mut p = LineParser::new(catalog);
@@ -1608,7 +1608,7 @@ mod tests {
     #[test]
     fn loads_bind_inputs_to_traces() {
         let catalog = Catalog::default();
-        let text = "let edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));";
+        let text = "let edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, ((), d)) -> ((d), ()));";
         let bindings: BTreeMap<String, String> = [("edges".to_string(), "g::edges".to_string())].into();
         let load = Cmd::Load { width: 1, id_hint: "q".into(), bindings, program: text.into(), explain: None };
         let Ok(PreparedCommand::Server(ServerCommand::Install { program, .. })) = prepare(load, &catalog) else { panic!("the program lowers") };

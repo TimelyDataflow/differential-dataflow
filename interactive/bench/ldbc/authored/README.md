@@ -152,7 +152,7 @@ Two conventions apply throughout:
 ## Idioms
 
 - **Keyed collections.** Keep a collection as `(key, value)` by the key it is
-  joined on: `friend` is `(person, friend)`, so `join(friend, (_, req, f) -> …)`
+  joined on: `friend` is `(person, friend)`, so `join(friend, (_, (req, f)) -> …)`
   reads as "for each friend". Map back to `((fields), ())` only where a step needs
   a whole-row key.
 - **Destructuring.** Lambdas name what they take apart:

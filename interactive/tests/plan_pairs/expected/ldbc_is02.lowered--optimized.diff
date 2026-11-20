@@ -5,12 +5,12 @@
  let answer_map = top | map((rid, (rank, (_, (id, created, root)))) -> (id, (rid, rank, created, root)));
  let answer_idx = answer_map | arrange;
 -let message_idx2 = message | arrange;
--let answer_join = answer_idx | join(message_idx2, (id, (rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
-+let answer_join = answer_idx | join(message_idx, (id, (rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _)) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
+-let answer_join = answer_idx | join(message_idx2, (id, ((rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _))) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
++let answer_join = answer_idx | join(message_idx, (id, ((rid, rank, created, root), (_, _, _, _, content, image, _, _, _, _, _, _, _))) -> (root, (rid, rank, id, ((content len, 0) gt, content, image) select, created)));
  let answer_idx2 = answer_join | arrange;
 -let message_idx3 = message | arrange;
--let answer_join2 = answer_idx2 | join(message_idx3, (root, (rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (op, (rid, rank, id, body, created, root)));
-+let answer_join2 = answer_idx2 | join(message_idx, (root, (rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _)) -> (op, (rid, rank, id, body, created, root)));
+-let answer_join2 = answer_idx2 | join(message_idx3, (root, ((rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _))) -> (op, (rid, rank, id, body, created, root)));
++let answer_join2 = answer_idx2 | join(message_idx, (root, ((rid, rank, id, body, created), (_, _, op, _, _, _, _, _, _, _, _, _, _))) -> (op, (rid, rank, id, body, created, root)));
  let answer_idx3 = answer_join2 | arrange;
  let person_idx = person | arrange;
- let answer = answer_idx3 | join(person_idx, (op, (rid, rank, id, body, created, root), (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, rank), (id, body, created, root, op, first, last)));
+ let answer = answer_idx3 | join(person_idx, (op, ((rid, rank, id, body, created, root), (first, last, _, _, _, _, _, _, _, _, _))) -> ((rid, rank), (id, body, created, root, op, first, last)));

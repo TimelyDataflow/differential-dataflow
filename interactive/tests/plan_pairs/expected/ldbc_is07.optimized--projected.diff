@@ -17,4 +17,4 @@
 +let marked = marked_map + marked_map3;
  let marked_idx = marked | arrange;
  let person_idx = person | arrange;
- let ranked_join = marked_idx | join(person_idx, (who, ((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((created neg, who), (id, text, first, last, k))));
+ let ranked_join = marked_idx | join(person_idx, (who, (((rid, id, text, created), k), (first, last, _, _, _, _, _, _, _, _, _))) -> (rid, ((created neg, who), (id, text, first, last, k))));

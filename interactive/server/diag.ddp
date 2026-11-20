@@ -13,7 +13,7 @@ let placed = operator | filter((_, (program, _, _, _)) -> (program, "diag") ne)
                       | map((key, (program, statement, _, _)) -> (key, (program, statement)));
 
 -- Nanoseconds scheduled: by live operators where they are, plus by operators that have shut down.
-let timed = time | join(placed, (_, (), place) -> (place, ()))
+let timed = time | join(placed, (_, ((), place)) -> (place, ()))
           + (retired | filter(((_, program, _, _), ()) -> (program, "diag") ne)
                      | map(((_, program, statement, _), ()) -> ((program, statement), ())));
 
@@ -21,7 +21,7 @@ output "time_by_statement" = timed | count;
 output "time_by_program" = timed | map(((program, _), ()) -> (program, ())) | count;
 
 -- Updates the arrangements hold, by where they are.
-output "records_by_statement" = records | join(placed, (_, (), place) -> (place, ())) | count;
+output "records_by_statement" = records | join(placed, (_, ((), place)) -> (place, ())) | count;
 
 -- Live operators per program.
 output "operators_by_program" = placed | map((_, (program, _)) -> (program, ())) | count;

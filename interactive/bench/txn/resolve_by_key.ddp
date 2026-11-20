@@ -14,10 +14,10 @@ let wid = wr_all | map(((wid, k), v) -> (wid, (k, v)));
 -- ((k), (tag, id, value)): tag 1 a read and its expected value, tag 0 a write.
 let read_entries = reads | map(((rid, k), e) -> (k, (1, rid, e)));
 -- The store row of each key read, as a write older than any of this epoch's.
-let store_entries = read_entries | join(store, (k, _, (sw, v)) -> (k, (0, sw, v)));
+let store_entries = read_entries | join(store, (k, (_, (sw, v))) -> (k, (0, sw, v)));
 
 res: {
-    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let wr_bad = wid | join(rollback, (wid, (kv, ())) -> (wid, kv));
     let writes = wid + (wr_bad | negate);
     let write_entries = writes | map((wid, (k, v)) -> (k, (0, wid, v)));
 
@@ -37,12 +37,12 @@ res: {
 }
 
 let rb = res::rollback;
-let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let wbad = wid | join(rb, (wid, (kv, ())) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
 let latest = committed | map((wid, (k, v)) -> (k, (wid neg, v))) | min;
 let new_rows = latest | map((k, (nw, v)) -> (k, (nw neg, v)));
-let old_rows = latest | join(store, (k, _, (sw, sv)) -> (k, (sw, sv)));
+let old_rows = latest | join(store, (k, (_, (sw, sv))) -> (k, (sw, sv)));
 
 output "rollback" = rb;
 output "delta" = new_rows + (old_rows | negate);

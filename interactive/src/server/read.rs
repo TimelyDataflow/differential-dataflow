@@ -169,7 +169,7 @@ impl Published {
         });
         let keys = CorgiBackend::arrange(stream.as_collection());
         let target = Arr { arranged: self.0.import_named(scope, "PeekImport"), since: point.clone() };
-        let project = crate::ir::Lambda::new("let (k, _, v) = input in (k, v)".into(), &corgi::Scope::default());
+        let project = crate::ir::Lambda::new("let (k, (_, v)) = input in (k, v)".into(), &corgi::Scope::default());
         CorgiBackend::join(keys, target, &project, ((shape.0.clone(), corgi::Shape::Unit), shape.clone()))
     }
 }

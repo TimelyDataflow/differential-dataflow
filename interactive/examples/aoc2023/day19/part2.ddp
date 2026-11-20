@@ -8,7 +8,7 @@ let rules = input 0 : ((int, int, int, int, int, int), ()) | map(((st, prio, f, 
 
 flow: {
     let cur = reg | map(((st, prio, xl, xh, ml, mh, al, ah, sl, sh), ()) -> ((st, prio), (xl, xh, ml, mh, al, ah, sl, sh)));
-    let b1 = cur | join(rules, (_, (xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, nx)) ->
+    let b1 = cur | join(rules, (_, ((xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, nx))) ->
           let isgt = (cmp, 1) eq in
           let islt = (cmp, 0) eq in
           let up = (v, 1) add in
@@ -22,7 +22,7 @@ flow: {
             (((f, 2) eq, islt) all, (dn, ah) min, ah) select,
             (((f, 3) eq, isgt) all, (up, sl) max, sl) select,
             (((f, 3) eq, islt) all, (dn, sh) min, sh) select), ()));
-    let b2 = cur | join(rules, ((st, prio), (xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, _)) ->
+    let b2 = cur | join(rules, ((st, prio), ((xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, _))) ->
           let isgt = (cmp, 1) eq in
           let islt = (cmp, 0) eq in
           ((st, (prio, 1) add,

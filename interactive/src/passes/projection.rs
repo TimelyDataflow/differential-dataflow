@@ -546,7 +546,7 @@ fn build_scope(
                                 builder.edge(id, key);
                             }
                         }
-                        builder.lambda(&output, &[left, right], projection);
+                        builder.lambda(&output, &[left, right], &projection.on_join_columns());
                     }
                     Node::HalfJoin {
                         stream,

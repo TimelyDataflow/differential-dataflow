@@ -19,22 +19,22 @@ let maxc = cells | map(((_, c), _) -> ((), (1000000, c) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
 let minr = cells | map(((r, _), _) -> ((), r)) | min;
 
-let seeds = (rows | map((r, _) -> ((), r)) | join(minc, (_, r, m) -> ((r, m, 0, 0, r), ())))
-          + (rows | map((r, _) -> ((), r)) | join(maxc, (_, r, m) -> ((r, m, 1, 1, r), ())))
-          + (cols | map((c, _) -> ((), c)) | join(minr, (_, c, m) -> ((m, c, 3, 3, c), ())))
-          + (cols | map((c, _) -> ((), c)) | join(maxc, (_, c, m) -> ((m, c, 2, 2, c), ())));
+let seeds = (rows | map((r, _) -> ((), r)) | join(minc, (_, (r, m)) -> ((r, m, 0, 0, r), ())))
+          + (rows | map((r, _) -> ((), r)) | join(maxc, (_, (r, m)) -> ((r, m, 1, 1, r), ())))
+          + (cols | map((c, _) -> ((), c)) | join(minr, (_, (c, m)) -> ((m, c, 3, 3, c), ())))
+          + (cols | map((c, _) -> ((), c)) | join(maxc, (_, (c, m)) -> ((m, c, 2, 2, c), ())));
 -- key (r, c, dir, sd, si)
 
 beam: {
     let onsym = l | map(((r, c, d, sd, si), _) -> ((r, c), (d, sd, si)))
-        | join(cells, ((r, c), (d, sd, si), s) -> ((d, s), (r, c, sd, si)));
+        | join(cells, ((r, c), ((d, sd, si), s)) -> ((d, s), (r, c, sd, si)));
     -- ((dir, sym), (r, c, sd, si))
-    let next = onsym | join(shift, (_, (r, c, sd, si), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd, sd, si), ()));
+    let next = onsym | join(shift, (_, ((r, c, sd, si), (dr, dc, nd))) -> (((r, dr) add, (c, dc) add, nd, sd, si), ()));
     set l = seeds + next | distinct;
 }
 
 let energized = beam::l | map(((r, c, _, sd, si), _) -> ((r, c), (sd, si)))
-    | join(cells, ((r, c), (sd, si), _) -> ((r, c, sd, si), ())) | distinct
+    | join(cells, ((r, c), ((sd, si), _)) -> ((r, c, sd, si), ())) | distinct
     | map(((_, _, sd, si), _) -> ((sd, si), ())) | count;
 -- ((sd, si), n)
 

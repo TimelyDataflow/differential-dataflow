@@ -12,7 +12,7 @@ const REPROS: [(&str, &str); 8] = [
     ("F2",
     r#"let rows = input 0 : (int, int);
         s: {
-            let step = x | join(rows, (k,l,r) -> (k,l));
+            let step = x | join(rows, (k,(l,r)) -> (k,l));
             set x = (rows + step) | min;
         }
         let dead = rows | map((k,v) -> (v,k));
@@ -32,7 +32,7 @@ const REPROS: [(&str, &str); 8] = [
             var x : (int, int);
             inner: {
                 let mapped = ::rows | map((k, v) -> (v, k));
-                let joined = mapped | join(::rows, (k, l, r) -> (k, l));
+                let joined = mapped | join(::rows, (k, (l, r)) -> (k, l));
                 let reduced = joined | min;
             }
             set x = inner::reduced;
@@ -42,7 +42,7 @@ const REPROS: [(&str, &str); 8] = [
     ("local arrangements survive ancestor reuse without structural cleanup (seed 20864)",
     r#"let rows = input 0 : (int, int);
         let twice = rows | arrange | arrange;
-        let joined = rows | join(twice, (k, l, r) -> (k, l));
+        let joined = rows | join(twice, (k, (l, r)) -> (k, l));
         child: { let idx = ::rows | arrange; var x : (int, int); set x = idx; }
         output "root" = joined;
         output "child" = child::x;"#),

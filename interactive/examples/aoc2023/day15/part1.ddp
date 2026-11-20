@@ -12,14 +12,14 @@ let ktab = chars | map(_ -> ((), ())) | distinct
 
 hash: {
     let t = st | map(((r, i, h), _) -> ((r, (i, 1) add), h))
-        | join(chars, ((r, i), h, c) -> ((), (r, i, ((h, c) add, 17) mul)));
+        | join(chars, ((r, i), (h, c)) -> ((), (r, i, ((h, c) add, 17) mul)));
     -- ((), (r, i, t))
-    let next = t | join(ktab, (_, (r, i, t), k) -> ((r, i, (t, (256, k) mul) sub), ()))
+    let next = t | join(ktab, (_, ((r, i, t), k)) -> ((r, i, (t, (256, k) mul) sub), ()))
         | filter(((_, _, t), _) -> ((t, 0) ge, (t, 256) lt) all);
     set st = (lens | map((r, _) -> ((r, 0, 0), ()))) + next | distinct;
 }
 
 output "result" = hash::st | map(((r, i, h), _) -> (r, (i, h)))
-    | join(lens, (r, (i, h), n) -> (r, (i, h, n))) | filter((_, (i, _, n)) -> (i, n) eq)
+    | join(lens, (r, ((i, h), n)) -> (r, (i, h, n))) | filter((_, (i, _, n)) -> (i, n) eq)
     | map((_, (_, h, _)) -> ((), h)) | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part1);

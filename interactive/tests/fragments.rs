@@ -278,7 +278,7 @@ fn direct_first_join_reads_the_key_and_carries_it_when_rekeyed() {
     let source = format!("{projection:?}");
     let graph = corgi::parse_ml_in(&source[1..source.len()-1], &corgi::Scope::default()).unwrap();
     let got = corgi::eval_graph(&graph, corgi::Value::Prod(vec![
-        corgi::Value::int([10]), corgi::Value::int([20]), corgi::Value::int([30]),
+        corgi::Value::int([10]), corgi::Value::Prod(vec![corgi::Value::int([20]), corgi::Value::int([30])]),
     ]));
     // y becomes the key. x leaves the key and must survive in the value with z.
     assert_eq!(got, corgi::Value::Prod(vec![corgi::Value::int([20]),

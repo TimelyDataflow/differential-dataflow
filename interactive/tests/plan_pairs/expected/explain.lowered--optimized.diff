@@ -37,7 +37,7 @@
 -    let item_map5 = item_map4 | map((k, v) -> ((k, v), ()));
 -    let item_idx2 = item_map5 | arrange;
 -    let item_reduce2 = item_idx2 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
-+    let item_join = ::input0_map_idx | join(item_idx, (k, v, r) -> (k, ()));
++    let item_join = ::input0_map_idx | join(item_idx, (k, (v, r)) -> (k, ()));
 +    let item_map2 = item_join | map((k, v) -> (k.0, k.1));
 +    let item_map3 = item_map2 | map((a, b) -> ((a, (b)), ()));
 +    let item_idx2 = item_map3 | arrange;
@@ -61,7 +61,7 @@
 -    let item_map14 = demand_set_0 | map((k, v) -> ((k, v), ()));
 -    let item_idx5 = item_map13 | arrange;
 -    let item_idx6 = item_map14 | arrange;
--    let item_join = item_idx5 | join(item_idx6, (k, v, r) -> (k, ()));
+-    let item_join = item_idx5 | join(item_idx6, (k, (v, r)) -> (k, ()));
 -    let item_map15 = item_join | map((k, v) -> (k.0, k.1));
 -    let item_map16 = item_map15 | map((k, v) -> (k, (v)));
 -    let item_map17 = item_map16 | map((k, v) -> ((k, v), ()));
@@ -94,7 +94,7 @@
 -    let item_map31 = item_map30 | map((k, v) -> (k, ((), v.1)));
 -    let item_idx13 = item_map31 | arrange;
 -    let item_idx14 = item_rows | arrange;
--    let item_join2 = item_idx13 | join(item_idx14, (k, v, r) -> (k, (r.0, v.1)));
+-    let item_join2 = item_idx13 | join(item_idx14, (k, (v, r)) -> (k, (r.0, v.1)));
 -    let item_map32 = item_join2 | map((k, v) -> (k, (v.0, v.1)));
 -    let item_map33 = item_map32 | map((k, v) -> ((k, v), ()));
 -    let item_idx15 = item_map33 | arrange;
@@ -109,14 +109,14 @@
 -    let item_map38 = item_map36 | map((k, v) -> (k, ((), v.1)));
 -    let item_idx17 = item_map38 | arrange;
 -    let item_idx18 = item_map37 | arrange;
--    let item_join3 = item_idx17 | join(item_idx18, (k, v, r) -> (r.0, (r.1, v.1)));
+-    let item_join3 = item_idx17 | join(item_idx18, (k, (v, r)) -> (r.0, (r.1, v.1)));
 -    let item_map39 = item_join3 | map((k, v) -> (k, (v.0, v.1)));
 -    let item_map40 = item_map39 | map((k, v) -> (k, v.0));
 -    let item_map41 = item_map40 | map((k, v) -> ((k, v), ()));
 -    let item_map42 = item_map2 | map((k, v) -> ((k, v), ()));
 -    let item_idx19 = item_map41 | arrange;
 -    let item_idx20 = item_map42 | arrange;
--    let item_join4 = item_idx19 | join(item_idx20, (k, v, r) -> (k, ()));
+-    let item_join4 = item_idx19 | join(item_idx20, (k, (v, r)) -> (k, ()));
 -    let item_map43 = item_join4 | map((k, v) -> (k.0, k.1));
 -    let item_rows3 = demand_set_0 + item_map43;
 -    let item_map44 = item_rows3 | map((k, v) -> ((k, v), ()));
@@ -126,7 +126,7 @@
 -    set demand_set_0 = item_map45;
 +    let item_rows = ::rows_map2_map_idx_reduce_map + item_map6;
 +    let item_idx4 = item_rows | arrange;
-+    let item_join2 = ::query_map_idx_reduce_map_map_idx | join(item_idx4, (k, v, r) -> (k, (r.0, v.1)));
++    let item_join2 = ::query_map_idx_reduce_map_map_idx | join(item_idx4, (k, (v, r)) -> (k, (r.0, v.1)));
 +    let item_map7 = item_join2 | map((k, v) -> ((k, v), ()));
 +    let item_idx5 = item_map7 | arrange;
 +    let item_reduce3 = item_idx5 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
@@ -136,10 +136,10 @@
 +    let item_map9 = item_reduce4 | map((k, v) -> (k.0, k.1));
 +    let item_idx6 = item_map9 | arrange;
 +    let item_idx7 = item_map8 | arrange;
-+    let item_join3 = item_idx6 | join(item_idx7, (k, v, r) -> (r.0, (r.1, v.1)));
++    let item_join3 = item_idx6 | join(item_idx7, (k, (v, r)) -> (r.0, (r.1, v.1)));
 +    let item_map10 = item_join3 | map((a, (b, _)) -> ((a, b), ()));
 +    let item_idx8 = item_map10 | arrange;
-+    let item_join4 = item_idx8 | join(::input0_map_idx_reduce_map_map2_idx, (k, v, r) -> (k, ()));
++    let item_join4 = item_idx8 | join(::input0_map_idx_reduce_map_map2_idx, (k, (v, r)) -> (k, ()));
 +    let item_map11 = item_join4 | map((k, v) -> (k.0, k.1));
 +    let item_rows3 = demand_set_0 + item_map11;
 +    let item_map12 = item_rows3 | map((k, v) -> ((k, v), ()));

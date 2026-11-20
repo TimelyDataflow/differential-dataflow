@@ -69,6 +69,7 @@ impl Printer<'_> {
                 };
                 format!("{} | {word}({})", self.expression(input)?, self.parsed_lambda(l)?)
             }
+            Expr::Join(left, right, l) if l.returns_input() => format!("{} | join({})", self.expression(left)?, self.expression(right)?),
             Expr::Join(left, right, l) => format!("{} | join({}, {})", self.expression(left)?, self.expression(right)?, self.parsed_lambda(l)?),
             Expr::HalfJoin(stream, arrangement, strict, l) => format!("{} | half_join({}, {}, {})", self.expression(stream)?, self.expression(arrangement)?, u8::from(*strict), self.parsed_lambda(l)?),
             Expr::Reduce(input, reducer) => {

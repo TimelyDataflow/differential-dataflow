@@ -11,12 +11,12 @@ res: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var rollback;
     let rollback_idx = rollback | arrange;
-    let wr_bad = ::wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
+    let wr_bad = ::wid_idx | join(rollback_idx, (wid, (kv, ())) -> (wid, kv));
     let writes_neg = wr_bad | negate;
     let writes = ::wid + writes_neg;
     let wk = writes | map((wid, (k, v)) -> (k, (wid, v)));
     let wk_idx = wk | arrange;
-    let pairs_join = ::rk_idx | join(wk_idx, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
+    let pairs_join = ::rk_idx | join(wk_idx, (k, ((rid, e), (wid, v))) -> ((k, rid, e), (wid, v)));
     let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
     let best_idx = best_rows | arrange;
     let best = best_idx | reduce(limit 1, (_, a) -> (((), a head.0.1), 1) enlist);
@@ -24,7 +24,7 @@ res: {
     let unseen_rows = best | map(((k, rid, _), _) -> ((rid, k), ())) | negate;
     let unseen = ::rkk + unseen_rows;
     let unseen_idx = unseen | arrange;
-    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), (), e) -> ((rid, e), ()));
+    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), ((), e)) -> ((rid, e), ()));
     let bad_absent = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> (rid, ()));
     let rollback_rows = bad_seen + bad_absent;
     let rollback_idx2 = rollback_rows | arrange;
@@ -33,7 +33,7 @@ res: {
 }
 let rb = res::rollback;
 let rb_idx = rb | arrange;
-let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
+let wbad = wid_idx | join(rb_idx, (wid, (kv, ())) -> (wid, kv));
 let committed_neg = wbad | negate;
 let committed = wid + committed_neg;
 let current_map = committed | map((wid, (k, v)) -> (k, (wid neg, v)));

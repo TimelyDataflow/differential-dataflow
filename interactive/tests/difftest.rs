@@ -135,7 +135,7 @@ struct Let {
 enum Op {
     /// An op whose text is fixed, and the shape after it (to know when it may be dropped).
     Plain { text: String, same_shape: bool },
-    /// `join(other, (k, l, r) -> body)`, kept in parts so a delta join can swap the sides.
+    /// `join(other, (k, (l, r)) -> body)`, kept in parts so a delta join can swap the sides.
     Join { other: String, k: String, l: String, r: String, body: String },
 }
 
@@ -259,7 +259,7 @@ fn render_let(l: &Let, delta: bool, indent: &str) -> String {
                         "(({text} | lift | half_join({other}, 0, ({k}, {lp}, {r}) -> {body})) + ({other} | lift | half_join({text}, 1, ({k}, {r}, {lp}) -> {body}))) | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v))"
                     );
                 } else {
-                    text = format!("{text} | join({other}, ({k}, {lp}, {r}) -> {body})");
+                    text = format!("{text} | join({other}, ({k}, ({lp}, {r})) -> {body})");
                 }
             }
         }
@@ -1530,7 +1530,7 @@ let roots = input 1 : (int, ());
 left: {
     var reached : (int, ());
     let edges_idx = ::edges | arrange;
-    let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+    let step = reached | join(edges_idx, (_, ((), dst)) -> (dst, ()));
     set reached = (::roots + step) | distinct;
     let rows = ::edges + edges_idx;
 }
@@ -1540,7 +1540,7 @@ outer: {
     right: {
         var reached : (int, ());
         let edges_idx = ::edges | arrange;
-        let step = reached | join(edges_idx, (_, (), dst) -> (dst, ()));
+        let step = reached | join(edges_idx, (_, ((), dst)) -> (dst, ()));
         set reached = (outer::starts + step) | distinct;
     }
     set again = right::reached | filter((_, ()) -> 0);
@@ -1581,9 +1581,9 @@ outer: {
         let flat = filtered | flatmap((k, src) -> (k, (0, src)) enlist) | map((dst, (_, src)) -> (src, dst));
         let doubled = flat + flat;
         let once = doubled + (flat | negate);
-        let paired = once | join(::edges, (src, dst, _) -> (src, dst));
+        let paired = once | join(::edges, (src, (dst, _)) -> (src, dst));
         let reduced = paired | min;
-        let step = reached | join(reduced, (_, (), dst) -> (dst, ()));
+        let step = reached | join(reduced, (_, ((), dst)) -> (dst, ()));
         set reached = (::roots + outer::again + step) | distinct;
     }
     set again = inner::reached | filter((_, ()) -> 0);

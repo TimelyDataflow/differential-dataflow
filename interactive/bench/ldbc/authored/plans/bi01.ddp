@@ -23,12 +23,12 @@ let per_day = classified | join_function(((day, year, kind, cat), (_, length)) -
 let cutoff = request | map(((rid, end), ()) -> (rid, (end, ((end, 86400000) div, 86400000) mul)));
 let whole  = cutoff | map((rid, (_, day)) -> ((), (rid, day)))
                     | join(per_day | map(((day, year, kind, cat, c), v) -> ((), (day, year, kind, cat, c, v))),
-                           (_, (rid, cut), (day, year, kind, cat, c, v)) -> ((rid, cut, day), (year, kind, cat, c, v)))
+                           (_, ((rid, cut), (day, year, kind, cat, c, v))) -> ((rid, cut, day), (year, kind, cat, c, v)))
                     | filter(((_, cut, day), _) -> (day, cut) lt)
                     | join_function(((rid, _, _), (year, kind, cat, c, v)) -> (((rid, year, kind, cat, c), ()), 0, v) enlist);
 let part   = cutoff | map((rid, (end, day)) -> (day, (rid, end)))
                     | join(classified | map(((day, year, kind, cat), (created, length)) -> (day, (year, kind, cat, created, length))),
-                           (_, (rid, end), (year, kind, cat, created, length)) -> ((rid, year, kind, cat), (created, end, length)))
+                           (_, ((rid, end), (year, kind, cat, created, length))) -> ((rid, year, kind, cat), (created, end, length)))
                     | filter((_, (created, end, _)) -> (created, end) lt)
                     | join_function(((rid, year, kind, cat), (_, _, length)) ->
                           ((((rid, year, kind, cat, 0), ()), 0, 1) enlist, (((rid, year, kind, cat, 1), ()), 0, length) enlist) append);
@@ -42,7 +42,7 @@ let groups = sums | map(((rid, year, kind, cat, c), v) -> ((rid, year, kind, cat
 let total  = sums | filter(((_, _, _, _, c), _) -> (c, 0) eq)
                   | join_function(((rid, _, _, _, _), n) -> ((rid, ()), 0, n) enlist) | count;
 let ranked = groups | map(((rid, year, kind, cat), (n, s)) -> (rid, (year, kind, cat, n, s)))
-                    | join(total, (rid, (year, kind, cat, n, s), all) -> (rid, ((year neg, kind, cat), (n, s, all))))
+                    | join(total, (rid, ((year, kind, cat, n, s), all)) -> (rid, ((year neg, kind, cat), (n, s, all))))
                     | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((neg_year, kind, cat), (n, s, all)))) -> ((rid, rank),
                  (neg_year neg, kind, cat, n, (s to_float, n to_float) div, s, ((n, 100) mul to_float, all to_float) div)));

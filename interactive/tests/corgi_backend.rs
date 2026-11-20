@@ -306,3 +306,39 @@ fn reregistering_a_function_replaces_it() {
     assert!(std::sync::Arc::ptr_eq(&second, &interactive::lambda::lookup("reregistered").unwrap()));
     assert!(std::panic::catch_unwind(|| register("min", vec![], corgi::Shape::Int, Ok)).is_err());
 }
+
+#[test]
+fn join_projects_the_same_row_as_map() {
+    use interactive::server::{host_time, Server};
+
+    timely::execute_directly(|worker| {
+        let source = r#"
+            let l = input 0 : (int, int);
+            let r = input 1 : (int, (int, int));
+            let pairs = l | join(r);
+            output "pairs" = pairs;
+            output "identity" = l | join(r, row -> row);
+            output "mapped" = pairs | map((k, (x, (y, z))) -> (y, (z, k, x)));
+            output "projected" = l | join(r, (k, (x, (y, z))) -> (y, (z, k, x)));
+        "#;
+        let mut server = Server::new();
+        let mut program = lower::lower_tree(parse::pipe::parse(source));
+        interactive::passes::optimize(&mut program);
+        server.install(worker, "p", &program).unwrap();
+        server.feed("p", 0, "1 val=10 diff=2\n2 val=20", 0).unwrap();
+        server.feed("p", 1, "1 val=tuple(3,4) diff=3", 0).unwrap();
+        server.feed("p", 0, "1 val=10 diff=-1", 1).unwrap();
+        for input in [0, 1] { server.advance_input("p", input, &host_time(2)).unwrap(); }
+        for (t, diff) in [(0, 6), (1, 3)] {
+            for (name, key, val) in [
+                ("pairs", "1", "tuple(10,tuple(3,4))"),
+                ("identity", "1", "tuple(10,tuple(3,4))"),
+                ("mapped", "3", "tuple(4,1,10)"),
+                ("projected", "3", "tuple(4,1,10)"),
+            ] {
+                let rows = server.snapshot_as_of(worker, &format!("p::{name}"), &host_time(t)).unwrap().rows();
+                assert_eq!(rows, vec![(key.into(), val.into(), diff)], "{name} at {t}");
+            }
+        }
+    });
+}

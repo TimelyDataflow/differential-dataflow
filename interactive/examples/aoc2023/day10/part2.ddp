@@ -24,22 +24,22 @@ let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, n) -> (n, 2) eq)
     | map(((r, c, r2, c2), _) -> ((r, c), (r2, c2)));
 
 reach: {
-    let next = r | join(symm, (_, (), rc) -> (rc, ()));
+    let next = r | join(symm, (_, ((), rc)) -> (rc, ()));
     set r = (scell | map(((r, c), _) -> ((r, c), ()))) + next | distinct;
 }
 let loop = reach::r;
 -- key (r, c) of loop cells (incl. S)
 
 -- loop cells whose ORIGINAL symbol toggles parity (S resolves to '???': never)
-let toggles = loop | join(symbols, (rc, _, s) -> (rc, s))
+let toggles = loop | join(symbols, (rc, (_, s)) -> (rc, s))
     | filter((_, s) -> ((s, 74) eq, (s, 45) eq, (s, 124) eq, (s, 70) eq) any)
     | map((rc, _) -> (rc, ()));
 
 status: {
-    let cur = st | map(((r, c, e), _) -> ((r, c), e)) | join(symbols, (rc, e, _) -> (rc, e));
+    let cur = st | map(((r, c, e), _) -> ((r, c), e)) | join(symbols, (rc, (e, _)) -> (rc, e));
     -- in-grid status cells ((r, c), e)
-    let tog = cur | join(toggles, ((r, c), e, _) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
-    let matched = cur | join(toggles, (rc, e, _) -> (rc, e));
+    let tog = cur | join(toggles, ((r, c), (e, _)) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
+    let matched = cur | join(toggles, (rc, (e, _)) -> (rc, e));
     let nontog = (cur - matched) | map(((r, c), e) -> (((r, 1) add, (c, 1) add, e), ()));
     set st = (symbols | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) any) | map(((r, c), _) -> ((r, c, 0), ()))) + tog + nontog | distinct;
 }
@@ -49,10 +49,10 @@ let enclosed = status::st | filter(((_, _, e), _) -> (e, 1) eq) | map(((r, c, _)
 -- pipe = reach minus S cells with no symm out-edge (slt keeps those countable)
 let ssrc = symm | map((rc, _) -> (rc, ())) | distinct;
 let scellk = scell | map(((r, c), _) -> ((r, c), ()));
-let isoS = scellk - (scellk | join(ssrc, (rc, _, _) -> (rc, ())));
+let isoS = scellk - (scellk | join(ssrc, (rc, (_, _)) -> (rc, ())));
 let pipe = loop - isoS;
 
 -- set-minus needs an anti-join: bare `-` is multiset subtraction and lets
 -- non-enclosed pipe cells cancel unrelated enclosed cells in the count.
-let enc_on_pipe = enclosed | join(pipe, (rc, _, _) -> (rc, ()));
+let enc_on_pipe = enclosed | join(pipe, (rc, (_, _)) -> (rc, ()));
 output "result" = (enclosed - enc_on_pipe) | map(_ -> ((), ())) | count | arrange | inspect(part2);

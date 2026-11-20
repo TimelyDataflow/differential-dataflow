@@ -30,7 +30,7 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
             {name}: {{
                 let seed_{name} = {input} | map((k_{name}, v_{name}) -> (k_{name}, ()));
                 inner_{name}: {{
-                    let step_{name} = reach_{name} | join({input}, (k_{name}, v_{name}, w_{name}) -> (w_{name}, ()));
+                    let step_{name} = reach_{name} | join({input}, (k_{name}, (v_{name}, w_{name})) -> (w_{name}, ()));
                     set reach_{name} = (seed_{name} + step_{name}) | distinct;
                 }}
                 let out_{name} = inner_{name}::reach_{name};

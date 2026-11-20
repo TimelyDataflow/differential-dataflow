@@ -16,7 +16,7 @@ let members = groups | map((grp, who) -> (grp inject Group, who));
 let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
 barring: {
    var barred : (Member, int);     -- member -> doc: expanded blocked list.
-   let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
+   let beyond = barred | join(members, (_grp, (doc, who)) -> (who, doc));
    set barred = blocks | map((doc, who) -> (who, doc)) + beyond | distinct;
 }
 
@@ -25,7 +25,7 @@ output "access" = sharing::allowed;
 sharing: {
    var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
    set allowed = offered
-               - (offered | join(barred, (pair, acc, ()) -> (pair, acc)))
+               - (offered | join(barred, (pair, (acc, ())) -> (pair, acc)))
                | min;
 
    let offered = grants | map((doc, (who, acc)) -> ((who, doc), acc))
@@ -33,5 +33,5 @@ sharing: {
 
    let inherited = allowed
          | map(((who, doc), acc) -> (who, (doc, acc)))
-         | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
+         | join(members, (_grp, ((doc, acc), who)) -> ((who, doc), acc));
 }

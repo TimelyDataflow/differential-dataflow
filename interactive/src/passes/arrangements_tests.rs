@@ -169,7 +169,7 @@ fn batched_statements_keep_sibling_names_and_dependencies() {
             let b = ::x | map((k, v) -> (k, v neg));
             let c = a + b;
         }
-        third: { let a = first::c | join(second::c, (k, a, b) -> (k, (a, b) add)); }
+        third: { let a = first::c | join(second::c, (k, (a, b)) -> (k, (a, b) add)); }
         output "first" = first::c;
         output "second" = second::c;
         output "third" = third::a;
@@ -194,7 +194,7 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
                 let idx = mapped | arrange;
             }
             let mixed = variant + ::rows;
-            let joined = mixed | join(::rows, (k, l, r) -> (k, l));
+            let joined = mixed | join(::rows, (k, (l, r)) -> (k, l));
             let reduced = joined | min;
             set x = ::rows;
         }
@@ -215,7 +215,7 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
     "#, hoist(), 0);
     let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };
     assert!(matches!(child.items[0], Item::Op(Node::HalfJoin { .. })));
-    for (input, removed) in [("::x", 0), ("::x | join(::x, (k, l, r) -> (k, l))", 1)] {
+    for (input, removed) in [("::x", 0), ("::x | join(::x, (k, (l, r)) -> (k, l))", 1)] {
         let p = rewrite(&format!(r#"
             let x = input 0 : (int, int);
             child: {{

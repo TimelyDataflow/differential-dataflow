@@ -10,18 +10,18 @@ let friend           = import "graph::friend"           : (int, (int, int));  --
 
 -- People interested in the tag: (rid, person).
 let fans    = request | map(((rid, name), ()) -> (name, rid))
-                      | join(tag_by_name, (_, rid, t) -> (t, rid))
-                      | join(interest_by_tag, (_, rid, who) -> ((rid, who), ()));   -- one tag; (person, tag) is a set
+                      | join(tag_by_name, (_, (rid, t)) -> (t, rid))
+                      | join(interest_by_tag, (_, (rid, who)) -> ((rid, who), ()));   -- one tag; (person, tag) is a set
 
 -- Each fan's friends, as both ends of a path: (rid, shared friend) -> fan.
-let reach   = fans | map(((rid, who), ()) -> (who, rid)) | join(friend, (who, rid, (mid, _)) -> ((rid, mid), who));
-let paths   = reach | join(reach, ((rid, _), one, other) -> ((rid, one, other), ()))
+let reach   = fans | map(((rid, who), ()) -> (who, rid)) | join(friend, (who, (rid, (mid, _))) -> ((rid, mid), who));
+let paths   = reach | join(reach, ((rid, _), (one, other)) -> ((rid, one, other), ()))
                     | filter(((_, one, other), ()) -> (one, other) ne);
 
 -- Drop pairs who are already friends (both are fans, so `reach` holds their
 -- friendships), count shared friends, rank.
 let known   = reach | map(((rid, mid), who) -> ((rid, who, mid), ()));
-let fresh   = paths - (paths | join(known, (key, (), ()) -> (key, ())));
+let fresh   = paths - (paths | join(known, (key, ((), ())) -> (key, ())));
 let pairs   = fresh | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.

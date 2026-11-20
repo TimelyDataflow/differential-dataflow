@@ -20,13 +20,13 @@ let wid = wr_all | map(((wid, k), v) -> (wid, (k, v)));
 
 res: {
     -- writes of transactions not (currently) rolled back: anti-join on id.
-    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let wr_bad = wid | join(rollback, (wid, (kv, ())) -> (wid, kv));
     let writes = wid + (wr_bad | negate);
 
     -- each read paired with every surviving prior write to its key ...
     let wk = writes | map((wid, (k, v)) -> (k, (wid, v)));
     let rk = reads  | map(((rid, k), e) -> (k, (rid, e)));
-    let pairs = rk | join(wk, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)))
+    let pairs = rk | join(wk, (k, ((rid, e), (wid, v))) -> ((k, rid, e), (wid, v)))
               | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
     -- ... and the LATEST prior write wins: min over (-wid, v).
     let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
@@ -38,14 +38,14 @@ res: {
     let seen   = best | map(((k, rid, _), _) -> ((rid, k), ()));
     let rkk    = reads | map((rk, _) -> (rk, ()));
     let unseen = rkk + (seen | negate);
-    let bad_absent = unseen | join(reads, ((rid, _), (), e) -> ((rid, e), ()))
+    let bad_absent = unseen | join(reads, ((rid, _), ((), e)) -> ((rid, e), ()))
                    | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> (rid, ()));
 
     set rollback = (bad_seen + bad_absent) | distinct;
 }
 
 let rb = res::rollback;
-let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let wbad = wid | join(rb, (wid, (kv, ())) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
 -- ((k), (-wid, v)): each key's latest committed write.

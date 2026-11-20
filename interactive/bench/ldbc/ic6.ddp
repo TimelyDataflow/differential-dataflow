@@ -6,17 +6,17 @@ let message = import "graph::message" : (int, (int, int, int));
 let tagged = import "graph::tagged" : (int, List(int));
 -- Reachable rows: (request_id, origin, author, tag_name), deduplicated across paths.
 let one = request | map(((rid, pid, tag), ()) -> (pid, (rid, tag)))
-    | join(edge, (pid, (rid, tag), (q, _)) -> ((rid, pid, q, tag), ()));
+    | join(edge, (pid, ((rid, tag), (q, _))) -> ((rid, pid, q, tag), ()));
 let two = one | map(((rid, origin, author, tag), ()) -> (author, (rid, origin, tag)))
-    | join(edge, (_, (rid, origin, tag), (q, _)) -> ((rid, origin, q, tag), ()));
+    | join(edge, (_, ((rid, origin, tag), (q, _))) -> ((rid, origin, q, tag), ()));
 let authors = (one + two) | filter(((_, origin, author, _), ()) -> (origin, author) ne) | distinct;
 let posts = message | filter((_, (kind, _, _)) -> (kind, 0) eq) | map((id, (_, creator, _)) -> (creator, id));
 let candidates = authors | map(((rid, _, author, tag), ()) -> (author, (rid, tag)))
-    | join(posts, (_, req, m) -> (m, req));
-let selected = candidates | join(tagged, (m, (rid, tag), name) -> ((rid, m, tag, name), ()))
+    | join(posts, (_, (req, m)) -> (m, req));
+let selected = candidates | join(tagged, (m, ((rid, tag), name)) -> ((rid, m, tag, name), ()))
     | filter(((_, _, tag, name), ()) -> (tag, name) eq) | map(((rid, m, tag, _), ()) -> ((rid, m, tag), ())) | distinct;
 let counts = selected | map(((rid, m, tag), ()) -> (m, (rid, tag)))
-    | join(tagged, (_, (rid, tag), name) -> ((rid, name, tag), ()))
+    | join(tagged, (_, ((rid, tag), name)) -> ((rid, name, tag), ()))
     | filter(((_, name, tag), ()) -> (name, tag) ne) | map(((rid, name, _), ()) -> ((rid, name), ())) | count;
 output "answer" = counts | map(((rid, name), n) -> (rid, (n neg, name)))
     | collect | flatmap((k, vs) -> (k, ((0, vs len) range, vs) zip) cap_list) | filter((_, (pos, _)) -> (pos, 10) lt)

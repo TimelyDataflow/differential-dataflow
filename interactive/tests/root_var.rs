@@ -28,7 +28,7 @@ fn run(src: &'static str, epochs: Vec<Vec<&'static str>>) -> Vec<(Vec<(String, S
 const REMEMBER: &str = r#"
     let x = input 0 : (int, ());
     var seen : (int, ());
-    let fresh = x - (x | join(seen, (k, (), ()) -> (k, ())));
+    let fresh = x - (x | join(seen, (k, ((), ())) -> (k, ())));
     set seen = seen + fresh;
     output "seen" = seen;
     output "fresh" = fresh;

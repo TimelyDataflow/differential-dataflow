@@ -23,15 +23,15 @@
      var rollback;
 -    let wid_idx = ::wid | arrange;
      let rollback_idx = rollback | arrange;
--    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
-+    let wr_bad = ::wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
+-    let wr_bad = wid_idx | join(rollback_idx, (wid, (kv, ())) -> (wid, kv));
++    let wr_bad = ::wid_idx | join(rollback_idx, (wid, (kv, ())) -> (wid, kv));
      let writes_neg = wr_bad | negate;
      let writes = ::wid + writes_neg;
      let wk = writes | map((wid, (k, v)) -> (k, (wid, v)));
 -    let rk_idx = ::rk | arrange;
      let wk_idx = wk | arrange;
--    let pairs_join = rk_idx | join(wk_idx, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)));
-+    let pairs_join = ::rk_idx | join(wk_idx, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)));
+-    let pairs_join = rk_idx | join(wk_idx, (k, ((rid, e), (wid, v))) -> ((k, rid, e), (wid neg, v)));
++    let pairs_join = ::rk_idx | join(wk_idx, (k, ((rid, e), (wid, v))) -> ((k, rid, e), (wid neg, v)));
      let pairs = pairs_join | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
      let best_rows = pairs + ::base;
      let best_idx = best_rows | arrange;
@@ -47,10 +47,10 @@
 +    let unseen = ::rkk + unseen_rows;
      let unseen_idx = unseen | arrange;
 -    let reads_idx = ::reads | arrange;
--    let bad_absent_join = unseen_idx | join(reads_idx, ((rid, _), (), e) -> ((rid, e), ()));
+-    let bad_absent_join = unseen_idx | join(reads_idx, ((rid, _), ((), e)) -> ((rid, e), ()));
 -    let bad_absent_filter = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne);
 -    let bad_absent = bad_absent_filter | map(((rid, _), ()) -> (rid, ()));
-+    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), (), e) -> ((rid, e), ()));
++    let bad_absent_join = unseen_idx | join(::reads_idx, ((rid, _), ((), e)) -> ((rid, e), ()));
 +    let bad_absent = bad_absent_join | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> (rid, ()));
      let rollback_rows = bad_seen + bad_absent;
      let rollback_idx2 = rollback_rows | arrange;
@@ -60,15 +60,15 @@
  let rb = res::rollback;
 -let wid_idx = wid | arrange;
  let rb_idx = rb | arrange;
- let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
+ let wbad = wid_idx | join(rb_idx, (wid, (kv, ())) -> (wid, kv));
  let committed_neg = wbad | negate;
 @@ -53,8 +45,7 @@
  let latest_idx = latest_map | arrange;
  let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map((k, (nw, v)) -> (k, (nw neg, v)));
 -let store_idx2 = store | arrange;
--let old_rows = latest | join(store_idx2, (k, _, (sw, sv)) -> (k, (sw, sv)));
-+let old_rows = latest | join(store_idx, (k, _, (sw, sv)) -> (k, (sw, sv)));
+-let old_rows = latest | join(store_idx2, (k, (_, (sw, sv))) -> (k, (sw, sv)));
++let old_rows = latest | join(store_idx, (k, (_, (sw, sv))) -> (k, (sw, sv)));
  let delta_neg = old_rows | negate;
  let delta_rows = new_rows + delta_neg;
  -- Renderer: build an export arrangement.

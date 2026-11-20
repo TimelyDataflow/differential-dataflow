@@ -4,7 +4,7 @@ let request = input 0 : ((int, int), ());                    -- (rid, person)
 let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
 
 let answer  = request | map(((rid, who), ()) -> (who, rid))
-                      | join(person, (_, rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _)) ->
+                      | join(person, (_, (rid, (first, last, gender, birthday, created, ip, browser, city, _, _, _))) ->
                              ((rid, 0), (first, last, birthday, ip, browser, city, gender, created)));
 
 output "answer" = answer | arrange;

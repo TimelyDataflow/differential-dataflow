@@ -409,8 +409,9 @@ impl Printer<'_> {
             }
             Node::Concat(refs) => refs.iter().map(|r| names.of(r)).collect::<Vec<_>>().join(" + "),
             Node::Arrange(r) => format!("{} | arrange", names.of(r)),
+            Node::Join { left, right, projection } if projection.returns_input() => format!("{} | join({})", names.of(left), names.of(right)),
             Node::Join { left, right, projection } => {
-                let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, l.val, r.val]));
+                let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
                 format!("{} | join({}, {})", names.of(left), names.of(right), self.lambda(projection, input)?)
             }
             Node::HalfJoin { stream, arrangement, strict, projection } => {
@@ -543,12 +544,31 @@ mod tests {
     }
 
     #[test]
+    fn identity_joins_print_without_a_projection() {
+        for (args, explicit) in [
+            ("b", false),
+            ("b, x -> x", false),
+            ("b, (k, (l, r)) -> (k, (r, l))", true),
+        ] {
+            let text = format!(r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
+                output "out" = a | join({args});"#);
+            let report = plan(&text);
+            for stage in DdpStage::ALL {
+                let printed = report.emit_ddp_at(stage).unwrap().text;
+                let join_args = printed.split_once("| join(").unwrap().1.split_once(';').unwrap().0;
+                assert_eq!(join_args.contains(" -> "), explicit, "{stage:?}: {printed}");
+                assert!(report.compare_final(&plan(&printed)).is_empty(), "{stage:?}: {printed}");
+            }
+        }
+    }
+
+    #[test]
     fn fused_names_and_generated_names_do_not_collide() {
         let output = roundtrip(r#"
             let x = input 0 : (int, int);
             let result_idx = x | map((k, v) -> (v, k));
             let intermediate = x | filter((k, _) -> (k, 0) gt);
-            let result = intermediate | map((k, v) -> (k, v)) | join(result_idx, (k, x, y) -> (k, (x, y)));
+            let result = intermediate | map((k, v) -> (k, v)) | join(result_idx);
             output "out" = result;
         "#);
         assert!(output.contains("let result_idx ="));
@@ -662,7 +682,7 @@ mod tests {
             let early = rows | map((k, v) -> (v, k));
             let late = rows | filter((k, v) -> (k, v) lt);
             let between = rows | map((k, v) -> (k, v neg));
-            child: { let pair = ::early | join(::late, (k, a, b) -> (k, (a, b))); }
+            child: { let pair = ::early | join(::late); }
             output "out" = child::pair;
             output "between" = between;"#;
         let printed = roundtrip(text);

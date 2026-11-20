@@ -15,7 +15,7 @@ let hands = input 0 : ((int, int, int, int, int, int, int), ()) | map(((id, c1, 
     ((), (id, t, v1, v2, v3, v4, v5, bid)));
 -- ((), (id, t, v1..v5, bid))
 
-let less = hands | join(hands, (_, (_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2, r3, r4, r5, r6, _)) -> ((
+let less = hands | join(hands, (_, ((_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2, r3, r4, r5, r6, _))) -> ((
     ((l1, r1) lt, 1, ((l1, r1) gt, 0,
     ((l2, r2) lt, 1, ((l2, r2) gt, 0,
     ((l3, r3) lt, 1, ((l3, r3) gt, 0,
@@ -31,7 +31,7 @@ let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> (id,
 let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 
 -- ranks misses the weakest hand (zero smaller); add every bid once instead.
-let above = ranks | join(bids, (id, n, bid) -> (id, (n, bid) mul));
+let above = ranks | join(bids, (id, (n, bid)) -> (id, (n, bid) mul));
 
 output "result" = above + bids
     | map((_, x) -> ((), x)) | collect

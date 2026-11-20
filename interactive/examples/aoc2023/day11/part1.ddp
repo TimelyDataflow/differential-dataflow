@@ -16,15 +16,15 @@ let gk = g | map(((r, c), _) -> ((), (r, c)));
 let rgk = row_gaps | map((r, _) -> ((), r));
 let cgk = col_gaps | map((c, _) -> ((), c));
 
-let rcnt = gk | join(rgk, (_, (r, c), gr) -> ((r, c), gr)) | filter(((r, _), gr) -> (gr, r) lt) | map((rc, _) -> (rc, ())) | count;
-let radj = (rcnt | map((rc, n) -> (rc, (1, n) mul))) + ((g - (g | join(rcnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
-let ccnt = gk | join(cgk, (_, (r, c), gc) -> ((r, c), gc)) | filter(((_, c), gc) -> (gc, c) lt) | map((rc, _) -> (rc, ())) | count;
-let cadj = (ccnt | map((rc, n) -> (rc, (1, n) mul))) + ((g - (g | join(ccnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
+let rcnt = gk | join(rgk, (_, ((r, c), gr)) -> ((r, c), gr)) | filter(((r, _), gr) -> (gr, r) lt) | map((rc, _) -> (rc, ())) | count;
+let radj = (rcnt | map((rc, n) -> (rc, (1, n) mul))) + ((g - (g | join(rcnt, (rc, (_, _)) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
+let ccnt = gk | join(cgk, (_, ((r, c), gc)) -> ((r, c), gc)) | filter(((_, c), gc) -> (gc, c) lt) | map((rc, _) -> (rc, ())) | count;
+let cadj = (ccnt | map((rc, n) -> (rc, (1, n) mul))) + ((g - (g | join(ccnt, (rc, (_, _)) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
 
-let gal = radj | join(cadj, ((r, c), dr, dc) -> (((r, dr) add, (c, dc) add), ()));
+let gal = radj | join(cadj, ((r, c), (dr, dc)) -> (((r, dr) add, (c, dc) add), ()));
 let gs = gal | map(((r, c), _) -> ((), (r, c)));
 
-let contrib = gs | join(gs, (_, (r1, c1), (r2, c2)) -> ((),
+let contrib = gs | join(gs, (_, ((r1, c1), (r2, c2))) -> ((),
     (((r1, r2) lt, ((r1, r2) eq, (c1, c2) lt) all) any,
        (((r1, r2) lt, (r2, r1) sub, (r1, r2) sub) select,
         ((c1, c2) lt, (c2, c1) sub, (c1, c2) sub) select) add,

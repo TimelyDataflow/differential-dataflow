@@ -12,4 +12,4 @@
 +let posts = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
  let mtag_idx = mtag | arrange;
  let tag_idx = tag | arrange;
- let tags = mtag_idx | join(tag_idx, (t, m, (name, _)) -> (m, (t, name)));
+ let tags = mtag_idx | join(tag_idx, (t, (m, (name, _))) -> (m, (t, name)));

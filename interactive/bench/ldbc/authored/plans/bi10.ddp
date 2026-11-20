@@ -22,7 +22,7 @@ let starts = request | map(((rid, who, _, _, _, most), ()) -> ((rid, most, who, 
 search: {
     let grow   = search | filter(((_, most, _, d), ()) -> (d, most) lt)
                         | map(((rid, most, node, d), ()) -> (node, (rid, most, d)))
-                        | join(friend, (_, (rid, most, d), (next, _)) -> ((rid, most, next, (d, 1) add), ()));
+                        | join(friend, (_, ((rid, most, d), (next, _))) -> ((rid, most, next, (d, 1) add), ()));
     set search = (starts + grow) | map(((rid, most, node, d), ()) -> ((rid, most, node), d)) | min
                                  | map(((rid, most, node), d) -> ((rid, most, node, d), ()));
 }
@@ -30,24 +30,24 @@ search: {
 -- People in range whose city is in the country.
 let asked  = request | map(((rid, who, country, _, least, _), ()) -> (rid, (who, country, least)));
 let people = search::search | map(((rid, _, node, d), ()) -> (rid, (node, d)))
-                            | join(asked, (rid, (node, d), (who, country, least)) -> (node, (rid, d, who, country, least)))
+                            | join(asked, (rid, ((node, d), (who, country, least))) -> (node, (rid, d, who, country, least)))
                             | filter((node, (_, d, who, _, least)) -> ((d, least) ge, (node, who) ne) all)
-                            | join(person, (node, (rid, _, _, country, _), (_, _, _, _, _, _, _, city, _, _, _)) -> (city, (rid, node, country)))
-                            | join(place, (_, (rid, node, country), (_, _, up)) -> (up, (rid, node, country)))
-                            | join(place, (_, (rid, node, country), (kname, _, _)) -> ((rid, node), (country, kname)))
+                            | join(person, (node, ((rid, _, _, country, _), (_, _, _, _, _, _, _, city, _, _, _))) -> (city, (rid, node, country)))
+                            | join(place, (_, ((rid, node, country), (_, _, up))) -> (up, (rid, node, country)))
+                            | join(place, (_, ((rid, node, country), (kname, _, _))) -> ((rid, node), (country, kname)))
                             | filter((_, (country, kname)) -> (country, kname) eq)
                             | map((key, _) -> (key, ()));
 
 -- The class's messages, by author, kept if the author qualifies; then all their tags.
 let inclass = request | map(((rid, _, _, cls, _, _), ()) -> (cls, rid))
-                      | join(class_id, (_, rid, c) -> (c, rid))
-                      | join(in_class, (_, rid, t) -> (t, rid))
-                      | join(tagged, (_, rid, m) -> ((rid, m), ())) | distinct
+                      | join(class_id, (_, (rid, c)) -> (c, rid))
+                      | join(in_class, (_, (rid, t)) -> (t, rid))
+                      | join(tagged, (_, (rid, m)) -> ((rid, m), ())) | distinct
                       | map(((rid, m), ()) -> (m, rid))
-                      | join(message, (m, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> ((rid, who), m))
-                      | join(people, ((rid, who), m, ()) -> (m, (rid, who)));
-let counts  = inclass | join(tags_of, (_, (rid, who), t) -> (t, (rid, who)))
-                      | join(tag, (_, (rid, who), (name, _)) -> ((rid, who, name), ())) | count;
+                      | join(message, (m, (rid, (_, _, who, _, _, _, _, _, _, _, _, _, _))) -> ((rid, who), m))
+                      | join(people, ((rid, who), (m, ())) -> (m, (rid, who)));
+let counts  = inclass | join(tags_of, (_, ((rid, who), t)) -> (t, (rid, who)))
+                      | join(tag, (_, ((rid, who), (name, _))) -> ((rid, who, name), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | map(((rid, who, name), n) -> (rid, (n neg, name, who)))

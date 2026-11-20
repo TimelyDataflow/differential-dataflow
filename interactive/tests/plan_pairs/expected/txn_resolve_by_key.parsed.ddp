@@ -4,9 +4,9 @@ let reads = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), e)
 let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), v) -> ((wid, k), v));
 let wid = wr_all | map(((wid, k), v) -> (wid, (k, v)));
 let read_entries = reads | map(((rid, k), e) -> (k, (1, rid, e)));
-let store_entries = read_entries | join(store, (k, _, (sw, v)) -> (k, (0, sw, v)));
+let store_entries = read_entries | join(store, (k, (_, (sw, v))) -> (k, (0, sw, v)));
 res: {
-    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let wr_bad = wid | join(rollback, (wid, (kv, ())) -> (wid, kv));
     let writes = wid + (wr_bad | negate);
     let write_entries = writes | map((wid, (k, v)) -> (k, (0, wid, v)));
     let bad = read_entries + store_entries + write_entries | reduce((_, vals) -> let entries = vals map ((e, _) -> e) in
@@ -21,10 +21,10 @@ res: {
     set rollback = bad | map((_, rid) -> (rid, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 let rb = res::rollback;
-let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let wbad = wid | join(rb, (wid, (kv, ())) -> (wid, kv));
 let committed = wid + (wbad | negate);
 let latest = committed | map((wid, (k, v)) -> (k, (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let new_rows = latest | map((k, (nw, v)) -> (k, (nw neg, v)));
-let old_rows = latest | join(store, (k, _, (sw, sv)) -> (k, (sw, sv)));
+let old_rows = latest | join(store, (k, (_, (sw, sv))) -> (k, (sw, sv)));
 output "rollback" = rb;
 output "delta" = new_rows + (old_rows | negate);

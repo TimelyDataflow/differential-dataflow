@@ -14,14 +14,14 @@ let cubcol = cubesN | map(((r, c), _) -> (c, r));          -- (c, rc)
 
 -- nearest cube above each rock
 let b = os | map(((r, c), _) -> (c, r))
-    | join(cubcol, (c, r, rc) -> ((c, r), rc))
+    | join(cubcol, (c, (r, rc)) -> ((c, r), rc))
     | filter(((_, r), rc) -> (rc, r) lt)
     | map(((c, r), rc) -> ((r, c), (1000000, rc) sub)) | min
     | map((rc, v) -> (rc, (1000000, v) sub));
 -- ((r, c), b)
 
 let seg = b | map(((r, c), b) -> ((c, b), r));           -- ((c, b), r)
-let cnt = seg | join(seg, ((c, b), r, r2) -> ((c, b, r), r2))
+let cnt = seg | join(seg, ((c, b), (r, r2)) -> ((c, b, r), r2))
     | filter(((_, _, r), r2) -> (r2, r) le) | map((k, _) -> (k, ())) | count;
 -- ((c, b, r), n): rank incl. self
 let rolled = cnt | map(((c, b, _), n) -> (((b, n) add, c), ()));    -- (newr, c)
@@ -29,6 +29,6 @@ let rolled = cnt | map(((c, b, _), n) -> (((b, n) add, c), ()));    -- (newr, c)
 let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
 output "result" = rolled | map(((r, _), _) -> ((), r))
-    | join(maxr, (_, r, m) -> ((), ((1, m) add, r) sub))
+    | join(maxr, (_, (r, m)) -> ((), ((1, m) add, r) sub))
     | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part1);

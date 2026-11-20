@@ -51,13 +51,13 @@ let language = input 16 : ((int, List(int)), ());
 output "language.by_person" = language | map(((person, value), ()) -> (person, value)) | arrange;
 let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
-let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t))) | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
+let friends = either | join(exists, (a, ((b, t), ())) -> (b, (a, t))) | join(exists, (b, ((a, t), ())) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
 output "friend" = friends | arrange;
 output "friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
 let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
 let replies = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq) | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
 thread: {
-    let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, root, child) -> ((child, root), ()));
+    let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, (root, child)) -> ((child, root), ()));
     set thread = posts + below | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 }
 output "message.root" = thread::thread | map(((mid, root), ()) -> (mid, root)) | arrange;

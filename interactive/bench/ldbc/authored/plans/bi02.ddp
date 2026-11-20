@@ -12,18 +12,18 @@ let tagged   = import "graph::mtag.by_tag"   : (int, int);                     -
 let class_id = import "graph::tagclass.by_name" : (List(int), int);            -- (name, id)
 
 -- ((class, day), (tag name, created)) for every tagged message, and each class's days.
-let byday   = tag | join(tagged, (_, (name, cls), m) -> (m, (cls, name)))
-                  | join(message, (_, (cls, name), (_, created, _, _, _, _, _, _, _, _, _, _, day)) -> ((cls, day), (name, created)));
+let byday   = tag | join(tagged, (_, ((name, cls), m)) -> (m, (cls, name)))
+                  | join(message, (_, ((cls, name), (_, created, _, _, _, _, _, _, _, _, _, _, day))) -> ((cls, day), (name, created)));
 let days    = byday | map(((cls, day), _) -> ((cls, day), ())) | distinct | map(((cls, day), ()) -> (cls, day));
 
 -- The request's class and its 200 window days (days with a message of the class).
 let wanted  = request | map(((rid, date, name), ()) -> (name, (rid, date)))
-                      | join(class_id, (_, (rid, date), cls) -> (cls, (rid, date)))
-                      | join(days, (cls, (rid, date), day) -> ((cls, day), (rid, date)))
+                      | join(class_id, (_, ((rid, date), cls)) -> (cls, (rid, date)))
+                      | join(days, (cls, ((rid, date), day)) -> ((cls, day), (rid, date)))
                       | filter(((_, day), (_, date)) -> ((day, ((date, 86400000) div, 86400000) mul) ge, (day, (date, 17280000000) add) lt) all);
 
 -- Count each tag's messages in the two halves.
-let halves  = wanted | join(byday, (_, (rid, date), (name, created)) -> ((rid, name), (created, date)))
+let halves  = wanted | join(byday, (_, ((rid, date), (name, created))) -> ((rid, name), (created, date)))
                      | filter((_, (created, date)) -> ((created, date) ge, (created, (date, 17280000000) add) lt) all)
                      | map((key, (created, date)) -> (key, ((created, (date, 8640000000) add) lt, (1, 0), (0, 1)) select));
 let counts  = halves | map(((rid, name), (a, _)) -> ((rid, name, a), ())) | count
