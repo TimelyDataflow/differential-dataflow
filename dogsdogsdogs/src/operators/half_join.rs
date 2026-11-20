@@ -23,8 +23,8 @@ use timely::{Container, ContainerBuilder};
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
-use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::generic::OutputBuilderSession;
+use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 
@@ -90,7 +90,21 @@ where
     let arrangement_stream = arrangement.stream;
 
     let scope = stream.scope();
-    stream.binary_frontier(arrangement_stream, pact, Pipeline, "HalfJoin", move |_, info| {
+    let mut builder = OperatorBuilder::new("HalfJoin".to_owned(), scope);
+    let info = builder.operator_info();
+    let mut input1 = builder.new_input(stream, pact);
+    let mut input2 = builder.new_input(arrangement_stream, Pipeline);
+    // The operator holds capabilities exactly while it has staged or deferred updates, which is
+    // the only state in which an arrangement frontier advance can release work. It never holds
+    // physical compaction, and the logical compaction it delays while idle is a permission the
+    // trace may use later, so it need not run on frontier advances otherwise.
+    let interest = differential_dataflow::idle::reader_interest(&scope);
+    builder.set_notify_for(0, interest);
+    builder.set_notify_for(1, interest);
+    let (output, stream) = builder.new_output();
+    let mut output = OutputBuilder::<Tr::Time, NoopBuilder<C>>::from(output);
+
+    builder.build(move |_capabilities| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = scope.activator_for(info.address);
@@ -103,10 +117,12 @@ where
         // tactic, yields output containers, shipped stamped with all of the paired capabilities.
         let mut todo: VecDeque<(CapabilitySet<Tr::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
-        move |(input1, frontier1), (input2, frontier2), output| {
+        move |frontiers| {
 
+            let (frontier1, frontier2) = (&frontiers[0], &frontiers[1]);
             // The driver ships only finished containers, so it pins the operator output to `NoopBuilder<C>`.
-            let output: &mut OutputBuilderSession<'_, Tr::Time, NoopBuilder<C>> = output;
+            let mut output = output.activate();
+            let output: &mut OutputBuilderSession<'_, Tr::Time, NoopBuilder<C>> = &mut output;
 
             // Stage all arriving updates, retaining capabilities that cover them.
             input1.for_each(|capability, data| {
@@ -162,7 +178,9 @@ where
             // If no updates incoming, no updates held in `batcher`, and no work in `todo`, we can drop the trace.
             if frontier1.is_empty() && caps.is_empty() && todo.is_empty() { arrangement_trace = None; }
         }
-    })
+    });
+
+    stream
 }
 
 /// The proxy half-join tactic and backend trait, built over differential's `int_proxy` surface.

@@ -25,8 +25,25 @@ use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
 pub struct TraceAgent<Tr: TraceReader> {
-    trace: Rc<RefCell<trace_box::TraceBox<Tr>>>,
+    inner: TraceIntra<Tr>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
+}
+
+/// Shared trace access without a channel for importing into another dataflow.
+///
+/// Created by `arrange_intra` or by giving up a [`TraceAgent`]'s channel with `into_intra`.
+/// Compaction holds and logging behave like those of `TraceAgent`.
+///
+/// ```compile_fail,E0599
+/// use differential_dataflow::operators::arrange::TraceIntra;
+/// use differential_dataflow::trace::implementations::ValSpine;
+/// fn cannot_import(mut trace: TraceIntra<ValSpine<u64, u64, u64, isize>>,
+///                  scope: timely::dataflow::Scope<'_, u64>) {
+///     trace.import(scope);
+/// }
+/// ```
+pub struct TraceIntra<Tr: TraceReader> {
+    trace: Rc<RefCell<trace_box::TraceBox<Tr>>>,
     logical_compaction: Antichain<Tr::Time>,
     physical_compaction: Antichain<Tr::Time>,
     temp_antichain: Antichain<Tr::Time>,
@@ -35,7 +52,7 @@ pub struct TraceAgent<Tr: TraceReader> {
     logging: Option<crate::logging::Logger>,
 }
 
-impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
+impl<Tr: TraceReader> TraceReader for TraceIntra<Tr> {
 
     type Time = Tr::Time;
     type Batch = Tr::Batch;
@@ -83,9 +100,8 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             );
         }
 
-        let reader = TraceAgent {
+        let inner = TraceIntra {
             trace: Rc::clone(&trace),
-            queues: Rc::downgrade(&queues),
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
             temp_antichain: Antichain::new(),
@@ -93,6 +109,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             logging,
         };
 
+        let reader = TraceAgent { inner, queues: Rc::downgrade(&queues) };
         let writer = TraceWriter::new(
             vec![Tr::Time::minimum()],
             Rc::downgrade(&trace),
@@ -114,7 +131,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
 
         // add the existing batches from the trace
         let mut upper = None;
-        self.trace
+        self.inner.trace
             .borrow_mut()
             .trace
             .map_spans(|span| {
@@ -136,6 +153,21 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         reference
     }
 
+    /// Gives up this handle's channel, retaining its trace and compaction holds.
+    ///
+    /// This does not change the writer's frontier interest or affect other `TraceAgent` clones.
+    pub fn into_intra(self) -> TraceIntra<Tr> { self.inner }
+
+    /// The [OperatorInfo] of the underlying Timely operator.
+    pub fn operator(&self) -> &OperatorInfo { self.inner.operator() }
+
+    /// See [`TraceIntra::trace_box_unstable`] for the caller's obligations.
+    pub fn trace_box_unstable(&self) -> Rc<RefCell<trace_box::TraceBox<Tr>>> {
+        self.inner.trace_box_unstable()
+    }
+}
+
+impl<Tr: TraceReader> TraceIntra<Tr> {
     /// The [OperatorInfo] of the underlying Timely operator
     pub fn operator(&self) -> &OperatorInfo {
         &self.operator
@@ -481,6 +513,22 @@ impl<T> ShutdownButton<T> {
 }
 
 impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
+    fn clone(&self) -> Self { Self { inner: self.inner.clone(), queues: self.queues.clone() } }
+}
+
+impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
+    type Time = Tr::Time;
+    type Batch = Tr::Batch;
+
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.inner.set_logical_compaction(frontier); }
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.inner.get_logical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.inner.set_physical_compaction(frontier); }
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.inner.get_physical_compaction() }
+    fn spans_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Span<Tr::Time, Tr::Batch>>> { self.inner.spans_through(frontier) }
+    fn map_spans<F: FnMut(&Span<Tr::Time, Tr::Batch>)>(&self, f: F) { self.inner.map_spans(f); }
+}
+
+impl<Tr: TraceReader> Clone for TraceIntra<Tr> {
     fn clone(&self) -> Self {
 
         if let Some(logging) = &self.logging {
@@ -494,9 +542,8 @@ impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
         self.trace.borrow_mut().adjust_logical_compaction(empty_frontier.borrow(), self.logical_compaction.borrow());
         self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
 
-        TraceAgent {
+        TraceIntra {
             trace: Rc::clone(&self.trace),
-            queues: Weak::clone(&self.queues),
             logical_compaction: self.logical_compaction.clone(),
             physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
@@ -506,7 +553,7 @@ impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
     }
 }
 
-impl<Tr: TraceReader> Drop for TraceAgent<Tr> {
+impl<Tr: TraceReader> Drop for TraceIntra<Tr> {
     fn drop(&mut self) {
 
         if let Some(logging) = &self.logging {
