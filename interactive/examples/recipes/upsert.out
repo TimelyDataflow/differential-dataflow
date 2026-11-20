@@ -1,0 +1,33 @@
+_1 ok installed "upsert"
+_2 ok fed "upsert" input 0 at t=0
+_3 ok fed "upsert" input 0 at t=0
+_4 ok sealed "upsert" input 0 to 1
+_5 ok sealed "upsert" input 1 to 1
+_6 data 1 val=10
+_6 data 2 val=20
+_6 ok as-of=0
+_7 ok fed "upsert" input 0 at t=1
+_8 ok fed "upsert" input 0 at t=1
+_9 ok sealed "upsert" input 0 to 2
+_10 ok sealed "upsert" input 1 to 2
+_11 data 1 val=11
+_11 data 2 val=20
+_11 data 3 val=30
+_11 ok as-of=1
+_12 ok fed "upsert" input 1 at t=2
+_13 ok fed "upsert" input 0 at t=2
+_14 ok fed "upsert" input 0 at t=2
+_15 ok sealed "upsert" input 0 to 3
+_16 ok sealed "upsert" input 1 to 3
+_17 data 1 val=11
+_17 data 3 val=31
+_17 ok as-of=2
+_18 ok sealed "upsert" input 0 to 4
+_19 ok sealed "upsert" input 1 to 4
+_20 data 1 val=11
+_20 data 3 val=31
+_20 ok as-of=3
+_21 data 1 val=10
+_21 data 2 val=20
+_21 ok as-of=0
+_22 ok bye

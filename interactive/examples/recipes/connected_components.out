@@ -1,0 +1,27 @@
+_1 ok installed "cc"
+_2 ok fed "cc" input 0 at t=0
+_3 ok fed "cc" input 0 at t=0
+_4 ok fed "cc" input 0 at t=0
+_5 ok sealed "cc" input 0 to 1
+_6 data 1 val=1
+_6 data 2 val=1
+_6 data 3 val=1
+_6 data 4 val=4
+_6 data 5 val=4
+_6 ok as-of=0
+_7 ok fed "cc" input 0 at t=1
+_8 ok sealed "cc" input 0 to 2
+_9 data 1 val=1
+_9 data 2 val=1
+_9 data 3 val=1
+_9 data 4 val=1
+_9 data 5 val=1
+_9 ok as-of=1
+_10 ok fed "cc" input 0 at t=2
+_11 ok sealed "cc" input 0 to 3
+_12 data 2 val=2
+_12 data 3 val=2
+_12 data 4 val=2
+_12 data 5 val=2
+_12 ok as-of=2
+_13 ok bye

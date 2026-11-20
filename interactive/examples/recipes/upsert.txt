@@ -1,0 +1,34 @@
+# Upsert with a root feedback variable: see upsert.ddp.
+# Run from interactive/: ddir_server < examples/recipes/upsert.txt
+load upsert from examples/recipes/upsert.ddp
+
+# Time 0: put keys 1 and 2.
+feed upsert 0 1 val=10 time=0
+feed upsert 0 2 val=20 time=0
+seal upsert 0 1
+seal upsert 1 1
+peek upsert::table
+
+# Time 1: overwrite key 1, and add key 3.
+feed upsert 0 1 val=11 time=1
+feed upsert 0 3 val=30 time=1
+seal upsert 0 2
+seal upsert 1 2
+peek upsert::table
+
+# Time 2: delete key 2, and put key 3 twice: the least value wins.
+feed upsert 1 2 time=2
+feed upsert 0 3 val=33 time=2
+feed upsert 0 3 val=31 time=2
+seal upsert 0 3
+seal upsert 1 3
+peek upsert::table
+
+# Time 3: no writes; the table stays as it was.
+seal upsert 0 4
+seal upsert 1 4
+peek upsert::table
+
+# Reading back in time still works.
+peek upsert::table as-of 0
+exit

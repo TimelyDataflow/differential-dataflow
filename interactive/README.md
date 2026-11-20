@@ -1,6 +1,6 @@
 # DDIR
 
-[Server command reference](server/README.md#server-command-reference)
+[Server command reference](server/README.md#server-command-reference) · [Recipes](examples/recipes/README.md)
 
 
 An interpreted language (and runtime) for computation over continually changing collections.

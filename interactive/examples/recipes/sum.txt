@@ -1,0 +1,18 @@
+# Sum per key with `count`: see sum.ddp.
+# Run from interactive/: ddir_server < examples/recipes/sum.txt
+load sum from examples/recipes/sum.ddp
+
+# Time 0: three sales at store 1, one at store 2.
+feed sum 0 1 val=5 time=0
+feed sum 0 1 val=7 time=0
+feed sum 0 1 val=7 time=0
+feed sum 0 2 val=40 time=0
+seal sum 0 1
+peek sum::total
+
+# Time 1: a refund at store 2 brings it to zero, and its row goes away.
+feed sum 0 2 val=-40 time=1
+feed sum 0 1 val=1 time=1
+seal sum 0 2
+peek sum::total
+exit
