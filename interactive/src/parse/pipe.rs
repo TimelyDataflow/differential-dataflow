@@ -58,6 +58,10 @@
 //!   each row to at least the time the lambda gives. The tuple names the epoch, then each
 //!   enclosing loop from outermost to innermost; `0` leaves a coordinate unchanged. Inside one
 //!   loop, `delay((_, n) -> (0, (256, n call bit_length) mul))` schedules by integer bit length.
+//! - `| semijoin(other)` — the rows whose key is a key of `other`, each once however many rows of
+//!   `other` share it: `join` with `other | map((k, _) -> (k, ())) | distinct`, keeping `(k, v)`.
+//!   `| antijoin(other)` — the other rows: the input less its semijoin. The two split the input
+//!   exactly, where `a - (a | join(b, …))` subtracts a row once per row of `b` with its key.
 //! - `a + b` (concat), `a - b` (concat with `b` negated). `+ b` and `- b` are stages like `| op`,
 //!   and each stage applies to everything to its left: `a | map(f) + b | distinct` is
 //!   `((a | map(f)) + b) | distinct`. To add a pipeline, parenthesize it or put it first.
@@ -713,6 +717,17 @@ impl Parser {
                 let p = self.lambda();
                 self.expect(&Token::RParen);
                 Expr::HalfJoin(Box::new(lhs), Box::new(r), strict, p)
+            },
+            Token::Ident(name) if name == "semijoin" || name == "antijoin" => {
+                let anti = name == "antijoin";
+                self.next(); self.expect(&Token::LParen);
+                let right = self.parse_pipe_expr();
+                self.expect(&Token::RParen);
+                let key = Lambda::new("let (k, _) = input in (k, ())".into(), self.lambda_scope());
+                let keys = Expr::Reduce(Box::new(Expr::Map(Box::new(right), key)), Reducer::Distinct);
+                let matched = Lambda::new("let (k, v, _) = input in (k, v)".into(), self.lambda_scope());
+                let semi = Expr::Join(Box::new(lhs.clone()), Box::new(keys), matched);
+                if anti { Expr::Concat(vec![lhs, Expr::Negate(Box::new(semi))]) } else { semi }
             },
             Token::Ident(name) if name == "join_function" => { self.next(); Expr::JoinFunction(Box::new(lhs), self.slot()) },
             Token::Ident(name) if name == "delay" => {
