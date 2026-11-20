@@ -115,7 +115,6 @@ The `time` is in the shape of the scope's time (see [Time](#time-and-scopes)), a
 | Sugar | Expansion |
 |---|---|
 | `map((k, v) -> (k2, v2))` | `join_function((k, v) -> ((k2, v2), 0, 1) enlist)` |
-| `value((k, v) -> v2)` | `map((k, v) -> (k, v2))` |
 | `filter((k, v) -> mask)` | `join_function((k, v) -> (mask, ((k, v), 0, 1)) enlist filter)` |
 | `flatmap((k, v) -> rows)` | `join_function((k, v) -> rows map (r -> (r, 0, 1)))` |
 | `negate` | `join_function((k, v) -> ((k, v), 0, -1) enlist)` |
@@ -163,11 +162,11 @@ It groups rows by key.
 | Sugar | Result per key | Expansion |
 |---|---|---|
 | `min` | the least value | `reduce(limit 1, (k, vals) -> (vals head .0, 1) enlist)` |
-| `count` | the sum of the diffs | `reduce((k, vals) -> let n = vals map ((_, d) -> d) fold_add in (n, (n, 1)) enlist filter)` |
+| `count` | the sum of the diffs | `map((k, _) -> (k, ())) \| reduce((k, vals) -> (vals head .1, 1) enlist)` |
 | `distinct` | each present value once | `reduce((k, vals) -> vals map ((v, _) -> (v, 1)))` |
 | `collect` | a `List` of the values, each repeated by its count | `reduce((k, vals) -> (vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) flatten .1, 1) enlist)` |
 
-`distinct` is lowered by whole record rather than by key when that is cheaper; the result is the same.
+When the value is not `()`, `count` drops it first and `distinct` keys by the whole record, so neither reduce reads a key's values together.
 
 `count` adds diffs, which makes it the way to sum integers: move the value into the diff with `join_function`, then `count` ([`sum`](examples/recipes/sum.ddp)).
 A key whose diffs sum to zero has no row, so a total of zero is absent.
@@ -181,10 +180,10 @@ None of them is sugar.
 | Operator | Result |
 |---|---|
 | `lift` | each value paired with its row's time: `(k, (v, t))` |
-| `lift_iter` | each value paired with the innermost loop's round |
-| `half_join(other, strict, (k, v1, v2) -> (k2, v3))` | for a lifted stream `(k, (v, t))`: each update meets `other`'s rows whose times come before `t` (strictly when `strict` is 1); `other`'s own changes produce nothing |
+| `half_join(other, strict, (k, v1, v2) -> (k2, v3))` | for a lifted stream `(k, (v, t))`: each update meets `other`'s rows whose times come before `t` (strictly when `strict`, a bool written `0` or `1`, is `1`); `other`'s own changes produce nothing |
 
 `half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/recipes/triangles.ddp) recipe.
+A loop's round is the last coordinate of `lift`'s time.
 `lift` with `delay` makes an input row count at its own time only ([`upsert`](examples/recipes/upsert.ddp)).
 
 ### Arrangements and inspection
