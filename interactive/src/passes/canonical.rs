@@ -117,7 +117,13 @@ fn compose_run(maps: &[&Lambda], input: &Shape) -> Option<Lambda> {
     let mut words = crate::lambda::base_scope();
     for f in crate::lambda::registered() { words.word(f.name(), crate::lambda::function_word(&f)).ok()?; }
     let parsed = corgi::parse_ml_in(&src, &words).ok()?;
-    if corgi::shape_of(&parsed, input).ok()? != output || canonical(&parsed, input).ok()? != **composed.graph().ok()? { return None; }
+    if corgi::shape_of(&parsed, input).ok()? != output { return None; }
+    // The printer spells the compiled graph, which corgi can simplify further than `canonical`
+    // does: a tuple rebuilt from every field of its input reads the input, inside a match arm too.
+    // Accept such a spelling when it compiles to the same graph at this input type, as
+    // `Reducer::project` does.
+    if canonical(&parsed, input).ok()? != **composed.graph().ok()?
+        && corgi::compile(parsed.clone(), input).ok()?.graph() != corgi::compile(composed.graph().ok()?.as_ref().clone(), input).ok()?.graph() { return None; }
     composed.src = src;
     // Retain the surface pattern checks after proving graph equality without them.
     // This keeps serialization and exact plan round trips faithful to the new graph.

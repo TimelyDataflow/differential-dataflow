@@ -21,7 +21,7 @@
 +let arr = arr_filter | map((id, (_, cs)) -> (id, (0, cs) get));
  eqsat: {
 -    let canon = pc | join(eq, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
--    let bsig = canon | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist) | map(((id, op), cs) -> ((op, cs), id));
+-    let bsig = canon | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist) | map(((id, op), cs) -> ((op, cs), id));
 -    let reps = bsig | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 -    let cong = bsig | join(reps, (_, id, rep) -> (id, rep));
 -    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
@@ -36,7 +36,7 @@
 +    let eq_idx = eq | arrange;
 +    let canon = pc_idx | join(eq_idx, (_, (id, op, pos), cls) -> ((id, op), (pos, cls)));
 +    let canon_idx = canon | arrange;
-+    let bsig_reduce = canon_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
++    let bsig_reduce = canon_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
 +    let bsig = bsig_reduce | map(((id, op), cs) -> ((op, cs), id));
 +    let bsig_idx = bsig | arrange;
 +    let reps = bsig_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);

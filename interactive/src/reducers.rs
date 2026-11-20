@@ -104,7 +104,7 @@ impl crate::parse::Reducer {
             Self::Min => "let first = vals head in (first.0, 1) enlist",
             Self::Distinct => "vals map ((v, _) -> (v, 1))",
             Self::Count => "let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter",
-            Self::Collect => "let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist",
+            Self::Collect => "let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist",
             Self::Expr(lambda, _) => return lambda.clone(),
         };
         Lambda::new(format!("let (_, vals) = input in {body}"), &corgi::Scope::default())
