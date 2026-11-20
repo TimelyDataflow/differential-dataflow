@@ -643,8 +643,8 @@ fn lambda_explanations_sufficient_small() {
 const SCALARS: &str = r#"
     let pairs = input 0 : (int, int);
     let counted = pairs | filter((_, v) -> (v, 3) gt) | count;
-    let lists = pairs | value((_, v) -> (v, 2) mul) | collect;
-    let flat = lists | flatmap((k, l) -> (k, l) cap_list) | value((_, x) -> x);
+    let lists = pairs | map((k, v) -> (k, (v, 2) mul)) | collect;
+    let flat = lists | flatmap((k, l) -> (k, l) cap_list);
     inner: {
         set low = (flat | filter((_, x) -> (x, 15) lt)) + (low | filter((k, _) -> (k, k) eq)) | min;
     }
@@ -678,9 +678,8 @@ fn collect_explanations_sufficient_small() {
 
 // ---------------------------------------------------------------------------
 // Explanations of loops: `delay`, a `min` in a loop, and SCC's shape at one
-// scope, with its feedback negated and not. `LinearOp::LiftIter` is synthesized
-// by the rewrite (every `$host:` export is one), so explained programs are what
-// exercise it.
+// scope, with its feedback negated and not. The rewrite writes a `lift` and a map
+// at every `$host:` export, so explained programs are what exercise `lift` in loops.
 // ---------------------------------------------------------------------------
 
 /// `delay` through the rewrite, at depth 1.

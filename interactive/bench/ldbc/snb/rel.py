@@ -385,7 +385,7 @@ class Compiler:
                     # A dedicated value-only collect avoids lists of singleton
                     # tuples and is useful for nested IC1/IC12 results.
                     assert len(aggs)==1
-                    code = f'{source_name} | map((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | value((_, (item)) -> item) | collect | map((key, values) -> ({product([*outs,"values"])}, ()))'
+                    code = f'{source_name} | map((row, ()) -> ({group_key}, {scalar(expr(e),refs)})) | collect | map((key, values) -> ({product([*outs,"values"])}, ()))'
                     self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
                     return name
                 else: raise ValueError(kind)

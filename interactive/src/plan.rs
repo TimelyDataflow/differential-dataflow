@@ -393,7 +393,6 @@ fn linear(op: &LinearOp) -> String {
         LinearOp::Project(l) => format!("map({})", source_lambda(l)),
         LinearOp::Filter(l) => format!("filter({})", source_lambda(l)),
         LinearOp::Negate => "negate".into(),
-        LinearOp::LiftIter => "lift_iter".into(),
         LinearOp::FlatMap(l) => format!("flatmap({})", source_lambda(l)),
         LinearOp::Lift => "lift".into(),
         LinearOp::JoinFunction(l) => format!("join_function({})", source_lambda(l)),
@@ -431,7 +430,7 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
                 let name = match op {
                     LinearOp::Project(_) => "map", LinearOp::Filter(_) => "filter",
                     LinearOp::FlatMap(_) => "flatmap", LinearOp::JoinFunction(_) => "join_function",
-                    LinearOp::Negate => "negate", LinearOp::Lift => "lift", LinearOp::LiftIter => "lift_iter",
+                    LinearOp::Negate => "negate", LinearOp::Lift => "lift",
                 };
                 printed.push(match op {
                     LinearOp::Project(l) | LinearOp::Filter(l) | LinearOp::FlatMap(l) | LinearOp::JoinFunction(l) =>

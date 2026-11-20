@@ -10,5 +10,5 @@ let good = games - bad;
 
 output "result" = good
     | map((game, _) -> ((), game)) | collect
-    | value((_, gs) -> gs fold_add)
+    | map((k, gs) -> (k, gs fold_add))
     | arrange | inspect(part1);

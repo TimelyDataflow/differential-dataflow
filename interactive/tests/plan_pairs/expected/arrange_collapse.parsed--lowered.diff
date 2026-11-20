@@ -4,7 +4,7 @@
 +-- Time lanes: epoch.
  let rows = input 0 : (int, ());
 -let arranged = rows | arrange | arrange;
--output "counts" = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | arrange;
+-output "counts" = arranged | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter) | arrange;
 +let rows_idx = rows | arrange;
 +let arranged = rows_idx | arrange;
 +let counts_reduce = arranged | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

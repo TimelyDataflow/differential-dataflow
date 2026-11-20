@@ -67,7 +67,7 @@ impl Plan {
             LinearOp::Filter(cond) => ("filter", Some(compile_predicate(cond, k, v))),
             LinearOp::FlatMap(list) => ("flatmap", Some(compile_flatmap(list, k, v))),
             LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level.width()))),
-            LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => ("", None),
+            LinearOp::Negate | LinearOp::Lift => ("", None),
         };
         let graph = graph.map(|g| g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}")));
         Plan { shape: (kshape, vshape), graph }
@@ -86,8 +86,7 @@ impl Plan {
 /// column + a structural explode; Negate = Rust. Every slot is columnar — there is no row-wise
 /// path inside the dataflow — and each op's graph was compiled when the operator was built
 /// (`plans`). An empty batch passes through untouched: it has no rows to compute.
-/// The data<->time ops are columnar and total: LiftIter reads the iteration coordinate out of
-/// `times` and appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction
+/// The data<->time ops are columnar and total: Lift reads every lane of `times` into `vals`; JoinFunction
 /// explodes its list column as FlatMap does and joins each element's time lanes into `times`.
 /// `level` locates the iteration coordinate and fixes the number of lanes as data.
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
@@ -126,25 +125,6 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
                     *d = -*d;
                 }
                 c
-            }
-            // A value read OUT of each row's time. Vals gain one
-            // integer field; keys, times and diffs are untouched, and no slot is compiled.
-            //
-            // A tuple gains a field, and unit is the empty tuple: columnar it arrives as
-            // `CValue::Unit`, not an empty `Prod`, so `Unit` must become `Prod([iter])`.
-            // `Prod([Unit, iter])` would be a silent one-field-too-many divergence from the
-            // shape `shapes` infers.
-            LinearOp::LiftIter => {
-                // At the root there is no iteration
-                // coordinate and the value is zero.
-                let iters: Vec<u64> = level.own_lane().map_or_else(|| vec![0; c.times.len()], |lane| c.times.lane(lane));
-                let lane = CValue::i64(iters.into_iter().map(|i| i as i64).collect());
-                let vals = match c.vals {
-                    CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
-                    CValue::Unit(_) => CValue::Prod(vec![lane]),
-                    other => CValue::Prod(vec![other, lane]),
-                };
-                CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
             // A time as data is the root coordinates and one per scope: `level.width()` lanes, zero
             // where the column is narrower. Keys, times and diffs are untouched.
@@ -309,7 +289,7 @@ impl Backend for CorgiBackend {
 
     fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: Level, (k, v): st::RowShape) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
-        // `level` is the scope depth (locates the iteration coordinate for LiftIter).
+        // `level` is the scope depth, which fixes the number of time lanes.
         // Every op compiles now, at the shape it will see.
         let steps = crate::shapes::linear_shapes(&ops, k, v, level).expect("install inferred these shapes");
         let plans: Vec<Plan> = ops.iter().zip(steps).map(|(op, (key, val))| Plan::new(op, key, val, level)).collect();

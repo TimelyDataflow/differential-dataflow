@@ -3,7 +3,7 @@
 //!
 //! **What a seed generates.** One case, the same every time for the same seed: a program over up
 //! to six declared inputs (int pairs, `(int, int)`, a list key, a declared sum, floats), with a
-//! few `let`s of `map`, `value`, `filter`, `flatmap`, `join`, `negate`, concat and difference,
+//! few `let`s of `map`, `filter`, `flatmap`, `join`, `negate`, concat and difference,
 //! `arrange`, the reductions (`distinct`, `count`, `min`, `collect`, `reduce` by a lambda),
 //! `delay` and `join_function`, and small iterative scopes (reachability or label propagation,
 //! sometimes nested); and its feeds, 3 to 30 epochs of inserts and retractions over small values,
@@ -465,18 +465,11 @@ impl Gen {
             let same_shape = |text: String| Op::Plain { text, same_shape: true };
             let roll = self.rng.below(100);
             let op = match roll {
-                0..=29 => {
+                0..=34 => {
                     let (k2, v2) = (self.shape(&env, true, false), self.shape(&env, false, false));
                     let body = format!("({}, {})", self.expr(&k2, &env, false), self.expr(&v2, &env, false));
                     let op = Op::Plain { text: format!("map({input} -> {body})"), same_shape: k2 == key && v2 == val };
                     key = k2;
-                    val = v2;
-                    op
-                }
-                30..=34 => {
-                    let v2 = self.shape(&env, false, false);
-                    let body = self.expr(&v2, &env, false);
-                    let op = Op::Plain { text: format!("value({input} -> {body})"), same_shape: v2 == val };
                     val = v2;
                     op
                 }

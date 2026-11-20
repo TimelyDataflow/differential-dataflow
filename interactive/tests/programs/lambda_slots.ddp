@@ -1,4 +1,4 @@
--- The slots that take one lambda: `value` (the value as written, with no tuple around it),
+-- The slots that take one lambda: `map` (a row to a row),
 -- `filter`, `flatmap` (complete rows, with positions explicitly zipped here) and `delay` (a row
 -- advances to the coordinate-wise maximum of its time and the tuple it names). A `--` comment
 -- may sit inside a lambda written over several lines. Declared types and the built-in `Option`
@@ -10,7 +10,7 @@ enum Outer = Wrap Inner | Opt Option(int) | Nums List(int);
 
 let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
-output "value" = pairs | value((a, b) -> ((b, 10) mul, a) add);
+output "value" = pairs | map((a, b) -> (a, ((b, 10) mul, a) add));
 output "filter" = pairs | filter((a, b) -> (a, b) lt);
 output "flatmap" = pairs | flatmap(row -> let (a, b) = row in let l = (a enlist, b enlist, (a, b) add enlist) append in (row.0, ((0, l len) range, l) zip) cap_list);
 stepped: {
@@ -18,14 +18,14 @@ stepped: {
     set counted = delayed | count;
 }
 output "delay" = stepped::counted;
-output "comment" = pairs | value((a, b) ->
+output "comment" = pairs | map((a, b) -> (a,
     -- the key and the value, added
     (a, b) add  -- one Int
-);
+));
 
-let sized = pairs | value((a, b) -> ((b, 3) gt, (b, a) inject Big, b inject Small) select);
-output "sized" = sized | value((_, s) -> s match (Small (x -> x), Big ((x, y) -> (x, y) mul)));
-let maybe = pairs | value((_, b) -> (b, (b, 3) gt) branch Option map_variant None (_ -> ()));
-output "option" = maybe | value((_, m) -> m match (None (_ -> 0), Some (x -> x)));
-let outer = pairs | value((_, b) -> b inject A inject Wrap);
-output "nested" = outer | value((_, o) -> o match (Wrap (i -> i match (A (x -> x), B (_ -> 0))), Opt (_ -> -1), Nums (_ -> -1)));
+let sized = pairs | map((a, b) -> (a, ((b, 3) gt, (b, a) inject Big, b inject Small) select));
+output "sized" = sized | map((k, s) -> (k, s match (Small (x -> x), Big ((x, y) -> (x, y) mul))));
+let maybe = pairs | map((k, b) -> (k, (b, (b, 3) gt) branch Option map_variant None (_ -> ())));
+output "option" = maybe | map((k, m) -> (k, m match (None (_ -> 0), Some (x -> x))));
+let outer = pairs | map((k, b) -> (k, b inject A inject Wrap));
+output "nested" = outer | map((k, o) -> (k, o match (Wrap (i -> i match (A (x -> x), B (_ -> 0))), Opt (_ -> -1), Nums (_ -> -1))));

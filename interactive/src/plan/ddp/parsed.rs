@@ -81,12 +81,15 @@ impl Printer<'_> {
                     // Parsed syntax has no inferred shapes. Key by the whole record,
                     // which also preserves unit-valued distinct's meaning.
                     format!("{input} | map((k, v) -> ((k, v), ())) | reduce({lambda}) | map((kv, ()) -> kv)")
+                } else if matches!(reducer, crate::parse::Reducer::Count) {
+                    // Parsed syntax has no inferred shapes. Count projects its values away.
+                    format!("{input} | map((k, _) -> (k, ())) | reduce({lambda})")
                 } else {
                     format!("{input} | reduce({}{lambda})", super::limit_text(reducer.limit()))
                 }
             }
-            Expr::Negate(input) | Expr::Lift(input) | Expr::LiftIter(input) | Expr::Arrange(input) => {
-                let word = match expr { Expr::Negate(_) => "negate", Expr::Lift(_) => "lift", Expr::LiftIter(_) => "lift_iter", _ => "arrange" };
+            Expr::Negate(input) | Expr::Lift(input) | Expr::Arrange(input) => {
+                let word = match expr { Expr::Negate(_) => "negate", Expr::Lift(_) => "lift", _ => "arrange" };
                 format!("{} | {word}", self.expression(input)?)
             }
             Expr::Inspect(input, label) => format!("{} | inspect({label})", self.expression(input)?),

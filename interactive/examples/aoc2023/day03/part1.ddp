@@ -40,5 +40,5 @@ let part_numbers = maximal | map(((r, s, _, v), _) -> ((r, s), v)) | join(active
 
 output "result" = part_numbers
     | map((_, v) -> ((), v)) | collect
-    | value((_, vs) -> vs fold_add)
+    | map((k, vs) -> (k, vs fold_add))
     | arrange | inspect(part1);

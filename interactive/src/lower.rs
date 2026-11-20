@@ -188,7 +188,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             *expr = Expr::ResolvedPath { anchor: key.anchor, target: key.target, field: key.field };
         }
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-        | Expr::Negate(e) | Expr::LiftIter(e) | Expr::FlatMap(e, _)
+        | Expr::Negate(e) | Expr::FlatMap(e, _)
         | Expr::Lift(e) | Expr::JoinFunction(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) =>
             resolve_expr(e, here, item, scopes, plan),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => {
@@ -247,7 +247,7 @@ fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
         Expr::ResolvedPath { .. } => {},
         Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
         Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-            | Expr::Negate(e) | Expr::LiftIter(e)
+            | Expr::Negate(e)
             | Expr::FlatMap(e, _) | Expr::Lift(e) | Expr::JoinFunction(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) | Expr::HalfJoin(l, r, _, _) => { expr_free_names(l, out); expr_free_names(r, out); },
@@ -310,17 +310,17 @@ pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
     let mut plan = PathPlan::default();
     resolve_body(&mut stmts, &[], &scopes, &mut plan);
     let empty = HashMap::new();
-    let mut distinct = HashMap::new();
-    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut distinct) };
+    let mut by_shape = HashMap::new();
+    let mut program = st::Program { root: lower_scope_tree(&[], &stmts, &empty, &[], &plan, true, &mut by_shape) };
     let (shapes, _) = crate::shapes::infer(&program, &|_| None, 1);
-    crate::reducers::expand_distinct(&mut program.root, &shapes, &distinct, &mut Vec::new());
+    crate::reducers::expand_by_shape(&mut program.root, &shapes, &by_shape, &mut Vec::new());
     program
 }
 
 /// Expr-lowering state for one scope. Resolves names to scope-local `Ref`s and
 /// accumulates this scope's nodes and (input/trace) imports.
 struct ScopeLower {
-    distinct: Vec<usize>,
+    by_shape: Vec<(usize, crate::reducers::ByShape)>,
     is_root: bool,
     items: Vec<st::Item>,
     /// Each item's statement name (see `st::Scope::labels`).
@@ -386,7 +386,6 @@ impl ScopeLower {
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
             Expr::Negate(e)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Negate] }) },
             Expr::FlatMap(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::FlatMap(t.clone())] }) },
-            Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
             Expr::Lift(e)       => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Lift] }) },
             Expr::JoinFunction(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::JoinFunction(t.clone())] }) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
@@ -404,11 +403,13 @@ impl ScopeLower {
             },
             Expr::Reduce(e, red)=> {
                 let r = self.lower_expr(e);
-                let a = if matches!(red, Reducer::Distinct) {
+                let a = match red {
                     // Once shapes are known, lower distinct by key or by whole record.
-                    self.distinct.push(self.items.len());
-                    r
-                } else { self.arrange(r) };
+                    Reducer::Distinct => { self.by_shape.push((self.items.len(), crate::reducers::ByShape::Distinct)); r }
+                    // Once shapes are known, project count's values away if they are not unit.
+                    Reducer::Count => { self.by_shape.push((self.items.len(), crate::reducers::ByShape::Count)); r }
+                    _ => self.arrange(r),
+                };
                 self.push(st::Node::Reduce { input: a, reducer: crate::ir::Reducer::Expr(red.lambda()), limit: red.limit() })
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
@@ -424,11 +425,11 @@ fn lower_scope_tree(
     exports_wanted: &[PathKey],
     plan: &PathPlan,
     is_root: bool,
-    distinct: &mut HashMap<Vec<String>, Vec<usize>>,
+    by_shape: &mut HashMap<Vec<String>, Vec<(usize, crate::reducers::ByShape)>>,
 ) -> st::Scope {
     let scope_name = scope_label(address);
     let mut s = ScopeLower {
-        distinct: Vec::new(),
+        by_shape: Vec::new(),
         is_root,
         items: Vec::new(),
         labels: Vec::new(),
@@ -560,7 +561,7 @@ fn lower_scope_tree(
                 let mut child_address = address.to_vec();
                 child_address.push(name.clone());
                 let wanted: Vec<PathKey> = plan.exports.get(&child_address).into_iter().flatten().cloned().collect();
-                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, distinct);
+                let child = lower_scope_tree(&child_address, b, &s.env, &wanted, plan, false, by_shape);
                 let slots = export_slots(&wanted, &child_address);
                 let cidx = s.items.len();
                 s.items.push(st::Item::Sub(child));
@@ -611,7 +612,7 @@ fn lower_scope_tree(
         }
     }
 
-    distinct.insert(address.to_vec(), s.distinct);
+    by_shape.insert(address.to_vec(), s.by_shape);
     st::Scope { name: scope_name.to_string(), imports: s.imports, vars, items: s.items, labels: s.labels, names, binds, exports }
 }
 

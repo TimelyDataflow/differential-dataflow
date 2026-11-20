@@ -263,12 +263,6 @@ pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Lev
                 Shape::List(e) => (k, v) = row_shape(*e)?,
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
-            // Extend a tuple, or pair any other value.
-            LinearOp::LiftIter => v = match v {
-                Shape::Prod(mut fs) => { fs.push(Shape::Int); Shape::Prod(fs) }
-                Shape::Unit => Shape::Prod(vec![Shape::Int]),
-                other => Shape::Prod(vec![other, Shape::Int]),
-            },
             LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(level)]),
             LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, level)?,
         }

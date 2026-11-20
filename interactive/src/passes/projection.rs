@@ -206,13 +206,6 @@ impl Builder {
         }
     }
 
-    fn lift_iter(&mut self, from: &Site, input: &Site) {
-        self.key_identity(from, input);
-        for (&out, &src) in from.val.iter().zip(&input.val) {
-            self.edge(out, src);
-        }
-    }
-
     fn lift(&mut self, from: &Site, input: &Site) {
         self.key_identity(from, input);
         if let Some(&value) = from.val.first() {
@@ -502,7 +495,6 @@ fn build_scope(
                                     builder.scalar_lambda(&after, &[&before], lambda);
                                 }
                                 LinearOp::Negate => builder.identity(&after, &before),
-                                LinearOp::LiftIter => builder.lift_iter(&after, &before),
                                 LinearOp::Lift => builder.lift(&after, &before),
                                 LinearOp::FlatMap(lambda) => {
                                     builder.presence(&after, &before);
@@ -704,12 +696,19 @@ fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lam
     let Some(&value_fact) = output.val.first() else {
         return None;
     };
+    // A unit value has nothing to mask, though the half join keeps a fact for it.
+    // Masking it again would count a change each round, and never converge.
+    let (value_shape, value_facts) = if parts[0] == Shape::Unit {
+        (Some(&parts[0]), &[][..])
+    } else {
+        (None, std::slice::from_ref(&value_fact))
+    };
     mask_lambda(
         original,
         &output.shape.0,
         &output.key,
-        None,
-        &[value_fact],
+        value_shape,
+        value_facts,
         live,
     )
 }
@@ -756,7 +755,8 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             (Item::Op(Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
                 if let Some(new) = mask_half_join(projection, output, live) {
                     masked += output.key.iter().filter(|&&id| !live[id]).count();
-                    masked += usize::from(!live[output.val[0]]);
+                    let unit = matches!(&output.shape.1, Shape::Prod(parts) if parts[0] == Shape::Unit);
+                    masked += usize::from(!unit && !live[output.val[0]]);
                     *projection = new;
                 }
             }
@@ -1050,7 +1050,8 @@ mod tests {
         let distinct = format!("{source}output \"out\" = x | distinct;\n");
         let mut count = lower::lower_tree(parse::pipe::parse(&count));
         let mut distinct = lower::lower_tree(parse::pipe::parse(&distinct));
-        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 0);
+        // Count projects its values away as it is lowered, so the map's value goes unread.
+        assert_eq!(pushdown(&mut count, &|_| None).unwrap(), 2);
         assert_eq!(pushdown(&mut distinct, &|_| None).unwrap(), 0);
     }
 
@@ -1167,7 +1168,7 @@ mod tests {
                     | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 4);
         let (_, check) = shapes::infer(&program, &|_| None, 1);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
     }
@@ -1184,7 +1185,7 @@ mod tests {
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
-        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 2);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 4);
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();

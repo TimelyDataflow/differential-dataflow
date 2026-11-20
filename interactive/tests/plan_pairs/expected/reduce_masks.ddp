@@ -11,7 +11,9 @@ let unique_map = values | map((k, v) -> ((k, v), ()));
 let unique_idx = unique_map | arrange;
 let unique_reduce = unique_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 let unique_map2 = unique_reduce | map(((a, (_, b)), _) -> (a, ((), b)));
-let counted_reduce = values_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((_, a) -> ((), a)));
+let counted_map = values | map((k, _) -> (k, ()));
+let counted_idx = counted_map | arrange;
+let counted_reduce = counted_idx | reduce((_, a) -> let v0 = a map ((_, a) -> a) fold_add in (v0, (v0, 1)) enlist filter map ((_, a) -> ((), a)));
 let collected_reduce = values_idx | reduce(_ -> ((), 1) enlist);
 let custom_map = custom | map((k, (_, v)) -> ((k, v), ()));
 -- Renderer: build an export arrangement.

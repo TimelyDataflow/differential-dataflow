@@ -9,7 +9,7 @@
 //! The clone-with-lifts is the foundation the rewrite's witness and
 //! forward copies are built from. `clone_into` clones an original
 //! program's scopes into an output scope under construction; every nested
-//! scope additionally `lift_iter`s and exports each internal collection, so
+//! scope additionally lifts its round into each internal collection and exports it, so
 //! every value-producing site in the subtree has a "host-visible" form — its
 //! value as `(V, chain…)`, the user's value whole and then its user-iter
 //! coordinates, innermost first — at the
@@ -176,6 +176,11 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize], 
                 // and the export is the host-visible edge upward. A site of
                 // this scope first has its value wrapped as `(V)`, so the
                 // lifts extend it to `(V, chain…)` with `V` whole.
+                //
+                // The fold is `lift` and then a map that keeps the value's fields and the time's
+                // last coordinate, which is this scope's round. Times here have one root
+                // coordinate, the forward clone's explanation round if `forward`, and one per scope.
+                let round = format!("v.1.{}", child_path.len() + usize::from(forward));
                 let sub_idx = out.items.len();
                 for (a, vref) in child_visible {
                     let vref = if a.path == child_path {
@@ -185,8 +190,13 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize], 
                     } else {
                         vref
                     };
+                    // The value is `(V)` and one coordinate for each deeper exit.
+                    let width = 1 + a.path.len() - child_path.len();
+                    let mut fields: Vec<String> = (0..width).map(|j| format!("v.0.{j}")).collect();
+                    fields.push(round.clone());
+                    let fold = LinearOp::Project(projection(var(0), tup(fields), 2));
                     let lift_idx = child_out.items.len();
-                    child_out.items.push(Item::Op(Node::Linear { input: vref, ops: vec![LinearOp::LiftIter] }));
+                    child_out.items.push(Item::Op(Node::Linear { input: vref, ops: vec![LinearOp::Lift, fold] }));
                     let export_idx = child_out.exports.len();
                     child_out.exports.push(Export {
                         name: format!("$host:{}", export_idx),
@@ -1017,7 +1027,6 @@ impl<'a> Reverse<'a> {
                     LinearOp::Negate => {
                         self.push(ex, path, input, dep_this);
                     }
-                    LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
                     // Lift reads the whole time, and the forward clone runs one scope deeper.
                     LinearOp::Lift => panic!("explain: lift is not supported"),
                     LinearOp::JoinFunction(lambda) => {
@@ -1127,7 +1136,7 @@ mod tests {
         let mut out = Scope { imports: p.root.imports.clone(), ..Scope::default() };
         let import_map: Vec<Ref> = (0..out.imports.len()).map(Ref::Import).collect();
         clone_into(&p.root, &mut out, &import_map);
-        // outer's clone: every $host: export is a LiftIter Linear; and the
+        // outer's clone: every $host: export is a lift and a map; and the
         // ones re-exporting fwd/bwd internals chain TWO lifts (one per level):
         // the value behind the lift is itself a ChildExport of a lift.
         let Item::Sub(outer) = out.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
@@ -1135,8 +1144,7 @@ mod tests {
         for e in outer.exports.iter().filter(|e| e.name.starts_with("$host:")) {
             let Ref::Local(li) = &e.value else { panic!("$host export should be a fresh lift") };
             let Item::Op(Node::Linear { input, ops }) = &outer.items[*li] else { panic!("expected a lift") };
-            assert_eq!(ops.as_slice().len(), 1);
-            assert!(matches!(ops[0], LinearOp::LiftIter));
+            assert!(matches!(ops.as_slice(), [LinearOp::Lift, LinearOp::Project(_)]));
             if matches!(input, Ref::ChildExport(..)) { depth2_chains += 1; }
         }
         assert!(depth2_chains > 0, "fwd/bwd internals re-lift at outer's exit");
