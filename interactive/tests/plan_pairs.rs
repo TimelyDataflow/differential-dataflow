@@ -11,6 +11,8 @@ use interactive::plan::{self, Report};
 use interactive::plan::ddp::DdpStage;
 use interactive::scope_ir::{Item, Node, Ref, RowShape, Scope, Source};
 
+mod common;
+
 #[path = "plan_pairs/manifest.rs"]
 mod manifest;
 
@@ -418,4 +420,94 @@ fn all_pass_subsets() {
     }
     println!("corpus: {same} same, {known} known as-of, {rejected} expected rejections, {failed} failed");
     assert_eq!(failed, 0);
+}
+
+/// Directories whose `.ddp` files are not example programs. Everything else under the crate is planned.
+const NOT_EXAMPLES: &[(&str, &str)] = &[
+    ("target/", "build output"),
+    ("tests/plan_pairs/expected/", "emitted plans, compared byte for byte by `reviewed_plan_pairs`"),
+];
+
+/// The older LDBC programs `bench/ldbc/{bi5,bi11,ic6,is3}.ddp` import this smaller graph program.
+const LEGACY_GRAPH: &[(&str, &str)] = &[("graph", "bench/ldbc/graph.ddp")];
+
+/// Programs the manifest does not cover and that import another program's outputs, by path prefix.
+/// Each provider is `(program name, file)` and is planned first, so its outputs are published as
+/// `<name>::<output>`. The authored LDBC plans import the graph program that
+/// `bench/ldbc/suite.py` generates. `reviewed_plan_pairs` compares the checked-in copy with the
+/// generator on every run, so it cannot go stale unnoticed.
+const EXAMPLE_PROVIDERS: &[(&str, &[(&str, &str)])] = &[
+    ("bench/ldbc/authored/plans/", &[("graph", "tests/plan_pairs/generated/graph.ddp")]),
+    ("bench/ldbc/bi5.ddp", LEGACY_GRAPH),
+    ("bench/ldbc/bi11.ddp", LEGACY_GRAPH),
+    ("bench/ldbc/ic6.ddp", LEGACY_GRAPH),
+    ("bench/ldbc/is3.ddp", LEGACY_GRAPH),
+];
+
+/// The `.ddp` files below `dir`, relative to `root` and `/`-separated.
+fn collect_ddp(root: &Path, dir: &Path, found: &mut Vec<String>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() { collect_ddp(root, &path, found); }
+        else if path.extension().is_some_and(|ext| ext == "ddp") {
+            found.push(path.strip_prefix(root).unwrap().components()
+                .map(|c| c.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join("/"));
+        }
+    }
+}
+
+/// Plan one example against `source` with every pass on. Reports why it does not plan cleanly,
+/// including any scalar whose compiled graph disagrees with its source.
+fn plan_example(text: &str, source: &dyn Fn(&str) -> Option<RowShape>) -> Result<Report, String> {
+    let report = plan::report(text, source, &Config::all())?;
+    if !report.unresolved.is_empty() { return Err(format!("unresolved imports {:?}", report.unresolved)); }
+    for stage in &report.stages {
+        if !stage.problems.is_empty() { return Err(format!("{}: {:?}", stage.name, stage.problems)); }
+    }
+    let printed = report.emit_ddp_at(DdpStage::AsOf)?;
+    if printed.lambdas.graph_changed != 0 { return Err(format!("{} printed scalar graphs changed", printed.lambdas.graph_changed)); }
+    // The same check as `ddir-plan --check-lambdas`. Only a mismatch fails: unchecked lambdas and
+    // graph fallbacks are reported in the text but do not gate.
+    let checked = report.print_with(plan::PrintOptions { check_lambdas: true, ..Default::default() });
+    if checked.lambdas.failed != 0 {
+        let failing: Vec<_> = checked.text.lines().filter(|line| line.starts_with("Lambda check FAILED")).collect();
+        return Err(format!("{} lambdas fail their check: {failing:?}", checked.lambdas.failed));
+    }
+    Ok(report)
+}
+
+/// Every `.ddp` file in the crate plans, found by walking the tree so that a new example is covered
+/// without editing this test. Files in the manifest get the stricter `reviewed_plan_pairs` checks and
+/// are skipped here. A program that imports another's outputs needs an `EXAMPLE_PROVIDERS` entry.
+/// Imports the server supplies (generated sources, `diag.*`) resolve through a fresh `Server`.
+#[test]
+fn every_example_plans() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    collect_ddp(&root, &root, &mut files);
+    files.retain(|file| !NOT_EXAMPLES.iter().any(|(prefix, _)| file.starts_with(prefix)));
+    let reviewed: BTreeSet<_> = manifest::CASES.iter().map(|case| case.input).collect();
+    files.retain(|file| !reviewed.contains(file.as_str()));
+    for (prefix, _) in EXAMPLE_PROVIDERS {
+        assert!(files.iter().any(|file| file.starts_with(prefix)), "EXAMPLE_PROVIDERS entry {prefix} matches no example");
+    }
+    // The programs in `tests/programs` call these host functions.
+    common::register_test_functions();
+    let server = interactive::server::Server::new();
+    let mut failures = Vec::new();
+    for file in &files {
+        let mut catalog = BTreeMap::new();
+        let providers = EXAMPLE_PROVIDERS.iter().find(|(prefix, _)| file.starts_with(prefix)).map_or(&[][..], |(_, p)| p);
+        for (name, provider) in providers {
+            let source = |n: &str| catalog.get(n).cloned().or_else(|| server.source_shape(n));
+            let report = plan_example(&fs::read_to_string(root.join(provider)).unwrap(), &source)
+                .unwrap_or_else(|e| panic!("provider {provider}: {e}"));
+            let exports: Vec<_> = report.exports.into_iter().map(|(out, shape)| (interactive::server::output_name(name, &out), shape)).collect();
+            catalog.extend(exports);
+        }
+        let source = |n: &str| catalog.get(n).cloned().or_else(|| server.source_shape(n));
+        if let Err(e) = plan_example(&fs::read_to_string(root.join(file)).unwrap(), &source) { failures.push(format!("{file}: {e}")); }
+    }
+    assert!(failures.is_empty(), "{} of {} examples do not plan:\n{}", failures.len(), files.len(), failures.join("\n"));
+    println!("{} examples plan, {} more are covered by the manifest", files.len(), reviewed.len());
 }
