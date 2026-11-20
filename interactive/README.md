@@ -102,6 +102,11 @@ From outside the scope, a path `scope::name` references the fixed point of the c
 If any recursive definitions fail to reach a fixed point the computation diverges (please avoid doing this).
 All cycles of definitions must include at least one variable.
 
+At a program's root, `var` and `set` carry state from one time to the next instead.
+A root variable is empty at first, and at each time t holds what its `set` held at t - 1, so nothing iterates and there is no fixed point to reach.
+Anything may feed the `set`, as the cycle passes through the step.
+To see what a variable is about to become, bind the `set` value with a `let` and read that.
+
 </details>
 <p>
 

@@ -88,8 +88,8 @@
 //! the last join's projection. Weights multiply; nothing implies distinct.
 //! Even the parsed view shows the expansion.
 //!
-//! Statements: `let x = …;`, `set x = …;` (a feedback variable in a named
-//! scope), `name: { … }` (a nested scope), `output "name" = …;` (a
+//! Statements: `let x = …;`, `set x = …;` (a feedback variable: in a named
+//! scope it is the previous round's value; at the root, the previous time's), `name: { … }` (a nested scope), `output "name" = …;` (a
 //! program output, root scope only). An optional `var x;` or
 //! `var x : (key_shape, val_shape);` declares a feedback variable; the latter
 //! checks the shape inferred for its `set` value. An `output` may also declare

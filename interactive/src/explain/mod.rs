@@ -732,6 +732,7 @@ pub fn explain(p: &Program) -> Program {
 
 /// [`explain`], with [`Options`].
 pub fn explain_with(p: &Program, options: Options) -> Program {
+    assert!(p.root.vars.is_empty(), "explain does not cover feedback variables at a program's root");
     let n_sources = p.root.imports.len();
     // The largest positional-input index, for placing the query input after.
     let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {
