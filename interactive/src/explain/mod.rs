@@ -730,9 +730,32 @@ pub fn explain(p: &Program) -> Program {
     explain_with(p, Options::default())
 }
 
+/// `p`, with each root `join_function` that writes a bare integer time rewritten to write the
+/// one-coordinate tuple, which is the form explain's rules read. Only the root scope at one root
+/// coordinate has one-coordinate times; a site whose shapes are unknown is left as it is.
+fn tuple_bare_times(p: &Program) -> Program {
+    let mut p = p.clone();
+    let (shapes, _) = crate::shapes::infer(&p, &|_| None, 1);
+    for item in &mut p.root.items {
+        let Item::Op(Node::Linear { input, ops }) = item else { continue };
+        let Some(c) = shapes.of(input) else { continue };
+        let Ok(steps) = crate::shapes::linear_shapes(ops, c.key, c.val, crate::level::Level::root(1)) else { continue };
+        for (op, (k, v)) in ops.iter_mut().zip(steps) {
+            let LinearOp::JoinFunction(lambda) = op else { continue };
+            let bare = matches!(crate::lambda::slot_shape(lambda, &[k, v]),
+                Ok(corgi::Shape::List(e)) if matches!(&*e, corgi::Shape::Prod(fs) if fs.len() == 3 && fs[1] == corgi::Shape::Int));
+            if bare {
+                *lambda = slot(2, &[(lambda, tup(vec![var(0), var(1)]))], |out| format!("{} map ((row, t, d) -> (row, (t), d))", out[0]));
+            }
+        }
+    }
+    p
+}
+
 /// [`explain`], with [`Options`].
 pub fn explain_with(p: &Program, options: Options) -> Program {
     assert!(p.root.vars.is_empty(), "explain does not cover feedback variables at a program's root");
+    let p = &tuple_bare_times(p);
     let n_sources = p.root.imports.len();
     // The largest positional-input index, for placing the query input after.
     let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {

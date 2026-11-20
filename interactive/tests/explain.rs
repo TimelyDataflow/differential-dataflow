@@ -701,6 +701,19 @@ fn delay_explanations_sufficient() {
     assert!(!assert_all_rows_sufficient(REACH_DELAY, &inputs).is_empty());
 }
 
+/// Root `join_function` and `delay` with bare one-coordinate times, through the rewrite.
+const BARE_TIMES: &str = r#"
+    let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
+    let degree = edges | join_function((src, _) -> ((src, ()), 0, 1) enlist) | count;
+    let later = edges | delay((_, dst) -> (dst, 100) rem) | map((src, dst) -> (dst, src));
+    output "result" = later | join(degree, (dst, src, n) -> (src, (dst, n)));
+"#;
+
+#[test]
+fn bare_time_explanations_sufficient() {
+    assert!(!assert_all_rows_sufficient(BARE_TIMES, &[gen_edges(50, 55)]).is_empty());
+}
+
 /// A `min` reducer in an iterative loop, at depth 1.
 const MIN_LOOP: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));

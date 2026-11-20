@@ -412,14 +412,14 @@ pub(crate) fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) ->
 }
 
 /// Compile a `JoinFunction`'s lambda → a `List` column of `((key, val), time, diff)`, one list per
-/// input row, with `time` a tuple of `width` `Int`s. Any other shape is the type error: the backend
-/// explodes the column structurally and joins the time lanes into the rows' times.
+/// input row, with `time` a tuple of `width` `Int`s, or one `Int` when `width` is one. Any other
+/// shape is the type error: the backend explodes the column structurally and joins the time lanes
+/// into the rows' times.
 pub(crate) fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
     let (g, out) = slot_graph(lambda, &[kshape.clone(), vshape.clone()])?;
     if let Shape::List(elem) = &out {
         if let Shape::Prod(fs) = &**elem {
-            let time = Shape::Prod(vec![Shape::Int; width]);
-            if fs.len() == 3 && matches!(&fs[0], Shape::Prod(kv) if kv.len() == 2) && fs[1] == time && fs[2] == Shape::Int {
+            if fs.len() == 3 && matches!(&fs[0], Shape::Prod(kv) if kv.len() == 2) && crate::shapes::writes_time(&fs[1], width) && fs[2] == Shape::Int {
                 return Ok(g.graph().clone());
             }
         }
