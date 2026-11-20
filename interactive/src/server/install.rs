@@ -53,13 +53,16 @@ impl Server {
         if name.is_empty() || name.contains("::") {
             return Err(format!("a program name must be non-empty and contain no `::`, got {:?}", name));
         }
-        // The root is not a loop: a published trace holds what its program computes at each
-        // epoch, not a round of an iteration. Loops live in named scopes.
+        // A feedback variable at the root is not a loop: at each time t it holds what its `set`
+        // held at t - 1, so a program can carry state from one time to the next. The step is
+        // defined only when the root time has one coordinate.
         if let Some(var) = prog.root.vars.first() {
-            return Err(format!(
-                "program {:?} has feedback variable `{}` at its root; `set` belongs in a named scope (`name: {{ set {} = ...; }}`)",
-                name, var.name, var.name
-            ));
+            if root_width != 1 {
+                return Err(format!(
+                    "program {:?} has feedback variable `{}` at its root; a root variable steps a scalar time, and this root time has width {root_width}",
+                    name, var.name
+                ));
+            }
         }
         // An input is fed from outside, so it says what it holds, as a table declares its columns.
         for imp in &prog.root.imports {

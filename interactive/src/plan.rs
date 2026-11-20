@@ -128,9 +128,6 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
     }
     unresolved.sort();
     unresolved.dedup();
-    if !program.root.vars.is_empty() {
-        problems.push("feedback at the root cannot be installed; put it in a named scope".into());
-    }
     let resolve = |source: &Source| match source {
         Source::Trace(name) => catalog.get(name).cloned().flatten(),
         _ => None,

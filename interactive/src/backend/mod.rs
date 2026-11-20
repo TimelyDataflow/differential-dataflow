@@ -297,7 +297,13 @@ pub(crate) fn render_scope<'s, B: Backend>(
     }
 
     for bind in &s.binds {
-        let c = resolve(&items, &imports, &var_cols, &bind.value).collection();
+        let mut c = resolve(&items, &imports, &var_cols, &bind.value).collection();
+        // At the root a variable steps the root time by one, and nothing iterates to a fixed point:
+        // an update and its retraction at one time would both go around again, at every later
+        // time. Arranging the bound value nets them first.
+        if level.depth == 0 {
+            c = B::as_collection(B::arrange(c));
+        }
         var_handles[bind.var].take().expect("bind: variable already bound").set(c);
     }
 

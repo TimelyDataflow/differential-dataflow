@@ -474,7 +474,6 @@ fn lower_scope_tree(
             Stmt::Let(n, e)  => { assert!(lets.insert(n.clone(), e).is_none(), "let `{n}` defined twice"); order.push((ItemKind::Let, n.clone())); },
             Stmt::Var(n, s) => { assert!(declarations.insert(n, s).is_none(), "var `{n}` declared twice"); },
             Stmt::Set(n, e) => {
-                assert!(!is_root, "set `{n}` is only valid in a named scope");
                 assert!(set_names.insert(n.as_str()), "set `{n}` defined twice");
                 sets.push((n, e));
             },
@@ -714,7 +713,7 @@ mod tree_tests {
     #[test]
     fn rejects_invalid_set_and_var_names() {
         for (src, expected) in [
-            ("set x = x;", "only valid in a named scope"),
+            ("set x = x; set x = x;", "set `x` defined twice"),
             ("s: { set x = x; set x = x; }", "set `x` defined twice"),
             ("s: { var x; }", "var `x` has no set"),
             ("s: { var x; let y = x; }", "var `x` has no set"),
