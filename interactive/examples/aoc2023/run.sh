@@ -11,7 +11,7 @@ while read -r day part expected; do
   dir=day$day
   prog=$dir/part$part.ddp
   # One session per part: load the program, feed each input it reads from
-  # its fact file (part-specific if present), close the epoch. The answer is
+  # its fact file (part-specific if present), and seal each input. The answer is
   # the one integer in the `vals` column of the `[partN]` inspect line.
   cmds="load p from $prog"
   k=0
@@ -20,10 +20,11 @@ while read -r day part expected; do
     [ -f "$inp" ] || inp=gen/$dir/in$k.txt
     [ -f "$inp" ] || break
     grep -Eq "input $k([^0-9]|$)" "$prog" && cmds="$cmds
-feed p $k from $inp"
+feed p $k time=now from $inp
+seal p $k 1"
     k=$((k + 1))
   done
-  got=$(printf '%s\ntick\nexit\n' "$cmds" \
+  got=$(printf '%s\npeek p::result as-of 0\nexit\n' "$cmds" \
         | "$SERVER" 2>&1 \
         | sed -n "s/.*\\[part$part\\].*vals=[^]]*[UI][0-9]*(\\[\\(-\\{0,1\\}[0-9]*\\)\\].*/\\1/p")
   if [ "$got" = "$expected" ]; then

@@ -1,5 +1,8 @@
 # The DDIR server
 
+[Server command reference](../../server/README.md#server-command-reference)
+
+
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
 at a time; each may `import` traces other dataflows `output`, so a
@@ -19,7 +22,7 @@ and the configuration). The session scripts here are piped into its stdin.
   in `../programs/` read positional `input`s instead, which you fill with
   `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
-  (`load`/`feed`/`tick`/…) you hand to the server. You do **not** `load` a
+  (`load`/`feed`/`seal`/…) you hand to the server. You do **not** `load` a
   session; you run the server *on* it.
 
 ## Running
@@ -44,12 +47,14 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 | command | effect |
 |---|---|
 | `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
-| `feed <prog> <in> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `feed <prog> <in> from <file-or-trace>` | fill an input from a published trace or a file of integer rows, sharded across workers |
-| `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |
+| `feed <prog> <in> <value> [val=<value>] time=<t> [diff=<int>]` | stage an input update |
+| `feed <prog> <in> time=now from <file-or-trace>` | fill an input from a published trace or a file of integer rows, sharded across workers |
+| `seal <prog> <in> <frontier>` | advance an input’s write frontier; a scalar frontier of 1 closes time 0 |
+| `spin` | wait for the commanded progress of outputs and tails |
+| `trim <trace> <frontier>` | release older snapshots of the output |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
-| `peek <trace> [key]` | print a trace's current contents (consolidated across workers), one `data` line per row |
-| `tail <trace>` / `stop <reqid>` | follow a trace's changes at every tick, until stopped |
+| `peek <trace> [key] [as-of <t>]` | print a closed, retained snapshot (consolidated across workers), one `data` line per row |
+| `tail <trace>` / `stop <reqid>` | follow timestamped changes as the contributing inputs advance |
 | `list` | show programs, traces (+ importer counts) |
 
 A program installed as `<name>` publishes each `output "x"` as the trace `<name>::x`, so two programs may name their outputs alike, and one file may be loaded several times under different names.
@@ -60,8 +65,7 @@ A `<value>` is read at the shape its input declares, **written without spaces**:
 an integer, a decimal number for a float, `tuple(a,b)`, `list(1,2,3)`, and
 `inject(lane,payload)` for a sum, as in ADT-shaped data such as ASTs. A whole
 key or value may drop its wrapper: `1,2` for a tuple of integers, and `_` or
-nothing for unit. `feed` defaults to value=unit, `time`=the current epoch (use a
-future `time=` to schedule ahead), `diff`=+1.
+nothing for unit. A feed defaults to a unit value and a diff of +1. Supply the update time explicitly, or use `time=now` when the input frontier has one element.
 
 ## Running a program in batch
 
@@ -71,14 +75,14 @@ whole of the old single-program harness, so there is no separate binary:
 
 ```
 load scc from examples/programs/scc.ddp
-feed scc 0 1,2
-feed scc 0 2,1
-tick
-peek scc::result
+feed scc 0 1,2 time=0
+feed scc 0 2,1 time=0
+seal scc 0 1
+peek scc::result as-of 0
 exit
 ```
 
-`feed … from` deals the rows across the workers (each feeds its shard, and
+`feed … time=now from` deals the rows across the workers (each feeds its shard, and
 the exchange places every row on its key's owner). A file source is one row per line of
 whitespace-separated integers, each becoming `(Tuple[ints], ())`; the
 `aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
@@ -109,7 +113,7 @@ you `peek` as `<name>::demand:inputN`. `,debug` taps every demand collection wit
 ## The sessions — what to look for
 
 - **`shared_trace.txt`** — the headline: `prod` publishes `prod::edges`, `reach`
-  imports it. Feed edges/roots, `tick`, and watch `reach` update incrementally;
+  imports it. Feed edges and roots, seal the inputs, and watch `reach` update incrementally;
   add and retract an edge to see `+1`/`-1` changes propagate **across two
   separately-installed dataflows**.
 - **`drop.txt`** — the teardown gate: dropping `prod` is refused while `reach`

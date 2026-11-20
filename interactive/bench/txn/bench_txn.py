@@ -11,7 +11,7 @@ the maintenance epoch. Cycle throughput includes the deletions and their work.
 `oneoff`: a store program (store.ddp) plus, each cycle, a resolver
 (resolve.ddp) installed for one epoch: load it, admit the batch, close the
 epoch, observe rollbacks, feed its `delta` into the store, and drop it. The
-store change takes effect in the next cycle's tick, so its work is counted
+store change takes effect in the next cycle's completion, so its work is counted
 there.
 """
 
@@ -37,7 +37,7 @@ HERE = Path(__file__).resolve().parent
 # The LDBC client's frame encoder writes `feed … frame` payloads, and its decoder reads
 # `peek … as corgi` frames.
 sys.path.insert(0, str(HERE.parent / "ldbc"))
-from client import decode, encode_frame  # noqa: E402
+from client import diagnostic_exports, decode, encode_frame  # noqa: E402
 
 # The intents input of every program here: `((txn, is_read, key), (value))`.
 INTENTS = (("prod", ["int", "int", "int"]), ("prod", ["int"]))
@@ -61,7 +61,7 @@ class Transaction:
 @dataclass
 class Sample:
     """One cycle's phases. `install_ms` and `drop_ms` are the oneoff resolver's;
-    `maintain_ms` is the maintained program's second tick."""
+    `maintain_ms` is the maintained program's second seal, spin and trim."""
 
     attempts: int
     committed: int
@@ -72,6 +72,8 @@ class Sample:
     retire_submit_ms: float
     drop_ms: float
     maintain_ms: float
+    resolve_spin_ms: float
+    maintain_spin_ms: float
 
     @property
     def decision_ms(self) -> float:
@@ -89,6 +91,10 @@ class Client:
         self.next_id = 0
         self.frames = frames
         self.encode_ms = 0.0
+        self.diagnostics = ()
+        if os.environ.get("DDIR_DIAGNOSTICS") == "1":
+            lines, _ = self.request("list")
+            self.diagnostics = tuple(diagnostic_exports(lines))
 
     def _id(self) -> str:
         self.next_id += 1
@@ -130,7 +136,7 @@ class Client:
     def drop(self, name: str) -> float:
         return self.request(f"drop {name}")[1]
 
-    def feed(self, prog: str, transactions: Iterable[Transaction]) -> float:
+    def feed(self, prog: str, transactions: Iterable[Transaction], epoch: int) -> float:
         reqid = self._id()
         encode = time.perf_counter()
         if self.frames:
@@ -142,18 +148,15 @@ class Client:
                 for k, v in txn.writes:
                     keys.append((txn.txn_id, 0, k))
                     vals.append((v,))
-            frame = encode_frame(INTENTS, keys, [1] * len(keys), vals)
+            frame = encode_frame(INTENTS, keys, [1] * len(keys), vals, times=[epoch] * len(keys))
             payload = f"{reqid} feed {prog} 0 frame {len(frame)}\n".encode() + frame
         else:
             body = "\n".join(row for txn in transactions for row in txn.rows())
-            payload = f"{reqid} feed {prog} 0 begin\n{body}\n{reqid} end-feed\n"
+            payload = f"{reqid} feed {prog} 0 time={epoch} begin\n{body}\n{reqid} end-feed\n"
         self.encode_ms += (time.perf_counter() - encode) * 1000.0
         start = time.perf_counter()
         self._exchange(reqid, payload)
         return (time.perf_counter() - start) * 1000.0
-
-    def tick(self) -> float:
-        return self.request("tick")[1]
 
     def peek(self, trace: str) -> tuple[list[tuple[tuple[int, ...], tuple[int, ...], int]], float]:
         """A binary peek, as (key, val, diff) rows of integers. Decoding is outside the clock."""
@@ -164,7 +167,7 @@ class Client:
         return [(flat(key), flat(val), diff) for key, val, diff in decode(frames)], observe_ms
 
     def feed_from(self, prog: str, trace: str, diff: int) -> float:
-        return self.request(f"feed {prog} 0 from {trace} diff={diff}")[1]
+        return self.request(f"feed {prog} 0 time=now from {trace} diff={diff}")[1]
 
     def close(self) -> None:
         self.reader.close()
@@ -337,20 +340,41 @@ def run_cycle(
     mode: str,
     transactions: list[Transaction],
     state: dict[int, int],
+    epoch: int,
     resolver: Path = HERE / "resolve.ddp",
 ) -> Sample:
     expected_rollback = apply_reference(transactions, state)
-    install_ms = drop_ms = maintain_ms = 0.0
+    install_ms = drop_ms = maintain_ms = maintain_spin_ms = 0.0
     if mode == "maintained":
-        submit_ms = client.feed("bank", transactions)
-        resolve_ms = client.tick()
+        exports = ("bank::rollback", "bank::retire", "bank::state")
+        submit_ms = client.feed("bank", transactions, epoch)
+        resolve_ms = client.request(f"seal bank 0 {epoch + 1}")[1]
+        if client.diagnostics:
+            resolve_ms += client.request("diag")[1]
+        resolve_spin_ms = client.request("spin")[1]
+        resolve_ms += resolve_spin_ms
+        for trace in (*exports, *client.diagnostics):
+            resolve_ms += client.request(f"trim {trace} {epoch}")[1]
         observe_ms = check_rollback(client, "bank", expected_rollback)
         retire_submit_ms = client.feed_from("bank", "bank::retire", -1)
-        maintain_ms = client.tick()
+        maintain_ms = client.request(f"seal bank 0 {epoch + 2}")[1]
+        if client.diagnostics:
+            maintain_ms += client.request("diag")[1]
+        maintain_spin_ms = client.request("spin")[1]
+        maintain_ms += maintain_spin_ms
+        for trace in (*exports, *client.diagnostics):
+            maintain_ms += client.request(f"trim {trace} {epoch + 1}")[1]
     else:
         install_ms = client.load("res", resolver)
-        submit_ms = client.feed("res", transactions)
-        resolve_ms = client.tick()
+        submit_ms = client.feed("res", transactions, epoch)
+        resolve_ms = client.request(f"seal store 0 {epoch + 1}")[1]
+        resolve_ms += client.request(f"seal res 0 {epoch + 1}")[1]
+        if client.diagnostics:
+            resolve_ms += client.request("diag")[1]
+        resolve_spin_ms = client.request("spin")[1]
+        resolve_ms += resolve_spin_ms
+        for trace in ("store::store", "res::rollback", "res::delta", *client.diagnostics):
+            resolve_ms += client.request(f"trim {trace} {epoch}")[1]
         observe_ms = check_rollback(client, "res", expected_rollback)
         retire_submit_ms = client.feed_from("store", "res::delta", 1)
         drop_ms = client.drop("res")
@@ -364,6 +388,8 @@ def run_cycle(
         retire_submit_ms=retire_submit_ms,
         drop_ms=drop_ms,
         maintain_ms=maintain_ms,
+        resolve_spin_ms=resolve_spin_ms,
+        maintain_spin_ms=maintain_spin_ms,
     )
 
 
@@ -389,6 +415,10 @@ def summarize(mode: str, workers: int, batch: int, samples: list[Sample]) -> dic
         "decision_p95_ms": percentile((s.decision_ms for s in samples), 0.95),
         "cycle_p50_ms": percentile((s.cycle_ms for s in samples), 0.50),
         "cycle_p95_ms": percentile((s.cycle_ms for s in samples), 0.95),
+        "spin_means_ms": {
+            "resolve": sum(s.resolve_spin_ms for s in samples) / len(samples),
+            "maintain": sum(s.maintain_spin_ms for s in samples) / len(samples) if mode == "maintained" else None,
+        },
         "phase_means_ms": {
             phase: sum(getattr(s, phase) for s in samples) / len(samples)
             for phase in ("install_ms", "submit_ms", "resolve_ms", "observe_ms",
@@ -487,7 +517,8 @@ def main() -> None:
                             args.shape,
                         )
                         next_txn += batch
-                        sample = run_cycle(client, mode, transactions, state, args.resolve_program.resolve())
+                        epoch = round_index * (2 if mode == "maintained" else 1)
+                        sample = run_cycle(client, mode, transactions, state, epoch, args.resolve_program.resolve())
                         if round_index >= args.warmup:
                             samples.append(sample)
 
@@ -501,7 +532,13 @@ def main() -> None:
                             raise RuntimeError("maintenance left retire rows behind")
                         actual_state, _ = client.peek("bank::state")
                     else:
-                        client.tick()  # apply the last cycle's store delta
+                        # Apply the final pending store delta after the resolver is gone.
+                        client.request(f"seal store 0 {epoch + 2}")
+                        if client.diagnostics:
+                            client.request("diag")
+                        client.request("spin")
+                        for trace in ("store::store", *client.diagnostics):
+                            client.request(f"trim {trace} {epoch + 1}")
                         actual_state, _ = client.peek("store::store")
                     if parse_state(actual_state) != state:
                         raise RuntimeError("final state differs from the serial reference")

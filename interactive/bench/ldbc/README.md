@@ -66,7 +66,7 @@ the same partition name, the plain file takes precedence and is read once.
 `--queries bi5 bi11` measures BI maintenance without interactive consumers.
 Compare those controls with the default concurrent panel. `--batch-size 1`
 measures single bindings **per interactive query**; in the default panel that
-still means two simultaneous requests per tick. Increase batch size separately
+still means two simultaneous requests per epoch. Increase batch size separately
 from data size to study dispatch amortization. Defaults enforce a 120-second
 command deadline and a sampled 6-GiB **server** RSS ceiling. The latter is not
 a hard memory limit and excludes the Python loader/reference process. RSS can
@@ -109,8 +109,7 @@ of BI5's top-100 authors, filling shortfalls with other edges. This is deliberat
 The report states whether each displayed BI answer actually changed. The
 dataset oscillates between two states: **bounded churn, not growth or a
 time-bounded saturation run**. No node deletion/cascade semantics are assumed.
-Every `feed` group ends with `tick`; acknowledgement of that tick, not of feed
-admission, establishes completion.
+The default binary feeds include a u64 time for each row in a scalar time lane. Text feeds place the same epoch on the batch header. At the end of each group it seals every installed input to the next epoch, times a separate `spin` request, and trims every published output to the completed epoch. This retains the latest complete snapshot for reads and late imports.
 
 BI parameters remain bound throughout; their maintenance is paid even when
 unread. Interactive bindings are absent during graph mutations. Their parameter
@@ -132,16 +131,18 @@ LDBC conformance suite.
 
 ## Read the measurements
 
-- Setup records plan install/parse, input admission and initial `tick` separately.
-- `bind`: feed all interactive bindings and wait for `tick`.
+- Setup records plan install/parse, input admission and initial settlement separately.
+- `bind`: feed all interactive bindings and complete the epoch.
 - `read:*`: `peek` and decode the full answer. No top-k work is done by the client.
 - `batch_answers`: sum of bind and read phases, excluding reference checks;
   this is the complete batch-answer latency, **not the bind time alone**.
-- `release`: retract all bindings and wait for `tick`. Do not omit this from
+- `release`: retract all bindings and complete the epoch. Do not omit this from
   a sustained-work accounting. Subsequent `empty:*` reads check cleanup.
-- `update` / `restore`: graph feeds and `tick`, including maintenance of both
+- `update` / `restore`: graph feeds and epoch completion, including maintenance of both
   standing BI results and unbound interactive plans. `maintained:*` reads are
   separate; subtracting them does not remove the maintenance cost.
+
+Events for epoch completion include `spin_ms`, the client-observed round trip for `spin` after the seal replies arrived. The full `wire_ms` also includes the feeds, seals and trims in that phase.
 
 Events split command preparation, encoding, wire wait/receipt and Value decoding.
 Every phase's `summary` contains separate `prepare_ms`, `encode_ms`, `wire_ms`,

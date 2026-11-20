@@ -8,18 +8,22 @@ load reach from examples/server/programs/reach_import.ddp edges=prod::edges
 list
 
 # graph: 1 -> 2 -> 3 ; root: 1   (reach should become {1, 2, 3})
-feed prod 0 1,2
-feed prod 0 2,3
-feed reach roots 1
-tick
+feed prod 0 1,2 time=0
+feed prod 0 2,3 time=0
+feed reach roots 1 time=0
+seal reach roots []
+seal prod 0 1
+peek reach::result as-of 0
 
 # extend the graph with 3 -> 4 ; reach should grow to include 4
-feed prod 0 3,4
-tick
+feed prod 0 3,4 time=1
+seal prod 0 2
+peek reach::result as-of 1
 
 # retract 2 -> 3 ; reach should drop 3 and 4
-feed prod 0 2,3 diff=-1
-tick
+feed prod 0 2,3 diff=-1 time=2
+seal prod 0 3
+peek reach::result as-of 2
 
 list
 exit

@@ -5,6 +5,8 @@
 //! at every epoch while edges come and go, and at several workers. The loops
 //! read the shared traces at iteration times, so this also checks that their compaction
 //! requests are sound for the parent's arrangement.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::scope_ir::{Item, Node, Program, Ref, Scope, Source};
 use interactive::server::Server;
 use interactive::{lower, parse};
@@ -60,10 +62,11 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
         server.set_passes(interactive::passes::Config::none());
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
-        for batch in epochs.iter() {
+        for (epoch, batch) in epochs.iter().enumerate() {
             let mine = if worker.index() == 0 { batch.as_str() } else { "" };
-            server.feed("p", 0, mine, None).unwrap();
-            server.tick(worker);
+            server.feed("p", 0, mine, epoch as u64).unwrap();
+            server.seal("p", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+            server.spin(worker);
             let mut rows = server.snapshot(worker, "p::result").unwrap().rows();
             rows.sort();
             seen.push(rows);

@@ -1,4 +1,6 @@
 //! Structural sharing preserves outputs, including feedback and nested scope exports.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::{lower, parse, scope_ir::{Item, Node, Program}, server::Server};
 
 fn program(src: &str) -> Program { lower::lower_tree(parse::pipe::parse(src)) }
@@ -55,13 +57,16 @@ fn nested_recursive_scopes_share_only_with_the_same_inputs() {
             let mut after = Server::new();
             before.install(worker, "before", &original).unwrap();
             after.install(worker, "after", &optimized).unwrap();
-            for batch in ["0 val=1\n1 val=2\n2 val=3", "1 val=2 diff=-1\n3 val=4", "0 val=1 diff=-1\n2 val=3 diff=-1"] {
+            for (epoch, batch) in ["0 val=1\n1 val=2\n2 val=3", "1 val=2 diff=-1\n3 val=4", "0 val=1 diff=-1\n2 val=3 diff=-1"].into_iter().enumerate() {
                 for (name, server) in [("before", &mut before), ("after", &mut after)] {
                     if worker.index() == 0 {
-                        server.feed(name, 0, batch, None).unwrap();
-                        server.feed(name, 1, "7 val=8", None).unwrap();
+                        server.feed(name, 0, batch, epoch as u64).unwrap();
+                        server.feed(name, 1, "7 val=8", epoch as u64).unwrap();
                     }
-                    server.tick(worker);
+                    for input in [0, 1] {
+                        server.seal(name, input, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+                    }
+                    server.spin(worker);
                 }
                 for export in &original.root.exports {
                     let mut want = before.snapshot(worker, &format!("before::{}", export.name)).unwrap().rows();

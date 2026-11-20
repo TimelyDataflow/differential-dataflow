@@ -1112,10 +1112,10 @@ mod tests {
             server.install(worker, "before", &original).unwrap();
             server.install(worker, "after", &projected).unwrap();
             for name in ["before", "after"] {
-                server.feed(name, 0, "1,10", None).unwrap();
-                server.feed(name, 0, "1,20", None).unwrap();
+                server.feed(name, 0, "1,10", 0).unwrap();
+                server.feed(name, 0, "1,20", 0).unwrap();
+                server.seal(name, 0, &timely::progress::Antichain::new()).unwrap();
             }
-            server.tick(worker);
             assert_eq!(
                 server.snapshot(worker, "before::out").unwrap().rows(),
                 server.snapshot(worker, "after::out").unwrap().rows()
@@ -1190,10 +1190,10 @@ mod tests {
             server.install(worker, "before", &original).unwrap();
             server.install(worker, "after", &projected).unwrap();
             for name in ["before", "after"] {
-                server.feed(name, 0, "1,10", None).unwrap();
-                server.feed(name, 1, "1,20,30", None).unwrap();
+                server.feed(name, 0, "1,10", 0).unwrap();
+                server.feed(name, 1, "1,20,30", 0).unwrap();
+                for input in [0, 1] { server.seal(name, input, &timely::progress::Antichain::new()).unwrap(); }
             }
-            server.tick(worker);
             assert_eq!(
                 server.snapshot(worker, "before::out").unwrap().rows(),
                 server.snapshot(worker, "after::out").unwrap().rows()

@@ -1,19 +1,19 @@
 # Structured (ADT) values + time-scheduled input.
 load echo from examples/server/programs/echo.ddp
 
-# A variant at the current epoch (0): `Pair(1, 2)`, written as its tag and payload,
+# A variant at time 0: `Pair(1, 2)`, written as its tag and payload,
 # the shape an AST node takes. (values are one token — write terms without spaces)
-feed echo 0 inject(1,tuple(1,2))
+feed echo 0 inject(1,tuple(1,2)) time=0
 # A value scheduled for a FUTURE logical time (3) — appears only once the
-# input frontier passes 3 (i.e., after the 4th tick).
+# input frontier passes 3.
 feed echo 0 inject(0,7) time=3
 
-tick
-tick
-tick
-tick
+seal echo 0 1
+peek echo::out as-of 0
+seal echo 0 4
+peek echo::out as-of 3
 
 # A malformed value: the server reports it and keeps running (robustness).
-feed echo 0 inject(oops)
+feed echo 0 inject(oops) time=4
 list
 exit

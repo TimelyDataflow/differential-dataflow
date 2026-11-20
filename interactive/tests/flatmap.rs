@@ -1,4 +1,6 @@
 //! Complete rows and zero-or-one lists; only the passing match lane builds output.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::{lower, parse, passes, plan, server::Server};
 
 const PROGRAM: &str = r#"
@@ -48,9 +50,10 @@ fn lanes_diffs_retractions_and_times() {
             for (epoch, diff) in [3, -2, -1].into_iter().enumerate() {
                 if worker.index() == 0 {
                     server.feed("p", 0, &format!(
-                        "10 val=tuple(inject(0,2),7) diff={diff}\n20 val=tuple(inject(1,0),0) diff={diff}"), None).unwrap();
+                        "10 val=tuple(inject(0,2),7) diff={diff}\n20 val=tuple(inject(1,0),0) diff={diff}"), epoch as u64).unwrap();
                 }
-                server.tick(worker);
+                server.seal("p", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+                server.spin(worker);
                 let count = [3, 1, 0][epoch];
                 for (name, k, v) in [("users", "2", "tuple(10,7)"), ("literal", "7", "10")] {
                     let got = server.snapshot(worker, &format!("p::{name}")).unwrap().rows();

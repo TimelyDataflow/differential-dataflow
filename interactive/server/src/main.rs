@@ -346,7 +346,7 @@ fn read_frame(input: &mut impl Read, nbytes: usize, wanted: bool) -> std::io::Re
 
 /// Whether `line` is a `feed <prog> <in#> frame <nbytes>` header, with or without a reqid.
 fn is_frame_header(line: &str) -> bool {
-    matches!(line.split_whitespace().collect::<Vec<_>>().as_slice(), [.., "feed", _, _, "frame", _])
+    matches!(line.split_whitespace().filter(|s| !s.starts_with("time=")).collect::<Vec<_>>().as_slice(), [.., "feed", _, _, "frame", _] | [.., "feed", _, "frame", _])
 }
 
 fn run_stdin_session(control: ControlHandle) {

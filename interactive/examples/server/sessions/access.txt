@@ -9,7 +9,7 @@ load demo from examples/server/programs/access.ddp
 # inject(0,tuple()), inject(1,tuple()), inject(2,tuple()) are Owner, Edit, View.
 
 # Input 1, `groups`: group 10 holds user 2 and group 11; group 11 holds user 3.
-feed demo 1 begin
+feed demo 1 time=0 begin
 10 val=inject(0,2)
 10 val=inject(1,11)
 11 val=inject(0,3)
@@ -17,28 +17,30 @@ end-feed
 
 # Input 0, `grants`: user 1 owns doc 100, group 10 can view doc 100 and edit
 # doc 200, and user 3 can edit doc 100.
-feed demo 0 begin
+feed demo 0 time=0 begin
 100 val=tuple(inject(0,1),inject(0,tuple()))
 100 val=tuple(inject(1,10),inject(2,tuple()))
 200 val=tuple(inject(1,10),inject(1,tuple()))
 100 val=tuple(inject(0,3),inject(1,tuple()))
 end-feed
 
-# Apply the changes, then read every (member, doc) and its access.
-tick
-peek demo::access
+# Grants and groups are finished. Blocks can still arrive at time 1.
+seal demo 0 []
+seal demo 1 []
+seal demo 2 1
+initial peek demo::access as-of 0
 
 # Input 2, `blocks`: block group 10 on doc 100. It reaches users 2 and 3 through
 # groups 10 and 11, even past user 3's own grant.
-feed demo 2 100 val=inject(1,10)
-tick
-peek demo::access
+feed demo 2 100 val=inject(1,10) time=1
+seal demo 2 2
+blocked peek demo::access as-of 1
 
 # Read one key: user 3 on doc 100. Nothing comes back while the block holds.
-peek demo::access tuple(inject(0,3),100)
+lookup peek demo::access tuple(inject(0,3),100) as-of 1
 
 # Remove the block by retracting the same row, and read the key again.
-feed demo 2 100 val=inject(1,10) diff=-1
-tick
-peek demo::access tuple(inject(0,3),100)
+feed demo 2 100 val=inject(1,10) time=2 diff=-1
+seal demo 2 3
+restored peek demo::access tuple(inject(0,3),100) as-of 2
 exit

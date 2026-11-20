@@ -66,26 +66,51 @@ def run_plan(args, name, program, schema, bank, graph):
         def command(make):
             return measure.commands(server, make)
         text = graph_program()
-        m, _ = command(lambda: [f'load graph begin\n{text}\n{{rid}} end-load', 'tick'])
+        m, _ = command(lambda: [server.load('graph', text),
+            *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+            *(['diag'] if server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+        server.epoch += 1
         query = program['text']
-        m, _ = command(lambda: [f'load {name} begin\n{query}\n{{rid}} end-load', 'tick'])
+        m, _ = command(lambda: [server.load(name, query),
+            *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+            *(['diag'] if server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+        server.epoch += 1
         record['phases']['install_ms'] = m['wire_ms']
         feed_ms = 0
         for i, table in enumerate(data.SCHEMA):
             rows = sorted(graph[table])
             for offset in range(0, len(rows), 1000):
-                m, _ = command(lambda: [Server.feed('graph', i, rows[offset:offset + 1000], 1, shapes[i])])
+                m, _ = command(lambda: [server.feed('graph', i, rows[offset:offset + 1000], 1, shapes[i], epoch=server.epoch)])
                 feed_ms += m['wire_ms']
-        m, _ = command(lambda: ['tick'])
+        m, _ = command(lambda: [
+            *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+            *(['diag'] if server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+        server.epoch += 1
         record['phases'].update(feed_ms=feed_ms, settle_ms=m['wire_ms'])
         for label, binding in bank:
             rows = sorted(requests(name, schema, binding, 1))
             samples, answer = [], None
             for rep in range(args.warmup + args.reps):
-                mb, _ = command(lambda: [Server.feed(name, 0, rows, 1, request_shape), 'tick'])
+                mb, _ = command(lambda: [server.feed(name, 0, rows, 1, request_shape, epoch=server.epoch),
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                server.epoch += 1
                 mp, (lines,) = command(lambda: [f'peek {name}::answer as corgi'])
                 got = measure.decode_answer(lines, mp)
-                command(lambda: [Server.feed(name, 0, rows, -1, request_shape), 'tick'])
+                command(lambda: [server.feed(name, 0, rows, -1, request_shape, epoch=server.epoch),
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                server.epoch += 1
                 answer = got if answer is None else answer
                 if rep >= args.warmup:
                     samples.append(mb['wire_ms'] + mp['wire_ms'])

@@ -102,15 +102,15 @@ def main():
 
         # Both race for (5,5) with convention ids in the value: (id, epoch).
         # The program's min over (epoch, id) settles it for client 1.
-        a.send("c1 feed world 0 5,5 val=1,0")
+        a.send("c1 feed world 0 5,5 val=1,0 time=0")
         a.expect("c1")
-        b.send("c2 feed world 0 5,5 val=2,0")
+        b.send("c2 feed world 0 5,5 val=2,0 time=0")
         b.expect("c2")
-        b.send("c3 feed world 0 2,2 val=2,0")
+        b.send("c3 feed world 0 2,2 val=2,0 time=0")
         b.expect("c3")
-        b.send("t1 tick")
+        b.send("t1 seal world 0 1")
         b.expect("t1")
-        a.send("p1 peek world::owner as corgi")
+        a.send("p1 peek world::owner as-of 0 as corgi")
         _, _, frames = a.expect("p1")
         owned = {tuple(key): val for key, val, _ in decode(frames)}
         check(

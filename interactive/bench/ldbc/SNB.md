@@ -134,10 +134,7 @@ an official update stream, or a time-bounded saturation run. It does not claim
 general entity-deletion/cascade semantics. Interactive request IDs are reused
 after retraction with new values; they do not name pre-maintained future answers.
 
-Each feed group is completed by `tick`; the feed acknowledgement alone means
-admission. An empty `peek` after that tick is a completed empty result. The
-report separates install/parse, graph admission, initial settlement, bind/tick,
-answer retrieval, release/tick, graph update/tick, and restoration. `read:*`
+Each feed group has an explicit scalar timestamp. The client seals every installed input, waits for `spin`, and trims each published output to the completed time. A subsequent empty `peek` is a completed empty result. The report separates installation, graph admission, initial settlement, binding and completion, answer retrieval, release, graph updates, and restoration. `read:*`
 includes full-result wire transfer and client decoding, not just a handle to an
 answer. Ranking/top-k work stays in DDIR. `batch_answers` sums binding and answer
 retrieval, excluding reference checks between them.

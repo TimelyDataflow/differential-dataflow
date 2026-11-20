@@ -21,8 +21,8 @@ declares the shape of every input it reads.
 
 `run.sh` first runs `transcribe.py` (python3) to regenerate `gen/`, then
 runs each part as one server session piped into `ddir_server` — `load` the
-program from its file, `feed … from` each input's fact file (`gen/dayNN/in{k}.txt`
-for input k, or `partP.in{k}.txt` where a part reads its own), `tick` — and
+program from its file, `feed … time=now from` each input's fact file (`gen/dayNN/in{k}.txt`
+for input k, or `partP.in{k}.txt` where a part reads its own), seal each input at 1, peek at time 0 — and
 reads the answer off the `[partN]` inspect line.
 
 All 33 parts pass.

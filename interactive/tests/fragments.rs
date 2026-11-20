@@ -1,4 +1,6 @@
 //! Weighted fragment semantics, restrictions, placement, and emitted plans.
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::{lower, parse, plan, passes::Config, server::Server};
 
 fn program(src: &str) -> interactive::scope_ir::Program { lower::lower_tree(parse::pipe::parse(src)) }
@@ -14,8 +16,13 @@ fn rows(src: &str, feeds: Vec<(usize, String)>) -> Vec<(String, String, i64)> {
         let mut server = Server::new();
         server.set_passes(Config::parse("all").unwrap());
         server.install(worker, "p", &p).unwrap();
-        for (i, text) in feeds { server.feed("p", i, &text, None).unwrap(); }
-        server.tick(worker);
+        for (i, text) in feeds { server.feed("p", i, &text, 0).unwrap(); }
+        for imp in &p.root.imports {
+            if let interactive::scope_ir::Source::Input(i) = imp.from {
+                server.seal("p", i, &Antichain::from_elem(host_time(1))).unwrap();
+            }
+        }
+        server.spin(worker);
         server.snapshot(worker, "p::out").unwrap().rows()
     })
 }
@@ -34,12 +41,23 @@ fn joins_multiply_weights_and_handle_retractions() {
         let mut s = Server::new();
         s.set_passes(Config::parse("all").unwrap());
         s.install(worker, "p", &p).unwrap();
-        for (i, text) in [(0,"1 val=2 diff=2"),(1,"2 val=3 diff=3"),(2,"1,3 diff=4")] { s.feed("p",i,text,None).unwrap(); }
-        s.tick(worker);
+        for (i, text) in [(0,"1 val=2 diff=2"),(1,"2 val=3 diff=3"),(2,"1,3 diff=4")] { s.feed("p",i,text,0).unwrap(); }
+        for input in 0..3 {
+            s.seal("p", input, &Antichain::from_elem(host_time(1))).unwrap();
+        }
+        s.spin(worker);
         assert_eq!(s.snapshot(worker,"p::out").unwrap().rows(), vec![("tuple(1,2,3)".into(),"tuple()".into(),24)]);
-        s.feed("p",0,"1 val=2 diff=-1",None).unwrap(); s.tick(worker);
+        s.feed("p",0,"1 val=2 diff=-1",1).unwrap();
+        for input in 0..3 {
+            s.seal("p", input, &Antichain::from_elem(host_time(2))).unwrap();
+        }
+        s.spin(worker);
         assert_eq!(s.snapshot(worker,"p::out").unwrap().rows()[0].2,12);
-        s.feed("p",1,"2 val=3 diff=-3",None).unwrap(); s.tick(worker);
+        s.feed("p",1,"2 val=3 diff=-3",2).unwrap();
+        for input in 0..3 {
+            s.seal("p", input, &Antichain::from_elem(host_time(3))).unwrap();
+        }
+        s.spin(worker);
         assert!(s.snapshot(worker,"p::out").unwrap().is_empty());
     });
 }
@@ -464,9 +482,12 @@ fn variants_rekey_before_pending_plain_payload_tests() {
         let mut s = Server::new();
         s.set_passes(Config::all());
         s.install(worker, "p", &p).unwrap();
-        s.feed("p", 0, "100 val=inject(1,tuple(10,7))\n200 val=inject(1,tuple(20,8))\n300 val=inject(0,30)", None).unwrap();
-        s.feed("p", 1, "10 val=3\n20 val=4", None).unwrap();
-        s.tick(worker);
+        s.feed("p", 0, "100 val=inject(1,tuple(10,7))\n200 val=inject(1,tuple(20,8))\n300 val=inject(0,30)", 0).unwrap();
+        s.feed("p", 1, "10 val=3\n20 val=4", 0).unwrap();
+        for input in [0, 1] {
+            s.seal("p", input, &Antichain::from_elem(host_time(1))).unwrap();
+        }
+        s.spin(worker);
         assert_eq!(s.snapshot(worker, "p::keyed").unwrap().rows(), vec![
             ("10".into(), "tuple(100,7)".into(), 1),
             ("20".into(), "tuple(200,8)".into(), 1),

@@ -7,14 +7,13 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
 use interactive::runtime::container::Updates;
 use interactive::runtime::exchange::GatherPact;
 use interactive::runtime::feed::render_row;
 use interactive::runtime::frame;
-use interactive::server::{host_time, Command as ServerCommand, HostContainer, HostTime, OuterTime, Server};
+use interactive::server::{Command as ServerCommand, FeedTimes, HostContainer, HostTime, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -31,6 +30,11 @@ struct Tail {
     _shutdown: ShutdownButton<CapabilitySet<HostTime>>,
     trace: String,
     probe: ProbeHandle<HostTime>,
+}
+
+fn wire_time(point: &HostTime) -> String {
+    if point.len() <= 1 { point.first().copied().unwrap_or(0).to_string() }
+    else { serde_json::to_string(&point[..]).expect("u64 coordinates serialize") }
 }
 
 type TailKey = (ConnectionId, String);
@@ -59,37 +63,27 @@ impl Work {
     fn distribute(self, peers: usize) -> Vec<(u64, Work)> {
         match self {
             Work::Request {
-                token,
-                reqid,
-                command:
-                    Ok(PreparedCommand::Server(ServerCommand::FeedColumns {
-                        prog,
-                        input,
-                        columns,
-                    })),
-                connection_id,
-                logical_count: _,
+                token, reqid, connection_id,
+                command: Ok(PreparedCommand::Server(ServerCommand::FeedBatch { prog, input, columns, times })),
+                ..
             } => {
-                let logical_count = columns.len();
-                (0..peers)
-                    .map(|target| {
-                        let rows: Vec<usize> = (target..logical_count).step_by(peers).collect();
-                        (
-                            target as u64,
-                            Work::Request {
-                                token,
-                                reqid: reqid.clone(),
-                                command: Ok(PreparedCommand::Server(ServerCommand::FeedColumns {
-                                    prog: prog.clone(),
-                                    input: input.clone(),
-                                    columns: columns.select(&rows),
-                                })),
-                                connection_id,
-                                logical_count: Some(logical_count),
-                            },
-                        )
+                (0..peers).map(|target| {
+                    let rows: Vec<_> = (target..columns.len()).step_by(peers).collect();
+                    let times = match &times {
+                        FeedTimes::Shared(point) => FeedTimes::Shared(point.clone()),
+                        FeedTimes::PerRow { lanes, least, width } => FeedTimes::PerRow {
+                            lanes: lanes.iter().map(|lane| rows.iter().map(|&i| lane[i]).collect()).collect(),
+                            least: least.clone(), width: *width,
+                        },
+                    };
+                    let command = ServerCommand::FeedBatch {
+                        prog: prog.clone(), input: input.clone(), columns: columns.select(&rows), times,
+                    };
+                    (target as u64, Work::Request {
+                        token, reqid: reqid.clone(), command: Ok(PreparedCommand::Server(command)),
+                        connection_id, logical_count: Some(columns.len()),
                     })
-                    .collect()
+                }).collect()
             }
             work => (0..peers)
                 .map(|target| (target as u64, work.clone()))
@@ -112,7 +106,7 @@ pub fn run_worker(
     events: Option<Receiver<ControlEvent>>,
 ) {
     // With DDIR_DIAGNOSTICS=1 diagnostics own the worker's loggers, registered before any dataflow
-    // is built so that every operator is seen. Their events are only folded in at `tick`, so an
+    // is built so that every operator is seen. Their events are only folded in at `diag`, so an
     // idle server stays idle.
     let diagnostics = (std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1"))
         .then(|| interactive::diag::register(worker));
@@ -267,9 +261,8 @@ fn dispatch(
     let result = match command {
         Err(error) => Err(error),
         Ok(PreparedCommand::Server(command)) => match command {
-            ServerCommand::Install { name, program } => server
-                .install(worker, &name, &program)
-                .map(|()| format!("installed {:?} ({} ops)", name, program.op_count())),
+            ServerCommand::Install { name, program, width } => server.install_with_width(worker, &name, &program, width)
+                .map(|()| format!("installed {name:?} ({} ops)", program.op_count())),
             ServerCommand::Drop { name } => {
                 if tails.values().any(|tail| {
                     server
@@ -292,40 +285,61 @@ fn dispatch(
                         .map(|()| format!("dropped {:?}", name))
                 }
             }
-            ServerCommand::Feed {
-                prog,
-                input,
-                columns,
-                time,
-            } => {
-                // An external row must enter the distributed collection once.
-                // Its dataflow exchanges will place it on the appropriate peer.
+            ServerCommand::Feed { prog, input, columns, time }
+            | ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::Shared(time) } => {
                 server.input_position(&prog, &input).and_then(|input| {
-                    let result = if worker.index() == 0 {
-                        server.feed_columns(&prog, input, columns, time)
-                    } else {
-                        Ok(())
+                    let point = match time {
+                        Some(time) => time,
+                        None => server.input_time(&prog, input)?.clone(),
                     };
-                    result.map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch()))
+                    // Batches arrive sharded. A single row enters the collection once.
+                    if logical_count.is_some() || worker.index() == 0 {
+                        server.feed_columns_at(&prog, input, columns, &point)?;
+                    }
+                    let time = wire_time(&point);
+                    match logical_count {
+                        Some(rows) => Ok(format!("fed {rows} rows to {prog:?} input {input} at t={time}")),
+                        None => Ok(format!("fed {prog:?} input {input} at t={time}")),
+                    }
                 })
             }
-            ServerCommand::FeedColumns {
-                prog,
-                input,
-                columns,
-            } => server.input_position(&prog, &input).and_then(|input| server.feed_columns(&prog, input, columns, None).map(|()| {
-                format!(
-                    "fed {} rows to {:?} input {} at t={}",
-                    logical_count.expect("distributed batch retains its logical row count"),
-                    prog,
-                    input,
-                    server.epoch()
-                )
-            })),
+            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.input_position(&prog, &input).and_then(|input| {
+                server.validate_batch(&prog, input, &least, width)?;
+                let times = interactive::runtime::col_times::ColTimes::from_raw_lanes(lanes, columns.len());
+                let interactive::runtime::container::Updates { keys, vals, diffs } = columns;
+                server.feed_container(&prog, input, HostContainer { keys, vals, times, diffs })?;
+                Ok(format!("fed {} rows to {prog:?} input {input} at their times",
+                    logical_count.expect("a timed batch retains its logical row count")))
+            }),
+            // Collective: every worker moves its own handle. Nothing is waited for.
+            ServerCommand::Seal { prog, input, frontier } => server.input_position(&prog, &input).and_then(|input| {
+                server.seal(&prog, input, &frontier)?;
+                let text = match frontier.elements() {
+                    [point] => wire_time(point),
+                    points => serde_json::to_string(&points.iter().map(|p| &p[..]).collect::<Vec<_>>())
+                        .expect("u64 coordinates serialize"),
+                };
+                Ok(format!("sealed {prog:?} input {input} to {text}"))
+            }),
+            ServerCommand::Trim { trace, frontier } => server.trim(worker, &trace, frontier.as_ref()).map(|()| format!("trimmed {trace:?}")),
+            // Collective: outputs and tails must reach or pass their commanded targets.
+            ServerCommand::Spin => {
+                server.spin(worker);
+                settle_tails(server, tails, worker);
+                Ok("spun".to_string())
+            }
             // Collective: every worker sources its own shard.
-            ServerCommand::Load { prog, input, source, diff } => server.input_position(&prog, &input).and_then(|input| {
+            ServerCommand::Load { prog, input, source, diff, time } => server.input_position(&prog, &input).and_then(|input| {
                 let local = server.loads_from_trace(&source);
-                server.load(worker, &prog, input, &source, diff).map(|rows| {
+                if local {
+                    // A seal may have returned before every shard reached the snapshot cut.
+                    server.wait_for_frontier(worker, &source, &server.target(&source)?)?;
+                }
+                let time = match time {
+                    Some(point) => point,
+                    None => server.input_time(&prog, input)?.clone(),
+                };
+                server.load_at(worker, &prog, input, &source, diff, &time).map(|rows| {
                     if local {
                         format!("fed trace {source:?} with diff={diff} into {prog:?} input {input} ({rows} rows on worker 0)")
                     } else {
@@ -358,17 +372,10 @@ fn dispatch(
                             format!("trace name={:?} importers={}", name, importers),
                         );
                     }
-
                 }
-                Ok(format!("t={}", server.epoch()))
+                Ok(String::new())
             }
-            ServerCommand::Tick { n } => {
-                let timer = Instant::now();
-                for _ in 0..n {
-                    tick(server, tails, worker);
-                }
-                Ok(format!("t={} elapsed={:.2?}", server.epoch(), timer.elapsed()))
-            }
+            ServerCommand::SampleDiagnostics => server.sample_diagnostics(worker).map(|t| format!("diagnostics t={t}")),
             ServerCommand::Exit => {
                 *shutdown = connection_id == 0;
                 Ok("bye".into())
@@ -378,7 +385,10 @@ fn dispatch(
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
-                interactive::plan::report_at(&program, &|trace| server.source_shape(trace), &server.passes(), server.epoch().saturating_sub(1)).and_then(|report| {
+                interactive::plan::report_with_read_floor(
+                    &program, &|trace| server.source_shape(trace), &server.passes(),
+                    |program| server.install_read_floor(program).first().copied().unwrap_or(0),
+                ).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         report.print_with(interactive::plan::PrintOptions { timings, ..Default::default() })
                     })).map_err(|_| "plan printing panicked".to_string())?;
@@ -389,7 +399,12 @@ fn dispatch(
                 })
             } else { Ok(String::new()) }
         }
-        Ok(PreparedCommand::Peek { name, key, format }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
+        Ok(PreparedCommand::Peek { name, key, as_of, format }) => (|| {
+            let time = match as_of {
+                Some(time) => time,
+                None => server.latest_readable(&name)?.ok_or_else(|| format!("trace {name:?} has no closed time in its retained history"))?,
+            };
+            let updates = server.peek_as_of(worker, &name, key.as_deref(), &time)?;
             if let Some(response) = response.as_ref() {
                 match format {
                     ReadFormat::Corgi => {
@@ -408,8 +423,8 @@ fn dispatch(
                     ReadFormat::Columns => {}
                 }
             }
-            format!("t={}", server.epoch())
-        }),
+            Ok(format!("as-of={}", wire_time(&time)))
+        })(),
         Ok(PreparedCommand::Tail { name, format }) => start_tail(
             connection_id,
             reqid,
@@ -420,7 +435,7 @@ fn dispatch(
             tails,
             worker,
         )
-        .map(|()| format!("tailing {:?} from t={}", name, server.epoch())),
+        .map(|()| format!("tailing {name:?}")),
         Ok(PreparedCommand::Stop { tail_reqid }) => {
             let key = (connection_id, tail_reqid.clone());
             match tails.remove(&key) {
@@ -475,6 +490,10 @@ fn start_tail(
     let mut trace = server
         .published(name)
         .ok_or_else(|| format!("no trace {:?}", name))?;
+    if server.trace_width(name).is_some_and(|w| w > 1) {
+        return Err("tail requires scalar time; use peek as-of with a point for this trace".into());
+    }
+    let as_of = server.trace_since(name).ok_or("trace history released")?.clone();
     if let (Some(response), ReadFormat::Corgi) = (response.as_ref(), format) {
         let (k, v) = server.trace_shape(name).expect("a published trace has a shape");
         send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
@@ -483,9 +502,9 @@ fn start_tail(
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
     let shutdown = interactive::server::host_dataflow(worker, |scope| {
-        let (containers, shutdown) = trace.import_containers(scope, "TailImport", server.import_as_of());
+        let (containers, shutdown) = trace.import_containers(scope, "TailImport", as_of);
         let pending = Arc::new(AtomicUsize::new(0));
-        let (mut upper, mut dropped) = (None::<OuterTime>, false);
+        let (mut last_frontier, mut dropped) = (None, false);
         containers
             .inner
             .unary_frontier::<CapacityContainerBuilder<Vec<()>>, _, _, _>(GatherPact, "Tail", move |capability, _info| {
@@ -509,8 +528,13 @@ fn start_tail(
                     input.for_each(|_time, data| {
                         let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
                         let updates = Updates { keys, vals, diffs };
-                        // A published trace's times are `(epoch, [])`: its rows go out at their epochs.
-                        let epochs = &times.raw_lanes()[..times.raw_lanes().len().min(1)];
+                        // Each change carries the scalar time at which it took effect.
+                        // Times that are all zero are stored as no lane; the frame still says them.
+                        let zeros;
+                        let epochs = match times.raw_lanes() {
+                            [] => { zeros = [vec![0; times.len()]]; &zeros[..] }
+                            lanes => &lanes[..1],
+                        };
                         match format {
                             ReadFormat::Corgi => out("data", frame::encode(&updates, epochs)),
                             ReadFormat::Columns => {
@@ -525,11 +549,10 @@ fn start_tail(
                         }
                     });
                     if format == ReadFormat::Corgi {
-                        if let Some(t) = frontier.frontier().iter().map(|t| t.first().copied().unwrap_or(0)).min() {
-                            if upper != Some(t) {
-                                upper = Some(t);
-                                out("progress", t.to_le_bytes().to_vec());
-                            }
+                        let upper = frontier.frontier().iter().map(|t| t.first().copied().unwrap_or(0)).min();
+                        if last_frontier != Some(upper) {
+                            last_frontier = Some(upper);
+                            out("progress", upper.map(|t| t.to_le_bytes().to_vec()).unwrap_or_default());
                         }
                     }
                 }
@@ -539,11 +562,11 @@ fn start_tail(
     });
 
     // A tail's acknowledgement is its initial-replay boundary. Drive the new
-    // import through the current closed epoch before returning. The response
+    // import through the commanded write frontier before returning. The response
     // channel is FIFO, so every replayed `data` message precedes dispatch's
     // terminal `ok` and later commands cannot mistake replay for fresh data.
-    let epoch = server.epoch();
-    while probe.less_than(&host_time(epoch)) {
+    let target = server.target(name)?;
+    while behind(&probe, &target) {
         worker.step();
     }
     tails.insert(
@@ -558,10 +581,17 @@ fn start_tail(
     Ok(())
 }
 
-fn tick(server: &mut Server, tails: &mut HashMap<TailKey, Tail>, worker: &mut Worker) {
-    server.tick(worker);
-    let epoch = server.epoch();
-    while tails.values().any(|tail| tail.probe.less_than(&host_time(epoch))) {
+/// Whether a reader's `probe` has yet to reach `target`, the frontier of the trace it reads.
+fn behind(probe: &ProbeHandle<HostTime>, target: &timely::progress::Antichain<HostTime>) -> bool {
+    probe.with_frontier(|frontier| frontier.iter().any(|time| !target.less_equal(time)))
+}
+
+/// Run until every tail has sent the changes that the commands so far have made to its trace:
+/// those before the meet of its input frontiers.
+/// `spin` waits for this delivery. A seal only moves its input.
+fn settle_tails(server: &Server, tails: &HashMap<TailKey, Tail>, worker: &mut Worker) {
+    let targets: Vec<_> = tails.values().map(|tail| (tail, server.target(&tail.trace).expect("a tailed trace is published"))).collect();
+    while targets.iter().any(|(tail, target)| behind(&tail.probe, target)) {
         worker.step();
     }
 }
@@ -596,4 +626,41 @@ fn send(sender: &Sender<Out>, reqid: &str, kind: &str, body: String) {
 fn send_frame(sender: &Sender<Out>, reqid: &str, kind: &str, bytes: Vec<u8>, pending: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>) {
     let header = format!("{} frame {} {}\n", reqid, kind, bytes.len());
     let _ = sender.send(Out::Frame { header, bytes, pending });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmd::{prepare, Catalog, Cmd};
+    use interactive::runtime::feed::FeedDecoder;
+    use interactive::server::{host_time, InputId};
+
+    #[test]
+    fn timed_batch_distributes_rows_and_replicates_its_bounds() {
+        let program = interactive::parse::pipe::parse(r#"output "x" = input 0 : (int, ());"#);
+        let shape = interactive::lower::lower_tree(program).root.imports[0].shape.clone().unwrap();
+        let mut decoder = FeedDecoder::new(&shape.0, &shape.1);
+        for key in ["0", "1", "2", "3"] { decoder.push(key, None, 1).unwrap(); }
+        let times = vec![vec![8, 0, 4, 8], vec![0, 7, 7, 1]];
+        let command = Cmd::FeedTimed {
+            prog: "p".into(), input: InputId::Position(0), columns: decoder.finish(), times: times.clone(),
+        };
+        let work = Work::Request {
+            token: 0, reqid: "f".into(), connection_id: 0, logical_count: None,
+            command: prepare(command, &Catalog::default()),
+        };
+        for (target, work) in work.distribute(3) {
+            let Work::Request { logical_count: Some(4), command: Ok(PreparedCommand::Server(
+                ServerCommand::FeedBatch { columns, times: FeedTimes::PerRow { lanes, least, width }, .. }
+            )), .. } = work else { panic!("expected a shard of the four-row batch") };
+            let rows: Vec<_> = (target as usize..4).step_by(3).collect();
+            assert_eq!(columns.len(), rows.len());
+            for (i, (key, _, _)) in columns.rows().iter().enumerate() {
+                assert_eq!(key, &rows[i].to_string());
+                assert_eq!((lanes[0][i], lanes[1][i]), (times[0][rows[i]], times[1][rows[i]]));
+            }
+            assert_eq!(width, 2);
+            assert_eq!(least, [HostTime::new([0, 7].into_iter().collect()), host_time(8)]);
+        }
+    }
 }

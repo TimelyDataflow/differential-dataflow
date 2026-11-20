@@ -2,8 +2,8 @@
 //!
 //! With diagnostics on, each worker keeps timely's `"timely"` events, DD's
 //! `"differential/arrange"` events, and the statement labels rendering logs to `"ddir/labels"`.
-//! At each `tick` the server turns the events since the last one into rows of these sources, at
-//! the epoch being closed. Each source's count carries its magnitude:
+//! The `diag` command turns events since the previous sample into rows of these sources
+//! and advances their own scalar frontier. Each source's count carries its magnitude:
 //!
 //! - `diag.operator`: `((worker, op), (program, statement, name, address))`, +1 when the operator
 //!   is created and −1 when it shuts down or its dataflow is dropped.

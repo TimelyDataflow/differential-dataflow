@@ -30,7 +30,7 @@ fn analyze(scope: &Scope, exports: Option<&[bool]>) -> Live {
     let mut live = Live {
         items: vec![false; scope.items.len()],
         // Root inputs remain part of the client's interface. Importing the clock also
-        // publishes it in the server catalog and keeps it advancing on each tick.
+        // publishes it in the server catalog so clients can feed and seal it.
         imports: scope.imports.iter().map(|i| matches!(&i.from, Source::Input(_))
             || matches!(&i.from, Source::Trace(name) if name == "clock")).collect(),
         exports: scope.items.iter().map(|item| match item {

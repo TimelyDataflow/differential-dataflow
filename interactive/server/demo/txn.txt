@@ -11,7 +11,7 @@
 #
 # Rows: key = (txn id, is_read, account), val = (value); accounts alice=1,
 # bob=2; "expect absent" reads use the sentinel -1. Ids order transactions;
-# the epoch seal (tick) is what makes resolved prefixes final.
+# sealing the input is what makes resolved prefixes final.
 #
 #   cargo run -p ddir-server --release
 #   ./target/release/ddir_server < interactive/server/demo/txn.txt
@@ -62,26 +62,26 @@ bank end-load
 
 # The five transactions from the post, all as blind appends:
 # T1: blind write alice=100.
-feed bank 0 1,0,1 val=100
+feed bank 0 1,0,1 val=100 time=0
 # T2: bob must be absent; write bob=50.
-feed bank 0 2,1,2 val=-1
-feed bank 0 2,0,2 val=50
+feed bank 0 2,1,2 val=-1 time=0
+feed bank 0 2,0,2 val=50 time=0
 # T3: move 30 alice->bob, iff alice=100 and bob=50.
-feed bank 0 3,1,1 val=100
-feed bank 0 3,1,2 val=50
-feed bank 0 3,0,1 val=70
-feed bank 0 3,0,2 val=80
+feed bank 0 3,1,1 val=100 time=0
+feed bank 0 3,1,2 val=50 time=0
+feed bank 0 3,0,1 val=70 time=0
+feed bank 0 3,0,2 val=80 time=0
 # T4: move 40, against the SAME reads -- must roll back (T3 got there first).
-feed bank 0 4,1,1 val=100
-feed bank 0 4,1,2 val=50
-feed bank 0 4,0,1 val=60
-feed bank 0 4,0,2 val=90
+feed bank 0 4,1,1 val=100 time=0
+feed bank 0 4,1,2 val=50 time=0
+feed bank 0 4,0,1 val=60 time=0
+feed bank 0 4,0,2 val=90 time=0
 # T5: move 30 more, against T3's refreshed values -- commits.
-feed bank 0 5,1,1 val=70
-feed bank 0 5,1,2 val=80
-feed bank 0 5,0,1 val=50
-feed bank 0 5,0,2 val=100
-tick
+feed bank 0 5,1,1 val=70 time=0
+feed bank 0 5,1,2 val=80 time=0
+feed bank 0 5,0,1 val=50 time=0
+feed bank 0 5,0,2 val=100 time=0
+seal bank 0 1
 
 # Expect: rollback = {4}; state alice=50, bob=100.
 peek bank::rollback
@@ -89,22 +89,22 @@ peek bank::state
 
 # --- Asynchronous maintenance (any client, any time; output-invariant) ---
 # Remove the failed transaction, the read sets of committed transactions,
-# and overwritten writes. The ids are sealed (their epoch has ticked), so
+# and overwritten writes. The client has finished writing transactions with these ids, so
 # these deletions cannot change what committed.
-feed bank 0 4,1,1 val=100 diff=-1
-feed bank 0 4,1,2 val=50 diff=-1
-feed bank 0 4,0,1 val=60 diff=-1
-feed bank 0 4,0,2 val=90 diff=-1
-feed bank 0 2,1,2 val=-1 diff=-1
-feed bank 0 3,1,1 val=100 diff=-1
-feed bank 0 3,1,2 val=50 diff=-1
-feed bank 0 5,1,1 val=70 diff=-1
-feed bank 0 5,1,2 val=80 diff=-1
-feed bank 0 1,0,1 val=100 diff=-1
-feed bank 0 3,0,1 val=70 diff=-1
-feed bank 0 2,0,2 val=50 diff=-1
-feed bank 0 3,0,2 val=80 diff=-1
-tick
+feed bank 0 4,1,1 val=100 diff=-1 time=1
+feed bank 0 4,1,2 val=50 diff=-1 time=1
+feed bank 0 4,0,1 val=60 diff=-1 time=1
+feed bank 0 4,0,2 val=90 diff=-1 time=1
+feed bank 0 2,1,2 val=-1 diff=-1 time=1
+feed bank 0 3,1,1 val=100 diff=-1 time=1
+feed bank 0 3,1,2 val=50 diff=-1 time=1
+feed bank 0 5,1,1 val=70 diff=-1 time=1
+feed bank 0 5,1,2 val=80 diff=-1 time=1
+feed bank 0 1,0,1 val=100 diff=-1 time=1
+feed bank 0 3,0,1 val=70 diff=-1 time=1
+feed bank 0 2,0,2 val=50 diff=-1 time=1
+feed bank 0 3,0,2 val=80 diff=-1 time=1
+seal bank 0 2
 
 # The log is now just the two live writes -- and state is UNCHANGED.
 peek bank::log

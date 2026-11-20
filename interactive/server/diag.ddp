@@ -1,5 +1,5 @@
 -- The server's diagnostics views, over the `diag.*` sources it feeds from its own logging at
--- each tick (see `interactive/src/diag.rs`). Installed as program `diag` when the server starts
+-- each `diag` sample (see `interactive/src/diag.rs`). Installed as program `diag` when the server starts
 -- with DDIR_DIAGNOSTICS=1; drop it, or install another, like any program. Names are lists of
 -- their bytes. Every view leaves out the diagnostics program itself (program "diag").
 

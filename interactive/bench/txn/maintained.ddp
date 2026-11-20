@@ -4,12 +4,12 @@
 -- Input 0 is the log: key = (txn id, is_read, record key), val = (value).
 -- `is_read = 1` asserts the record held `value` before this transaction; the
 -- sentinel -1 asserts it was absent. `is_read = 0` proposes a write. Ids order
--- transactions and increase across ticks.
+-- transactions and increase across epochs.
 --
 -- The store is not a separate collection: it is the log's current committed
--- writes, which keep their transaction ids. So once a tick seals its ids, the
+-- writes, which keep their transaction ids. So once the client seals the epoch, the
 -- rows the log no longer needs are `log - store`, exported as `retire`, and
--- `feed bank 0 from retire diff=-1` leaves the log equal to the store.
+-- `feed bank 0 time=now from bank::retire diff=-1` leaves the log equal to the store.
 
 let intents = input 0 : ((int, int, int), (int));
 

@@ -4,6 +4,8 @@
 //! (With per-shard validation, two workers and the lines `1, bad, 3, 4` gave
 //! "loaded 4 rows" on worker 0 with only `1` and `3` present.)
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use std::collections::BTreeSet;
 
 use interactive::server::Server;
@@ -31,7 +33,8 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
         let outcome = server.load(worker, "world", 0, &path, 1);
-        server.tick(worker);
+        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.spin(worker);
         let rows = server
             .snapshot(worker, "world::rows")
             .unwrap().rows()
@@ -82,15 +85,20 @@ fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
         install(&mut server, worker, "world");
         install(&mut server, worker, "gone");
         if worker.index() == 0 {
-            server.feed("world", 0, "1\n2\n3\n4\n5\n6", None).unwrap();
-            server.feed("gone", 0, "2\n4\n6", None).unwrap();
+            server.feed("world", 0, "1\n2\n3\n4\n5\n6", 0).unwrap();
+            server.feed("gone", 0, "2\n4\n6", 0).unwrap();
         }
-        server.tick(worker);
+        for name in ["world", "gone"] {
+            server.seal(name, 0, &Antichain::from_elem(host_time(1))).unwrap();
+        }
+        server.spin(worker);
         assert!(server.loads_from_trace("gone::rows"));
         server.load(worker, "world", 0, "gone::rows", -1).unwrap();
-        server.tick(worker);
+        server.seal("world", 0, &Antichain::from_elem(host_time(2))).unwrap();
+        server.spin(worker);
         server.load(worker, "world", 0, "world::rows", 2).unwrap();
-        server.tick(worker);
+        server.seal("world", 0, &Antichain::from_elem(host_time(3))).unwrap();
+        server.spin(worker);
         server
             .snapshot(worker, "world::rows")
             .unwrap()

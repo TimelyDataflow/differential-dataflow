@@ -79,7 +79,7 @@ One update thread submits each update as it falls due; `--threads` read workers
 each run one complex read and then its walk, one read at a time, as the Java
 driver's thread pool does.
 
-- **DDIR:** one loop ticks the server. A tick applies every update submitted
+- **DDIR:** one loop closes each scalar epoch by sealing the graph and request inputs, waiting on `spin`, and trimming the graph and plan outputs. The driver calls these batches ticks in its logs. Each batch applies every update submitted
   since the previous tick began, answers every read submitted in that time, and
   retracts the previous tick's reads. Every operation in a tick starts when the
   tick starts and ends when it ends.

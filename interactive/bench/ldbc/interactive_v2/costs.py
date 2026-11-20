@@ -49,7 +49,6 @@ def main():
     timed = Counter()
     if args.system == 'ddir':
         import systems
-        from client import Server
         from snb.parameters import requests
         with gzip.open(args.snapshot) as f:
             graph = pickle.load(f)
@@ -61,11 +60,29 @@ def main():
             start = time.perf_counter()
             sut.server.commands(commands)
             return time.perf_counter() - start
-        empty = statistics.median(run(['tick']) for _ in range(50))
+        samples = []
+        for _ in range(50):
+            samples.append(run([
+                *(f'seal {program} {slot} {sut.server.epoch + 1}' for program, slot in sut.server.input_ports),
+                *(['diag'] if sut.server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {sut.server.epoch}' for trace in (*sut.server.output_traces, *sut.server.diagnostics))]))
+            sut.server.epoch += 1
+        empty = statistics.median(samples)
         for k, (plan, binding) in enumerate(reads):
             rows = sorted(requests(plan, sut.plans[plan]['parameters'], binding, 10**6 + k))
-            first[plan] += run([Server.feed(plan, 0, rows, 1, sut.shapes[plan]), 'tick', f'peek {plan}::answer as corgi']) - empty
-            second[plan] += run([Server.feed(plan, 0, rows, -1, sut.shapes[plan]), 'tick']) - empty
+            first[plan] += run([sut.server.feed(plan, 0, rows, 1, sut.shapes[plan], epoch=sut.server.epoch),
+                *(f'seal {program} {slot} {sut.server.epoch + 1}' for program, slot in sut.server.input_ports),
+                *(['diag'] if sut.server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {sut.server.epoch}' for trace in (*sut.server.output_traces, *sut.server.diagnostics)), f'peek {plan}::answer as corgi']) - empty
+            sut.server.epoch += 1
+            second[plan] += run([sut.server.feed(plan, 0, rows, -1, sut.shapes[plan], epoch=sut.server.epoch),
+                *(f'seal {program} {slot} {sut.server.epoch + 1}' for program, slot in sut.server.input_ports),
+                *(['diag'] if sut.server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {sut.server.epoch}' for trace in (*sut.server.output_traces, *sut.server.diagnostics))]) - empty
+            sut.server.epoch += 1
             timed[plan] += 1
         sut.server.close()
     else:

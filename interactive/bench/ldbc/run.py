@@ -68,15 +68,25 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
         for name in ('graph', *args.queries):
             program = (HERE / f'{name}.ddp').read_text()
             shapes[name] = declared_inputs(program) if args.feed == 'frames' else {}
-            command(f'install:{name}', lambda: [f'load {name} begin\n{program}\n{{rid}} end-load', 'tick'])
+            command(f'install:{name}', lambda: [server.load(name, program),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
         for index, name in enumerate(TABLES):
             rows = sorted(graph[name])
             for offset in range(0, len(rows), 1000):
                 chunk = rows[offset:offset+1000]
-                command(f'load:{name}', lambda: [Server.feed('graph', index, chunk, 1, shapes['graph'].get(index))])
+                command(f'load:{name}', lambda: [server.feed('graph', index, chunk, 1, shapes['graph'].get(index), epoch=server.epoch)])
         for name in bi:
-            command(f'standing:{name}', lambda: [Server.feed(name, 0, [(0, *standing[name])], 1, shapes[name].get(0))])
-        command('initial_tick', lambda: ['tick'])
+            command(f'standing:{name}', lambda: [server.feed(name, 0, [(0, *standing[name])], 1, shapes[name].get(0), epoch=server.epoch)])
+        command('initial_tick', lambda: [
+            *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+            *(['diag'] if server.diagnostics else []),
+            'spin',
+            *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+        server.epoch += 1
         for name in bi:
             read(name, answers['initial'][name][standing[name]])
         for name in interactive:
@@ -87,8 +97,13 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
             for state_index, state in enumerate(('initial', 'changed')):
                 context['state'] = state
                 if state == 'changed':
-                    command('update', lambda: [Server.feed('graph', TABLES.index(t), rows, -1, shapes['graph'].get(TABLES.index(t)))
-                                              for t, rows in delta.items() if rows] + ['tick'])
+                    command('update', lambda: [server.feed('graph', TABLES.index(t), rows, -1, shapes['graph'].get(TABLES.index(t)), epoch=server.epoch)
+                                              for t, rows in delta.items() if rows] + [
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
                     for name in bi:
                         read(name, answers[state][name][standing[name]], 'maintained')
                 bindings = {name: [(rid, *bank[name][((2*cycle+state_index)*args.batch_size+rid) % len(bank[name])])
@@ -96,7 +111,12 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                 record['requests'].append(dict(context, bindings=bindings))
                 if interactive:
                     first_event = len(record['events'])
-                    command('bind', lambda: [Server.feed(name, 0, bindings[name], 1, shapes[name].get(0)) for name in interactive] + ['tick'])
+                    command('bind', lambda: [server.feed(name, 0, bindings[name], 1, shapes[name].get(0), epoch=server.epoch) for name in interactive] + [
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
                     for name in interactive:
                         want = []
                         for rid, *params in bindings[name]:
@@ -107,12 +127,22 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                     totals = measure.total(record['events'][first_event:])
                     record['events'].append(dict(context, phase='batch_answers', **totals,
                                                  derived=True, requests=len(interactive)*args.batch_size))
-                    command('release', lambda: [Server.feed(name, 0, bindings[name], -1, shapes[name].get(0)) for name in interactive] + ['tick'])
+                    command('release', lambda: [server.feed(name, 0, bindings[name], -1, shapes[name].get(0), epoch=server.epoch) for name in interactive] + [
+                        *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                        *(['diag'] if server.diagnostics else []),
+                        'spin',
+                        *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                    server.epoch += 1
                     for name in interactive:
                         read(name, [], 'empty')
             context['state'] = 'restored'
-            command('restore', lambda: [Server.feed('graph', TABLES.index(t), rows, 1, shapes['graph'].get(TABLES.index(t)))
-                                       for t, rows in delta.items() if rows] + ['tick'])
+            command('restore', lambda: [server.feed('graph', TABLES.index(t), rows, 1, shapes['graph'].get(TABLES.index(t)), epoch=server.epoch)
+                                       for t, rows in delta.items() if rows] + [
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             for name in bi:
                 read(name, answers['initial'][name][standing[name]], 'maintained')
             print(f'{backend}: round {cycle-args.warmup + 1}/{args.rounds}, answers verified', flush=True)

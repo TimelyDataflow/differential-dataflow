@@ -1,5 +1,7 @@
 //! Projection changes what reduce stores, without changing which input wins.
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use corgi::Shape;
 use interactive::{ir::{LinearOp, Reducer}, lower, parse, passes::projection};
 use interactive::scope_ir::{Item, Node, Ref};
@@ -32,8 +34,11 @@ fn latest_write_stores_only_the_payload_and_suppresses_unchanged_payloads() {
             "1,-3,8", // The new winner has a different payload.
             "1,-3,8 diff=-1\n1,-2,7 diff=-1\n1,0,99 diff=-1", // The key disappears.
         ].into_iter().enumerate() {
-            for name in ["before", "after"] { server.feed(name, 0, rows, None).unwrap(); }
-            server.tick(worker);
+            for name in ["before", "after"] { server.feed(name, 0, rows, tick as u64).unwrap(); }
+            for name in ["before", "after"] {
+                server.seal(name, 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            }
+            server.spin(worker);
             let after = server.snapshot(worker, "after::after").unwrap();
             assert_eq!(server.snapshot(worker, "before::before").unwrap().rows(), after.rows());
             if tick < 3 {
@@ -74,9 +79,12 @@ fn demand_mask_enters_an_arbitrary_reduce_and_keeps_its_diffs() {
         let mut server = Server::new();
         server.install(worker, "before", &original).unwrap();
         server.install(worker, "after", &projected).unwrap();
-        for rows in ["1,10,7\n1,20,7 diff=-2", "1,10,7 diff=-1\n1,20,7 diff=2"] {
-            for name in ["before", "after"] { server.feed(name, 0, rows, None).unwrap(); }
-            server.tick(worker);
+        for (tick, rows) in ["1,10,7\n1,20,7 diff=-2", "1,10,7 diff=-1\n1,20,7 diff=2"].into_iter().enumerate() {
+            for name in ["before", "after"] { server.feed(name, 0, rows, tick as u64).unwrap(); }
+            for name in ["before", "after"] {
+                server.seal(name, 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            }
+            server.spin(worker);
             assert_eq!(server.snapshot(worker, "before::before").unwrap().rows(), server.snapshot(worker, "after::after").unwrap().rows());
         }
     });

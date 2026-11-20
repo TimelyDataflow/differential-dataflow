@@ -51,6 +51,7 @@
 //!   original failures for later minimization. Each case logs its subset and outcome.
 //! - A case that makes no progress for two minutes stops the sweep, naming its seed.
 
+use timely::progress::Antichain;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -86,7 +87,7 @@ enum Sh { Int, Unit, Tup(Vec<Sh>), List(Box<Sh>), Sum, Float }
 
 /// Whether `split` and `bind` may install their consumer after the producer has run some epochs,
 /// and whether `reinstall` runs. A consumer installed late imports traces whose history has been
-/// compacted, which it reads as of the time it starts (`Server::import_as_of`). Turning this off
+/// compacted, which it reads as of the time it starts. Turning this off
 /// changes no case: the late epoch is drawn either way.
 const LATE_INSTALLS: bool = true;
 
@@ -945,7 +946,7 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
         if ahead && worker.index() == 0 {
             for (time, epoch) in epochs.iter().enumerate() {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), Some(time as u64))?;
+                    server.feed(&fed, *input, &lines.join("\n"), time as u64)?;
                 }
             }
         }
@@ -961,10 +962,17 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
             }
             if !ahead && worker.index() == 0 {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), None)?;
+                    server.feed(&fed, *input, &lines.join("\n"), e as u64)?;
                 }
             }
-            server.tick(worker);
+            let frontier = Antichain::from_elem(server::host_time(e as u64 + 1));
+            for p in server.program_info() {
+                for input in p.inputs { server.seal(&p.name, input, &frontier)?; }
+            }
+            server.spin(worker);
+            for (trace, _) in server.trace_info() {
+                server.trim(worker, &trace, Some(&server::host_time(e as u64)))?;
+            }
             let mut now = Exports::new();
             for name in &exports {
                 // Not installed (yet, or any more): an install starts its taps over.

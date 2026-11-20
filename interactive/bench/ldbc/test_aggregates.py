@@ -58,15 +58,25 @@ def main():
     for workers in (1,4):
         state = Counter()
         with Server(args.server.resolve(), args.output/f'w{workers}.log', workers, 120, 6) as server:
-            server.commands([f'load test begin\n{text}\n{{rid}} end-load', 'tick'])
+            server.commands([server.load('test', text),
+                *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                *(['diag'] if server.diagnostics else []),
+                'spin',
+                *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+            server.epoch += 1
             for epoch, delta in enumerate(deltas):
                 if delta is None:
                     delta = [(row,-count) for row,count in state.items() if count]
                 commands = []
                 for row, count in delta:
                     state[row] += count
-                    commands.append(Server.feed('test', 0, [row], count))
-                server.commands([*commands, 'tick'])
+                    commands.append(server.feed('test', 0, [row], count, epoch=server.epoch))
+                server.commands([*commands,
+                    *(f'seal {program} {slot} {server.epoch + 1}' for program, slot in server.input_ports),
+                    *(['diag'] if server.diagnostics else []),
+                    'spin',
+                    *(f'trim {trace} {server.epoch}' for trace in (*server.output_traces, *server.diagnostics))])
+                server.epoch += 1
                 for name in AGGREGATES:
                     frames, = server.commands([f'peek test::{name} as corgi'])[1]
                     checked(decode(frames), expected(state,name), f'w{workers}/{epoch}/{name}')

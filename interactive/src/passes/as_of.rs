@@ -1,7 +1,7 @@
 //! A rewrite that uses the time a program is installed as of.
 //!
-//! A program installed at epoch `e` reads every import as of `G = [e − 1]`
-//! and its own inputs are fed from epoch `e` on, so every time in the
+//! A program reads every import as of its installation point `G`
+//! and its own inputs start at that point, so every time in the
 //! program, and every time an arrangement presents to a half join, is at or beyond `G`. An update
 //! at exactly `G` can then meet only arranged rows at exactly `G`, and a strict half join, which
 //! needs `t2 < t`, meets none. An update keeps its own time along a chain of half joins, so once a
@@ -15,7 +15,7 @@
 //! the edges to the readers it is dead for. It needs only
 //! that every time is at or beyond `G`, which holds in any scope: a nested scope's times extend
 //! `G` with coordinates that are zero at entry and only grow. So it applies at every depth, with
-//! `G` read as `(e − 1, 0, …, 0)`.
+//! the root coordinates of `G` extended by zeros.
 
 use crate::ir::{Lambda, LinearOp, Time};
 use crate::level::Level;

@@ -228,10 +228,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
 /// it flattens the chunks, a join, reduce or half join through DD's `BackendFrontier`. An
 /// arrangement the program built is read as it is, which `since` at the minimum says.
 ///
-/// One time, not a frontier: the server compacts every published trace by the one-element
-/// frontier `{(epoch - 1, [])}` and a reader starts at that same element, so the frontier a
-/// reader reads as of is `{since}`, which is beyond the frontier its trace compacted by, as DD's
-/// `BackendFrontier` requires.
+/// A reader starts at one point at or beyond the imported trace's retained read floor.
+/// Its singleton frontier `{since}` satisfies DD's `BackendFrontier` requirement.
 #[derive(Clone)]
 pub(crate) struct Arr<'scope> {
     pub(crate) arranged: Arranged<'scope, TraceAgent<CTrace>>,

@@ -6,6 +6,7 @@
 //! the oracle accumulates only the updates <= the requested point. Here the oracle uses
 //! Kosaraju's two DFS passes, independently of the program's nested label propagation.
 
+use timely::progress::Antichain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -184,8 +185,8 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                     continue;
                 }
                 Step::Advance(input, point) => {
-                    let previous = server.input_frontier(input.program(), 0).unwrap().clone();
-                    server.advance_input(input.program(), 0, &at(*point)).unwrap();
+                    let previous = server.input_time(input.program(), 0).unwrap().clone();
+                    server.seal(input.program(), 0, &Antichain::from_elem(at(*point))).unwrap();
                     // Each advance moves exactly one coordinate, and feeds below that
                     // input's own frontier must be refused even if other inputs lag.
                     assert_eq!((0..3).filter(|&i| previous.get(i).copied().unwrap_or(0) != point[i]).count(), 1);
@@ -195,6 +196,10 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                 }
                 Step::Compact(since) => {
                     for export in EXPORTS {
+                        // A scalar import can only promise [s, 0, 0]. The wire-style trim
+                        // refuses a floor with positive event coordinates. Exercise the
+                        // independent logical hold through the lower-level Rust API.
+                        assert!(server.trim(worker, export, Some(&at(*since))).is_err());
                         server.compact(export, &at(*since)).unwrap();
                         assert_eq!(server.trace_since(export), Some(&at(*since)));
                         // Below the floor in each coordinate, plus an incomparable point.
@@ -210,8 +215,8 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                     compacted = true;
                 }
             }
-            let edge_frontier = server.input_frontier("graph", 0).unwrap().clone();
-            let allow_frontier = server.input_frontier("allow", 0).unwrap().clone();
+            let edge_frontier = server.input_time("graph", 0).unwrap().clone();
+            let allow_frontier = server.input_time("allow", 0).unwrap().clone();
             let system = edge_frontier.get(0).copied().unwrap_or(0).min(allow_frontier.get(0).copied().unwrap_or(0));
             for export in EXPORTS { server.wait_for(worker, export, &at([system, 0, 0])).unwrap(); }
             let mut peeked = false;

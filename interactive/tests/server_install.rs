@@ -1,5 +1,7 @@
 //! `Server::install` checks a program before installing anything for it.
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use interactive::scope_ir::Program;
 use interactive::server::Server;
 use interactive::{lower, parse};
@@ -62,11 +64,21 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
             let text = text.replace("\"out\"", &format!("{name:?}"));
             let program = lower::lower_tree(parse::pipe::parse(&text));
             server.install(worker, name, &program).unwrap();
-            server.feed(name, 1, "1 val=20", None).unwrap();
+            server.feed(name, 1, "1 val=20", 0).unwrap();
         }
-        server.tick(worker);
-        for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", None).unwrap(); }
-        server.tick(worker);
+        for name in ["original", "emitted"] {
+            for input in [0, 1] {
+                server.seal(name, input, &Antichain::from_elem(host_time(1))).unwrap();
+            }
+        }
+        server.spin(worker);
+        for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", 1).unwrap(); }
+        for name in ["original", "emitted"] {
+            for input in [0, 1] {
+                server.seal(name, input, &Antichain::from_elem(host_time(2))).unwrap();
+            }
+        }
+        server.spin(worker);
         let original = server.snapshot(worker, "original::original").unwrap().rows();
         assert_eq!(original, vec![("1".into(), "tuple(10,tuple(1))".into(), 1)]);
         assert_eq!(server.snapshot(worker, "emitted::emitted").unwrap().rows(), original);

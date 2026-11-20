@@ -1,11 +1,13 @@
-//! A program installed late reads the published traces it imports as of the time it starts
-//! (`Server::import_as_of`), the traces' compaction frontier: every update's time advanced to it.
+//! A program installed late reads its imports as of their read floors, with every
+//! update's time advanced to the installation point.
 //! Before that frontier a compacted trace's batches can hold counts no time ever had (a retraction
 //! advanced past the frontier, the insertion it retracts left behind), and an iterative scope
 //! reading them there need not converge. Imports read as containers, as rows of arrangements, and
 //! as arrangements read directly by a join and a reduce, all from the frontier on. (Found by
 //! `difftest`.)
 
+use interactive::server::host_time;
+use timely::progress::Antichain;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -57,9 +59,15 @@ fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
         for epoch in 0..22 {
             if epoch == late { server.install(worker, "consumer", &program(CONSUMER)).unwrap(); }
             for (_, input, rows) in FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, None).unwrap();
+                server.feed("producer", *input, rows, epoch).unwrap();
             }
-            server.tick(worker);
+            for input in [0, 1] {
+                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            }
+            server.spin(worker);
+            for export in ["producer::seeds", "producer::edges"] {
+                server.trim(worker, export, Some(&host_time(epoch))).unwrap();
+            }
         }
         server.snapshot(worker, "consumer::result").unwrap().rows()
     })
@@ -67,7 +75,7 @@ fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
 
 #[test]
 fn late_importers_converge() {
-    // Without the fix, the late cases never finish their first tick: fail rather than hang.
+    // Without the fix, the late cases never finish their first spin: fail rather than hang.
     let (send, recv) = mpsc::channel();
     std::thread::spawn(move || {
         let early = run(0, false);
@@ -131,9 +139,15 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
         for epoch in 0..27 {
             if epoch == late { server.install(worker, "consumer", &program(ARRANGED_CONSUMER)).unwrap(); }
             for (_, input, rows) in ARRANGED_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, None).unwrap();
+                server.feed("producer", *input, rows, epoch).unwrap();
             }
-            server.tick(worker);
+            for input in [0, 5] {
+                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            }
+            server.spin(worker);
+            for export in ["producer::pairs", "producer::weights"] {
+                server.trim(worker, export, Some(&host_time(epoch))).unwrap();
+            }
         }
         (server.snapshot(worker, "consumer::result").unwrap().rows(), server.snapshot(worker, "consumer::least").unwrap().rows())
     })
@@ -168,9 +182,15 @@ fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)
         for epoch in 0..27 {
             if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
             for (_, input, rows) in ARRANGED_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, None).unwrap();
+                server.feed("producer", *input, rows, epoch).unwrap();
             }
-            server.tick(worker);
+            for input in [0, 5] {
+                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            }
+            server.spin(worker);
+            for export in ["producer::pairs", "producer::weights"] {
+                server.trim(worker, export, Some(&host_time(epoch))).unwrap();
+            }
         }
         (server.snapshot(worker, "consumer::result").unwrap().rows(), server.snapshot(worker, "consumer::least").unwrap().rows())
     })
@@ -253,9 +273,15 @@ fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String,
         for epoch in 0..13 {
             if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
             for (_, input, rows) in TRIPLE_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, None).unwrap();
+                server.feed("producer", *input, rows, epoch).unwrap();
             }
-            server.tick(worker);
+            for input in [0, 1, 2] {
+                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            }
+            server.spin(worker);
+            for export in ["producer::a", "producer::b", "producer::c"] {
+                server.trim(worker, export, Some(&host_time(epoch))).unwrap();
+            }
         }
         server.snapshot(worker, "consumer::r").unwrap().rows()
     })

@@ -303,7 +303,7 @@ impl<T> ColTimes<T> {
     pub fn raw_lanes(&self) -> &[Vec<u64>] { &self.lanes }
 
     /// A column from lanes that each hold `len` rows.
-    pub(crate) fn from_raw_lanes(lanes: Vec<Vec<u64>>, len: usize) -> Self {
+    pub fn from_raw_lanes(lanes: Vec<Vec<u64>>, len: usize) -> Self {
         assert!(lanes.iter().all(|lane| lane.len() == len), "every lane must hold {len} rows");
         ColTimes { lanes, len, _t: PhantomData }
     }
