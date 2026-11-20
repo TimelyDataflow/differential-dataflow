@@ -339,7 +339,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
         st::Node::Join { left, right, projection } => {
             let (l, r) = (shapes.of(left)?, shapes.of(right)?);
             if l.key != r.key { return fail(format!("join keys {} and {}", l.key, r.key)); }
-            match pair_shape(projection, &[l.key, l.val, r.val]) {
+            match pair_shape(projection, &[l.key, Shape::Prod(vec![l.val, r.val])]) {
                 Ok((k, v)) => Some(CollShape::new(k, v, level)),
                 Err(e) => fail(format!("join: {e}")),
             }
@@ -383,7 +383,7 @@ mod tests {
         let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> ((src), (dst)));
         let roots = input 1 : ((int), ()) | map(((n), ()) -> ((n), ()));
         reach: {
-            let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+            let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
             set reach = roots + proposals | distinct;
         }
         output "result" = reach::reach | map(_ -> ((), ())) | arrange;

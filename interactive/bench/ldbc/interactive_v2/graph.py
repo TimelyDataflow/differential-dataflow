@@ -49,13 +49,13 @@ def killed(name, field, dead):
     """Rows of `<name>_in` whose `field` is in the unit-valued collection `dead`."""
     b = binders(SCHEMA[name])
     key = b[list(SCHEMA[name]).index(field)]
-    return f"({name}_in | map({row(name)} -> ({key}, {tup(name)})) | join({dead}, (_, r, ()) -> (r, ())))"
+    return f"({name}_in | map({row(name)} -> ({key}, {tup(name)})) | join({dead}, (_, (r, ())) -> (r, ())))"
 
 
 def killed_pair(name, dead):
     """Rows of `<name>_in` whose first two fields are an explicit delete target in `dead`."""
     b = binders(SCHEMA[name])
-    return f"({name}_in | map({row(name)} -> (({b[0]}, {b[1]}), {tup(name)})) | join({dead}, (_, r, ()) -> (r, ())))"
+    return f"({name}_in | map({row(name)} -> (({b[0]}, {b[1]}), {tup(name)})) | join({dead}, (_, (r, ())) -> (r, ())))"
 
 
 def prefix(text, n):
@@ -74,20 +74,20 @@ def cascade_program(export_live=False):
 -- People deleted, and the forums they moderated: Walls and Albums are deleted, Groups lose their moderator.
 let dead_p = del_person | map(((id, _), ()) -> (id, ())) | distinct;
 let owned  = forum_in | map(((id, title, created, moderator), ()) -> (moderator, (id, title, created)))
-                      | join(dead_p, (moderator, (id, title, created), ()) -> (id, (title, created, moderator)));
+                      | join(dead_p, (moderator, ((id, title, created), ())) -> (id, (title, created, moderator)));
 let dead_f = ((del_forum | map(((id, _), ()) -> (id, ()))) + (owned | filter((_, (title, _, _)) -> {walls})
                                                                   | map((id, _) -> (id, ())))) | distinct;
 let groups = owned | filter((_, (title, _, _)) -> {group});
-let kept   = groups - (groups | join(dead_f, (id, v, ()) -> (id, v)));
+let kept   = groups - (groups | join(dead_f, (id, (v, ())) -> (id, v)));
 
 -- Messages deleted: explicit targets, those of deleted people, the posts of deleted forums,
 -- and every reply below any of them.
 let seeds = (del_message | map(((id, _), ()) -> (id, ())))
-          + (message_in | map({msg} -> ({m[3]}, {m[0]})) | join(dead_p, (_, id, ()) -> (id, ())))
-          + (message_in | filter({msg} -> ({m[1]}, 0) eq) | map({msg} -> ({m[9]}, {m[0]})) | join(dead_f, (_, id, ()) -> (id, ())));
+          + (message_in | map({msg} -> ({m[3]}, {m[0]})) | join(dead_p, (_, (id, ())) -> (id, ())))
+          + (message_in | filter({msg} -> ({m[1]}, 0) eq) | map({msg} -> ({m[9]}, {m[0]})) | join(dead_f, (_, (id, ())) -> (id, ())));
 let children = message_in | filter({msg} -> ({m[1]}, 1) eq) | map({msg} -> ({m[10]}, {m[0]}));
 dead_m: {{
-    let kids   = dead_m | join(children, (_, (), child) -> (child, ()));
+    let kids   = dead_m | join(children, (_, ((), child)) -> (child, ()));
     set dead_m = (seeds + kids) | distinct;
 }}
 let dead_msg = dead_m::dead_m;

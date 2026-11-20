@@ -10,13 +10,13 @@
 +    var again;
 +    let starts = ::seeds + again;
      inner: {
--        let step = reached | join(edges, (_, (), dst) -> (dst, ()));
+-        let step = reached | join(edges, (_, ((), dst)) -> (dst, ()));
 -        set reached = starts + step | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +        -- Time lanes: epoch, then 2 scope coordinates; this scope enters at zero.
 +        var reached;
 +        let reached_idx = reached | arrange;
 +        let edges_idx = ::edges | arrange;
-+        let step = reached_idx | join(edges_idx, (_, (), dst) -> (dst, ()));
++        let step = reached_idx | join(edges_idx, (_, ((), dst)) -> (dst, ()));
 +        let reached_rows = outer::starts + step;
 +        let reached_idx2 = reached_rows | arrange;
 +        let reached_reduce = reached_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

@@ -8,7 +8,7 @@ let edges = input "edges" : (int, int);
 let roots = input "roots" : (int, ());
 
 reach: {
-    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+    let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
     set reach = roots + proposals | distinct;
 }
 

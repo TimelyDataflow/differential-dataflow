@@ -443,7 +443,7 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
             format!("{} | linear [ {} ]", names.of(input), printed.join(" | "))
         }
         Node::Join { left, right, projection } => {
-            let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, l.val, r.val]));
+            let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
             format!("{} | join({}, {})", names.of(left), names.of(right), slots.lambda(projection, input, &format!("{at}/join")))
         }
         Node::HalfJoin { stream, arrangement, strict, projection } => {

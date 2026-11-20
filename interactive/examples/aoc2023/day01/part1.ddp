@@ -9,7 +9,7 @@ let digits = input 0 : ((int, int, int), ())
 let first = digits | min | map((line, (_, d)) -> (line, d));
 let last  = digits | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map((line, (_, d)) -> (line, d));
 
-let calib = first | join(last, (line, f, l) -> (line, ((f, 10) mul, l) add));
+let calib = first | join(last, (line, (f, l)) -> (line, ((f, 10) mul, l) add));
 -- (line, value)
 
 output "result" = calib

@@ -36,7 +36,7 @@ let spread = xs | flatmap((k, (x, y)) -> let l = (x call fabs call fsqrt enlist,
 
 -- A join whose projection runs a row at a time.
 let scale = input 1 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
-let scaled = xs | join(scale, (k, (x, y), n) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
+let scaled = xs | join(scale, (k, ((x, y), n)) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
 
 output "unary"    = unary | arrange | inspect(total);
 output "binary"   = binary | arrange | inspect(total);

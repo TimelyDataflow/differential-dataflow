@@ -65,6 +65,9 @@ let blocks = input 2 : (int, Member);             -- doc -> blocked member
 
 The shape of records is load bearing when we perform joins and other data-parallel operations.
 The pair structure `(key, val)` calls out first how the data are organized, and then any associated values.
+For each pair of matches `(k, l)` and `(k, r)`, `left | join(right)` produces `(k, (l, r))`.
+You can project that row inside the join: `left | join(right, f)` computes the same collection as `left | join(right) | map(f)`.
+Existing three-field join patterns migrate from `(k, l, r) -> …` to `(k, (l, r)) -> …`.
 
 A currently unfortunate amount of symbolic load is in shuffling around fields of collection elements.
 The `map` operator applies to each record, and the `->` fragment is an expression converting the input to the output.
@@ -115,7 +118,7 @@ To see what a variable is about to become, bind the `set` value with a `let` and
 let barred = barring::barred | map((who, doc) -> ((who, doc), ()));
 barring: {
    var barred : (Member, int);     -- member -> doc: expanded blocked list.
-   let beyond = barred | join(members, (_grp, doc, who) -> (who, doc));
+   let beyond = barred | join(members, (_grp, (doc, who)) -> (who, doc));
    set barred = blocks | map((doc, who) -> (who, doc)) + beyond | distinct;
 }
 ```
@@ -145,7 +148,7 @@ output "access" = sharing::allowed;
 sharing: {
    var allowed : ((Member, int), Access);  -- (member, doc) -> strongest
    set allowed = offered
-               - (offered | join(barred, (pair, acc, ()) -> (pair, acc)))
+               - (offered | join(barred, (pair, (acc, ())) -> (pair, acc)))
                | min;
 
    let offered = grants | map((doc, (who, acc)) -> ((who, doc), acc))
@@ -153,7 +156,7 @@ sharing: {
 
    let inherited = allowed
          | map(((who, doc), acc) -> (who, (doc, acc)))
-         | join(members, (_grp, (doc, acc), who) -> ((who, doc), acc));
+         | join(members, (_grp, ((doc, acc), who)) -> ((who, doc), acc));
 }
 ```
 

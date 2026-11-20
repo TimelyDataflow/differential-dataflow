@@ -15,12 +15,12 @@ const PROGRAM: &str = r#"
     let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
     let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)));
     output "delta" = (ab + ba) | delay((_, (_, t)) -> t) | map((k, (xy, _)) -> (k, xy));
-    output "join" = a | join(b, (k, x, y) -> (k, (x, y)));
+    output "join" = a | join(b);
 
     -- Reachability from `a`'s keys along `b`'s edges, joining by each method.
     let roots = a | map((k, _) -> (k, ()));
     joined: {
-        let step = reach | join(b, (_, (), dst) -> (dst, ()));
+        let step = reach | join(b, (_, ((), dst)) -> (dst, ()));
         set reach = roots + step | distinct;
     }
     halved: {

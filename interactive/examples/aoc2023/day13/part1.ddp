@@ -13,11 +13,11 @@ let clines = cells | map(((b, r, c), s) -> ((b, c), (r, s))) | collect;
 -- row axes ------------------------------------------------------------
 let rcand = cells | map(((b, r, _), _) -> ((b, r), ())) | distinct;   -- (b, a)
 let rlk = rlines | map(((b, x), l) -> (b, (x, l)));  -- (b, (x, L))
-let t1 = rcand | map(((b, a), _) -> (b, a)) | join(rlk, (b, a, (x, l)) -> ((b, a, x), l));
+let t1 = rcand | map(((b, a), _) -> (b, a)) | join(rlk, (b, (a, (x, l))) -> ((b, a, x), l));
 -- ((b, a, x), Lx)
 let t2 = t1 | map(((b, a, x), l) -> ((b, (((2, a) mul, 1) sub, x) sub), (a, x, l)));
 -- ((b, y), (a, x, Lx))
-let rviol = t2 | join(rlines, ((b, y), (a, x, lx), ly) -> ((b, a), ((x, y) lt, ((lx, ly) eq, 0) eq) all))
+let rviol = t2 | join(rlines, ((b, y), ((a, x, lx), ly)) -> ((b, a), ((x, y) lt, ((lx, ly) eq, 0) eq) all))
     | filter((_, m) -> (m, 1) eq) | map((k, _) -> (k, ())) | distinct;
 -- (b, a) with a mismatched pair
 let rvalid = rcand - rviol;
@@ -26,9 +26,9 @@ let rscore = rvalid | map(((_, a), _) -> ((), (100, (a, 1) sub) mul));
 -- column axes ---------------------------------------------------------
 let ccand = cells | map(((b, _, c), _) -> ((b, c), ())) | distinct;
 let clk = clines | map(((b, x), l) -> (b, (x, l)));
-let s1 = ccand | map(((b, a), _) -> (b, a)) | join(clk, (b, a, (x, l)) -> ((b, a, x), l));
+let s1 = ccand | map(((b, a), _) -> (b, a)) | join(clk, (b, (a, (x, l))) -> ((b, a, x), l));
 let s2 = s1 | map(((b, a, x), l) -> ((b, (((2, a) mul, 1) sub, x) sub), (a, x, l)));
-let cviol = s2 | join(clines, ((b, y), (a, x, lx), ly) -> ((b, a), ((x, y) lt, ((lx, ly) eq, 0) eq) all))
+let cviol = s2 | join(clines, ((b, y), ((a, x, lx), ly)) -> ((b, a), ((x, y) lt, ((lx, ly) eq, 0) eq) all))
     | filter((_, m) -> (m, 1) eq) | map((k, _) -> (k, ())) | distinct;
 let cvalid = ccand - cviol;
 let cscore = cvalid | map(((_, a), _) -> ((), (a, 1) sub));

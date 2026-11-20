@@ -31,9 +31,9 @@
 //! ## Reading the method contracts
 //!
 //! Each method returns a projection/predicate that the rule applies to a row of
-//! a stated shape. Inputs are addressed by **slot**: after a binary `join`, the
-//! row exposes `$0` = the join key, `$1` = the left input's value, `$2` = the
-//! right input's value; before a join, `$0`/`$1` are key/value. A method's doc
+//! a stated shape. For a binary `join`, the three names `$0`, `$1`, and `$2` in these
+//! contracts refer to the key, left value, and right value in the row `($0, ($1, $2))`.
+//! For a single input, `$0` and `$1` name the key and value. A method's doc
 //! gives the *input row shape it expects* and the *output row shape it
 //! produces*, both in the `(K, …)` notation above; an implementer needs only
 //! those shapes, not the positions. Sizes arrive as parameters: `*_len`/`*_depth`
@@ -275,7 +275,7 @@ mod mem {
             for (lk, lv) in l {
                 for (rk, rv) in r {
                     if lk == rk {
-                        out.push(pair(&p, vec![lk.clone(), lv.clone(), rv.clone()]));
+                        out.push(pair(&p, vec![lk.clone(), Value::Prod(vec![lv.clone(), rv.clone()])]));
                     }
                 }
             }
@@ -369,7 +369,7 @@ mod value_contract {
     #[test]
     fn join_demands_both_inputs() {
         // proj: K_out = K, V_out = V_L.
-        let p = proj("let (k, l, r) = input in (k, l.0)");
+        let p = proj("let (k, (l, r)) = input in (k, l.0)");
         let left = side(vec![(one(5), env(7, &[]))], 0);
         let right = side(vec![(one(5), env(9, &[]))], 0);
         let dep = vec![(one(5), env(7, &[1]))];             // (K_out=5 ; V_out=7, q=1)

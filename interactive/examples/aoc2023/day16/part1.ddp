@@ -14,12 +14,12 @@ let shift = cells | map(_ -> ((), ())) | distinct | flatmap(_ -> [
 -- ((dir, sym), (dr, dc, newdir))
 
 beam: {
-    let onsym = l | map(((r, c, d), _) -> ((r, c), d)) | join(cells, (rc, d, s) -> ((d, s), rc));
+    let onsym = l | map(((r, c, d), _) -> ((r, c), d)) | join(cells, (rc, (d, s)) -> ((d, s), rc));
     -- ((dir, sym), (r, c))
-    let next = onsym | join(shift, (_, (r, c), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd), ()));
+    let next = onsym | join(shift, (_, ((r, c), (dr, dc, nd))) -> (((r, dr) add, (c, dc) add, nd), ()));
     set l = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0), ()))) + next | distinct;
 }
 
 output "result" = beam::l | map(((r, c, _), _) -> ((r, c), ()))
-    | join(cells, (rc, _, _) -> (rc, ())) | distinct
+    | join(cells, (rc, (_, _)) -> (rc, ())) | distinct
     | map(_ -> ((), ())) | count | arrange | inspect(part1);

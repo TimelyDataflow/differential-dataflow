@@ -19,10 +19,10 @@ fn consumer() -> String {
         let edges = import "prod::edges";
         let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
         r: {{
-            let step = reach | join(edges, (_, _, dst) -> (dst, ()));
+            let step = reach | join(edges, (_, (_, dst)) -> (dst, ()));
             set reach = roots + step | distinct;
         }}
-        output "hop" = roots | join(edges, (n, _, dst) -> (dst, n));
+        output "hop" = roots | join(edges, (n, (_, dst)) -> (dst, n));
         output "degree" = edges | count;
         output "reach" = r::reach;
         output "flipped" = edges | map((src, dst) -> (dst, src));

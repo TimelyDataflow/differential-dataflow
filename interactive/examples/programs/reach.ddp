@@ -6,7 +6,7 @@ let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
 let roots = input 1 : (int, ()) | map((n, ()) -> (n, ()));
 
 reach: {
-    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+    let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
     set reach = roots + proposals | distinct;
 }
 

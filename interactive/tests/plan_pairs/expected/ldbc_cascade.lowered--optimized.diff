@@ -13,7 +13,7 @@
  let dead_p = dead_p_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 @@ -33,10 +29,9 @@
  let owned_idx = owned_map | arrange;
- let owned = owned_idx | join(dead_p, (moderator, (id, title, created), ()) -> (id, (title, created, moderator)));
+ let owned = owned_idx | join(dead_p, (moderator, ((id, title, created), ())) -> (id, (title, created, moderator)));
  let dead_f_map = del_forum | map(((id, _), ()) -> (id, ()));
 -let dead_f_filter = owned | filter((_, (title, _, _)) -> ((((0, (title len, 6) min) range, title) gather, "Album ") eq, (((0, (title len, 5) min) range, title) gather, "Wall ") eq) any);
 -let dead_f_map2 = dead_f_filter | map((id, _) -> (id, ()));
@@ -28,13 +28,13 @@
 @@ -47,19 +42,17 @@
  let seeds_map2 = message_in | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (creator, id));
  let seeds_idx = seeds_map2 | arrange;
- let seeds_join = seeds_idx | join(dead_p, (_, id, ()) -> (id, ()));
+ let seeds_join = seeds_idx | join(dead_p, (_, (id, ())) -> (id, ()));
 -let seeds_filter = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 0) eq);
 -let seeds_map3 = seeds_filter | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
 -let seeds_idx2 = seeds_map3 | arrange;
 +let seeds_rows = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 0) eq) | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (forum, id));
 +let seeds_idx2 = seeds_rows | arrange;
- let seeds_join2 = seeds_idx2 | join(dead_f, (_, id, ()) -> (id, ()));
+ let seeds_join2 = seeds_idx2 | join(dead_f, (_, (id, ())) -> (id, ()));
  let seeds = seeds_map + seeds_join + seeds_join2;
 -let children_filter = message_in | filter(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (kind, 1) eq);
 -let children = children_filter | map(((id, kind, created, creator, country, content, image, length, language, forum, parent, year, month, day), ()) -> (parent, id));
@@ -45,8 +45,8 @@
      var dead_m;
      let dead_m_idx = dead_m | arrange;
 -    let children_idx = ::children | arrange;
--    let kids = dead_m_idx | join(children_idx, (_, (), child) -> (child, ()));
-+    let kids = dead_m_idx | join(::children_idx, (_, (), child) -> (child, ()));
+-    let kids = dead_m_idx | join(children_idx, (_, ((), child)) -> (child, ()));
++    let kids = dead_m_idx | join(::children_idx, (_, ((), child)) -> (child, ()));
      let dead_m_rows = ::seeds + kids;
      let dead_m_idx2 = dead_m_rows | arrange;
      let dead_m_reduce = dead_m_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
@@ -55,18 +55,18 @@
  let mtag_map = mtag_in | map(((message, tag), ()) -> (message, (message, tag)));
  let mtag_idx = mtag_map | arrange;
 -let dead_msg_idx2 = dead_msg | arrange;
--let mtag_join = mtag_idx | join(dead_msg_idx2, (_, r, ()) -> (r, ()));
-+let mtag_join = mtag_idx | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+-let mtag_join = mtag_idx | join(dead_msg_idx2, (_, (r, ())) -> (r, ()));
++let mtag_join = mtag_idx | join(dead_msg_idx, (_, (r, ())) -> (r, ()));
  let mtag_idx2 = mtag_join | arrange;
  let mtag_reduce = mtag_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
  let mtag_neg = mtag_reduce | negate;
 @@ -158,8 +150,7 @@
- let likes_join2 = likes_idx2 | join(dead_p, (_, r, ()) -> (r, ()));
+ let likes_join2 = likes_idx2 | join(dead_p, (_, (r, ())) -> (r, ()));
  let likes_map3 = likes_in | map(((person, message, created), ()) -> (message, (person, message, created)));
  let likes_idx3 = likes_map3 | arrange;
 -let dead_msg_idx3 = dead_msg | arrange;
--let likes_join3 = likes_idx3 | join(dead_msg_idx3, (_, r, ()) -> (r, ()));
-+let likes_join3 = likes_idx3 | join(dead_msg_idx, (_, r, ()) -> (r, ()));
+-let likes_join3 = likes_idx3 | join(dead_msg_idx3, (_, (r, ())) -> (r, ()));
++let likes_join3 = likes_idx3 | join(dead_msg_idx, (_, (r, ())) -> (r, ()));
  let likes_rows = likes_join + likes_join2 + likes_join3;
  let likes_idx4 = likes_rows | arrange;
  let likes_reduce = likes_idx4 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
@@ -87,8 +87,8 @@
      let below_map = thread | map(((mid, root), ()) -> (mid, root));
      let below_idx = below_map | arrange;
 -    let replies_idx = ::replies | arrange;
--    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
-+    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
+-    let below = below_idx | join(replies_idx, (_, (root, child)) -> ((child, root), ()));
++    let below = below_idx | join(::replies_idx, (_, (root, child)) -> ((child, root), ()));
      let thread_rows = ::posts + below;
      let thread_idx = thread_rows | arrange;
      let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

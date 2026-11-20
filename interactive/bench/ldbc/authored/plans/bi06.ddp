@@ -12,22 +12,22 @@ let liked_by = import "graph::likes.by_message" : (int, (int, int));        -- (
 
 -- The request's tagged messages and their authors (one tag; (message, tag) is a set).
 let written = request | map(((rid, name), ()) -> (name, rid))
-                      | join(tag_id, (_, rid, t) -> (t, rid))
-                      | join(tagged, (_, rid, m) -> (m, rid))
-                      | join(message, (m, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> ((rid, m, who), ()));
+                      | join(tag_id, (_, (rid, t)) -> (t, rid))
+                      | join(tagged, (_, (rid, m)) -> (m, rid))
+                      | join(message, (m, (rid, (_, _, who, _, _, _, _, _, _, _, _, _, _))) -> ((rid, m, who), ()));
 
 -- Popularity: likes received on all of a person's messages.
-let popular = liked_by | join(message, (_, _, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, ())) | count;
+let popular = liked_by | join(message, (_, (_, (_, _, who, _, _, _, _, _, _, _, _, _, _))) -> (who, ())) | count;
 
 -- Each (author, liker) pair once, scored by the liker's popularity; zero for the rest.
 let pairs   = written | map(((rid, m, who), ()) -> (m, (rid, who)))
-                      | join(liked_by, (_, (rid, who), (liker, _)) -> ((rid, who, liker), ())) | distinct;
+                      | join(liked_by, (_, ((rid, who), (liker, _))) -> ((rid, who, liker), ())) | distinct;
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
 let scored  = pairs | map(((rid, who, liker), ()) -> (liker, (rid, who)))
-                    | join(popular, (_, (rid, who), p) -> ((rid, who), p))
+                    | join(popular, (_, ((rid, who), p)) -> ((rid, who), p))
                     | join_function((key, p) -> ((key, ()), 0, p) enlist) | count;
 let authors = written | map(((rid, _, who), ()) -> ((rid, who), ())) | distinct;
-let score   = scored + ((authors - (authors | join(scored, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
+let score   = scored + ((authors - (authors | join(scored, (key, ((), _)) -> (key, ())))) | map((key, ()) -> (key, 0)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = score | map(((rid, who), s) -> (rid, (s neg, who)))

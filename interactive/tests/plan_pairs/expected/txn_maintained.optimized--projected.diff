@@ -1,7 +1,7 @@
 --- optimized
 +++ projected
 @@ -19,7 +19,7 @@
-     let pairs_join = ::rk_idx | join(wk_idx, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)));
+     let pairs_join = ::rk_idx | join(wk_idx, (k, ((rid, e), (wid, v))) -> ((k, rid, e), (wid, v)));
      let best_rows = pairs_join | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt) | map((kre, (wid, v)) -> (kre, (wid neg, v)));
      let best_idx = best_rows | arrange;
 -    let best = best_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);

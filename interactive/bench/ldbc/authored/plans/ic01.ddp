@@ -15,42 +15,42 @@ let language = import "graph::language.by_person" : (int, List(int));
 
 -- The circle with distances: least hops (1 to 3) to each person, not the person.
 let hop1   = request | map(((rid, who, name), ()) -> (who, (rid, who, name)))
-                     | join(friend, (_, req, (f, _)) -> (f, (req, 1)));
-let hop2   = hop1 | join(friend, (_, (req, _), (g, _)) -> (g, (req, 2)));
-let hop3   = hop2 | join(friend, (_, (req, _), (h, _)) -> (h, (req, 3)));
+                     | join(friend, (_, (req, (f, _))) -> (f, (req, 1)));
+let hop2   = hop1 | join(friend, (_, ((req, _), (g, _))) -> (g, (req, 2)));
+let hop3   = hop2 | join(friend, (_, ((req, _), (h, _))) -> (h, (req, 3)));
 let circle = (hop1 + hop2 + hop3) | filter((node, ((_, who, _), _)) -> (node, who) ne)
                                   | map((node, ((rid, _, name), d)) -> ((rid, node, name), d)) | min;
 
 -- Those with the first name, with their city's name: ((rid, node), (d, profile)).
 let found  = circle | map(((rid, node, name), d) -> (node, (rid, name, d)))
-                    | join(person, (node, (rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _)) ->
+                    | join(person, (node, ((rid, name, d), (first, last, gender, birthday, created, ip, browser, home, _, _, _))) ->
                            ((first, name) eq, (home, (rid, node, d, last, gender, birthday, created, ip, browser))))
                     | filter((named, _) -> named)
                     | map((_, row) -> row)
-                    | join(place, (_, (rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _)) ->
+                    | join(place, (_, ((rid, node, d, last, gender, birthday, created, ip, browser), (town, _, _))) ->
                            ((rid, node), (d, (last, gender, birthday, created, ip, browser, town))));
 
 -- For the people found: sorted emails, languages, and (organisation, year, place) for
 -- study and work.
 let who    = found | map(((rid, node), _) -> (node, rid));
-let emails = who | join(email,    (node, rid, value) -> ((rid, node), value)) | collect;
-let langs  = who | join(language, (node, rid, value) -> ((rid, node), value)) | collect;
-let school = who | join(study, (node, rid, (at, year)) -> (at, (rid, node, year)))
-                 | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year)))
-                 | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
-let jobs   = who | join(work, (node, rid, (at, year)) -> (at, (rid, node, year)))
-                 | join(org, (_, (rid, node, year), (name, _, at)) -> (at, (rid, node, name, year)))
-                 | join(place, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where))) | collect;
+let emails = who | join(email,    (node, (rid, value)) -> ((rid, node), value)) | collect;
+let langs  = who | join(language, (node, (rid, value)) -> ((rid, node), value)) | collect;
+let school = who | join(study, (node, (rid, (at, year))) -> (at, (rid, node, year)))
+                 | join(org, (_, ((rid, node, year), (name, _, at))) -> (at, (rid, node, name, year)))
+                 | join(place, (_, ((rid, node, name, year), (where, _, _))) -> ((rid, node), (name, year, where))) | collect;
+let jobs   = who | join(work, (node, (rid, (at, year))) -> (at, (rid, node, year)))
+                 | join(org, (_, ((rid, node, year), (name, _, at))) -> (at, (rid, node, name, year)))
+                 | join(place, (_, ((rid, node, name, year), (where, _, _))) -> ((rid, node), (name, year, where))) | collect;
 
 -- Attach a list, or an empty one for people without entries.
-let with1  = (found | join(emails, (key, row, list) -> (key, (row, list))))
-           + ((found - (found | join(emails, (key, row, _) -> (key, row)))) | map((key, row) -> (key, (row, [] : List(List(int))))));
-let with2  = (with1 | join(langs, (key, (row, e), list) -> (key, (row, e, list))))
-           + ((with1 - (with1 | join(langs, (key, row, _) -> (key, row)))) | map((key, (row, e)) -> (key, (row, e, [] : List(List(int))))));
-let with3  = (with2 | join(school, (key, (row, e, l), list) -> (key, (row, e, l, list))))
-           + ((with2 - (with2 | join(school, (key, row, _) -> (key, row)))) | map((key, (row, e, l)) -> (key, (row, e, l, [] : List((List(int), int, List(int)))))));
-let with4  = (with3 | join(jobs, (key, (row, e, l, s), list) -> (key, (row, e, l, s, list))))
-           + ((with3 - (with3 | join(jobs, (key, row, _) -> (key, row)))) | map((key, (row, e, l, s)) -> (key, (row, e, l, s, [] : List((List(int), int, List(int)))))));
+let with1  = (found | join(emails))
+           + ((found - (found | join(emails, (key, (row, _)) -> (key, row)))) | map((key, row) -> (key, (row, [] : List(List(int))))));
+let with2  = (with1 | join(langs, (key, ((row, e), list)) -> (key, (row, e, list))))
+           + ((with1 - (with1 | join(langs, (key, (row, _)) -> (key, row)))) | map((key, (row, e)) -> (key, (row, e, [] : List(List(int))))));
+let with3  = (with2 | join(school, (key, ((row, e, l), list)) -> (key, (row, e, l, list))))
+           + ((with2 - (with2 | join(school, (key, (row, _)) -> (key, row)))) | map((key, (row, e, l)) -> (key, (row, e, l, [] : List((List(int), int, List(int)))))));
+let with4  = (with3 | join(jobs, (key, ((row, e, l, s), list)) -> (key, (row, e, l, s, list))))
+           + ((with3 - (with3 | join(jobs, (key, (row, _)) -> (key, row)))) | map((key, (row, e, l, s)) -> (key, (row, e, l, s, [] : List((List(int), int, List(int)))))));
 
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.

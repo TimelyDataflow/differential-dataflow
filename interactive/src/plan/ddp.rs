@@ -410,7 +410,7 @@ impl Printer<'_> {
             Node::Concat(refs) => refs.iter().map(|r| names.of(r)).collect::<Vec<_>>().join(" + "),
             Node::Arrange(r) => format!("{} | arrange", names.of(r)),
             Node::Join { left, right, projection } => {
-                let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, l.val, r.val]));
+                let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
                 format!("{} | join({}, {})", names.of(left), names.of(right), self.lambda(projection, input)?)
             }
             Node::HalfJoin { stream, arrangement, strict, projection } => {
@@ -548,7 +548,7 @@ mod tests {
             let x = input 0 : (int, int);
             let result_idx = x | map((k, v) -> (v, k));
             let intermediate = x | filter((k, _) -> (k, 0) gt);
-            let result = intermediate | map((k, v) -> (k, v)) | join(result_idx, (k, x, y) -> (k, (x, y)));
+            let result = intermediate | map((k, v) -> (k, v)) | join(result_idx);
             output "out" = result;
         "#);
         assert!(output.contains("let result_idx ="));
@@ -662,7 +662,7 @@ mod tests {
             let early = rows | map((k, v) -> (v, k));
             let late = rows | filter((k, v) -> (k, v) lt);
             let between = rows | map((k, v) -> (k, v neg));
-            child: { let pair = ::early | join(::late, (k, a, b) -> (k, (a, b))); }
+            child: { let pair = ::early | join(::late); }
             output "out" = child::pair;
             output "between" = between;"#;
         let printed = roundtrip(text);

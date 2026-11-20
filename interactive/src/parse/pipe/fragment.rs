@@ -456,8 +456,8 @@ impl Fragment {
             s.ingest(&atom.val, "r".into());
             let body = s.row("k".into(), s.key.clone());
             let pat = if i == 1 && direct {
-                format!("(k : {}, v : {}, r : {})", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
-            } else { format!("(k, v, r : {})", atom.val.shape_pattern()) };
+                format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
+            } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
             expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
             let target = self.atoms.get(i + 1).map_or(Target::Output, |a| Target::Key(&a.key));
             expr = s.checkpoint(expr, target, "(k, v)");

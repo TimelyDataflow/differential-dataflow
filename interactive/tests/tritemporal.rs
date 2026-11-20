@@ -27,28 +27,28 @@ const PROGRAM: &str = r#"
         let degrees = scc | map((src, _) -> (src, ())) | count;
         fwd: {
             let nodes = edges | map((_, dst) -> (dst, dst))
-                | join(allowed, (dst, label, ()) -> (dst, label))
+                | join(allowed, (dst, (label, ())) -> (dst, label))
                 | delay((_, n) -> (0, 0, 0, 0, (256, n call bit_length) mul));
             let labels = proposals + nodes | min;
-            set proposals = labels | join(scc, (_, label, dst) -> (dst, label))
-                | join(allowed, (dst, label, ()) -> (dst, label));
+            set proposals = labels | join(scc, (_, (label, dst)) -> (dst, label))
+                | join(allowed, (dst, (label, ())) -> (dst, label));
         }
         let trim_fwd = edges
-            | join(fwd::labels, (src, dst, label) -> (dst, (src, label)))
-            | join(fwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
+            | join(fwd::labels, (src, (dst, label)) -> (dst, (src, label)))
+            | join(fwd::labels, (dst, ((src, label), other)) -> (dst, (src, label, other)))
             | filter((_, (_, a, b)) -> (a, b) eq)
             | map((dst, (src, _, _)) -> (dst, src));
         bwd: {
             let nodes = trans | map((_, dst) -> (dst, dst))
-                | join(allowed, (dst, label, ()) -> (dst, label))
+                | join(allowed, (dst, (label, ())) -> (dst, label))
                 | delay((_, n) -> (0, 0, 0, 0, (256, n call bit_length) mul));
             let labels = proposals + nodes | min;
-            set proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label))
-                | join(allowed, (dst, label, ()) -> (dst, label));
+            set proposals = labels | join(trim_fwd, (_, (label, dst)) -> (dst, label))
+                | join(allowed, (dst, (label, ())) -> (dst, label));
         }
         let trim_bwd = trans
-            | join(bwd::labels, (src, dst, label) -> (dst, (src, label)))
-            | join(bwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
+            | join(bwd::labels, (src, (dst, label)) -> (dst, (src, label)))
+            | join(bwd::labels, (dst, ((src, label), other)) -> (dst, (src, label, other)))
             | filter((_, (_, a, b)) -> (a, b) eq)
             | map((dst, (src, _, _)) -> (dst, src));
         set trim = trim_bwd - edges;

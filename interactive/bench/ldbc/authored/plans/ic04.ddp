@@ -12,16 +12,16 @@ let mtag    = import "graph::mtag.by_tag" : (int, int);         -- (tag, message
 -- Friends' posts with their tags: ((rid, tag), (tag name, created, window start, window end)).
 let posts  = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)
                      | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
-let tags   = mtag | join(tag, (t, m, (name, _)) -> (m, (t, name)));
+let tags   = mtag | join(tag, (t, (m, (name, _))) -> (m, (t, name)));
 let seen   = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add)))
-                     | join(friend, (_, req, (f, _)) -> (f, req))
-                     | join(posts, (_, (rid, start, end), (m, created)) -> (m, (rid, created, start, end)))
-                     | join(tags, (_, (rid, created, start, end), (t, name)) -> ((rid, t), (name, created, start, end)));
+                     | join(friend, (_, (req, (f, _))) -> (f, req))
+                     | join(posts, (_, ((rid, start, end), (m, created))) -> (m, (rid, created, start, end)))
+                     | join(tags, (_, ((rid, created, start, end), (t, name))) -> ((rid, t), (name, created, start, end)));
 
 -- Tags seen before the window, and the window's posts whose tag is new.
 let before = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ())) | distinct;
 let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);
-let fresh  = during - (during | join(before, (key, row, ()) -> (key, row)));
+let fresh  = during - (during | join(before, (key, (row, ())) -> (key, row)));
 let counts = fresh | map(((rid, _), (name, _, _, _)) -> ((rid, name), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.

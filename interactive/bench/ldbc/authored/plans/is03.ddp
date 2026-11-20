@@ -5,8 +5,8 @@ let person  = import "graph::person"  : (int, (List(int), List(int), List(int), 
 let friend  = import "graph::friend" : (int, (int, int));      -- (person, (friend, since))
 
 let ranked = request | map(((rid, who), ()) -> (who, rid))
-                     | join(friend, (_, rid, (f, since)) -> (f, (rid, since)))
-                     | join(person, (f, (rid, since), (first, last, _, _, _, _, _, _, _, _, _)) -> (rid, ((since neg, f), (first, last))))
+                     | join(friend, (_, (rid, (f, since))) -> (f, (rid, since)))
+                     | join(person, (f, ((rid, since), (first, last, _, _, _, _, _, _, _, _, _))) -> (rid, ((since neg, f), (first, last))))
                      | collect | flatmap((k, entries) -> (k, ((0, entries len) range, entries) zip) cap_list);
 let answer = ranked | map((rid, (rank, ((neg, f), (first, last)))) -> ((rid, rank), (f, first, last, neg neg)));
 

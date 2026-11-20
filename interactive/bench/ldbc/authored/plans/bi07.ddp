@@ -11,13 +11,13 @@ let replies  = import "graph::message.by_parent" : (int, int);               -- 
 
 -- Messages carrying the request's tag (one tag; (message, tag) is a set).
 let marked  = request | map(((rid, name), ()) -> (name, rid))
-                      | join(tag_id, (_, rid, t) -> (t, rid))
-                      | join(tagged, (_, rid, m) -> ((rid, m), ()));
-let answers = marked | map(((rid, m), ()) -> (m, rid)) | join(replies, (_, rid, r) -> ((rid, r), ()));
-let fresh   = answers - (answers | join(marked, (key, (), ()) -> (key, ())));
+                      | join(tag_id, (_, (rid, t)) -> (t, rid))
+                      | join(tagged, (_, (rid, m)) -> ((rid, m), ()));
+let answers = marked | map(((rid, m), ()) -> (m, rid)) | join(replies, (_, (rid, r)) -> ((rid, r), ()));
+let fresh   = answers - (answers | join(marked, (key, ((), ())) -> (key, ())));
 let counts  = fresh | map(((rid, r), ()) -> (r, rid))
-                    | join(tags_of, (_, rid, t) -> (t, rid))
-                    | join(tag, (_, rid, (name, _)) -> ((rid, name), ())) | count;
+                    | join(tags_of, (_, (rid, t)) -> (t, rid))
+                    | join(tag, (_, (rid, (name, _))) -> ((rid, name), ())) | count;
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.
 let ranked  = counts | map(((rid, name), n) -> (rid, (n neg, name)))

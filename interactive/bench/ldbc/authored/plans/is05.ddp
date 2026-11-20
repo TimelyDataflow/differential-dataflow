@@ -5,7 +5,7 @@ let person  = import "graph::person"  : (int, (List(int), List(int), List(int), 
 let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 
 let answer = request | map(((rid, m), ()) -> (m, rid))
-                     | join(message, (_, rid, (_, _, who, _, _, _, _, _, _, _, _, _, _)) -> (who, rid))
-                     | join(person, (who, rid, (first, last, _, _, _, _, _, _, _, _, _)) -> ((rid, 0), (who, first, last)));
+                     | join(message, (_, (rid, (_, _, who, _, _, _, _, _, _, _, _, _, _))) -> (who, rid))
+                     | join(person, (who, (rid, (first, last, _, _, _, _, _, _, _, _, _))) -> ((rid, 0), (who, first, last)));
 
 output "answer" = answer | arrange;

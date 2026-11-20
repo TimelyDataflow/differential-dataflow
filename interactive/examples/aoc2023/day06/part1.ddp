@@ -13,7 +13,7 @@ cands: {
 
 let wins = cands::c
     | map(((t, h), ()) -> (t, h))
-    | join(races, (t, h, d) -> ((t, h, d), ()))
+    | join(races, (t, (h, d)) -> ((t, h, d), ()))
     | filter(((t, h, d), ()) -> ((h, (t, h) sub) mul, d) gt)
     | map(((t, _, _), ()) -> (t, ())) | count;
 -- (time, n_wins)

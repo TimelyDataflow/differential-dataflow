@@ -23,7 +23,7 @@ explain: {
     let demand_input0 = demand_set_0;
     let item_map = demand_set_0 | map((k, v) -> ((k, v), ()));
     let item_idx = item_map | arrange;
-    let item_join = ::input0_map_idx | join(item_idx, (k, v, r) -> (k, ()));
+    let item_join = ::input0_map_idx | join(item_idx, (k, (v, r)) -> (k, ()));
     let item_map2 = item_join | map((k, v) -> (k.0, k.1));
     let item_map3 = item_map2 | map((a, b) -> ((a, (b)), ()));
     let item_idx2 = item_map3 | arrange;
@@ -35,7 +35,7 @@ explain: {
     let item_map6 = item_reduce2 | map((k, v) -> (k.0, k.1));
     let item_rows = ::rows_map2_map_idx_reduce_map + item_map6;
     let item_idx4 = item_rows | arrange;
-    let item_join2 = ::query_map_idx_reduce_map_map_idx | join(item_idx4, (k, v, r) -> (k, (r.0, v.1)));
+    let item_join2 = ::query_map_idx_reduce_map_map_idx | join(item_idx4, (k, (v, r)) -> (k, (r.0, v.1)));
     let item_map7 = item_join2 | map((k, v) -> ((k, v), ()));
     let item_idx5 = item_map7 | arrange;
     let item_reduce3 = item_idx5 | reduce((_, vals) -> vals map ((v, _) -> (v, 1)));
@@ -45,10 +45,10 @@ explain: {
     let item_map9 = item_reduce4 | map(arg -> let _call0 = let input = arg in let (k, v) = input in (k.0, k.1) in (_call0.0, ((), ())));
     let item_idx6 = item_map9 | arrange;
     let item_idx7 = item_map8 | arrange;
-    let item_join3 = item_idx6 | join(item_idx7, arg -> let _call0 = let input = arg in let (k, v, r) = input in (r.0, (r.1, v.1)) in (_call0.0, (_call0.1.0, ())));
+    let item_join3 = item_idx6 | join(item_idx7, arg -> let _call0 = let input = arg in let (k, (v, r)) = input in (r.0, (r.1, v.1)) in (_call0.0, (_call0.1.0, ())));
     let item_map10 = item_join3 | map((a, (b, _)) -> ((a, b), ()));
     let item_idx8 = item_map10 | arrange;
-    let item_join4 = item_idx8 | join(::input0_map_idx_reduce_map_map2_idx, (k, v, r) -> (k, ()));
+    let item_join4 = item_idx8 | join(::input0_map_idx_reduce_map_map2_idx, (k, (v, r)) -> (k, ()));
     let item_map11 = item_join4 | map((k, v) -> (k.0, k.1));
     let item_rows3 = demand_set_0 + item_map11;
     let item_map12 = item_rows3 | map((k, v) -> ((k, v), ()));

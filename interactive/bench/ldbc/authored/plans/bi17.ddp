@@ -16,27 +16,27 @@ let member  = import "graph::member.by_forum" : (int, (int, int));    -- (forum,
 -- message's forum is its thread's (the root post's). Tag names are unique and
 -- (message, tag) pairs are a set, so each message appears once.
 let tagged  = request | map(((rid, name, _), ()) -> (name, rid))
-                      | join(tag_by_name, (_, rid, t) -> (t, rid))
-                      | join(mtag_by_tag, (_, rid, m) -> (m, rid))
-                      | join(message, (m, rid, (_, created, author, _, _, _, _, _, _, parent, _, _, _)) -> (m, (rid, author, created, parent)))
-                      | join(root, (m, row, top) -> (top, (m, row)))
-                      | join(message, (_, (m, (rid, author, created, parent)), (_, _, _, _, _, _, _, _, f, _, _, _, _)) -> ((rid, m, author, created, parent, f), ()));
+                      | join(tag_by_name, (_, (rid, t)) -> (t, rid))
+                      | join(mtag_by_tag, (_, (rid, m)) -> (m, rid))
+                      | join(message, (m, (rid, (_, created, author, _, _, _, _, _, _, parent, _, _, _))) -> (m, (rid, author, created, parent)))
+                      | join(root, (m, (row, top)) -> (top, (m, row)))
+                      | join(message, (_, ((m, (rid, author, created, parent)), (_, _, _, _, _, _, _, _, f, _, _, _, _))) -> ((rid, m, author, created, parent, f), ()));
 
 -- Memberships, but only of forums holding one of the request's tagged messages.
 let forums  = tagged | map(((rid, _, _, _, _, f), ()) -> ((f, rid), ())) | distinct | map(((f, rid), ()) -> (f, rid));
-let members = forums | join(member, (f, rid, (who, _)) -> ((rid, f, who), ()));
+let members = forums | join(member, (f, (rid, (who, _))) -> ((rid, f, who), ()));
 
 -- Discussions: a tagged message2 with a tagged reply by someone else. For each, the
 -- candidate forum1s: forums (other than forum2) where both authors are members.
 let by_mid    = tagged | map(((rid, m, author, created, _, f), ()) -> ((rid, m), (author, created, f)));
 let answers   = tagged | map(((rid, _, author, _, parent, _), ()) -> ((rid, parent), author));
-let discuss   = by_mid | join(answers, ((rid, m), (a2, created, f2), a3) -> ((rid, m, a2, created, f2, a3), ()))
+let discuss   = by_mid | join(answers, ((rid, m), ((a2, created, f2), a3)) -> ((rid, m, a2, created, f2, a3), ()))
                        | filter(((_, _, a2, _, _, a3), ()) -> (a2, a3) ne);
 let in_forum  = members | map(((rid, f, who), ()) -> ((rid, who), f));
 let candidate = discuss | map(((rid, m, a2, created, f2, a3), ()) -> ((rid, a2), (m, created, f2, a3)))
-                        | join(in_forum, ((rid, _), (m, created, f2, a3), f1) -> ((rid, f1, a3), (m, created, f2)))
+                        | join(in_forum, ((rid, _), ((m, created, f2, a3), f1)) -> ((rid, f1, a3), (m, created, f2)))
                         | filter(((_, f1, _), (_, _, f2)) -> (f1, f2) ne)
-                        | join(members, ((rid, f1, _), (m, created, f2), ()) -> ((rid, f1), (m, created, f2)));
+                        | join(members, ((rid, f1, _), ((m, created, f2), ())) -> ((rid, f1), (m, created, f2)));
 
 -- Each person's earliest tagged message per forum: (rid, forum1) -> (person1, first).
 let earliest  = tagged | map(((rid, _, author, created, _, f), ()) -> ((rid, f, author), created)) | min
@@ -44,10 +44,10 @@ let earliest  = tagged | map(((rid, _, author, created, _, f), ()) -> ((rid, f, 
 
 -- person1 posted in forum1 more than delta hours before message2, and is not in forum2.
 let delta     = request | map(((rid, _, hours), ()) -> (rid, (hours, 3600000) mul));
-let spread    = earliest | join(candidate, ((rid, _), (p1, first), (m, created, f2)) -> (rid, (p1, first, m, created, f2)))
-                         | join(delta, (rid, (p1, first, m, created, f2), wait) -> ((rid, f2, p1), (m, created, (first, wait) add)))
+let spread    = earliest | join(candidate, ((rid, _), ((p1, first), (m, created, f2))) -> (rid, (p1, first, m, created, f2)))
+                         | join(delta, (rid, ((p1, first, m, created, f2), wait)) -> ((rid, f2, p1), (m, created, (first, wait) add)))
                          | filter((_, (_, created, after)) -> (after, created) lt);
-let spread_ok = spread - (spread | join(members, (key, value, ()) -> (key, value)));
+let spread_ok = spread - (spread | join(members, (key, (value, ())) -> (key, value)));
 
 -- Count distinct message2 per person1 and rank.
 let counts = spread_ok | map(((rid, _, p1), (m, _, _)) -> ((rid, p1, m), ())) | distinct

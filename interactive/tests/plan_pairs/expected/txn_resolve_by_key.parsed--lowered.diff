@@ -13,18 +13,18 @@
 +let wr_all = wr_all_filter | map(((wid, _, k), v) -> ((wid, k), v));
  let wid = wr_all | map(((wid, k), v) -> (wid, (k, v)));
  let read_entries = reads | map(((rid, k), e) -> (k, (1, rid, e)));
--let store_entries = read_entries | join(store, (k, _, (sw, v)) -> (k, (0, sw, v)));
+-let store_entries = read_entries | join(store, (k, (_, (sw, v))) -> (k, (0, sw, v)));
 +let read_entries_idx = read_entries | arrange;
 +let store_idx = store | arrange;
-+let store_entries = read_entries_idx | join(store_idx, (k, _, (sw, v)) -> (k, (0, sw, v)));
++let store_entries = read_entries_idx | join(store_idx, (k, (_, (sw, v))) -> (k, (0, sw, v)));
  res: {
--    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+-    let wr_bad = wid | join(rollback, (wid, (kv, ())) -> (wid, kv));
 -    let writes = wid + (wr_bad | negate);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var rollback;
 +    let wid_idx = ::wid | arrange;
 +    let rollback_idx = rollback | arrange;
-+    let wr_bad = wid_idx | join(rollback_idx, (wid, kv, ()) -> (wid, kv));
++    let wr_bad = wid_idx | join(rollback_idx, (wid, (kv, ())) -> (wid, kv));
 +    let writes_neg = wr_bad | negate;
 +    let writes = ::wid + writes_neg;
      let write_entries = writes | map((wid, (k, v)) -> (k, (0, wid, v)));
@@ -46,21 +46,21 @@
 +    set rollback = rollback_reduce;
  }
  let rb = res::rollback;
--let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+-let wbad = wid | join(rb, (wid, (kv, ())) -> (wid, kv));
 -let committed = wid + (wbad | negate);
 -let latest = committed | map((wid, (k, v)) -> (k, (wid neg, v))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 +let wid_idx = wid | arrange;
 +let rb_idx = rb | arrange;
-+let wbad = wid_idx | join(rb_idx, (wid, kv, ()) -> (wid, kv));
++let wbad = wid_idx | join(rb_idx, (wid, (kv, ())) -> (wid, kv));
 +let committed_neg = wbad | negate;
 +let committed = wid + committed_neg;
 +let latest_map = committed | map((wid, (k, v)) -> (k, (wid neg, v)));
 +let latest_idx = latest_map | arrange;
 +let latest = latest_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
  let new_rows = latest | map((k, (nw, v)) -> (k, (nw neg, v)));
--let old_rows = latest | join(store, (k, _, (sw, sv)) -> (k, (sw, sv)));
+-let old_rows = latest | join(store, (k, (_, (sw, sv))) -> (k, (sw, sv)));
 +let store_idx2 = store | arrange;
-+let old_rows = latest | join(store_idx2, (k, _, (sw, sv)) -> (k, (sw, sv)));
++let old_rows = latest | join(store_idx2, (k, (_, (sw, sv))) -> (k, (sw, sv)));
 +let delta_neg = old_rows | negate;
 +let delta_rows = new_rows + delta_neg;
 +-- Renderer: build an export arrangement.

@@ -4,6 +4,6 @@ let tag     = import "graph::tag"     : (int, (List(int), int));
 let mtag    = import "graph::mtag.by_tag" : (int, int);
 let posts  = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)
                      | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
-let tags   = mtag | join(tag, (t, m, (name, _)) -> (m, (t, name)));
+let tags   = mtag | join(tag, (t, (m, (name, _))) -> (m, (t, name)));
 output "posts" = posts | arrange;
 output "tags" = tags | arrange;

@@ -25,7 +25,7 @@ const CONSUMER: &str = r#"
     let seeds = import "producer::seeds";
     let edges = import "producer::edges";
     s: {
-        let step = x | join(edges, ((_, b), (), ()) -> (((b, 5) rem, b), ()));
+        let step = x | join(edges, ((_, b), ((), ())) -> (((b, 5) rem, b), ()));
         set x = (seeds + step) | distinct;
     }
     output "result" = s::x;
@@ -101,9 +101,9 @@ const ARRANGED_PRODUCER: &str = r#"
 const ARRANGED_CONSUMER: &str = r#"
     let pairs = import "producer::pairs";
     let weights = import "producer::weights";
-    let r = pairs | join(pairs, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)) | distinct;
+    let r = pairs | join(pairs, ((a, b), ((), _)) -> ((b, (a, b) min) eq, 0)) | distinct;
     s: {
-        let step = x | join(weights, (k, v, _) -> (k, v));
+        let step = x | join(weights, (k, (v, _)) -> (k, v));
         set x = (r + step) | min;
     }
     output "result" = s::x;
@@ -165,7 +165,7 @@ const DELTA_CONSUMER: &str = r#"
            + (pairs | lift | half_join(pairs, 1, ((a, b), (), _) -> ((b, (a, b) min) eq, 0))))
           | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
     s: {
-        let step = x | join(weights, (k, v, _) -> (k, v));
+        let step = x | join(weights, (k, (v, _)) -> (k, v));
         set x = (r + step) | min;
     }
     output "result" = s::x;
@@ -247,7 +247,7 @@ const TRIPLE_JOIN: &str = r#"
     let a = import "producer::a";
     let b = import "producer::b";
     let c = import "producer::c";
-    output "r" = a | join(b, (k, x, y) -> (k, (x, y))) | join(c, (k, (x, y), z) -> (k, (x, y, z)));
+    output "r" = a | join(b) | join(c, (k, ((x, y), z)) -> (k, (x, y, z)));
 "#;
 
 /// The same join as a delta join: one path per import, each strict against the imports before it.

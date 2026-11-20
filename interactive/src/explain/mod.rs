@@ -321,11 +321,11 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
 // its own rows, whose values carry the chain (and `q`) after the user's value. A user lambda must
 // see the user's row, not explain's, so explain calls it on the user's row as it sits in explain's.
 
-/// A slot of `arity` rows, `(k, v)` or `(k, v, r)`, whose body is `body` applied to the results
+/// A slot of `arity` rows, `(k, v)` or `(k, (v, r))`, whose body is `body` applied to the results
 /// of the user's lambdas in `calls`, each called on an argument written over those rows (explain's
 /// spelling of the user's row). See [`Lambda::compose`]: the user's text is never parsed again.
 fn slot(arity: usize, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Lambda {
-    let pattern = if arity == 2 { "(k, v)" } else { "(k, v, r)" };
+    let pattern = if arity == 2 { "(k, v)" } else { "(k, (v, r))" };
     Lambda::compose(pattern, calls, body)
 }
 /// A projection of explain's own, from the lambda text of its key and value.
@@ -641,7 +641,7 @@ impl RowModel for Val {
         let mut val = vec![var(0), f(1, 0), f(2, 0)]; // K, V_L, V_R
         val.extend(fidx(1, 1, 1 + l_len));            // chain_L
         val.extend(fidx(2, 1, 1 + r_len));            // chain_R
-        slot(3, &[(proj, tup(vec![var(0), var(1), var(2)]))], |out| {
+        slot(3, &[(proj, tup(vec![var(0), tup(vec![var(1), var(2)])]))], |out| {
             val.push(fld(out[0].clone(), 1));       // V_out (pair-produced)
             tup(vec![fld(out[0].clone(), 0), tup(val)])
         })
@@ -1076,7 +1076,7 @@ impl<'a> Reverse<'a> {
                 let rt = resolve(self.orig, path, right);
                 let ls = self.side(&lt);
                 let rs = self.side(&rt);
-                let projection = slot(3, &[(projection, tup(vec![var(0), f(1, 0), f(2, 0)]))], |out| out[0].clone());
+                let projection = slot(3, &[(projection, tup(vec![var(0), tup(vec![f(1, 0), f(2, 0)])]))], |out| out[0].clone());
                 // Keep the coordinates of the scopes both sides share with this one: dropping more
                 // than one side needs only widens its demand, which is still sound.
                 let shared = shared_len(path, target_path(&lt)).min(shared_len(path, target_path(&rt)));

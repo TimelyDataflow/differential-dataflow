@@ -13,7 +13,7 @@ const DIAG: &str = include_str!("../server/diag.ddp");
 const PAIRS: &str = "
 let edges = input 0 : ((int, int), ());
 let forward = edges | map(((a, b), ()) -> (a, b));
-let pairs = forward | join(forward, (_, x, y) -> ((x, y), ()));
+let pairs = forward | join(forward, (_, (x, y)) -> ((x, y), ()));
 output \"NAME\" = pairs | distinct;
 ";
 

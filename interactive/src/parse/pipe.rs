@@ -33,7 +33,8 @@
 //!
 //! - `| map((k, v) -> (k', v'))` — reshape each row to the `(key, val)` the lambda gives.
 //! - `| value((k, v) -> v')` — replace the value, keeping the key.
-//! - `| join(other, (k, v, v1) -> (k', v'))` — equijoin on the key.
+//! - `| join(other)` — equijoin on the key, yielding `(k, (v, v1))`.
+//! - `| join(other, f)` — project the joined row, as in `| join(other) | map(f)`.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `distinct` keeps each `(key, val)`
 //!   record once, and `collect` is NEST (gather a key's values into a `List`).
 //! - `| sum` — sum integer values per key, weighted by their signed diffs. A zero total has no row.
@@ -113,7 +114,7 @@
 //! # Lambdas
 //!
 //! A slot runs `let pat = input in body` in corgi's ML syntax, with `input` the tuple of the
-//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join, and
+//! slot's rows: `(key, val)` for a linear op, `(key, (left val, right val))` for a join, and
 //! `(key, vals)` for `reduce`. For example, `map(((src, dst), ()) -> (src, dst))` keys each row
 //! of pairs by its first field. Operators are postfix (`(a, b) add`, `xs len`,
 //! `(mask, a, b) select`); `x.N` is a tuple's field, `(e)` a one-field tuple and `()` unit;
@@ -676,7 +677,19 @@ impl Parser {
                 let val = self.slot();
                 Expr::Map(Box::new(lhs), Lambda::compose("(k, v)", &[(&val, "(k, v)".into())], |r| format!("(k, {})", r[0])))
             },
-            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_pipe_expr(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
+            Token::Join => {
+                self.next();
+                self.expect(&Token::LParen);
+                let rhs = self.parse_pipe_expr();
+                let projection = if *self.peek() == Token::Comma {
+                    self.next();
+                    self.lambda()
+                } else {
+                    Lambda::new("let row = input in row".into(), &corgi::Scope::default())
+                };
+                self.expect(&Token::RParen);
+                Expr::Join(Box::new(lhs), Box::new(rhs), projection)
+            },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },

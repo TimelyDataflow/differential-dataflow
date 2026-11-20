@@ -11,7 +11,7 @@ let nodes = edges | map((a, _) -> (a, ())) | distinct;
 -- starting from its own name as a label, and
 -- maintaining the least label it has seen.
 cc: {
-    let props  = labels | join(edges, (_, lbl, dst) -> (dst, lbl));
+    let props  = labels | join(edges, (_, (lbl, dst)) -> (dst, lbl));
     set labels = nodes | map((n, _) -> (n, n)) + props | min;
 }
 

@@ -20,9 +20,9 @@ output "message" = message | map(((id, kind, creator, parent), ()) -> (id, (kind
 output "likes" = likes | map(((person, message), ()) -> (message, person)) | arrange;
 let tags = tag | map(((id, name), ()) -> (id, name));
 output "tagged" = message_tag | map(((message, tag), ()) -> (tag, message))
-    | join(tags, (_, message, name) -> (message, name)) | arrange;
+    | join(tags, (_, (message, name)) -> (message, name)) | arrange;
 let places = place | map(((id, name, parent), ()) -> (id, (name, parent)));
 -- City -> country is one parent step in SNB.
 output "resident" = person | map(((id, _, _, city), ()) -> (city, id))
-    | join(places, (_, person, (_, parent)) -> (parent, person))
-    | join(places, (_, person, (name, _)) -> (name, person)) | arrange;
+    | join(places, (_, (person, (_, parent))) -> (parent, person))
+    | join(places, (_, (person, (name, _))) -> (name, person)) | arrange;

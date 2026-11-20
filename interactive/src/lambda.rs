@@ -35,8 +35,8 @@ pub(crate) mod print;
 pub(crate) mod normalize;
 
 /// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
-/// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
-/// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
+/// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, (left val, right
+/// val))` for a join). The parser binds it where it is written, in the scope of its DDIR program:
 /// the registered functions and the base words `call` reaches, and the program's
 /// `enum` declarations. A parse error is kept, and reported where the program is compiled
 /// or run. A composed lambda's graph is authoritative: its readable `src` is
@@ -83,6 +83,10 @@ impl Lambda {
         lambda.src = format!("let {pattern} = input in {src}{body}");
         if let Some(e) = error { lambda.graph = Err(e); }
         lambda
+    }
+    /// Apply a join projection to the three columns supplied by the arrangements.
+    pub(crate) fn on_join_columns(&self) -> Self {
+        Self::compose("(k, l, r)", &[(self, "(k, (l, r))".into())], |out| out[0].clone())
     }
     /// The graph, or the parse error naming the program.
     pub(crate) fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {

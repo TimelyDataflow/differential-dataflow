@@ -353,7 +353,7 @@ impl Backend for CorgiBackend {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
         // compiles the projection once, now, at both inputs' shapes, and emits corgi columns
         // directly as `CorgiContainer`s — column-native, no row round-trip.
-        let backend = CorgiJoinBackend::new(projection, [k, v0, v1]);
+        let backend = CorgiJoinBackend::new(&projection.on_join_columns(), [k, v0, v1]);
         // An import is read as of its time. Reading one input as of a time `s` or both gives the
         // same output when the other's times are at or beyond `s` (`(t0 ∨ s) ∨ t1 = t0 ∨ t1`
         // then), as every program time is; two imports share one time. So the join reads both

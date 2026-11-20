@@ -10,10 +10,10 @@ use interactive::{lower, parse};
 
 const SRC: &str = "
 let edges = input 0 : ((int) ; (int));
-let pairs = edges | join(edges, (k, a, b) -> (a, b));
+let pairs = edges | join(edges, (k, (a, b)) -> (a, b));
 let counts = pairs | count;
 reach: {
-    let step = reach | join(edges, (k, (), b) -> (b, ()));
+    let step = reach | join(edges, (k, ((), b)) -> (b, ()));
     set reach = (edges | map((a, _) -> (a, ()))) + step | distinct;
 }
 output \"counts\" = counts | map((k, n) -> (k, n));

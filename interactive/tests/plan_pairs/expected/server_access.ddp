@@ -12,7 +12,7 @@ barring: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var barred : (Member, int);
     let barred_idx = barred | arrange;
-    let beyond = barred_idx | join(::members_idx, (_grp, doc, who) -> (who, doc));
+    let beyond = barred_idx | join(::members_idx, (_grp, (doc, who)) -> (who, doc));
     let barred_rows = ::blocks_map + beyond;
     let barred_map = barred_rows | map((k, v) -> ((k, v), ()));
     let barred_idx2 = barred_map | arrange;
@@ -27,10 +27,10 @@ sharing: {
     var allowed : ((Member, int), Access);
     let inherited_map = allowed | map(((who, doc), acc) -> (who, (doc, acc)));
     let inherited_idx = inherited_map | arrange;
-    let inherited = inherited_idx | join(::members_idx, (_grp, (doc, acc), who) -> ((who, doc), acc));
+    let inherited = inherited_idx | join(::members_idx, (_grp, ((doc, acc), who)) -> ((who, doc), acc));
     let offered = ::grants_map + inherited;
     let offered_idx = offered | arrange;
-    let allowed_join = offered_idx | join(::barred_idx, (pair, acc, ()) -> (pair, acc));
+    let allowed_join = offered_idx | join(::barred_idx, (pair, (acc, ())) -> (pair, acc));
     let allowed_neg = allowed_join | negate;
     let allowed_rows = offered + allowed_neg;
     let allowed_idx = allowed_rows | arrange;

@@ -94,7 +94,7 @@ const REACH: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst)) EDGES;
     let roots = edges | map((src, _) -> (src, ())) | distinct | filter((n, ()) -> (n, 3) lt);
     reach: {
-        let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+        let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
         set reach = roots + proposals | distinct;
     }
     output "result" = reach::reach;

@@ -100,7 +100,7 @@ fn conflicting_shapes_reject_the_install() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         // Join keys of different shapes.
-        let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); output "j" = a | join(b, (k, _, _) -> (k, ()));"#;
+        let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); output "j" = a | join(b, (k, (_, _)) -> (k, ()));"#;
         let err = server.install(worker, "join", &program(join)).unwrap_err();
         assert!(err.contains("join keys"), "{err}");
         // A field of an integer, through an import whose shape is published.

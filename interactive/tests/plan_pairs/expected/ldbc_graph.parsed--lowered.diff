@@ -55,7 +55,7 @@
 -output "language.by_person" = language | map(((person, value), ()) -> (person, value)) | arrange;
 -let exists = person | map(((id, _, _, _, _, _, _, _, _, _, _, _), ()) -> (id, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 -let either = (knows | map(((a, b, t), ()) -> (a, (b, t)))) + (knows | map(((a, b, t), ()) -> (b, (a, t))));
--let friends = either | join(exists, (a, (b, t), ()) -> (b, (a, t))) | join(exists, (b, (a, t), ()) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
+-let friends = either | join(exists, (a, ((b, t), ())) -> (b, (a, t))) | join(exists, (b, ((a, t), ())) -> ((a, b, t), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((a, b, t), ()) -> (a, (b, t)));
 -output "friend" = friends | arrange;
 -output "friend.pair" = friends | map((a, (b, _)) -> ((a, b), ())) | arrange;
 -let posts = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 0) eq) | map(((id, _, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> ((id, id), ()));
@@ -67,9 +67,9 @@
 +let either_map2 = knows | map(((a, b, t), ()) -> (b, (a, t)));
 +let either = either_map + either_map2;
 +let either_idx = either | arrange;
-+let friends_join = either_idx | join(exists, (a, (b, t), ()) -> (b, (a, t)));
++let friends_join = either_idx | join(exists, (a, ((b, t), ())) -> (b, (a, t)));
 +let friends_idx = friends_join | arrange;
-+let friends_join2 = friends_idx | join(exists, (b, (a, t), ()) -> ((a, b, t), ()));
++let friends_join2 = friends_idx | join(exists, (b, ((a, t), ())) -> ((a, b, t), ()));
 +let friends_idx2 = friends_join2 | arrange;
 +let friends_reduce = friends_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
 +let friends = friends_reduce | map(((a, b, t), ()) -> (a, (b, t)));
@@ -78,14 +78,14 @@
 +let replies_filter = message | filter(((_, kind, _, _, _, _, _, _, _, _, _, _, _, _), ()) -> (kind, 1) eq);
 +let replies = replies_filter | map(((id, _, _, _, _, _, _, _, _, _, parent, _, _, _), ()) -> (parent, id));
  thread: {
--    let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, root, child) -> ((child, root), ()));
+-    let below = thread | map(((mid, root), ()) -> (mid, root)) | join(replies, (_, (root, child)) -> ((child, root), ()));
 -    set thread = posts + below | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 +    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
 +    var thread;
 +    let below_map = thread | map(((mid, root), ()) -> (mid, root));
 +    let below_idx = below_map | arrange;
 +    let replies_idx = ::replies | arrange;
-+    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
++    let below = below_idx | join(replies_idx, (_, (root, child)) -> ((child, root), ()));
 +    let thread_rows = ::posts + below;
 +    let thread_idx = thread_rows | arrange;
 +    let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

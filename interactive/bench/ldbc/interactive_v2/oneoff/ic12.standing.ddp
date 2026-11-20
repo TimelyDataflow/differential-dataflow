@@ -9,7 +9,7 @@ let mtag     = import "graph::mtag.by_tag" : (int, int);
 let selves = tagclass | map((id, _) -> ((id, id), ()));
 below: {
     let step  = below | map(((low, high), ()) -> (high, low))
-                      | join(tagclass, (_, low, (_, parent)) -> (low, parent))
+                      | join(tagclass, (_, (low, (_, parent))) -> (low, parent))
                       | filter((_, parent) -> (parent, 0) ge)
                       | map((low, higher) -> ((low, higher), ()));
     set below = selves + step | distinct;

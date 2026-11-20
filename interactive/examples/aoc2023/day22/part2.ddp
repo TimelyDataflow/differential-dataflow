@@ -8,7 +8,7 @@ let bricks = input 0 : ((int, int, int, int, int, int, int), ()) | filter(((_, x
 -- (r, (xlo, ylo, zlo, xhi, yhi, zhi))
 
 let bu = bricks | map((r, (xl, yl, zl, xh, yh, zh)) -> ((), (r, xl, yl, zl, xh, yh, zh)));
-let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, zl2, xh2, yh2, zh2)) ->
+let ovl = bu | join(bu, (_, ((r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, zl2, xh2, yh2, zh2))) ->
         ((r1, r2), (
             (((xl1, xl2) max, (xh1, xh2) min) le,
              ((yl1, yl2) max, (yh1, yh2) min) le,
@@ -19,16 +19,16 @@ let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, z
 
 -- resting z per brick, stored negated (mz = BIG - z) so `min` computes max
 rests: {
-    let lifted = rest | join(ovl, (_, mz, (up, h)) -> (up, (mz, h) sub));
+    let lifted = rest | join(ovl, (_, (mz, (up, h))) -> (up, (mz, h) sub));
     set rest = (bricks | map((r, _) -> (r, 999999))) + lifted | min;
 }
 let rest = rests::rest;
 -- (r, BIG - resting z), BIG = 1000000
 
 -- direct supports: rest_top(lower) + 1 == rest_z(upper)
-let s1 = ovl | join(rest, (lo, (up, h), mz) -> (up, (lo, (mz, h) sub)));
+let s1 = ovl | join(rest, (lo, ((up, h), mz)) -> (up, (lo, (mz, h) sub)));
 -- (upper, (lower, required mz_upper))
-let sup = s1 | join(rest, (up, (lo, req), mz) -> ((lo, up, (req, mz) eq), ()))
+let sup = s1 | join(rest, (up, ((lo, req), mz)) -> ((lo, up, (req, mz) eq), ()))
     | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((lo, up, _), _) -> ((lo, up), ()));
 -- (lower, upper)
 
@@ -36,15 +36,15 @@ let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, n) -> (n, 1
 
 let supL = sup | map(((lo, up), _) -> (lo, up));      -- (lower, upper)
 let supcnt = sup | map(((_, up), _) -> (up, ())) | count;  -- (b, #supporters)
-let seed = sup | map(((lo, up), _) -> (up, lo)) | join(uniq2, (b, a, ()) -> ((a, b), ()));
+let seed = sup | map(((lo, up), _) -> (up, lo)) | join(uniq2, (b, (a, ())) -> ((a, b), ()));
 -- (a, b): b uniquely supported by a
 
 trans: {
-    let fell = st | map(((a, b), _) -> (b, a)) | join(supL, (_, a, c) -> ((a, c), ()))
+    let fell = st | map(((a, b), _) -> (b, a)) | join(supL, (_, (a, c)) -> ((a, c), ()))
         | map((k, _) -> (k, ())) | count;
     -- ((a, b), #supporters of b falling with a)
     let full = fell | map(((a, b), n) -> (b, (a, n)))
-        | join(supcnt, (b, (a, n), m) -> ((a, b, (n, m) eq), ()))
+        | join(supcnt, (b, ((a, n), m)) -> ((a, b, (n, m) eq), ()))
         | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((a, b, _), _) -> ((a, b), ()));
     set st = seed + full | distinct;
 }

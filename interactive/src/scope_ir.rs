@@ -116,7 +116,7 @@ pub enum Node {
     Linear { input: Ref, ops: Vec<LinearOp> },
     Concat(Vec<Ref>),
     Arrange(Ref),
-    /// `projection` is a lambda over `(key, left val, right val)` giving `(key', val')`.
+    /// `projection` is a lambda over `(key, (left val, right val))` giving `(key', val')`.
     Join { left: Ref, right: Ref, projection: Lambda },
     /// Each update of `stream`, `(key, (val, time))` with `time` a time as data (as `lift` writes
     /// it), meets the rows of `arrangement` at its key whose times are less than the update's own

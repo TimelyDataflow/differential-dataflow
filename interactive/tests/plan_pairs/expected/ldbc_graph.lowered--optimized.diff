@@ -17,8 +17,8 @@
      let below_map = thread | map(((mid, root), ()) -> (mid, root));
      let below_idx = below_map | arrange;
 -    let replies_idx = ::replies | arrange;
--    let below = below_idx | join(replies_idx, (_, root, child) -> ((child, root), ()));
-+    let below = below_idx | join(::replies_idx, (_, root, child) -> ((child, root), ()));
+-    let below = below_idx | join(replies_idx, (_, (root, child)) -> ((child, root), ()));
++    let below = below_idx | join(::replies_idx, (_, (root, child)) -> ((child, root), ()));
      let thread_rows = ::posts + below;
      let thread_idx = thread_rows | arrange;
      let thread_reduce = thread_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));

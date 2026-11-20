@@ -358,7 +358,7 @@ fn assert_shared_import_requests(workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"graph::edges\";\noutput \"answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
+                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"graph::edges\";\noutput \"answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, ((rid), (node))) -> ((rid), (node)));
 \n{name} end-load\n"
             ),
         );
@@ -723,7 +723,7 @@ fn refused_loads_do_not_redirect_named_inputs() {
 fn loads_bind_inputs_to_published_outputs() {
     let (server, mut writer, mut reader) = start_server(2);
     request(&mut writer, &mut reader, "g", "g load g begin\nlet e = input \"e\" : ((int), (int));\noutput \"edges\" = e | arrange;\ng end-load\n");
-    request(&mut writer, &mut reader, "q", "q load q edges=g::edges begin\nlet edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, (), d) -> ((d), ()));\nq end-load\n");
+    request(&mut writer, &mut reader, "q", "q load q edges=g::edges begin\nlet edges = input \"edges\" : ((int), (int));\nlet roots = input \"roots\" : ((int), ());\noutput \"hop\" = roots | join(edges, (_, ((), d)) -> ((d), ()));\nq end-load\n");
     request(&mut writer, &mut reader, "f", "f feed g e time=0 begin\n1 val=2\n1 val=3\n4 val=5\nf end-feed\n");
     request(&mut writer, &mut reader, "r", "r feed q roots time=0 1\n");
     seal_inputs(&mut writer, &mut reader, &["g e", "q roots"], 1);

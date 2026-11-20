@@ -327,7 +327,7 @@ class Compiler:
             else:
                 keyed_right = f'({keyed(rhs,right.fields,on.values(),False)} | distinct)'
                 out = 'left'
-            matched = f'{keyed_left} | join({keyed_right}, (_, left, right) -> ({out}, ()))'
+            matched = f'{keyed_left} | join({keyed_right}, (_, (left, right)) -> ({out}, ()))'
             code = f'{l} - ({matched})' if op=='anti' else matched
         elif op == 'group':
             source,keys,aggs = args
@@ -355,7 +355,7 @@ class Compiler:
                     if kind == 'sum':
                         # count omits zero totals, but SQL-style grouping keeps
                         # a zero sum while the input group remains nonempty.
-                        missing = f'({groups} - ({groups} | join({aggregate}, (key, _, _) -> (key, ()))))'
+                        missing = f'({groups} - ({groups} | join({aggregate}, (key, (_, _)) -> (key, ()))))'
                         present = aggregate+'_present'
                         self.lines.append(f'let {present} = {aggregate} + ({missing} | map((key, ()) -> (key, 0)));')
                         aggregate = present
@@ -364,7 +364,7 @@ class Compiler:
                         code = f'{aggregate} | map((key, total) -> (key, (total)))'
                     else:
                         values = product([*(f'left.{j}' for j in range(i)), 'right'])
-                        code = f'{joined} | join({aggregate}, (key, left, right) -> (key, {values}))'
+                        code = f'{joined} | join({aggregate}, (key, (left, right)) -> (key, {values}))'
                     self.lines.append(f'let {stage} = {code};')
                     joined = stage
                 fields = product([*outs, *(f'totals.{i}' for i in range(len(aggs)))])
@@ -424,7 +424,7 @@ class Compiler:
             combined = list(seed.fields)+['next_'+x for x in nextrel.fields]
             joined = product(refs[x] for x in combined)
             step_refs = positions(combined)
-            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n set state = ({s} + proposals) | map((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
+            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, (left, right)) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n set state = ({s} + proposals) | map((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
             code = f'{name}_loop::state'
         else: raise ValueError(op)
         self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
