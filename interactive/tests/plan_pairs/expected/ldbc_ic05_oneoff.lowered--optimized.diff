@@ -32,7 +32,7 @@
  let after_idx = after | arrange;
  let posted_idx = posted | arrange;
  let busy_join = after_idx | join(posted_idx, ((_, f), rid, n) -> ((rid, f), n));
- let busy_rows = busy_join | join_function((key, n) -> ((key, ()), (0), n) enlist);
+ let busy_rows = busy_join | join_function((key, n) -> ((key, ()), 0, n) enlist);
  let busy_idx = busy_rows | arrange;
  let busy = busy_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
 -let circle_idx3 = circle | arrange;

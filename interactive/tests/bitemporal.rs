@@ -144,11 +144,11 @@ impl Fed {
 /// `(point, export)` checks made on worker 0.
 fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let text = if shared { PROGRAM.replace("let owners = input 1 : ((int), (int));", "let owners = (input 1 : ((int), (int))) + (import \"seed::seed_owners\");") } else { PROGRAM.to_string() };
+        let text = if shared { PROGRAM.replace("let owners = input 1 : (int, int);", "let owners = (input 1 : (int, int)) + (import \"seed::seed_owners\");") } else { PROGRAM.to_string() };
         let program = lower::lower_tree(parse::pipe::parse(&text));
         let mut server = Server::new();
         if shared {
-            let seed = lower::lower_tree(parse::pipe::parse(r#"output "seed_owners" = input 0 : ((int), (int));"#));
+            let seed = lower::lower_tree(parse::pipe::parse(r#"output "seed_owners" = input 0 : (int, int);"#));
             server.install(worker, "seed", &seed).unwrap();
         }
         server.install_with_root(worker, "bank", &program, 2, at((0, 0))).unwrap();

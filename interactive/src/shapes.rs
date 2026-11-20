@@ -235,6 +235,16 @@ fn time_shape(level: Level) -> Shape {
     Shape::Prod(vec![Shape::Int; level.width()])
 }
 
+/// Whether a `join_function` lambda may write a time of shape `shape` at a time `width` wide:
+/// a tuple of `width` integers, or a bare integer when there is one coordinate.
+pub(crate) fn writes_time(shape: &Shape, width: usize) -> bool {
+    match shape {
+        Shape::Prod(fs) => fs.len() == width && fs.iter().all(|f| *f == Shape::Int),
+        Shape::Int => width == 1,
+        _ => false,
+    }
+}
+
 /// The shapes a linear chain at `level` sees: before each op, then after the last.
 pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Level) -> Result<Vec<(Shape, Shape)>, String> {
     let (mut k, mut v) = (key, val);
@@ -293,13 +303,13 @@ fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, Stri
 }
 
 /// The `(key, val)` shapes of a `join_function` lambda's output rows. The lambda gives a list of
-/// `((key, val), time, diff)`, with `time` the shape of a time at this level.
+/// `((key, val), time, diff)`, with `time` the shape of a time at this level (see `writes_time`).
 fn join_function_shape(lambda: &Lambda, env: &[Shape], level: Level) -> Result<(Shape, Shape), String> {
     let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(level));
     let shape = slot_shape(lambda, env).map_err(|e| format!("join_function: {e}"))?;
     let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
     match &**elem {
-        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(level) && fs[2] == Shape::Int => match &fs[0] {
+        Shape::Prod(fs) if fs.len() == 3 && writes_time(&fs[1], level.width()) && fs[2] == Shape::Int => match &fs[0] {
             Shape::Prod(kv) if kv.len() == 2 => Ok((kv[0].clone(), kv[1].clone())),
             _ => Err(wrong(&shape)),
         },

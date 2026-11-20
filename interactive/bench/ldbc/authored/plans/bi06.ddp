@@ -25,7 +25,7 @@ let pairs   = written | map(((rid, m, who), ()) -> (m, (rid, who)))
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
 let scored  = pairs | map(((rid, who, liker), ()) -> (liker, (rid, who)))
                     | join(popular, (_, (rid, who), p) -> ((rid, who), p))
-                    | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+                    | join_function((key, p) -> ((key, ()), 0, p) enlist) | count;
 let authors = written | map(((rid, _, who), ()) -> ((rid, who), ())) | distinct;
 let score   = scored + ((authors - (authors | join(scored, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped

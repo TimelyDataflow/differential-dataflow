@@ -156,6 +156,8 @@ impl Parser {
 }
 
 fn tuple(xs: &[String]) -> String { format!("({})", xs.join(", ")) }
+/// A row's key or value from its fields: one field is itself, not a tuple of one.
+fn fields(xs: &[String]) -> String { if let [x] = xs { x.clone() } else { tuple(xs) } }
 // Emit a join's next key directly, as the design specifies. This is syntax
 // composition, with no demand analysis or choice of index.
 fn project(input: Expr, map: Lambda) -> Expr {
@@ -323,16 +325,17 @@ impl State<'_> {
         let carried = self.required().into_iter().filter(|a| !key.contains_key(a)).collect::<Vec<_>>();
         let values = carried.iter().map(|a| self.read(a)).collect::<Vec<_>>();
         let mut locations = key.iter().filter_map(|(a, r)| r.scalar().map(|r| (a.clone(), r))).collect::<BTreeMap<_, _>>();
-        for (i, at) in carried.into_iter().enumerate() { locations.insert(at, format!("v.{i}")); }
+        let one = carried.len() == 1;
+        for (i, at) in carried.into_iter().enumerate() { locations.insert(at, if one { "v".into() } else { format!("v.{i}") }); }
         self.locations = locations;
         self.key = key;
-        format!("({key_expr}, {})", tuple(&values))
+        format!("({key_expr}, {})", fields(&values))
     }
     fn layout(&mut self, target: Target<'_>) -> String {
         match target {
             Target::Output => {
                 let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
-                let key = tuple(&values);
+                let key = fields(&values);
                 format!("({key}, ())")
             }
             Target::Key(p) | Target::Keep(p) => {

@@ -886,7 +886,7 @@ fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
         assert!(error.contains("commanded write frontier is 0"), "{error}");
         let error = framed(&mut writer, &mut reader, "t", "s seal prod 0 4\nt trim prod::edges 9\n", &[]).unwrap_err();
         assert!(error.contains("commanded write frontier is 4"), "{error}");
-        assert_eq!(request(&mut writer, &mut reader, "p", "p peek prod::edges as-of 0\n"), ["tuple(1) val=tuple(2)"]);
+        assert_eq!(request(&mut writer, &mut reader, "p", "p peek prod::edges as-of 0\n"), ["1 val=2"]);
 
         // Send the seal, trim and joining import together, without an intervening peek or spin.
         request(&mut writer, &mut reader, "l", &format!("l load fresh from {programs}/producer.ddp\n"));
@@ -898,7 +898,7 @@ fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
         }
         request(&mut writer, &mut reader, "f", "f feed reach roots 1 time=3\n");
         request(&mut writer, &mut reader, "s", "s seal reach roots 4\n");
-        assert_eq!(request(&mut writer, &mut reader, "p", "p peek reach::result as-of 3\n"), ["tuple(1)", "tuple(2)"]);
+        assert_eq!(request(&mut writer, &mut reader, "p", "p peek reach::result as-of 3\n"), ["1", "2"]);
         server.stop();
     }
 }

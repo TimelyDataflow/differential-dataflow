@@ -6,11 +6,11 @@
 enum Dir = Fwd int | Bwd int;
 
 let edges = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
-let roots = input 1 : ((int), ()) | map(((n), ()) -> (n, ()));
+let roots = input 1 : (int, ()) | map((n, ()) -> (n, ()));
 
 -- Scalars: arithmetic, (signed) compares, unaries, `hash`, `select`.
 let scored = edges
-    | map((a, b) -> (a, ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, ((a) hash shr_b64 1, 97) rem)))
+    | map((a, b) -> (a, ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, (a hash shr_b64 1, 97) rem)))
     | filter((_, (_, n, _, _)) -> ((n, -99) eq, 0) eq);
 
 -- Floats: explicit `to_float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.

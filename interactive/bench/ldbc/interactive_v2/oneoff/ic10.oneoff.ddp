@@ -27,7 +27,7 @@ let liked  = wrote | map(((rid, who, node, m), ()) -> (m, (rid, who, node)))
                    | distinct;
 let points = (liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1)))
            + ((wrote - liked) | map(((rid, who, node, _), ()) -> ((rid, who, node), -1)));
-let summed = points | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+let summed = points | join_function((key, p) -> ((key, ()), 0, p) enlist) | count;
 let keys   = cands | map((key, _) -> (key, ()));
 let score  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 let ranked = score | join(cands, ((rid, _, node), s, (first, last, gender, town)) -> (rid, ((s neg, node), (first, last, s, gender, town))))

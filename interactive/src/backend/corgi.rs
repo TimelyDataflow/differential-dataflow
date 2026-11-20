@@ -163,7 +163,11 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: Level, plans: &[Plan]) -> CC {
                     corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_list("join_function list").unwrap();
                 let mut elem = elems.into_prod("join_function element").unwrap();
                 let d2 = elem.pop().unwrap().into_i64("join_function diff").unwrap();
-                let lanes = elem.pop().unwrap().into_prod("join_function time").unwrap();
+                // A time of one coordinate may be written bare, an integer rather than a tuple.
+                let lanes = match elem.pop().unwrap() {
+                    CValue::Prod(lanes) => lanes,
+                    lane => vec![lane],
+                };
                 let mut row = elem.pop().unwrap().into_prod("join_function row").unwrap();
                 let vals = row.pop().unwrap();
                 let keys = row.pop().unwrap();

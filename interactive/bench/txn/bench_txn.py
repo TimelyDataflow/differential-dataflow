@@ -39,8 +39,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "ldbc"))
 from client import diagnostic_exports, decode, encode_frame  # noqa: E402
 
-# The intents input of every program here: `((txn, is_read, key), (value))`.
-INTENTS = (("prod", ["int", "int", "int"]), ("prod", ["int"]))
+# The intents input of every program here: `((txn, is_read, key), value)`.
+INTENTS = (("prod", ["int", "int", "int"]), "int")
 DEFAULT_BINARY = ROOT / "target/release/ddir_server"
 
 
@@ -144,10 +144,10 @@ class Client:
             for txn in transactions:
                 for k, e in txn.reads:
                     keys.append((txn.txn_id, 1, k))
-                    vals.append((e,))
+                    vals.append(e)
                 for k, v in txn.writes:
                     keys.append((txn.txn_id, 0, k))
-                    vals.append((v,))
+                    vals.append(v)
             frame = encode_frame(INTENTS, keys, [1] * len(keys), vals, times=[epoch] * len(keys))
             payload = f"{reqid} feed {prog} 0 frame {len(frame)}\n".encode() + frame
         else:
@@ -256,7 +256,7 @@ def parse_rollback(rows) -> set[int]:
 
 
 def parse_state(rows) -> dict[int, int]:
-    """`state` is ((k), (v)) and `store` is ((k), (wid, v)): the value is the last field."""
+    """`state` is (k, v) and `store` is (k, (wid, v)): the value is the last field."""
     result: dict[int, int] = {}
     for key, val, diff in rows:
         if diff != 1 or key[0] in result:

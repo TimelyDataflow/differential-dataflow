@@ -33,7 +33,7 @@ let posted = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) ->
 -- Forums with posts by circle members who joined after the date: ((rid, forum), posts).
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
 let busy   = after | join(posted, ((_, f), rid, n) -> ((rid, f), n))
-                   | join_function((key, n) -> ((key, ()), (0), n) enlist) | count;
+                   | join_function((key, n) -> ((key, ()), 0, n) enlist) | count;
 
 -- Forums joined after the date with no such posts: from each person's 40 smallest-id
 -- forums when all their memberships postdate the date, otherwise from all of them.

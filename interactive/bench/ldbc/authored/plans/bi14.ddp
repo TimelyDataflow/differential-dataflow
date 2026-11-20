@@ -41,7 +41,7 @@ let points  = (pairs | map((pair, v) -> (pair, (v, 0))))
             + (pairs | join(fan,     (pair, v, ()) -> (pair, (v, 10))))
             + (flip  | join(fan,     ((p2, p1), v, ()) -> ((p1, p2), (v, 1))));
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
-let summed  = points | join_function(((p1, p2), ((rid, city, cname), s)) -> (((rid, city, cname, p1, p2), ()), (0), s) enlist) | count;
+let summed  = points | join_function(((p1, p2), ((rid, city, cname), s)) -> (((rid, city, cname, p1, p2), ()), 0, s) enlist) | count;
 let keys    = pairs | map(((p1, p2), (rid, city, cname)) -> ((rid, city, cname, p1, p2), ()));
 let scored  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 

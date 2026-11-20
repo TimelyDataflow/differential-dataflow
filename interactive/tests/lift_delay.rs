@@ -88,6 +88,39 @@ fn rows_are_as_expected() {
     }
 }
 
+/// A time of one coordinate may be written bare: `0` and `(0)` are the same time, at the root of a
+/// program with one root coordinate.
+#[test]
+fn one_coordinate_times_may_be_bare() {
+    let tupled = r#"
+        let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+        output "epoch" = pairs | delay((_, b) -> (b)) | lift;
+        output "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);
+    "#;
+    let bare = r#"
+        let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
+        output "epoch" = pairs | delay((_, b) -> b) | lift;
+        output "join_function" = pairs | join_function((a, b) -> (((b, a), 0, 2) enlist, ((a, a), 0, -1) enlist) append);
+    "#;
+    let run = |src: &'static str| timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        let mut program = lower::lower_tree(parse::pipe::parse(src));
+        interactive::passes::optimize(&mut program);
+        server.install(worker, "p", &program).unwrap();
+        for tick in 0..3 {
+            for (k, v, d) in feeds(tick) {
+                server.feed("p", 0, &format!("{k},{v} diff={d}"), tick as u64).unwrap();
+            }
+            server.seal("p", 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            server.spin(worker);
+        }
+        ["epoch", "join_function"].map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()).to_vec()
+    });
+    let want = expected();
+    assert_eq!(run(bare), vec![want[1].clone(), want[2].clone()]);
+    assert_eq!(run(tupled), run(bare));
+}
+
 /// A time of the wrong width, or a `join_function` lambda not giving a list of `((key, val), time, diff)`, is
 /// refused at install.
 #[test]

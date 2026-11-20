@@ -1,8 +1,10 @@
 --- lowered
 +++ optimized
-@@ -2,50 +2,41 @@
- let input0 = input 0 : ((int), (int, List(int)));
- let node = input0 | map(((id), v) -> (id, v));
+@@ -1,55 +1,44 @@
+ -- Time lanes: epoch.
+-let input0 = input 0 : (int, (int, List(int)));
+-let node = input0 | map((id, v) -> (id, v));
++let node = input 0 : (int, (int, List(int)));
  let elems = node | map((id, _) -> (id, id));
 -let pc_map = node | map((id, (op, cs)) -> ((id, op), cs));
 -let pc_rows = pc_map | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list);
@@ -64,4 +66,9 @@
 +    let eq_reduce = eq_idx2 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
      set eq = eq_reduce;
  }
- let classes_map = eqsat::eq | map((n, c) -> ((n), (c)));
+-let classes_map = eqsat::eq | map((n, c) -> (n, c));
+-let classes_idx = classes_map | arrange;
++let classes_idx = eqsat::eq | arrange;
+ let classes_inspect = classes_idx | inspect(classes);
+ -- Renderer: build an export arrangement.
+ output "classes" = classes_inspect;

@@ -8,24 +8,24 @@ enum Size = Small int | Big (int, int);
 enum Inner = A int | B;
 enum Outer = Wrap Inner | Opt Option(int) | Nums List(int);
 
-let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> ((a), (b)));
+let pairs = input 0 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
-output "value" = pairs | value(((a), (b)) -> ((b, 10) mul, a) add);
-output "filter" = pairs | filter(((a), (b)) -> (a, b) lt);
-output "flatmap" = pairs | flatmap(row -> let ((a), (b)) = row in let l = (a enlist, b enlist, (a, b) add enlist) append in (row.0, ((0, l len) range, l) zip) cap_list);
+output "value" = pairs | value((a, b) -> ((b, 10) mul, a) add);
+output "filter" = pairs | filter((a, b) -> (a, b) lt);
+output "flatmap" = pairs | flatmap(row -> let (a, b) = row in let l = (a enlist, b enlist, (a, b) add enlist) append in (row.0, ((0, l len) range, l) zip) cap_list);
 stepped: {
-    let delayed = pairs | delay((_, (b)) -> (0, (256, b call bit_length) mul));
+    let delayed = pairs | delay((_, b) -> (0, (256, b call bit_length) mul));
     set counted = delayed | count;
 }
 output "delay" = stepped::counted;
-output "comment" = pairs | value(((a), (b)) ->
+output "comment" = pairs | value((a, b) ->
     -- the key and the value, added
     (a, b) add  -- one Int
 );
 
-let sized = pairs | value(((a), (b)) -> ((b, 3) gt, (b, a) inject Big, b inject Small) select);
+let sized = pairs | value((a, b) -> ((b, 3) gt, (b, a) inject Big, b inject Small) select);
 output "sized" = sized | value((_, s) -> s match (Small (x -> x), Big ((x, y) -> (x, y) mul)));
-let maybe = pairs | value((_, (b)) -> (b, (b, 3) gt) branch Option map_variant None (_ -> ()));
+let maybe = pairs | value((_, b) -> (b, (b, 3) gt) branch Option map_variant None (_ -> ()));
 output "option" = maybe | value((_, m) -> m match (None (_ -> 0), Some (x -> x)));
-let outer = pairs | value((_, (b)) -> b inject A inject Wrap);
+let outer = pairs | value((_, b) -> b inject A inject Wrap);
 output "nested" = outer | value((_, o) -> o match (Wrap (i -> i match (A (x -> x), B (_ -> 0))), Opt (_ -> -1), Nums (_ -> -1)));

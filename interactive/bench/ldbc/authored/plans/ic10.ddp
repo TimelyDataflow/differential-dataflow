@@ -42,7 +42,7 @@ let liked  = wrote | map(((rid, who, node, m), ()) -> (m, (rid, who, node)))
 let points = (liked | map(((rid, who, node, _), ()) -> ((rid, who, node), 1)))
            + ((wrote - liked) | map(((rid, who, node, _), ()) -> ((rid, who, node), -1)));
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
-let summed = points | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+let summed = points | join_function((key, p) -> ((key, ()), 0, p) enlist) | count;
 let keys   = cands | map((key, _) -> (key, ()));
 let score  = summed + ((keys - (keys | join(summed, (key, (), _) -> (key, ())))) | map((key, ()) -> (key, 0)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
