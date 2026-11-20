@@ -1,18 +1,18 @@
 -- BI5: standing request(request_id, tag_name). Tagged messages and their
 -- immediate replies/likes contribute 1/2/10 points to the message's author.
 let request = input 0 : ((int, List(int)), ());
-let tagged = import "graph::tagged" : ((int), (List(int)));
-let message = import "graph::message" : ((int), (int, int, int));
-let likes = import "graph::likes" : ((int), (int));
+let tagged = import "graph::tagged" : (int, List(int));
+let message = import "graph::message" : (int, (int, int, int));
+let likes = import "graph::likes" : (int, int);
 let selected = request | map(((rid, name), ()) -> (name, rid))
-    | join(tagged | map((m, (name)) -> (name, m)), (_, rid, m) -> (m, rid))
-    | join(message, ((m), rid, (_, creator, _)) -> ((rid, m, creator), ())) | distinct;
+    | join(tagged | map((m, name) -> (name, m)), (_, rid, m) -> (m, rid))
+    | join(message, (m, rid, (_, creator, _)) -> ((rid, m, creator), ())) | distinct;
 -- Contributions are (messages, replies, likes). Collect+fold expresses a
 -- sum without introducing a new reducer or optimizer in this benchmark.
 let own = selected | map(((rid, _, creator), ()) -> ((rid, creator), (1, 0, 0)));
-let liked = selected | map(((rid, m, creator), ()) -> ((m), (rid, creator)))
+let liked = selected | map(((rid, m, creator), ()) -> (m, (rid, creator)))
     | join(likes, (_, (rid, creator), _) -> ((rid, creator), (0, 0, 1)));
-let comments = message | filter((_, (kind, _, _)) -> (kind, 1) eq) | map(((id), (_, _, parent)) -> (parent, id));
+let comments = message | filter((_, (kind, _, _)) -> (kind, 1) eq) | map((id, (_, _, parent)) -> (parent, id));
 let replied = selected | map(((rid, m, creator), ()) -> (m, (rid, creator)))
     | join(comments, (_, (rid, creator), _) -> ((rid, creator), (0, 1, 0)));
 let totals = (own + liked + replied) | collect

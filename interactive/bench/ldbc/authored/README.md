@@ -164,7 +164,7 @@ Two conventions apply throughout:
   `distinct`s are unnecessary: a message has one thread language, tag names are
   unique, and (message, tag) pairs are a set. Each plan says why where it omits one.
 - **Sums go in the multiplicity.** To add up a value per key, move it into the diff and
-  let `count` total it: `join_function((key, v) -> ((key, ()), (0), v) enlist) | count`
+  let `count` total it: `join_function((key, v) -> ((key, ()), 0, v) enlist) | count`
   (inside a loop the time is `(0, 0)`). This is differential's `explode`: the sum is
   maintained incrementally, where `collect` and `fold` would rebuild a list per change.
   A total of zero has no row, so a default of 0 is added for keys that must appear.

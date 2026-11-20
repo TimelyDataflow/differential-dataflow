@@ -24,7 +24,7 @@ leaves the log equal to the store. A second seal and completion wait applies the
 resolver's joins, `min`, and recursion, and then comes back out.
 
 **One-off** ([`store.ddp`](store.ddp), [`resolve.ddp`](resolve.ddp)). The store
-is its own program: `((key), (txn id, value))`. Each epoch installs a resolver
+is its own program: `(key, (txn id, value))`. Each epoch installs a resolver
 that imports it, takes only that epoch's intents, and exports `rollback` and
 `delta` (each written key's latest committed write in, its prior store row
 out). The client reads `rollback`, runs `feed store 0 time=now from res::delta`, and drops

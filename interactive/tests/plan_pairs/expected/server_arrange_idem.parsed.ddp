@@ -1,4 +1,4 @@
-let node = input 0 : ((int), (int, List(int))) | map(((id), v) -> (id, v));
+let node = input 0 : (int, (int, List(int))) | map((id, v) -> (id, v));
 let elems = node | map((id, _) -> (id, id));
 let pc = node | map((id, (op, cs)) -> ((id, op), cs)) | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list) | map(((id, op), (pos, child)) -> (child, (id, op, pos)));
 let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ()))) + (node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ())));
@@ -15,4 +15,4 @@ eqsat: {
     let prop = eq | join(edges, (_, l, n) -> (n, l));
     set eq = elems + prop | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 }
-output "classes" = eqsat::eq | map((n, c) -> ((n), (c))) | arrange | inspect(classes);
+output "classes" = eqsat::eq | map((n, c) -> (n, c)) | arrange | inspect(classes);

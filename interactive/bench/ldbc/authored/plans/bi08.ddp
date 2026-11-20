@@ -20,13 +20,13 @@ let recent  = tag_rid | join(tagged, (_, rid, m) -> (m, rid))
                       | filter((_, (created, start, end)) -> ((created, start) gt, (created, end) lt) all)
                       | map((key, _) -> (key, 1));
 -- Sums: move each value into the multiplicity (join_function) and let `count` add them up.
-let score   = (fans + recent) | join_function((key, p) -> ((key, ()), (0), p) enlist) | count;
+let score   = (fans + recent) | join_function((key, p) -> ((key, ()), 0, p) enlist) | count;
 
 -- Friends' points: for each scored person, the points of their scored friends.
 let theirs  = score | map(((rid, f), s) -> (f, (rid, s)))
                     | join(friend, (_, (rid, s), (p, _)) -> ((rid, p), s))
                     | join(score, (key, s, _) -> (key, s));
-let summed  = theirs | join_function((key, s) -> ((key, ()), (0), s) enlist) | count;
+let summed  = theirs | join_function((key, s) -> ((key, ()), 0, s) enlist) | count;
 let friends = summed + ((score - (score | join(summed, (key, s, _) -> (key, s)))) | map((key, _) -> (key, 0)));
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.

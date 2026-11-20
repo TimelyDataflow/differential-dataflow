@@ -1,2 +1,2 @@
-let store = input 0 : ((int), (int, int));
+let store = input 0 : (int, (int, int));
 output "store" = store;

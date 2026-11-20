@@ -20,5 +20,5 @@ let wins = cands::c
 
 output "result" = wins
     | map((_, n) -> ((), n)) | collect
-    | map((_, ns) -> ((), ((1, ns) fold ((acc, n) -> (acc, n) mul))))
+    | map((_, ns) -> ((), (1, ns) fold ((acc, n) -> (acc, n) mul)))
     | arrange | inspect(part1);

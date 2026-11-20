@@ -4,8 +4,8 @@
 --   for `producer.ddp` installed as `prod`.
 -- input `roots` : ((int), ()): the nodes to start from, fed.
 
-let edges = input "edges" : ((int), (int));
-let roots = input "roots" : ((int), ());
+let edges = input "edges" : (int, int);
+let roots = input "roots" : (int, ());
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

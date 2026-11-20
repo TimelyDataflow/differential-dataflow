@@ -2,16 +2,16 @@
 -- `bitemporal.rs` has the driver and the oracle.
 -- Deposits: an account, each row's multiplicity its amount. Owners: account -> owner.
 -- Links: account -> account.
-let deposits = input 0 : ((int), ());
-let owners = input 1 : ((int), (int));
-let links = input 2 : ((int, int), ()) | map(((a, b), ()) -> ((a), b));
+let deposits = input 0 : (int, ());
+let owners = input 1 : (int, int);
+let links = input 2 : ((int, int), ()) | map(((a, b), ()) -> (a, b));
 
 let balance = deposits | count;
 let by_owner = balance | join(owners, (acct, bal, owner) -> (owner, (bal, acct)));
 let roots = balance | filter((_, bal) -> (bal, 0) gt) | map((acct, _) -> (acct, ()));
 
 reach: {
-    let proposals = reach | join(links, (_, _, dst) -> ((dst), ()));
+    let proposals = reach | join(links, (_, _, dst) -> (dst, ()));
     set reach = roots + proposals | distinct;
 }
 

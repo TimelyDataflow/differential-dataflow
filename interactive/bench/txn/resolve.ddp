@@ -10,17 +10,17 @@
 -- the store's prior row for that key out. `feed store 0 time=now from res::delta` applies it.
 -- Nothing this program holds is ever retracted; dropping it frees it.
 
-let store = import "store::store" : ((int), (int, int));
-let intents = input 0 : ((int, int, int), (int));
+let store = import "store::store" : (int, (int, int));
+let intents = input 0 : ((int, int, int), int);
 
 -- ((rid, k), expected) and ((wid, k), v)
-let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
-let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
-let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
-let rk  = reads  | map(((rid, k), (e)) -> ((k), (rid, e)));
+let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), e) -> ((rid, k), e));
+let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), v) -> ((wid, k), v));
+let wid = wr_all | map(((wid, k), v) -> (wid, (k, v)));
+let rk  = reads  | map(((rid, k), e) -> (k, (rid, e)));
 
 -- Each read's store row: a prior write older than any of this epoch's.
-let base = rk | join(store, ((k), (rid, e), (sw, v)) -> ((k, rid, e), (sw neg, v)));
+let base = rk | join(store, (k, (rid, e), (sw, v)) -> ((k, rid, e), (sw neg, v)));
 
 res: {
     -- this epoch's writes of transactions not (currently) rolled back.
@@ -29,20 +29,20 @@ res: {
 
     -- each read paired with every surviving prior write to its key, the store's
     -- among them; the LATEST wins: min over (-wid, v).
-    let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
-    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)))
+    let wk = writes | map((wid, (k, v)) -> (k, (wid, v)));
+    let pairs = rk | join(wk, (k, (rid, e), (wid, v)) -> ((k, rid, e), (wid neg, v)))
               | filter(((_, rid, _), (nw, _)) -> (nw neg, rid) lt);
     let best = (pairs + base) | min;
 
     -- a read fails if the latest prior value mismatches ...
-    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
+    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> (rid, ()));
 
     -- ... or if no prior write exists and it did not expect absence (-1).
     let seen   = best | map(((k, rid, _), _) -> ((rid, k), ()));
     let rkk    = reads | map((rk, _) -> (rk, ()));
     let unseen = rkk + (seen | negate);
-    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ()))
-                   | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
+    let bad_absent = unseen | join(reads, ((rid, _), (), e) -> ((rid, e), ()))
+                   | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> (rid, ()));
 
     set rollback = (bad_seen + bad_absent) | distinct;
 }
@@ -52,9 +52,9 @@ let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
 -- ((k), (-wid, v)): each written key's latest committed write this epoch.
-let latest = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
-let new_rows = latest | map(((k), (nw, v)) -> ((k), (nw neg, v)));
-let old_rows = latest | join(store, ((k), _, (sw, sv)) -> ((k), (sw, sv)));
+let latest = committed | map((wid, (k, v)) -> (k, (wid neg, v))) | min;
+let new_rows = latest | map((k, (nw, v)) -> (k, (nw neg, v)));
+let old_rows = latest | join(store, (k, _, (sw, sv)) -> (k, (sw, sv)));
 
 output "rollback" = rb;
 output "delta" = new_rows + (old_rows | negate);

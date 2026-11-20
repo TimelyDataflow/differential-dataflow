@@ -1,6 +1,6 @@
 -- Time lanes: epoch.
-let edges = input "edges" : ((int), (int));
-let roots = input "roots" : ((int), ());
+let edges = input "edges" : (int, int);
+let roots = input "roots" : (int, ());
 let edges_idx = edges | arrange;
 reach: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
