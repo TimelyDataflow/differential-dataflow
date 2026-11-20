@@ -29,7 +29,7 @@ let chosen = (prefix, ends) zip map (((item, d), end) ->
 let ends = chosen map ((_, d) -> d) scan_add in
 (chosen, ends) zip map (((item, d), end) ->
     (item, ((end, d) sub, end) range) cap_list
-        map ((item, rank) -> ((rank, item), 1))) flatten .1''').split())
+        map ((item, rank) -> ((rank, item), 1))) flatten''').split())
 
 
 def validate_buckets(buckets):

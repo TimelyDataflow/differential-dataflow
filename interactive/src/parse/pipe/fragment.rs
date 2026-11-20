@@ -395,7 +395,7 @@ impl State<'_> {
         let body = if last { self.layout(target) } else { self.payload_lists(variants, i + 1, target) };
         let binder = if v.shape == "_" { name } else { format!("{name} : {}", v.shape) };
         let mapped = format!("({values}, {list}) cap_list map (({pat}, {binder}) -> {body})");
-        if last { mapped } else { format!("{mapped} flatten .1") }
+        if last { mapped } else { format!("{mapped} flatten") }
     }
     /// Finish one atom, before the next arrangement. A payload list can emit that next key.
     fn checkpoint(&mut self, expr: Expr, target: Target<'_>, pat: &str) -> Expr {
@@ -419,7 +419,7 @@ impl State<'_> {
             let mut context = vec!["k".into(), "v".into()];
             context.extend(bindings[..i].iter().map(|(_, n)| n.clone()));
             let context = tuple(&context);
-            body = format!("({context}, {payloads}) cap_list map (({context}, {name}) -> {body}){}", if list { " flatten .1" } else { "" });
+            body = format!("({context}, {payloads}) cap_list map (({context}, {name}) -> {body}){}", if list { " flatten" } else { "" });
             list = true;
         }
         expr = Expr::FlatMap(Box::new(expr), self.lambda(pat, body));

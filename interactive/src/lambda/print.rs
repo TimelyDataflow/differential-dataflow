@@ -137,6 +137,19 @@ impl Printer {
         uses[graph.output()] += 1;
         if let Some(p) = &paths[graph.output()] { read.insert(p.clone()); }
         if self.shallow { read = read.into_iter().map(|p| p.into_iter().take(1).collect()).collect(); }
+        // A fused `GatherRange` reads a pair `((lo, hi), haystack)` that only it reads. Spelling the
+        // pair as `((lo, hi) range, haystack)` and the op as `gather` writes the unfused form, which
+        // corgi fuses again, and evaluates neither part twice.
+        let ranged: BTreeSet<usize> = nodes.iter().filter_map(|node| match node {
+            NodeRef::Op(NumOp::Core(Op::GatherRange), i) if uses[*i] == 1
+                && matches!(nodes[*i], NodeRef::Tuple(fields) if fields.len() == 2) => Some(*i),
+            _ => None,
+        }).collect();
+        if let Some(index) = nodes.iter().enumerate().find_map(|(index, node)| {
+            matches!(node, NodeRef::Op(NumOp::Core(Op::GatherRange), i) if !ranged.contains(i)).then_some(index)
+        }) {
+            return Err(format!("gather_range at node {index} reads a pair it does not own"));
+        }
         let mut names = BTreeMap::new();
         let pattern = pattern(input, &mut Vec::new(), &read, &mut names);
         let mut expressions: Vec<String> = Vec::new();
@@ -150,6 +163,7 @@ impl Printer {
             } else {
                 match node {
                     NodeRef::Input => unreachable!(),
+                    NodeRef::Tuple(fields) if ranged.contains(&index) => tuple(vec![format!("{} range", expressions[fields[0]]), expressions[fields[1]].clone()]),
                     NodeRef::Tuple(fields) => tuple(fields.iter().map(|&i| expressions[i].clone()).collect()),
                     NodeRef::Op(NumOp::Core(Op::Unwrap), i) if uses[*i] == 1 && matches!(nodes[*i], NodeRef::Op(NumOp::Core(Op::MapSum(_)), _)) => {
                         let NodeRef::Op(NumOp::Core(Op::MapSum(arms)), arg) = &nodes[*i] else { unreachable!() };
@@ -214,6 +228,8 @@ impl Printer {
                 Op::Unit => return Ok("()".into()),
                 Op::Pattern(_) => return Ok(x.into()),
                 Op::Weave => return Err("weave has no surface spelling".into()),
+                // Its pair was spelled with the `range` in place (see `ranged` in `lambda`).
+                Op::GatherRange => "gather".into(),
                 Op::Inject(tag, lanes) => {
                     let mut resolved = lanes.clone();
                     resolved[*tag] = Some(shape.clone());
@@ -549,8 +565,8 @@ mod tests {
     #[test]
     fn shared_nodes_and_singletons() {
         let text = checked("let (x, y) = input in let sum = (x, y) add in (sum, sum neg)", ints(2));
-        assert_eq!(text, "(a, b) -> let v0 = (a, b) add in (v0, v0 neg)");
-        assert_eq!(checked("let (x) = input in (x)", ints(1)), "(a) -> (a)");
+        assert_eq!(text, "a -> let v0 = a add in (v0, v0 neg)");
+        assert_eq!(checked("let (x) = input in (x)", ints(1)), "a -> a");
     }
 
     #[test]

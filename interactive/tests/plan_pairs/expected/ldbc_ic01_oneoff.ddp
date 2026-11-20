@@ -34,11 +34,11 @@ let who_idx = who | arrange;
 let email_idx = email | arrange;
 let emails_join = who_idx | join(email_idx, (node, rid, value) -> ((rid, node), value));
 let emails_idx = emails_join | arrange;
-let emails = emails_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+let emails = emails_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
 let language_idx = language | arrange;
 let langs_join = who_idx | join(language_idx, (node, rid, value) -> ((rid, node), value));
 let langs_idx = langs_join | arrange;
-let langs = langs_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+let langs = langs_idx | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
 let study_idx = study | arrange;
 let school_join = who_idx | join(study_idx, (node, rid, (at, year)) -> (at, (rid, node, year)));
 let school_idx = school_join | arrange;
@@ -47,7 +47,7 @@ let school_join2 = school_idx | join(org_idx, (_, (rid, node, year), (name, _, a
 let school_idx2 = school_join2 | arrange;
 let school_join3 = school_idx2 | join(place_idx, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where)));
 let school_idx3 = school_join3 | arrange;
-let school = school_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+let school = school_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
 let work_idx = work | arrange;
 let jobs_join = who_idx | join(work_idx, (node, rid, (at, year)) -> (at, (rid, node, year)));
 let jobs_idx = jobs_join | arrange;
@@ -55,7 +55,7 @@ let jobs_join2 = jobs_idx | join(org_idx, (_, (rid, node, year), (name, _, at)) 
 let jobs_idx2 = jobs_join2 | arrange;
 let jobs_join3 = jobs_idx2 | join(place_idx, (_, (rid, node, name, year), (where, _, _)) -> ((rid, node), (name, year, where)));
 let jobs_idx3 = jobs_join3 | arrange;
-let jobs = jobs_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat.1, 1) enlist);
+let jobs = jobs_idx3 | reduce((_, vals) -> let lists = vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) in let flat = lists flatten in (flat, 1) enlist);
 let found_idx3 = found | arrange;
 let with1_join = found_idx3 | join(emails, (key, row, list) -> (key, (row, list)));
 let with1_join2 = found_idx3 | join(emails, (key, row, _) -> (key, row));
@@ -86,7 +86,7 @@ let with4_map = with4_rows | map((key, (row, e, l, s)) -> (key, (row, e, l, s, [
 let with4 = with4_join + with4_map;
 let ranked_map = with4 | map(((rid, node), ((d, (last, gender, birthday, created, ip, browser, town)), e, l, s, w)) -> (rid, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w))));
 let ranked_idx = ranked_map | arrange;
-let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten .1);
+let ranked = ranked_idx | reduce((_, vals) -> let positive = (vals map ((_, d) -> (d, 0) gt), (0, vals len) range) zip filter in let indices = ((0, (positive len, 20) min) range, positive) gather in let prefix = (indices, vals) gather in let ends = prefix map ((_, d) -> (d, 20) min) scan_add in let chosen = (prefix, ends) zip map (((item, d), end) -> let count = (d, 20) min in let before = (end, count) sub in let keep = (((20, before) sub, 0) max, count) min in ((keep, 0) gt, (item, keep))) filter in let ends = chosen map ((_, d) -> d) scan_add in (chosen, ends) zip map (((item, d), end) -> (item, ((end, d) sub, end) range) cap_list map ((item, rank) -> ((rank, item), 1))) flatten);
 let answer = ranked | map((rid, (rank, ((d, last, node), (gender, birthday, created, ip, browser, town, e, l, s, w)))) -> ((rid, rank), (node, last, d, birthday, created, gender, browser, ip, e, l, town, s, w)));
 let answer_idx = answer | arrange;
 -- Renderer: publish the existing arrangement.
