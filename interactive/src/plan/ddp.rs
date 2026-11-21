@@ -109,6 +109,8 @@ struct Printer<'a> {
 fn identifier(text: &str) -> String {
     let mut name: String = text.trim_start_matches("output ").chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if name.is_empty() { name.push('x'); }
+    // The label of a numbered input is its digits; its local name is `input<N>`.
+    if name.bytes().all(|b| b.is_ascii_digit()) { name.insert_str(0, "input"); }
     if name.as_bytes()[0].is_ascii_digit() || crate::ir::KEYWORDS.contains(&name.as_str()) { name.insert_str(0, "x_"); }
     name
 }
@@ -304,26 +306,20 @@ impl Printer<'_> {
             Source::Parent(r) => parent.map(|(_, _, imports, forms)| super::form(r, imports, forms)).unwrap_or(Form::Unknown),
         }).collect();
         if depth == 0 && scope.imports.iter().any(|i| matches!(i.from, Source::Trace(_))) {
-            writeln!(out, "-- Trace imports use provider arrangements; history advances to G = ({}, []).", self.as_of).unwrap();
+            writeln!(out, "-- Bound inputs use provider arrangements; history advances to G = ({}, []).", self.as_of).unwrap();
         }
-        // Named inputs are written without positions, which the order they are written supplies.
-        let positions: Vec<usize> = scope.imports.iter().filter_map(|imp| match imp.from { Source::Input(n) => Some(n), _ => None }).collect();
-        let named = |imp: &crate::scope_ir::Import, n: usize| imp.name != format!("input{n}");
-        let unnumbered = positions.iter().enumerate().all(|(i, &n)| i == n)
-            && scope.imports.iter().any(|imp| matches!(imp.from, Source::Input(n) if named(imp, n)));
         let mut defined = BTreeSet::new();
         for (i, imp) in scope.imports.iter().enumerate() {
             let name = &names.imports[i];
             match &imp.from {
                 Source::Input(_) | Source::Trace(_) => {
-                    let source = match &imp.from {
-                        Source::Input(n) if !unnumbered => format!("input {n}"),
-                        Source::Input(n) if named(imp, *n) => format!("input {}", quoted(&imp.name)?),
-                        Source::Input(_) => "input".to_string(),
-                        Source::Trace(trace) => {
-                            format!("import {}", quoted(trace)?)
-                        }
-                        _ => unreachable!(),
+                    // An input is written by its label; a bound input's binding belongs to the load.
+                    let source = if imp.name.bytes().all(|b| b.is_ascii_digit()) && !imp.name.is_empty() {
+                        format!("input {}", imp.name)
+                    } else if crate::server::InputId::is_name(&imp.name) {
+                        format!("input {}", quoted(&imp.name)?)
+                    } else {
+                        return Err(format!("source {:?} has no input label", imp.name));
                     };
                     let shape = imp.shape.clone().or_else(|| shapes.imports[i].as_ref().map(|s| (s.key.clone(), s.val.clone()))).ok_or("source shape unknown")?;
                     writeln!(out, "{indent}let {name} = {source} : {};", self.row(&shape)?).unwrap();
@@ -504,13 +500,13 @@ mod tests {
         output
     }
 
-    /// Named inputs print without positions, in position order, and keep their names and positions,
-    /// also when the program reads them in another order.
+    /// Inputs print by their labels, and keep their labels and positions, also when the program
+    /// reads them in another order.
     #[test]
     fn named_inputs_round_trip() {
         let text = r#"
             let a = input "first" : ((int), ());
-            let b = input : ((int), ());
+            let b = input 0 : ((int), ());
             let c = input "third" : ((int), ());
             output "out" = c + b + a;
         "#;
@@ -523,7 +519,7 @@ mod tests {
         let output = roundtrip(text);
         assert!(output.contains(r#"input "first""#) && output.contains(r#"input "third""#), "{output}");
         assert_eq!(inputs(&plan(text)), inputs(&plan(&output)), "{output}");
-        assert_eq!(inputs(&plan(text)), vec![(0, "first".to_string()), (1, "input1".to_string()), (2, "third".to_string())]);
+        assert_eq!(inputs(&plan(text)), vec![(0, "0".to_string()), (1, "first".to_string()), (2, "third".to_string())]);
     }
 
     #[test]
@@ -591,19 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn unnamed_sum_imports_get_valid_declarations() {
-        let source = |_: &str| Some((Shape::Sum(vec![Shape::Int, Shape::Unit]), Shape::Unit));
-        let before = super::super::report("output \"out\" = import \"sum\";", &source, &crate::passes::Config::all()).unwrap();
-        let text = before.emit_ddp().unwrap().text;
-        assert!(text.contains("enum Sum0 = V0 int | V1;"));
-        let after = super::super::report(&text, &source, &crate::passes::Config::all()).unwrap();
-        assert!(before.compare_final(&after).is_empty());
-        assert_eq!(text, after.emit_ddp().unwrap().text);
-    }
-
-    #[test]
     fn incomplete_plans_are_not_emitted_as_executable_ddp() {
-        assert!(plan(r#"output "out" = import "missing" : (int, ());"#).emit_ddp().is_err());
+        let report = super::super::report_bound(r#"output "out" = input "missing" : (int, ());"#, &[("missing", "absent::missing")], &|_| None, &crate::passes::Config::all()).unwrap();
+        assert!(report.emit_ddp().is_err());
     }
 
     #[test]

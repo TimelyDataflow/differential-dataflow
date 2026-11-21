@@ -2,14 +2,14 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, List(int)), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 @@ -9,10 +11,57 @@
- let mtag = import "graph::mtag.by_tag" : (int, int);
- let below_hl = import "ic12s::below_hl" : (int, int);
- let reply = import "ic12s::reply" : (int, (int, int));
+ let mtag = input "mtag_by_tag" : (int, int);
+ let below_hl = input "below_hl" : (int, int);
+ let reply = input "reply" : (int, (int, int));
 -let intag = request | map(((rid, _, name), ()) -> (name, rid)) | join(classes, (_, (rid, high)) -> (high, rid)) | join(below_hl, (_, (rid, low)) -> (low, rid)) | join(by_class, (_, (rid, t)) -> (t, rid)) | join(tag, (t, (rid, (name, _))) -> (t, (rid, name))) | join(mtag, (_, ((rid, name), m)) -> (m, (rid, name))) | join(message, (m, ((rid, name), (kind, _, _, _, _, _, _, _, _, _, _, _, _))) -> ((rid, m, name), kind)) | filter((_, kind) -> (kind, 0) eq) | map((key, _) -> (key, ()));
 -let hits = request | map(((rid, who, _), ()) -> (who, rid)) | join(friend, (_, (rid, (f, _))) -> (f, rid)) | join(reply, (f, (rid, (id, parent))) -> ((rid, parent), (f, id))) | join(intag | map(((rid, m, name), ()) -> ((rid, m), name)), ((rid, _), ((f, id), name)) -> ((rid, f), (id, name)));
 -let counts = hits | map(((rid, f), (id, _)) -> ((rid, f, id), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv) | map(((rid, f, _), ()) -> ((rid, f), ())) | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

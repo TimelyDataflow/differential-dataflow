@@ -20,11 +20,12 @@
 //!
 //! # The two binding points
 //!
-//! The named-trace IR (`import "x"` / `output "y"`) flows through parse → lower
+//! The named-trace IR (an input bound to a trace, and `output "y"`) flows through parse → lower
 //! → `scope_ir`. The server resolves both ends:
 //!
-//! - **`Source::Trace(name)`** — `import` the registered trace into the new
-//!   dataflow, as the producer's arrangement or as a root collection.
+//! - **`Source::Trace(name)`** — import the registered trace into the new
+//!   dataflow, as the producer's arrangement or as a root collection. A load's binding
+//!   ([`Program::bind`](crate::scope_ir::Program::bind)) makes an input this source.
 //! - **`Export(name, _)`** — arrange the output collection and register its
 //!   trace under `<program>::<name>` ([`output_name`]), so a later install can import it.
 //!
@@ -141,9 +142,9 @@ fn fmt_shape((k, v): &RowShape) -> String {
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
-/// A program's input, as a client names it: by its position, or by the name it is written with
-/// (`input "edges"`, or `input<N>` for an unnamed input). Workers resolve a name against the
-/// program installed, so a client's view of the program cannot misdirect a feed.
+/// A program's input, as a client names it: by its label, a number (`input 0`), which is also its
+/// position, or a name (`input "edges"`). Workers resolve a name against the program installed,
+/// so a client's view of the program cannot misdirect a feed.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InputId {
     Position(usize),
@@ -160,14 +161,11 @@ impl InputId {
         }
     }
 
-    /// Whether `text` may name an input: an identifier, so that it never reads as a position, and
-    /// not `input<N>`, the name of an unnamed input.
+    /// Whether `text` may name an input: an identifier, so that it never reads as a number.
     pub fn is_name(text: &str) -> bool {
         let mut chars = text.chars();
-        let identifier = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-        let unnamed = text.strip_prefix("input").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        identifier && !unnamed
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
 }
 

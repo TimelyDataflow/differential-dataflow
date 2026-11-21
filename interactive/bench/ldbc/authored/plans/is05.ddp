@@ -1,8 +1,8 @@
 -- IS5. The author of a message.
 
 let request = input 0 : ((int, int), ());                    -- (rid, message)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 
 let answer = request | map(((rid, m), ()) -> (m, rid))
                      | join(message, (_, (rid, (_, _, who, _, _, _, _, _, _, _, _, _, _))) -> (who, rid))

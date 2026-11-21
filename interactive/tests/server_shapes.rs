@@ -8,8 +8,12 @@ use interactive::scope_ir::Program;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn program(src: &str) -> Program {
+fn program(src: &str) -> Program { bound(src, &[]) }
+
+/// `src`, with inputs bound to traces as `label=trace` binds them at load.
+fn bound(src: &str, bindings: &[(&str, &str)]) -> Program {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
+    program.bind(bindings.iter().copied()).unwrap();
     interactive::passes::optimize(&mut program);
     program
 }
@@ -43,9 +47,9 @@ fn aliases_erase_in_collection_shapes_and_enum_payloads() {
             type Payload = (int, float, (), List(int), Option(int), Result(int, float));
             enum Same = Other Payload | Nothing;
             type Named = Same;
-            output "out" = import "aliases::out" : (Key, Named);
+            output "out" = input "out" : (Key, Named);
         "#;
-        server.install(worker, "consumer", &program(consumer)).unwrap();
+        server.install(worker, "consumer", &bound(consumer, &[("out", "aliases::out")])).unwrap();
         assert_eq!(server.trace_shape("consumer::out"), Some(expected));
     });
 }
@@ -71,9 +75,12 @@ fn exports_publish_their_shapes() {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
         assert_eq!(server.trace_shape("producer::edges"), Some((ints(1), ints(1))));
-        // An undeclared import takes the shape its trace is published at.
-        server.install(worker, "consumer", &program(r#"output "flipped" = import "producer::edges" | map(((src), (dst)) -> ((dst), (src, 0)));"#)).unwrap();
+        // A bound input declares its shape too.
+        let flipped = r#"output "flipped" = input "edges" : ((int), (int)) | map(((src), (dst)) -> ((dst), (src, 0)));"#;
+        server.install(worker, "consumer", &bound(flipped, &[("edges", "producer::edges")])).unwrap();
         assert_eq!(server.trace_shape("consumer::flipped"), Some((ints(1), ints(2))));
+        let mut loose = lower::lower_tree(parse::pipe::parse(r#"output "loose" = input "edges" | distinct;"#));
+        assert_eq!(loose.bind([("edges", "producer::edges")]).unwrap_err(), "input \"edges\" declares no shape");
         // An input must declare its shape.
         let err = server.install(worker, "loose", &program(r#"output "loose" = input 0;"#)).unwrap_err();
         assert!(err.contains("without declaring its shape"), "{err}");
@@ -84,12 +91,13 @@ fn exports_publish_their_shapes() {
 }
 
 #[test]
-fn a_declared_import_must_match_its_trace() {
+fn a_bound_input_must_match_its_trace() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "agrees", &program(r#"output "a" = import "producer::edges" : ((int), (int));"#)).unwrap();
-        let err = server.install(worker, "disagrees", &program(r#"output "b" = import "producer::edges" : ((int, int), ());"#)).unwrap_err();
+        let edges = [("edges", "producer::edges")];
+        server.install(worker, "agrees", &bound(r#"output "a" = input "edges" : ((int), (int));"#, &edges)).unwrap();
+        let err = server.install(worker, "disagrees", &bound(r#"output "b" = input "edges" : ((int, int), ());"#, &edges)).unwrap_err();
         assert!(err.contains("published as"), "{err}");
         assert!(server.snapshot(worker, "disagrees::b").is_err(), "a rejected program publishes nothing");
     });
@@ -103,10 +111,10 @@ fn conflicting_shapes_reject_the_install() {
         let join = r#"let a = input 0 : ((int), ()); let b = input 1 : ((int, int), ()); output "j" = a | join(b, (k, (_, _)) -> (k, ()));"#;
         let err = server.install(worker, "join", &program(join)).unwrap_err();
         assert!(err.contains("join keys"), "{err}");
-        // A field of an integer, through an import whose shape is published.
+        // A field of an integer, through a bound input.
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        let err = server.install(worker, "proj", &program(r#"output "p" = import "producer::edges" | map(((src), _) -> ((src .1), ()));"#
-)).unwrap_err();
+        let err = server.install(worker, "proj", &bound(r#"output "p" = input "edges" : ((int), (int)) | map(((src), _) -> ((src .1), ()));"#,
+            &[("edges", "producer::edges")])).unwrap_err();
         assert!(err.contains("conflicting shapes"), "{err}");
         assert!(server.snapshot(worker, "proj::p").is_err());
     });
@@ -169,20 +177,21 @@ fn rows_of_another_shape_are_refused() {
 }
 
 #[test]
-fn dead_imports_release_provider_dependencies_but_exports_keep_them() {
+fn dead_bound_inputs_release_provider_dependencies_but_exports_keep_them() {
     timely::execute_directly(|worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
         // Exercise install's optimizer too: this tree has not been optimized by the caller.
-        let unused = lower::lower_tree(parse::pipe::parse(r#"
-            let unused = import "producer::edges";
+        let mut unused = lower::lower_tree(parse::pipe::parse(r#"
+            let unused = input "edges" : ((int), (int));
             let fed = input 7 : (int, ());
         "#));
+        unused.bind([("edges", "producer::edges")]).unwrap();
         server.install(worker, "unused", &unused).unwrap();
         server.feed("unused", 7, "1", 0).unwrap();
         server.drop_program(worker, "producer").unwrap();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        server.install(worker, "contract", &program(r#"output "contract" = import "producer::edges";"#)).unwrap();
+        server.install(worker, "contract", &bound(r#"output "contract" = input "edges" : ((int), (int));"#, &[("edges", "producer::edges")])).unwrap();
         assert!(server.drop_program(worker, "producer").unwrap_err().contains("live importer"));
         server.drop_program(worker, "contract").unwrap();
         server.drop_program(worker, "producer").unwrap();

@@ -5,18 +5,19 @@ use interactive::{lower, parse};
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
+    if program.root.imports.iter().any(|i| i.name == "loose") { program.bind([("loose", "undeclared::loose")]).unwrap(); }
     interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
 
-/// A fed input, read through another program's import.
+/// A fed input, read through another program's bound input.
 const LOOSE: &str = r#"
     output "loose" = input 0 : ((int), ());
 "#;
 
-/// A declared import of that input's export, checked against its shape at install.
+/// An input bound to that input's export, its shape checked at install.
 const DECLARING: &str = r#"
-    let l = import "undeclared::loose" : ((int), ());
+    let l = input "loose" : ((int), ());
     output "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;

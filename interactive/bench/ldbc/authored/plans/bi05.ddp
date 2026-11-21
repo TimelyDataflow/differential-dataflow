@@ -3,12 +3,12 @@
 -- looked up from the request: the tag's messages, their authors, replies and likes.
 
 let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let tag_id   = import "graph::tag.by_name"       : (List(int), int);        -- (name, id)
-let tagged   = import "graph::mtag.by_tag"       : (int, int);              -- (tag, message)
-let replies  = import "graph::message.by_parent" : (int, int);              -- (message, reply)
-let liked_by = import "graph::likes.by_message"  : (int, (int, int));       -- (message, (person, created))
+let tag_id   = input "tag_by_name"       : (List(int), int);        -- (name, id)
+let tagged   = input "mtag_by_tag"       : (int, int);              -- (tag, message)
+let replies  = input "message_by_parent" : (int, int);              -- (message, reply)
+let liked_by = input "likes_by_message"  : (int, (int, int));       -- (message, (person, created))
 
 -- The request's tagged messages and their authors: (message, (rid, author)).
 -- Tag names are unique and (message, tag) pairs are a set, so each message appears once.

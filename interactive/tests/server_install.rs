@@ -19,7 +19,8 @@ fn a_rejected_install_leaves_no_generated_sources() {
         let valid = program(r#"output "taken" = input 0 : ((int), ());"#);
         server.install(worker, "first", &valid).unwrap();
         assert!(server.install(worker, "first", &valid).is_err());
-        let invalid = program(r#"output "x" = import "first::taken" + import "nope";"#);
+        let mut invalid = program(r#"output "x" = input "taken" : ((int), ()) + input "nope" : ((int), ());"#);
+        invalid.bind([("taken", "first::taken"), ("nope", "nope")]).unwrap();
         assert!(server.install(worker, "second", &invalid).is_err());
         assert!(server.trace_shape("second::x").is_none());
         server.drop_program(worker, "first").unwrap();
@@ -32,9 +33,10 @@ fn unread_imports_are_validated_before_passes() {
         let mut server = Server::new();
         for passes in [interactive::passes::Config::default(), interactive::passes::Config::none()] {
             server.set_passes(passes);
-            let invalid = lower::lower_tree(parse::pipe::parse(r#"let dead = import "nope";"#));
+            let mut invalid = lower::lower_tree(parse::pipe::parse(r#"let dead = input "nope" : ((int), ());"#));
+            invalid.bind([("nope", "nope")]).unwrap();
             let error = server.install(worker, "invalid", &invalid).unwrap_err();
-            assert!(error.contains("imports unknown trace \"nope\""), "{error}");
+            assert!(error.contains("to unknown trace \"nope\""), "{error}");
 
 
         }

@@ -874,6 +874,10 @@ fn program(src: &str, optimize: bool) -> Result<Program, String> {
     let src = src.to_string();
     quietly(move || {
         let mut p = lower::lower_tree(parse::pipe::parse(&src));
+        // A consumer's `shared_` inputs read the producer's outputs of those names.
+        let shared: Vec<String> = p.root.imports.iter().filter(|i| i.name.starts_with("shared_")).map(|i| i.name.clone()).collect();
+        let traces: Vec<String> = shared.iter().map(|label| format!("producer::{label}")).collect();
+        p.bind(shared.iter().map(String::as_str).zip(traces.iter().map(String::as_str))).unwrap();
         if optimize { interactive::passes::optimize(&mut p); }
         p
     })
@@ -1073,9 +1077,9 @@ fn split(case: &Case) -> Option<(String, String, bool, usize)> {
     let mut producer = String::new();
     render_stmts(before, false, "", &mut producer);
     let mut consumer = format!("{SUM_DECL}\n");
-    for (name, _, _) in &named {
+    for (name, key, val) in &named {
         writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
-        writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
+        writeln!(consumer, "let {name} = input \"shared_{name}\" : ({}, {});", key.text(), val.text()).unwrap();
     }
     render_stmts(after, false, "", &mut consumer);
     Some((producer, consumer, rng.chance(50), late))
@@ -1091,10 +1095,10 @@ fn asof_programs(case: &Case, optimize: bool) -> Result<Vec<(String, Program, us
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut consumer);
             }
-            Stmt::Input { name, .. } => {
+            Stmt::Input { name, key, val, .. } => {
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
                 writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
-                writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
+                writeln!(consumer, "let {name} = input \"shared_{name}\" : ({}, {});", key.text(), val.text()).unwrap();
             }
             _ => render_stmts(std::slice::from_ref(stmt), true, "", &mut consumer),
         }

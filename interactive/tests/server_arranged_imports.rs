@@ -16,7 +16,7 @@ const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((sr
 fn consumer() -> String {
     format!(
         r#"
-        let edges = import "prod::edges";
+        let edges = input "edges" : (int, int);
         let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
         r: {{
             let step = reach | join(edges, (_, (_, dst)) -> (dst, ()));
@@ -33,6 +33,8 @@ fn consumer() -> String {
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
+    // A consumer reads the producer's `edges`; the producer has no named input.
+    if program.root.imports.iter().any(|i| i.name == "edges") { program.bind([("edges", "prod::edges")]).unwrap(); }
     interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }

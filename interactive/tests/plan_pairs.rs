@@ -14,6 +14,27 @@ use interactive::scope_ir::{Item, Node, Ref, RowShape, Scope, Source};
 #[path = "plan_pairs/manifest.rs"]
 mod manifest;
 
+/// Published trace shapes, by trace name.
+type Catalog = BTreeMap<String, RowShape>;
+
+/// The bindings a driver gives `text`: each named input whose label is the name of a provider
+/// output, with `.` written `_`, reads that output. Other inputs are fed.
+fn bindings(text: &str, catalog: &Catalog) -> Vec<(String, String)> {
+    let Ok(program) = std::panic::catch_unwind(|| interactive::lower::lower_tree(interactive::parse::pipe::parse(text))) else { return Vec::new() };
+    program.root.imports.iter().filter(|i| matches!(i.from, Source::Input(_))).filter_map(|input| {
+        let found: Vec<&String> = catalog.keys().filter(|trace| trace.rsplit("::").next().unwrap().replace('.', "_") == input.name).collect();
+        assert!(found.len() <= 1, "input {:?} matches several traces: {found:?}", input.name);
+        found.first().map(|trace| (input.name.clone(), trace.to_string()))
+    }).collect()
+}
+
+/// Plan `text` with the bindings its drivers give it.
+fn plan_text(text: &str, catalog: &Catalog, config: &Config) -> Result<Report, String> {
+    let bindings = bindings(text, catalog);
+    let bindings: Vec<(&str, &str)> = bindings.iter().map(|(label, trace)| (label.as_str(), trace.as_str())).collect();
+    plan::report_bound(text, &bindings, &|name| catalog.get(name).cloned(), config)
+}
+
 struct Case {
     name: &'static str,
     input: &'static str,
@@ -196,7 +217,7 @@ fn stage_diff(before: (&str, &str), after: (&str, &str)) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn emitted(case: &Case, report: &Report, source: &dyn Fn(&str) -> Option<RowShape>) -> Vec<(String, String)> {
+fn emitted(case: &Case, report: &Report, catalog: &Catalog) -> Vec<(String, String)> {
     let mut output = Vec::new();
     let mut previous: Option<(DdpStage, String)> = None;
     for stage in DdpStage::ALL {
@@ -216,7 +237,7 @@ fn emitted(case: &Case, report: &Report, source: &dyn Fn(&str) -> Option<RowShap
             },
             Err(error) => panic!("{}: {}: {error}", case.name, stage.name()),
         };
-        let replanned = plan::report(&text, source, &Config::all()).unwrap_or_else(|e| panic!("{}: {}: emitted DDP does not replan: {e}", case.name, stage.name()));
+        let replanned = plan_text(&text, catalog, &Config::all()).unwrap_or_else(|e| panic!("{}: {}: emitted DDP does not replan: {e}", case.name, stage.name()));
         if case.problem.is_none() {
             assert!(replanned.unresolved.is_empty(), "{}: {}: emitted imports are unresolved", case.name, stage.name());
             assert!(replanned.stages.iter().all(|s| s.problems.is_empty()), "{}: {}: emitted DDP has shape problems", case.name, stage.name());
@@ -226,7 +247,7 @@ fn emitted(case: &Case, report: &Report, source: &dyn Fn(&str) -> Option<RowShap
                 assert!(!differences.is_empty(), "{}: parsed distinct allowance is no longer needed", case.name);
                 assert!(stable, "{}: parsed distinct text changed", case.name);
             } else if !differences.is_empty() || !stable {
-                assert!(stage == DdpStage::AsOf && as_of_reinsertion(report, &text, source, &Config::all()).unwrap(),
+                assert!(stage == DdpStage::AsOf && as_of_reinsertion(report, &text, catalog, &Config::all()).unwrap(),
                     "{}: {}: final plan differs: {differences:?}; text stable={stable}", case.name, stage.name());
             }
         }
@@ -305,16 +326,16 @@ fn reviewed_plan_pairs() {
         let report = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
             plan::report_program(interactive::explain::explain(&program), &source, &Config::all())
-        } else { plan::report(&text, &source, &Config::all()) }.unwrap_or_else(|e| panic!("{}: {e}", case.name));
+        } else { plan_text(&text, &catalog, &Config::all()) }.unwrap_or_else(|e| panic!("{}: {e}", case.name));
         check_report(case, &report);
 
         let repeated = if case.explain {
             let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
             plan::report_program(interactive::explain::explain(&program), &source, &Config::all())
-        } else { plan::report(&text, &source, &Config::all()) }.unwrap();
+        } else { plan_text(&text, &catalog, &Config::all()) }.unwrap();
         assert!(case.problem.is_some() || report.compare_final(&repeated).is_empty(), "{}: planning changed on repetition", case.name);
-        let out = emitted(case, &report, &source);
-        assert_eq!(out, emitted(case, &repeated, &source), "{}: emitted bytes changed on repetition", case.name);
+        let out = emitted(case, &report, &catalog);
+        assert_eq!(out, emitted(case, &repeated, &catalog), "{}: emitted bytes changed on repetition", case.name);
         providers.insert(case.name, report.exports.into_iter().map(|(name, shape)| (interactive::server::output_name(case.instance, &name), shape)).collect());
         outputs.extend(out.into_iter().map(|(name, text)| (pairs.join("expected").join(name), text)));
     }
@@ -337,9 +358,11 @@ fn reviewed_plan_pairs() {
 /// printing and lowering also splits its fused linear node. Normalize that grouping
 /// on both sides before classifying the known repeated insertion; compare the whole
 /// graph, including every scalar, with as-of insertion disabled on the second plan.
-fn as_of_reinsertion(report: &Report, text: &str, source: &dyn Fn(&str) -> Option<RowShape>, config: &Config) -> Result<bool, String> {
+fn as_of_reinsertion(report: &Report, text: &str, catalog: &Catalog, config: &Config) -> Result<bool, String> {
     if !config.as_of_drop || report.timings.as_of_drop.changes == 0 { return Ok(false); }
-    let without = plan::report(text, source, &Config { as_of_drop: false, ..*config })?;
+    let source = |name: &str| catalog.get(name).cloned();
+    let source = &source;
+    let without = plan_text(text, catalog, &Config { as_of_drop: false, ..*config })?;
     if report.compare_final(&without).is_empty() && without.emit_ddp()?.text == text { return Ok(true); }
     if config.structural { return Ok(false); }
     let normalize = Config { structural: true, ..Config::none() };
@@ -376,7 +399,7 @@ fn all_pass_subsets() {
             let report = if case.explain {
                 let p = interactive::lower::lower_tree(interactive::parse::pipe::parse(&text));
                 plan::report_program(interactive::explain::explain(&p), &source, &config)
-            } else { plan::report(&text, &source, &config) }.unwrap();
+            } else { plan_text(&text, &catalog, &config) }.unwrap();
             if mask == 0 { export_shapes.insert(case.name, report.exports.clone()); }
             else { assert_eq!(export_shapes[case.name], report.exports, "{}: mask {mask} changed export shapes", case.name); }
             providers.insert(case.name, report.exports.clone());
@@ -393,11 +416,11 @@ fn all_pass_subsets() {
                 let first = report.emit_ddp()?;
                 first_text = first.text;
                 if first.lambdas.graph_changed != 0 { return Err(format!("{} scalar graphs changed", first.lambdas.graph_changed)); }
-                let again = plan::report(&first_text, &source, &config)?;
+                let again = plan_text(&first_text, &catalog, &config)?;
                 second_text = again.emit_ddp()?.text;
                 let differences = report.compare_final(&again);
                 if differences.is_empty() && first_text == second_text { return Ok(false); }
-                if as_of_reinsertion(&report, &first_text, &source, &config)? { return Ok(true); }
+                if as_of_reinsertion(&report, &first_text, &catalog, &config)? { return Ok(true); }
                 Err(format!("text stable={}; {}", first_text == second_text, differences.join("; ")))
             })();
             let status = match &result {

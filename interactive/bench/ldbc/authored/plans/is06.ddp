@@ -2,10 +2,10 @@
 -- A thread's forum is its root post's: message -> root post -> forum -> moderator.
 
 let request = input 0 : ((int, int), ());                    -- (rid, message)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let forum   = import "graph::forum"   : (int, (List(int), int, int));
-let root_of = import "graph::message.root" : (int, int);
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let forum   = input "forum"   : (int, (List(int), int, int));
+let root_of = input "message_root" : (int, int);
 
 let answer  = request | map(((rid, m), ()) -> (m, rid))
                       | join(root_of, (_, (rid, root)) -> (root, rid))

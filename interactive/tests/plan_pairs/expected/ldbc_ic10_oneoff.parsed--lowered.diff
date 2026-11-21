@@ -2,14 +2,14 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 @@ -8,16 +10,59 @@
- let people = import "ic10s::people" : (int, (List(int), List(int), List(int), List(int), int, int));
- let posts = import "ic10s::posts" : (int, int);
- let likes = import "ic10s::likes" : ((int, int), ());
+ let people = input "people" : (int, (List(int), List(int), List(int), List(int), int, int));
+ let posts = input "posts" : (int, int);
+ let likes = input "likes" : ((int, int), ());
 -let hop1 = request | map(((rid, who, month), ()) -> (who, (rid, who, month))) | join(friend, (_, (req, (f, _))) -> (f, (req, 1)));
 -let hop2 = hop1 | join(friend, (_, ((req, _), (g, _))) -> (g, (req, 2)));
 -let twohop = hop1 + hop2 | filter((node, ((_, who, _), _)) -> (node, who) ne) | map((node, ((rid, who, month), d)) -> ((rid, who, month, node), d)) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist) | filter((_, d) -> (d, 2) eq);

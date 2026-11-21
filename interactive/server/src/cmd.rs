@@ -85,10 +85,9 @@ pub type ConnectionId = u64;
 pub enum Cmd {
     /// Install a dataflow.
     /// `id_hint` — the client-chosen name the dataflow is installed under.
-    /// `bindings` — `name -> binding`, where the name is a root input's (as written,
-    /// `input "name"`, or `input<N>` if unnamed) or an import's, and the binding is either a
-    /// published trace name . A bound input becomes an import of
-    /// the binding.
+    /// `bindings` — `label -> trace`, where the label is a root input's (`0` for `input 0`,
+    /// `edges` for `input "edges"`) and the trace a published one. A bound input reads the
+    /// trace instead of being fed.
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
     /// from a file (`load <name> from <path>`).
     /// `explain` — `explain` or `explain=debug`: apply the explanation rewrite,
@@ -101,8 +100,9 @@ pub enum Cmd {
         program: String,
         explain: Option<bool>,
     },
-    /// Print preparation stages without installing, using the live export catalog.
-    Plan { name: String, program: String, timings: bool },
+    /// Print preparation stages without installing, using the live export catalog and
+    /// binding inputs as a load does.
+    Plan { name: String, program: String, timings: bool, bindings: BTreeMap<String, String> },
     /// Drop the named dataflow. Fails if any export of this dataflow is
     /// still imported by another live dataflow or held by a reader.
     Drop { name: String },
@@ -175,7 +175,7 @@ pub enum PreparedCommand {
     Server(ServerCommand),
     /// A group's commands, in order.
     Group(Vec<ServerCommand>),
-    Plan { name: String, program: String, timings: bool },
+    Plan { name: String, program: String, timings: bool, bindings: BTreeMap<String, String> },
     Peek { name: String, key: Option<String>, as_of: Option<HostTime>, format: ReadFormat },
     Tail { name: String, format: ReadFormat },
     Stop { tail_reqid: ReqId },
@@ -243,7 +243,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 interactive::lower::lower_tree(interactive::parse::pipe::parse(&program))
             }))
             .map_err(panic_message)?;
-            apply_bindings(&mut program, &bindings)?;
+            program.bind(bindings.iter().map(|(label, trace)| (label.as_str(), trace.as_str())))?;
             // The rewrite precedes the passes, which install runs (its rules assume single-op Linears).
             if let Some(debug) = explain {
                 let options = interactive::explain::Options { debug_inspects: debug };
@@ -257,7 +257,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
                 program,
             }
         }
-        Cmd::Plan { name, program, timings } => return Ok(PreparedCommand::Plan { name, program, timings }),
+        Cmd::Plan { name, program, timings, bindings } => return Ok(PreparedCommand::Plan { name, program, timings, bindings }),
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
         Cmd::Peek { name, key, as_of, format } => return Ok(PreparedCommand::Peek { name, key, as_of, format }),
@@ -312,22 +312,6 @@ fn least_times(lanes: &[Vec<u64>], rows: usize) -> Vec<HostTime> {
             least.drain().collect()
         }
     }
-}
-
-fn apply_bindings(
-    program: &mut Program,
-    bindings: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    for (local, binding) in bindings {
-        let import = program
-            .root
-            .imports
-            .iter_mut()
-            .find(|import| import.name == *local)
-            .ok_or_else(|| format!("binding names no input or import {:?}", local))?;
-        import.from = Source::Trace(binding.clone());
-    }
-    Ok(())
 }
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
@@ -614,7 +598,7 @@ impl LineParser {
                     return Some((
                         done.reqid,
                         Ok(if done.plan {
-                            Cmd::Plan { name: done.id_hint, program: done.body, timings: done.timings }
+                            Cmd::Plan { name: done.id_hint, program: done.body, timings: done.timings, bindings: done.bindings }
                         } else {
                             Cmd::Load {
                                 id_hint: done.id_hint,
@@ -817,21 +801,28 @@ fn read_floor(text: &str) -> Result<Option<HostTime>, String> {
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
     match cmd {
         "plan" => {
-            const USAGE: &str = "plan: expected `<name> from <path> [--timings]` or `<name> [--timings] begin`";
-            let (name, path, timings) = match args {
-                [name, "from", path] => (*name, Some(*path), false),
-                [name, "from", path, "--timings"] => (*name, Some(*path), true),
-                [name, "begin"] => (*name, None, false),
-                [name, "--timings", "begin"] => (*name, None, true),
+            const USAGE: &str = "plan: expected `<name> from <path> [--timings] [label=trace ...]` or `<name> [--timings] [label=trace ...] begin`";
+            let (name, path, options): (&str, Option<&str>, &[&str]) = match args {
+                [name, "from", path, options @ ..] => (name, Some(path), options),
+                [name, options @ .., "begin"] => (name, None, options),
                 _ => return ParseOutcome::Err(USAGE.into()),
             };
+            let mut timings = false;
+            let mut bindings = BTreeMap::new();
+            for tok in options {
+                if *tok == "--timings" { timings = true; continue; }
+                let Some((k, v)) = tok.split_once('=') else { return ParseOutcome::Err(USAGE.into()) };
+                if bindings.insert(k.to_string(), v.to_string()).is_some() {
+                    return ParseOutcome::Err(format!("plan: duplicate binding for {:?}", k));
+                }
+            }
             match path {
                 Some(path) => match std::fs::read_to_string(path) {
-                    Ok(program) => ParseOutcome::Cmd(Cmd::Plan { name: name.into(), program, timings }),
+                    Ok(program) => ParseOutcome::Cmd(Cmd::Plan { name: name.into(), program, timings, bindings }),
                     Err(error) => ParseOutcome::Err(format!("plan: cannot read {path:?}: {error}")),
                 },
                 None => ParseOutcome::BeginLoad {
-                    plan: true, timings, id_hint: name.into(), width: 1, bindings: BTreeMap::new(), explain: None,
+                    plan: true, timings, id_hint: name.into(), width: 1, bindings, explain: None,
                 },
             }
         },
@@ -840,7 +831,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             // file, read here on the session thread. `load <name> [options] begin`
             // switches the parser into
             // body-collection mode; subsequent lines are program text terminated by
-            // `<reqid> end-load`. Options: `explain`, `explain=debug`, `name=binding`.
+            // `<reqid> end-load`. Options: `explain`, `explain=debug`, `width=N`, `label=trace`.
             const USAGE: &str = "load: expected `<name> from <path> [options]` or `<name> [options] begin`";
             let Some((id_hint, rest)) = args.split_first() else {
                 return ParseOutcome::Err(USAGE.into());
@@ -861,7 +852,7 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 }
                 let Some((k, v)) = tok.split_once('=') else {
                     return ParseOutcome::Err(format!(
-                        "load: argument {:?} must be `width=N`, `explain`, `explain=debug`, or `name=binding`",
+                        "load: argument {:?} must be `width=N`, `explain`, `explain=debug`, or `label=trace`",
                         tok
                     ));
                 };
@@ -1285,10 +1276,10 @@ mod tests {
         let got = feed_all(&mut p, &[
             "r0 plan preview begin", "output \"out\" = input 0 : (int, ());", "r0 end-plan",
         ]);
-        let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
+        let [(_, Ok(Cmd::Plan { name, program, timings, .. }))] = &got[..] else { panic!("expected Plan: {got:?}") };
         assert_eq!(name, "preview");
         assert!(!timings);
-        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings }, &p.catalog).unwrap();
+        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings, bindings: BTreeMap::new() }, &p.catalog).unwrap();
         assert!(matches!(prepared, PreparedCommand::Plan { .. }));
         assert!(p.catalog.shape("preview", &InputId::Position(0)).is_err());
         assert!(matches!(p.feed("plan p from /nonexistent/plan.ddp"), Some((_, Err(e))) if e.starts_with("plan: cannot read")));
@@ -1305,9 +1296,9 @@ mod tests {
         let got = feed_all(&mut p, &[
             "r0 plan preview --timings begin", "output \"out\" = input 0 : (int, ());", "r0 end-plan",
         ]);
-        let [(_, Ok(Cmd::Plan { name, program, timings }))] = &got[..] else { panic!("expected Plan: {got:?}") };
+        let [(_, Ok(Cmd::Plan { name, program, timings, .. }))] = &got[..] else { panic!("expected Plan: {got:?}") };
         assert!(*timings);
-        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings }, &p.catalog).unwrap();
+        let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings, bindings: BTreeMap::new() }, &p.catalog).unwrap();
         assert!(matches!(prepared, PreparedCommand::Plan { timings: true, .. }));
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/plan_pairs/cases/as_of_shared.ddp");
         assert!(matches!(p.feed(&format!("plan p from {path} --timings")), Some((_, Ok(Cmd::Plan { timings: true, .. })))));
@@ -1321,7 +1312,7 @@ mod tests {
             &mut p,
             &[
                 "r0 load gen edges=graph::edges begin",
-                "let edges = import \"edges/v1\";",
+                "let edges = input \"edges\" : (int, int);",
                 "output \"reach\" = edges;",
                 "r0 end-load",
             ],
@@ -1341,7 +1332,7 @@ mod tests {
                     bindings.get("edges").map(String::as_str),
                     Some("graph::edges")
                 );
-                assert!(program.contains("import \"edges/v1\""));
+                assert!(program.contains("input \"edges\""));
                 assert!(program.contains("output \"reach\""));
                 assert!(explain.is_none());
             }
@@ -1621,6 +1612,6 @@ mod tests {
         assert!(matches!(&got[1].1, Err(e) if e.contains("no input named \"edges\"")), "{:?}", got[1]);
         let bindings: BTreeMap<String, String> = [("paths".to_string(), "g::edges".to_string())].into();
         let load = Cmd::Load { width: 1, id_hint: "r".into(), bindings, program: text.into(), explain: None };
-        assert!(matches!(prepare(load, &Catalog::default()), Err(e) if e.contains("binding names no input or import \"paths\"")));
+        assert!(matches!(prepare(load, &Catalog::default()), Err(e) if e.contains("binding names no input \"paths\"")));
     }
 }

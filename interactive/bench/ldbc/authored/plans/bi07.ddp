@@ -3,11 +3,11 @@
 -- the tag's messages, their replies, and the replies' tags.
 
 let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
-let tag      = import "graph::tag"               : (int, (List(int), int));  -- (id, (name, class))
-let tag_id   = import "graph::tag.by_name"       : (List(int), int);         -- (name, id)
-let tagged   = import "graph::mtag.by_tag"       : (int, int);               -- (tag, message)
-let tags_of  = import "graph::mtag.by_message"   : (int, int);               -- (message, tag)
-let replies  = import "graph::message.by_parent" : (int, int);               -- (message, reply)
+let tag      = input "tag"               : (int, (List(int), int));  -- (id, (name, class))
+let tag_id   = input "tag_by_name"       : (List(int), int);         -- (name, id)
+let tagged   = input "mtag_by_tag"       : (int, int);               -- (tag, message)
+let tags_of  = input "mtag_by_message"   : (int, int);               -- (message, tag)
+let replies  = input "message_by_parent" : (int, int);               -- (message, reply)
 
 -- Messages carrying the request's tag (one tag; (message, tag) is a set).
 let marked  = request | map(((rid, name), ()) -> (name, rid))

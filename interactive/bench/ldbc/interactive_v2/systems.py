@@ -100,7 +100,7 @@ class Ddir:
             *(f'trim {trace} {self.server.epoch}' for trace in (*self.server.output_traces, *self.server.diagnostics))])
         self.server.epoch += 1
         # Plans answered one-off: each read installs its own copy of the plan's one-off half,
-        # which imports what the standing half publishes, and drops it at the next tick.
+        # which reads what the standing half publishes, and drops it at the next tick.
         self.oneoff = {}
         oneoff_dir = getattr(args, 'oneoff_dir', None)
         for name in getattr(args, 'oneoff', None) or []:
@@ -237,7 +237,7 @@ class Ddir:
             if read.plan in self.oneoff:
                 target = f'{read.plan}x{self.rid}'
                 text = self.oneoff[read.plan]
-                loads.append(self.server.load(target, text))
+                loads.append(self.server.load(target, text, providers=('graph', f'{read.plan}s')))
             commands.append(self.server.feed(target, 0, rows, 1, self.shapes[read.plan], epoch=self.server.epoch))
             live.append((target, rows))
             rids.append(self.rid)

@@ -319,7 +319,7 @@ fn text_tail_rows_keep_epochs_and_retractions() {
 fn assert_typed_sources() {
     let (server, mut writer, mut reader) = start_server(4);
     request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))), ());\noutput \"typed.rows\" = rows | arrange;\ng end-load\n");
-    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"graph::typed.rows\" : ((int, List(int), Option(List(int))), ());\noutput \"typed.copy\" = rows;\nq end-load\n");
+    request(&mut writer, &mut reader, "q", "q load copy rows=graph::typed.rows begin\nlet rows = input \"rows\" : ((int, List(int), Option(List(int))), ());\noutput \"typed.copy\" = rows;\nq end-load\n");
     // Neither a first empty list nor a never-populated sum lane can supply
     // its encoding by example. Both the producer and imported trace use the
     // declared shape, without sentinel rows or altered data.
@@ -358,7 +358,7 @@ fn assert_shared_import_requests(workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0 : ((int, int), ());\nlet e = import \"graph::edges\";\noutput \"answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, ((rid), (node))) -> ((rid), (node)));
+                "{name} load {name} e=graph::edges begin\nlet q = input 0 : ((int, int), ());\nlet e = input \"e\" : ((int), (int));\noutput \"answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, ((rid), (node))) -> ((rid), (node)));
 \n{name} end-load\n"
             ),
         );
@@ -665,7 +665,7 @@ fn planning_reads_live_exports_without_installing() {
     request(&mut writer, &mut reader, "s", "s seal provider 0 8\n");
     request(&mut writer, &mut reader, "t", "t trim provider::rows 7\n");
     let before = request(&mut writer, &mut reader, "before", "before list\n");
-    let command = "p plan preview begin\noutput \"out\" = import \"provider::rows\" | distinct;\np end-plan\n";
+    let command = "p plan preview rows=provider::rows begin\noutput \"out\" = input \"rows\" : (int, int) | distinct;\np end-plan\n";
     let plan = request(&mut writer, &mut reader, "p", command);
     assert!(plan.iter().any(|line| line.contains("Imported histories advance to G = (7, [])")));
     assert!(plan.iter().any(|line| line.contains("reduce(")));
@@ -686,7 +686,7 @@ fn diagnostics_plan_uses_source_shapes_and_reports_the_legacy_knob() {
         .env("DDIR_PROJECTION", "1").env_remove("DDIR_PASSES")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"p plan preview begin\noutput \"out\" = import \"diag.time\";\np end-plan\nexit\n").unwrap();
+    child.stdin.take().unwrap().write_all(b"p plan preview time=diag.time begin\noutput \"out\" = input \"time\" : ((int, int), ());\np end-plan\nexit\n").unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let warning = String::from_utf8(output.stderr).unwrap();
@@ -1006,7 +1006,7 @@ fn union_waits_only_for_commanded_progress() {
     request(&mut writer, &mut reader, "l", "l load src begin\noutput \"rows\" = input 0 : (int, ());\nl end-load\n");
     request(&mut writer, &mut reader, "s", "s seal src 0 5\n");
     request(&mut writer, &mut reader, "t", "t trim src::rows 4\n");
-    request(&mut writer, &mut reader, "l", "l load late begin\noutput \"rows\" = import \"src::rows\" + input 0 : (int, ());\nl end-load\n");
+    request(&mut writer, &mut reader, "l", "l load late rows=src::rows begin\noutput \"rows\" = input \"rows\" : (int, ()) + input 0 : (int, ());\nl end-load\n");
     assert!(framed(&mut writer, &mut reader, "p", "p peek late::rows\n", &[]).unwrap_err().contains("no closed time"));
     request(&mut writer, &mut reader, "s", "s seal late 0 5\n");
     assert!(request_observing(&mut writer, &mut reader, "p", "p peek late::rows\n", |line, _| {

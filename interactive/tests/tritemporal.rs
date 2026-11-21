@@ -21,7 +21,7 @@ use timely::order::PartialOrder;
 const PROGRAM: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
     let trans = edges | map((src, dst) -> (dst, src));
-    let allowed = import "allow::allowed";
+    let allowed = input "allowed" : (int, ());
     outer: {
         let scc = edges + trim;
         let degrees = scc | map((src, _) -> (src, ())) | count;
@@ -157,7 +157,8 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         let allow = lower::lower_tree(parse::pipe::parse(r#"output "allowed" = input 0 : (int, ());"#));
-        let program = lower::lower_tree(parse::pipe::parse(PROGRAM));
+        let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
+        program.bind([("allowed", "allow::allowed")]).unwrap();
         server.install(worker, "allow", &allow).unwrap();
         server.install_with_root(worker, "graph", &program, 3, at([0, 0, 0])).unwrap();
         assert_eq!(server.trace_width("allow::allowed"), Some(1));

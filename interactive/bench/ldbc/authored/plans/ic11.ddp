@@ -3,11 +3,11 @@
 -- descending; top 10.
 
 let request = input 0 : ((int, int, List(int), int), ());    -- (rid, person, country name, before year)
-let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let friend  = import "graph::friend" : (int, (int, int));              -- (person, (friend, since))
-let work    = import "graph::work.by_person" : (int, (int, int));      -- (person, (org, since))
-let org     = import "graph::org" : (int, (List(int), List(int), int));
-let place   = import "graph::place" : (int, (List(int), List(int), int));
+let person  = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend  = input "friend" : (int, (int, int));              -- (person, (friend, since))
+let work    = input "work_by_person" : (int, (int, int));      -- (person, (org, since))
+let org     = input "org" : (int, (List(int), List(int), int));
+let place   = input "place" : (int, (List(int), List(int), int));
 
 -- The circle: one or two hops from the person, not the person.
 let hop1   = request | map(((rid, who, country, year), ()) -> (who, (rid, who, country, year)))

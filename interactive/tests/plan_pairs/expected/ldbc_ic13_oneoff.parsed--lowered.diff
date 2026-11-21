@@ -2,9 +2,9 @@
 +++ lowered
 @@ -1,21 +1,62 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let friend = import "graph::friend" : (int, (int, int));
+ let friend = input "friend" : (int, (int, int));
 -let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ()))) + (request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ())));
 +let starts_map = request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ()));
 +let starts_map2 = request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ()));

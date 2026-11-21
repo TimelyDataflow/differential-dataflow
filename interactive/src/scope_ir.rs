@@ -232,6 +232,20 @@ pub struct Program {
 }
 
 impl Program {
+    /// Bind root inputs to published traces, as a load does: each `(label, trace)` makes the input
+    /// with that label read the trace instead of being fed. A bound input keeps the shape it
+    /// declares, which install checks against the trace's.
+    pub fn bind<'a>(&mut self, bindings: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<(), String> {
+        for (label, trace) in bindings {
+            let import = self.root.imports.iter_mut()
+                .find(|import| import.name == label && matches!(import.from, Source::Input(_)))
+                .ok_or_else(|| format!("binding names no input {label:?}"))?;
+            if import.shape.is_none() { return Err(format!("input {label:?} declares no shape")); }
+            import.from = Source::Trace(trace.to_string());
+        }
+        Ok(())
+    }
+
     /// Print the tree as indented structural text (readability, not
     /// parseability): imports and vars first, items in order (`Sub`s nest),
     /// then binds and exports.

@@ -6,11 +6,11 @@
 -- else is a lookup.
 
 let request = input 0 : ((int, int, List(int), List(int), int, int), ());   -- (rid, person, X, Y, start, days)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend"  : (int, (int, int));      -- (person, (friend, since))
-let place   = import "graph::place"   : (int, (List(int), List(int), int));
-let by_name = import "graph::place.by_name" : (List(int), int);
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend"  : (int, (int, int));      -- (person, (friend, since))
+let place   = input "place"   : (int, (List(int), List(int), int));
+let by_name = input "place_by_name" : (List(int), int);
 
 -- The request with X and Y as country ids ("Country" is the place type): (rid, (person, x, y, start, end)).
 let asked = request | map(((rid, who, x, y, start, days), ()) -> (x, (rid, who, y, start, (start, (days, 86400000) mul) add)))

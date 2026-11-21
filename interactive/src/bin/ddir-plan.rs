@@ -11,6 +11,7 @@ fn run() -> Result<(), String> {
     let mut stage = interactive::plan::ddp::DdpStage::AsOf;
     let mut as_of = 0;
     let mut passes = interactive::passes::Config::default();
+    let mut bindings: Vec<(String, String)> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -27,27 +28,35 @@ fn run() -> Result<(), String> {
                 emit_ddp = true;
             }
             "--check-roundtrip" => check_roundtrip = true,
+            // `--bind label=trace` binds an input of the next file, as a load does.
+            "--bind" => {
+                let binding = args.next().ok_or("--bind requires label=trace")?;
+                let (label, trace) = binding.split_once('=').ok_or("--bind requires label=trace")?;
+                bindings.push((label.to_string(), trace.to_string()));
+            }
             "--passes" => passes = interactive::passes::Config::parse(&args.next().ok_or("--passes requires a list, such as all, none, or all,-projection")?)?,
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}")),
             // `name=file.ddp` plans the file as program `name`; otherwise the program is named by the file's stem.
-            // Its outputs supply later files' imports as `<name>::<output>`.
+            // Its outputs are traces later files' inputs may bind, as `<name>::<output>`.
             _ => files.push(match arg.split_once('=') {
-                Some((name, file)) => (name.to_string(), file.to_string()),
-                None => (std::path::Path::new(&arg).file_stem().map_or(arg.clone(), |s| s.to_string_lossy().into_owned()), arg),
+                Some((name, file)) => (name.to_string(), file.to_string(), std::mem::take(&mut bindings)),
+                None => (std::path::Path::new(&arg).file_stem().map_or(arg.clone(), |s| s.to_string_lossy().into_owned()), arg, std::mem::take(&mut bindings)),
             }),
         }
     }
-    if files.is_empty() { return Err("usage: ddir-plan [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] [name=]file.ddp [[name=]more.ddp ...]".into()); }
+    if files.is_empty() { return Err("usage: ddir-plan [--as-of T] [--timings] [--passes LIST] [--emit-ddp | --emit-ddp-stage STAGE | --lambda-source] [--check-lambdas] [--check-roundtrip] [--bind label=trace ...] [name=]file.ddp [[--bind label=trace ...] [name=]more.ddp ...]".into()); }
+    if !bindings.is_empty() { return Err("--bind binds an input of the file after it".into()); }
     if emit_ddp && options.lambda_source { return Err("--emit-ddp always checks source against the compiled graph".into()); }
     if check_roundtrip && !emit_ddp { return Err("--check-roundtrip requires --emit-ddp".into()); }
     let mut catalog = BTreeMap::new();
     let mut incomplete = false;
     let mut out = io::stdout().lock();
-    for (i, (program, file)) in files.iter().enumerate() {
+    for (i, (program, file, bindings)) in files.iter().enumerate() {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
-        let report = interactive::plan::report_at(&text, &|name| catalog.get(name).cloned(), &passes, as_of).map_err(|e| format!("{file}: {e}"))?;
+        let bindings: Vec<(&str, &str)> = bindings.iter().map(|(label, trace)| (label.as_str(), trace.as_str())).collect();
+        let report = interactive::plan::report_with_read_floor(&text, &bindings, &|name| catalog.get(name).cloned(), &passes, |_| as_of).map_err(|e| format!("{file}: {e}"))?;
         if emit_ddp {
-            // Earlier files supply imports. Only the requested (last) program is emitted.
+            // Earlier files supply traces. Only the requested (last) program is emitted.
             if i + 1 == files.len() {
                 let start = std::time::Instant::now();
                 let printed = report.emit_ddp_at(stage)?;
@@ -56,7 +65,7 @@ fn run() -> Result<(), String> {
                 eprintln!("Lambdas: source={}, graph={}, graph_changed={}", printed.lambdas.source, printed.lambdas.graph, printed.lambdas.graph_changed);
                 incomplete |= printed.lambdas.graph_changed != 0;
                 if check_roundtrip {
-                    let reparsed = interactive::plan::report_at(&printed.text, &|name| catalog.get(name).cloned(), &passes, as_of)?;
+                    let reparsed = interactive::plan::report_with_read_floor(&printed.text, &bindings, &|name| catalog.get(name).cloned(), &passes, |_| as_of)?;
                     let differences = report.compare_final(&reparsed);
                     let stable = reparsed.emit_ddp_at(stage)?.text == printed.text;
                     eprintln!("Round trip: plan={}, text={}", if differences.is_empty() { "same" } else { "different" }, if stable { "stable" } else { "changed" });
@@ -71,14 +80,14 @@ fn run() -> Result<(), String> {
             }
             writeln!(out, "Program {}\n{}", i + 1, printed.text).map_err(|e| e.to_string())?;
         }
-        // Lowered diagnostics can mention an unread import that cleanup removed.
+        // Lowered diagnostics can mention an unread bound input that cleanup removed.
         incomplete |= !report.unresolved.is_empty() || !report.stages.last().unwrap().problems.is_empty();
         for (name, shape) in report.exports {
             let name = interactive::server::output_name(program, &name);
             if catalog.insert(name.clone(), shape).is_some() { return Err(format!("duplicate output {name:?}")); }
         }
     }
-    if incomplete { Err("planning incomplete; see imports, shape problems, and lambda checks above".into()) }
+    if incomplete { Err("planning incomplete; see bound inputs, shape problems, and lambda checks above".into()) }
     else { Ok(()) }
 }
 

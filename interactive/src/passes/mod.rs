@@ -307,11 +307,11 @@ mod schedule_tests {
     #[test]
     fn provider_checks_follow_dead_import_cleanup() {
         for (text, expected_skip) in [
-            (r#"let dead = import "absent"; output "out" = input 0 : (int, ());"#, false),
-            (r#"output "out" = import "absent" : (int, ());"#, true),
+            (r#"let dead = input "absent" : (int, ()); output "out" = input 0 : (int, ());"#, false),
+            (r#"output "out" = input "absent" : (int, ());"#, true),
             (r#"output "out" : ((), ()) = input 0 : (int, ());"#, true),
         ] {
-            let mut program = crate::lower::lower_tree(crate::parse::pipe::parse(text));
+            let mut program = crate::lower::lower_bound(text);
             let mut optimized = String::new();
             run(&mut program, &|_| None, &Config::all(), &crate::server::host_time(1), 1, &mut |name, program, changes| {
                 if name == "after optimizer" { optimized = format!("{program:?}"); }

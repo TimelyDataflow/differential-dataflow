@@ -2,12 +2,12 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let friend = import "graph::friend" : (int, (int, int));
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = input "friend" : (int, (int, int));
 @@ -8,10 +10,25 @@
- let mtag = import "graph::mtag.by_tag" : (int, int);
+ let mtag = input "mtag_by_tag" : (int, int);
  let selves = tagclass | map((id, _) -> ((id, id), ()));
  below: {
 -    let step = below | map(((low, high), ()) -> (high, low)) | join(tagclass, (_, (low, (_, parent))) -> (low, parent)) | filter((_, parent) -> (parent, 0) ge) | map((low, higher) -> ((low, higher), ()));

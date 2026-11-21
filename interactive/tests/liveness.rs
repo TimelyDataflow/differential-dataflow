@@ -78,16 +78,17 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
 #[test]
 fn dead_code_switch_controls_pruning_before_fusion() {
     use interactive::passes::{self, Config, Pass};
-    let original = program(r#"
+    let mut original = program(r#"
         let x = input 0 : (int, int);
         let alias = x;
         let unused = input 1 : (int, int);
-        let absent = import "absent" : (int, int);
+        let absent = input "absent" : (int, int);
         let prefix = x | map((k, v) -> (k, (v, 1) add));
         let dead = prefix | filter((_, v) -> (v, 0) gt);
         lost: { let dead = ::absent | map((k, v) -> (v, k)); }
         output "out" = prefix | map((k, v) -> (v, k));
     "#);
+    original.bind([("absent", "absent")]).unwrap();
     let off = Config::parse("none,structural").unwrap();
     let on = Config::parse("none,structural,dead-code").unwrap();
     assert!(Config::default().dead_code);

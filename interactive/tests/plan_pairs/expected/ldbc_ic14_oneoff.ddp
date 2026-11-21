@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let weighted = import "ic14s::weighted" : (int, (int, int));
+let weighted = input "weighted" : (int, (int, int));
 let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
 dist: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.

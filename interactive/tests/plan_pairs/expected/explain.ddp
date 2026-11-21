@@ -1,5 +1,5 @@
 -- Time lanes: epoch.
-let input0 = input : (int, int);
+let input0 = input 0 : (int, int);
 let query = input "query" : (int, (int, int));
 let rows_map2_map = input0 | map((_, a) -> ((a, (())), ()));
 let rows_map2_map_idx = rows_map2_map | arrange;

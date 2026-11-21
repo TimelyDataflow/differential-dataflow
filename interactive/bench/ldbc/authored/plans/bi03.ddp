@@ -4,17 +4,17 @@
 -- messages, and each message's thread root, whose forum is the thread's.
 
 let request   = input 0 : ((int, List(int), List(int)), ());  -- (rid, class name, country name)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let forum     = import "graph::forum"              : (int, (List(int), int, int));  -- (id, (title, created, moderator))
-let moderates = import "graph::forum.by_moderator" : (int, int);                    -- (person, forum)
-let residents = import "graph::person.by_city"     : (int, int);                    -- (city, person)
-let place_id  = import "graph::place.by_name"      : (List(int), int);              -- (name, id)
-let within    = import "graph::place.by_parent"    : (int, int);                    -- (parent, place)
-let class_id  = import "graph::tagclass.by_name"   : (List(int), int);              -- (name, id)
-let in_class  = import "graph::tag.by_class"       : (int, int);                    -- (class, tag)
-let tagged    = import "graph::mtag.by_tag"        : (int, int);                    -- (tag, message)
-let root_of   = import "graph::message.root"       : (int, int);                    -- (message, thread root)
+let forum     = input "forum"              : (int, (List(int), int, int));  -- (id, (title, created, moderator))
+let moderates = input "forum_by_moderator" : (int, int);                    -- (person, forum)
+let residents = input "person_by_city"     : (int, int);                    -- (city, person)
+let place_id  = input "place_by_name"      : (List(int), int);              -- (name, id)
+let within    = input "place_by_parent"    : (int, int);                    -- (parent, place)
+let class_id  = input "tagclass_by_name"   : (List(int), int);              -- (name, id)
+let in_class  = input "tag_by_class"       : (int, int);                    -- (class, tag)
+let tagged    = input "mtag_by_tag"        : (int, int);                    -- (tag, message)
+let root_of   = input "message_root"       : (int, int);                    -- (message, thread root)
 
 -- Forums moderated by someone living in a city of the country.
 let local    = request | map(((rid, _, country), ()) -> (country, rid))

@@ -2,7 +2,7 @@ use super::*;
 use crate::passes::Config;
 use crate::scope_ir::Program;
 
-fn program(text: &str) -> Program { crate::lower::lower_tree(crate::parse::pipe::parse(text)) }
+fn program(text: &str) -> Program { crate::lower::lower_bound(text) }
 
 fn count(scope: &Scope) -> usize {
     scope.items.iter().map(|item| match item {
@@ -83,7 +83,7 @@ fn lone_arrangements_move_but_time_and_feedback_stay() {
 #[test]
 fn collapse_follows_arrangements_but_not_collection_boundaries() {
     for source in [
-        "let x = import \"trace\" : (int, ());",
+        "let x = input \"trace\" : (int, ());",
         "let rows = input 0 : (int, ()); let x = rows | distinct;",
     ] {
         rewrite(&format!(r#"

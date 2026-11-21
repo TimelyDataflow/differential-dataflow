@@ -2,12 +2,12 @@
 +++ optimized
 @@ -1,13 +1,9 @@
  -- Time lanes: epoch.
- -- Trace imports use provider arrangements; history advances to G = (0, []).
--let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
--let friend = import "graph::friend" : (int, (int, int));
--let forum = import "graph::forum" : (int, (List(int), int, int));
- let member = import "graph::member.by_person" : (int, (int, int));
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
+-let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let friend = input "friend" : (int, (int, int));
+-let forum = input "forum" : (int, (List(int), int, int));
+ let member = input "member_by_person" : (int, (int, int));
 -let posted_filter = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq);
 -let posted_map = posted_filter | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
 -let posted_idx = posted_map | arrange;

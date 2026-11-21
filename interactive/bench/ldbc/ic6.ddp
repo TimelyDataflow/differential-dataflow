@@ -1,9 +1,9 @@
 -- IC6: request(request_id, person_id, tag_name). Two-hop tag co-occurrence.
 -- This explicit plan expands friends and posts before testing the bound tag.
 let request = input 0 : ((int, int, List(int)), ());
-let edge = import "graph::edge" : (int, (int, int));
-let message = import "graph::message" : (int, (int, int, int));
-let tagged = import "graph::tagged" : (int, List(int));
+let edge = input "edge" : (int, (int, int));
+let message = input "message" : (int, (int, int, int));
+let tagged = input "tagged" : (int, List(int));
 -- Reachable rows: (request_id, origin, author, tag_name), deduplicated across paths.
 let one = request | map(((rid, pid, tag), ()) -> (pid, (rid, tag)))
     | join(edge, (pid, ((rid, tag), (q, _))) -> ((rid, pid, q, tag), ()));

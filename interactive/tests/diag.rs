@@ -57,7 +57,10 @@ fn views_see_programs_and_state_stays_bounded() {
         let diagnostics = diag::register(worker);
         let mut server = Server::new();
         server.set_diagnostics(std::rc::Rc::clone(&diagnostics));
-        server.install(worker, "diag", &program(DIAG)).unwrap();
+        let mut views = lower::lower_tree(parse::pipe::parse(DIAG));
+        diag::bind_sources(&mut views).unwrap();
+        interactive::passes::optimize(&mut views);
+        server.install(worker, "diag", &views).unwrap();
         server.install(worker, "p", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
         server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", 0).unwrap();
         server.seal("p", 0, &Antichain::from_elem(host_time(1))).unwrap();

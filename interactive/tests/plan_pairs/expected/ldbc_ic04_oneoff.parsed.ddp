@@ -1,10 +1,10 @@
 let request = input 0 : ((int, int, int, int), ());
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "graph::friend" : (int, (int, int));
-let tag = import "graph::tag" : (int, (List(int), int));
-let mtag = import "graph::mtag.by_tag" : (int, int);
-let posts = import "ic4s::posts" : (int, (int, int));
-let tags = import "ic4s::tags" : (int, (int, List(int)));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = input "friend" : (int, (int, int));
+let tag = input "tag" : (int, (List(int), int));
+let mtag = input "mtag_by_tag" : (int, int);
+let posts = input "posts" : (int, (int, int));
+let tags = input "tags" : (int, (int, List(int)));
 let seen = request | map(((rid, who, start, days), ()) -> (who, (rid, start, (start, (days, 86400000) mul) add))) | join(friend, (_, (req, (f, _))) -> (f, req)) | join(posts, (_, ((rid, start, end), (m, created))) -> (m, (rid, created, start, end))) | join(tags, (_, ((rid, created, start, end), (t, name))) -> ((rid, t), (name, created, start, end)));
 let before = seen | filter((_, (_, created, start, _)) -> (created, start) lt) | map((key, _) -> (key, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
 let during = seen | filter((_, (_, created, start, end)) -> ((created, start) ge, (created, end) lt) all);

@@ -56,7 +56,11 @@ pub(super) fn run(scope: &mut Scope, collapse: bool, hoist: bool, timings: &mut 
 fn binding(scope: &Scope, r: &Ref) -> String {
     match r {
         Ref::Local(i) => scope.labels.get(*i).cloned().unwrap_or_else(|| "rows".into()),
-        Ref::Import(i) => scope.imports[*i].name.rsplit("::").next().unwrap().into(),
+        // A numbered input's label is its digits, and its binding `input<N>`.
+        Ref::Import(i) => match scope.imports[*i].name.rsplit("::").next().unwrap() {
+            digits if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => format!("input{digits}"),
+            name => name.into(),
+        },
         Ref::Var(i) => scope.vars[*i].name.clone(),
         Ref::ChildExport(i, e) => if let Item::Sub(child) = &scope.items[*i] { child.exports[*e].name.clone() } else { unreachable!() },
     }

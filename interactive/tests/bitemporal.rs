@@ -144,8 +144,9 @@ impl Fed {
 /// `(point, export)` checks made on worker 0.
 fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let text = if shared { PROGRAM.replace("let owners = input 1 : (int, int);", "let owners = (input 1 : (int, int)) + (import \"seed::seed_owners\");") } else { PROGRAM.to_string() };
-        let program = lower::lower_tree(parse::pipe::parse(&text));
+        let text = if shared { PROGRAM.replace("let owners = input 1 : (int, int);", "let owners = (input 1 : (int, int)) + (input \"seed_owners\" : (int, int));") } else { PROGRAM.to_string() };
+        let mut program = lower::lower_tree(parse::pipe::parse(&text));
+        if shared { program.bind([("seed_owners", "seed::seed_owners")]).unwrap(); }
         let mut server = Server::new();
         if shared {
             let seed = lower::lower_tree(parse::pipe::parse(r#"output "seed_owners" = input 0 : (int, int);"#));
@@ -217,7 +218,8 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
         let now = server.input_time("bank", 0).unwrap().clone();
         if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "bank::balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
-            let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "bank::balance";"#));
+            let mut narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = input "balance" : (int, int);"#));
+            narrow.bind([("balance", "bank::balance")]).unwrap();
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
             assert!(server.trace_width("narrow::bad").is_none());
             assert_eq!(server.trace_width("seed::seed_owners"), Some(1));
@@ -508,7 +510,8 @@ fn independent_inputs_and_time_shapes() {
             server.trim(worker, "split::left", Some(&at((0, 3)))).unwrap();
             assert!(server.snapshot_as_of(worker, "split::left", &at((0, 2))).is_err());
             assert!(server.trim(worker, "split::left", Some(&at((0, 1)))).is_err());
-            let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "split::left" | lift;"#));
+            let mut import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = input "left" : (int, int) | lift;"#));
+            import.bind([("left", "split::left")]).unwrap();
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
             server.wait_for(worker, "wide::wide", &at((2, 0))).unwrap();
@@ -523,7 +526,8 @@ fn independent_inputs_and_time_shapes() {
             server.install(worker, "producer", &producer).unwrap();
             for width in [1, 2] {
                 let name = format!("consumer{width}");
-                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = (input 0 : (int, int)) + (import \"producer::lagging\");")));
+                let mut consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = (input 0 : (int, int)) + (input \"lagging\" : (int, int));")));
+                consumer.bind([("lagging", "producer::lagging")]).unwrap();
                 server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
                 server.seal(&name, 0, &Antichain::from_elem(at((3, 0)))).unwrap();
                 server.spin(worker);

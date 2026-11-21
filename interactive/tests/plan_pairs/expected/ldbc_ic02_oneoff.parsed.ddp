@@ -1,10 +1,10 @@
 let request = input 0 : ((int, int, int), ());
-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "graph::friend" : (int, (int, int));
-let by_author = import "ic2s::by_author" : (int, (int, int));
-let latest = import "ic2s::latest" : (int, (int, int));
-let newest = import "ic2s::newest" : (int, int);
+let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = input "friend" : (int, (int, int));
+let by_author = input "by_author" : (int, (int, int));
+let latest = input "latest" : (int, (int, int));
+let newest = input "newest" : (int, int);
 let friends = request | map(((rid, who, max), ()) -> (who, (rid, max))) | join(friend, (_, (req, (f, _))) -> (f, req));
 let ahead = friends | join(newest, (f, ((rid, max), neg)) -> (f, (rid, max, neg neg)));
 let fast = ahead | filter((_, (_, max, last)) -> (last, max) lt) | join(latest, (f, ((rid, _, _), (neg, id))) -> (rid, ((neg, id), f)));

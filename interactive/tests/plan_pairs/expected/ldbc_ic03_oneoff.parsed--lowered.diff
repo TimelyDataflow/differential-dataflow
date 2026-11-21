@@ -2,14 +2,14 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, List(int), List(int), int, int), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 @@ -5,16 +7,68 @@
- let place = import "graph::place" : (int, (List(int), List(int), int));
- let by_name = import "graph::place.by_name" : (List(int), int);
- let sent_from = import "ic3s::sent_from" : (int, (int, int));
+ let place = input "place" : (int, (List(int), List(int), int));
+ let by_name = input "place_by_name" : (List(int), int);
+ let sent_from = input "sent_from" : (int, (int, int));
 -let asked = request | map(((rid, who, x, y, start, days), ()) -> (x, (rid, who, y, start, (start, (days, 86400000) mul) add))) | join(by_name, (_, (req, x)) -> (x, req)) | join(place, (x, ((rid, who, y, start, end), (_, kind, _))) -> ((kind, [67,111,117,110,116,114,121]) eq, (y, (rid, who, x, start, end)))) | filter((country, _) -> country) | map((_, row) -> row) | join(by_name, (_, (req, y)) -> (y, req)) | join(place, (y, ((rid, who, x, start, end), (_, kind, _))) -> ((kind, [67,111,117,110,116,114,121]) eq, (rid, (who, x, y, start, end)))) | filter((country, _) -> country) | map((_, row) -> row);
 -let window = (asked | map((rid, (_, x, _, start, end)) -> (x, (rid, start, end, 1, 0)))) + (asked | map((rid, (_, _, y, start, end)) -> (y, (rid, start, end, 0, 1))));
 -let visits = window | join(sent_from, (_, ((rid, start, end, ix, iy), (author, created))) -> ((rid, author), (created, start, end, ix, iy))) | filter((_, (created, start, end, _, _)) -> ((created, start) ge, (created, end) lt) all) | map((key, (_, _, _, ix, iy)) -> (key, (ix, iy)));

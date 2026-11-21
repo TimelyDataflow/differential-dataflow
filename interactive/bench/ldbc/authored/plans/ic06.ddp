@@ -4,13 +4,13 @@
 -- those by people in the circle.
 
 let request = input 0 : ((int, int, List(int)), ());           -- (rid, person, tag name)
-let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend" : (int, (int, int));                -- (person, (friend, since))
-let tag     = import "graph::tag" : (int, (List(int), int));
-let by_name = import "graph::tag.by_name" : (List(int), int);
-let tagged  = import "graph::mtag.by_tag" : (int, int);                  -- (tag, message)
-let tags_of = import "graph::mtag.by_message" : (int, int);              -- (message, tag)
+let person  = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend" : (int, (int, int));                -- (person, (friend, since))
+let tag     = input "tag" : (int, (List(int), int));
+let by_name = input "tag_by_name" : (List(int), int);
+let tagged  = input "mtag_by_tag" : (int, int);                  -- (tag, message)
+let tags_of = input "mtag_by_message" : (int, int);              -- (message, tag)
 
 -- The circle: everyone one or two hops from the person, except the person.
 let hop1   = request | map(((rid, who, _), ()) -> (who, (rid, who))) | join(person, (who, (req, _)) -> (who, req))

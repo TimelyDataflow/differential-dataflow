@@ -1,4 +1,4 @@
-//! A program installed late reads its imports as of their read floors, with every
+//! A program installed late reads its bound inputs as of their read floors, with every
 //! update's time advanced to the installation point.
 //! Before that frontier a compacted trace's batches can hold counts no time ever had (a retraction
 //! advanced past the frontier, the insertion it retracts left behind), and an iterative scope
@@ -11,8 +11,17 @@ use timely::progress::Antichain;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use interactive::scope_ir::{Program, Source};
 use interactive::server::Server;
 use interactive::{lower, parse};
+
+/// Bind each named input to the producer's output of that name, as a load would.
+fn bind_to_producer(program: &mut Program) {
+    let bindings: Vec<(String, String)> = program.root.imports.iter()
+        .filter(|i| matches!(i.from, Source::Input(_)) && !i.name.bytes().all(|b| b.is_ascii_digit()))
+        .map(|i| (i.name.clone(), format!("producer::{}", i.name))).collect();
+    program.bind(bindings.iter().map(|(l, t)| (l.as_str(), t.as_str()))).unwrap();
+}
 
 const PRODUCER: &str = r#"
     output "seeds" = input 0 : ((int, int), ());
@@ -22,8 +31,8 @@ const PRODUCER: &str = r#"
 /// A row `(a, b)` of `x` meets an equal row of `edges` and steps to `(b % 5, b)`: `(5, 5)` steps
 /// to `(0, 5)`, which steps to itself while `edges` holds `(0, 5)`.
 const CONSUMER: &str = r#"
-    let seeds = import "producer::seeds";
-    let edges = import "producer::edges";
+    let seeds = input "seeds" : ((int, int), ());
+    let edges = input "edges" : ((int, int), ());
     s: {
         let step = x | join(edges, ((_, b), ((), ())) -> (((b, 5) rem, b), ()));
         set x = (seeds + step) | distinct;
@@ -52,7 +61,7 @@ const FEEDS: &[(u64, usize, &str)] = &[
 /// containers or as arrangements.
 fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); bind_to_producer(&mut p); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
@@ -99,8 +108,8 @@ const ARRANGED_PRODUCER: &str = r#"
 "#;
 
 const ARRANGED_CONSUMER: &str = r#"
-    let pairs = import "producer::pairs";
-    let weights = import "producer::weights";
+    let pairs = input "pairs" : ((int, int), ());
+    let weights = input "weights" : (int, float);
     let r = pairs | join(pairs, ((a, b), ((), _)) -> ((b, (a, b) min) eq, 0)) | distinct;
     s: {
         let step = x | join(weights, (k, (v, _)) -> (k, v));
@@ -132,7 +141,7 @@ const ARRANGED_FEEDS: &[(u64, usize, &str)] = &[
 /// The arranged consumer's exports after the last epoch, installed before epoch `late`.
 fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, i64)>) {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); bind_to_producer(&mut p); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(true);
         server.install(worker, "producer", &program(ARRANGED_PRODUCER)).unwrap();
@@ -159,8 +168,8 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
 /// a stream read as of that time, and the pair meets exactly once only if both paths compare the
 /// same times.
 const DELTA_CONSUMER: &str = r#"
-    let pairs = import "producer::pairs";
-    let weights = import "producer::weights";
+    let pairs = input "pairs" : ((int, int), ());
+    let weights = input "weights" : (int, float);
     let r = ((pairs | lift | half_join(pairs, 0, ((a, b), (((), _), t)) -> ((b, (a, b) min) eq, (0, t))))
            + (pairs | lift | half_join(pairs, 1, ((a, b), (((), _), t)) -> ((b, (a, b) min) eq, (0, t)))))
           | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
@@ -175,7 +184,7 @@ const DELTA_CONSUMER: &str = r#"
 /// A consumer's exports after the last epoch, installed before epoch `late`, imports arranged.
 fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, i64)>) {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); bind_to_producer(&mut p); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(true);
         server.install(worker, "producer", &program(ARRANGED_PRODUCER)).unwrap();
@@ -244,9 +253,9 @@ const TRIPLE_FEEDS: &[(u64, usize, &str)] = &[
 
 /// The three-way join of the imports, as joins.
 const TRIPLE_JOIN: &str = r#"
-    let a = import "producer::a";
-    let b = import "producer::b";
-    let c = import "producer::c";
+    let a = input "a" : (int, int);
+    let b = input "b" : (int, int);
+    let c = input "c" : (int, int);
     output "r" = a | join(b) | join(c, (k, ((x, y), z)) -> (k, (x, y, z)));
 "#;
 
@@ -254,9 +263,9 @@ const TRIPLE_JOIN: &str = r#"
 /// Read as of a late install, `b`'s and `c`'s paths carry their history at the as-of time to a
 /// strict half join, which meets nothing there, so the install drops it where they are lifted.
 const TRIPLE_DELTA: &str = r#"
-    let a = import "producer::a";
-    let b = import "producer::b";
-    let c = import "producer::c";
+    let a = input "a" : (int, int);
+    let b = input "b" : (int, int);
+    let c = input "c" : (int, int);
     let pa = a | lift | half_join(b, 0) | half_join(c, 0, (k, (((x, y), z), t)) -> (k, ((x, y, z), t)));
     let pb = b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t))) | half_join(c, 0, (k, (((x, y), z), t)) -> (k, ((x, y, z), t)));
     let pc = c | lift | half_join(a, 1, (k, ((z, x), t)) -> (k, ((x, z), t))) | half_join(b, 1, (k, (((x, z), y), t)) -> (k, ((x, y, z), t)));
@@ -266,7 +275,7 @@ const TRIPLE_DELTA: &str = r#"
 /// The consumer's `r` after the last epoch, installed before epoch `late`.
 fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String, String, i64)> {
     timely::execute_directly(move |worker| {
-        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); interactive::passes::optimize(&mut p); p };
+        let program = |src: &str| { let mut p = lower::lower_tree(parse::pipe::parse(src)); bind_to_producer(&mut p); interactive::passes::optimize(&mut p); p };
         let mut server = Server::new();
         server.set_arranged_imports(arranged);
         server.install(worker, "producer", &program(TRIPLE_PRODUCER)).unwrap();

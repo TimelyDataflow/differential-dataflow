@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let member = import "graph::member.by_person" : (int, (int, int));
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let member = input "member_by_person" : (int, (int, int));
 let posted_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ()));
 let posted_idx = posted_rows | arrange;
 let posted = posted_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

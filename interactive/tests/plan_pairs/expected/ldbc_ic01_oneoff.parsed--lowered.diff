@@ -2,14 +2,14 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, List(int)), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let friend = import "graph::friend" : (int, (int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let friend = input "friend" : (int, (int, int));
 @@ -7,20 +9,99 @@
- let work = import "graph::work.by_person" : (int, (int, int));
- let email = import "graph::email.by_person" : (int, List(int));
- let language = import "graph::language.by_person" : (int, List(int));
+ let work = input "work_by_person" : (int, (int, int));
+ let email = input "email_by_person" : (int, List(int));
+ let language = input "language_by_person" : (int, List(int));
 -let hop1 = request | map(((rid, who, name), ()) -> (who, (rid, who, name))) | join(friend, (_, (req, (f, _))) -> (f, (req, 1)));
 -let hop2 = hop1 | join(friend, (_, ((req, _), (g, _))) -> (g, (req, 2)));
 -let hop3 = hop2 | join(friend, (_, ((req, _), (h, _))) -> (h, (req, 3)));

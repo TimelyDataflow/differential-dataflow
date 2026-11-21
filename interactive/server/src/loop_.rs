@@ -166,7 +166,8 @@ pub fn run_worker(
     // The diagnostics program: views over the `diag.*` sources, published as `diag.*` traces.
     if let Some(diagnostics) = &diagnostics {
         server.set_diagnostics(Rc::clone(diagnostics));
-        let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
+        interactive::diag::bind_sources(&mut program).expect("the diagnostics program binds its sources");
         server.install(worker, "diag", &program).expect("the diagnostics program installs");
     }
     // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
@@ -480,12 +481,13 @@ fn execute(
                 Ok("bye".into())
             }
         },
-        Ok(PreparedCommand::Plan { name, program, timings }) => {
+        Ok(PreparedCommand::Plan { name, program, timings, bindings }) => {
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
+                let bindings: Vec<(&str, &str)> = bindings.iter().map(|(label, trace)| (label.as_str(), trace.as_str())).collect();
                 interactive::plan::report_with_read_floor(
-                    &program, &|trace| server.source_shape(trace), &server.passes(),
+                    &program, &bindings, &|trace| server.source_shape(trace), &server.passes(),
                     |program| server.install_read_floor(program).first().copied().unwrap_or(0),
                 ).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -734,7 +734,7 @@ fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
 }
 
 /// The transform. The query arrives as one extra positional input appended
-/// after the original inputs, its rows `(key, (val, q))`: a row of the first
+/// after the original inputs and labelled `query`, its rows `(key, (val, q))`: a row of the first
 /// export, and a query id.
 pub fn explain(p: &Program) -> Program {
     explain_with(p, Options::default())
@@ -767,6 +767,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     assert!(p.root.vars.is_empty(), "explain does not cover feedback variables at a program's root");
     let p = &tuple_bare_times(p);
     let n_sources = p.root.imports.len();
+    assert!(p.root.imports.iter().all(|imp| imp.name != "query"), "explain labels its query input `query`, which the program uses");
     // The largest positional-input index, for placing the query input after.
     let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {
         Source::Input(i) => Some(*i + 1),

@@ -1,7 +1,7 @@
 let request = input 0 : ((int, int, int), ());
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let pals    = import "graph::friend.pair" : ((int, int), ());
-let weighted = import "ic14s::weighted" : (int, (int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals    = input "friend_pair" : ((int, int), ());
+let weighted = input "weighted" : (int, (int, int));
 let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
 dist: {
     let grow = dist | map(((rid, node, cost), ()) -> (node, (rid, cost)))

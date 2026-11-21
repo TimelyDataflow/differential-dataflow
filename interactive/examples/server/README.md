@@ -5,7 +5,7 @@
 
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
-at a time; each may `import` traces other dataflows `output`, so a
+at a time; a load may bind a dataflow's inputs to traces other dataflows `output`, so a
 consumer maintains a computation incrementally over a producer's output. It is
 the interpreter-driven successor to the old `dd_server` crate (which hot-loaded
 compiled `.so`s); here "install" means render a DDIR program, not `dlopen`.
@@ -18,9 +18,9 @@ and the configuration). The session scripts here are piped into its stdin.
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
-  The ones here are server-oriented (they use `import`/`output`); the programs
-  in `../programs/` read positional `input`s instead, which you fill with
-  `feed` (see "Running a program in batch" below).
+  The ones here are server-oriented (their named inputs are bound to other programs'
+  outputs at load); the programs in `../programs/` read numbered `input`s, which you
+  fill with `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
   (`load`/`feed`/`seal`/…) you hand to the server. You do **not** `load` a
   session; you run the server *on* it.
@@ -46,7 +46,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 | command | effect |
 |---|---|
-| `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `load <name> from <file> [<label>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, the inputs with those labels bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
 | `feed <prog> <in> <value> [val=<value>] time=<t> [diff=<int>]` | stage an input update |
 | `feed <prog> <in> time=now from <file-or-trace>` | fill an input from a published trace or a file of integer rows, sharded across workers |
 | `seal <prog> <in> <frontier>` | advance an input’s write frontier; a scalar frontier of 1 closes time 0 |

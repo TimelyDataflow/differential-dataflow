@@ -123,7 +123,7 @@ At 0.005 DDIR's server is saturated with standing plans: about 3.2 of the 4
 workers' cores are busy. One-off complex reads (`oneoff/`, below) halve their
 work; the 0.0025 run was 81% one-off complex reads, 12% short reads and 3%
 updates. A one-off is installed while updates flow. Since #1024 and #1025 it
-reads every import, including the arrangements its half joins read, as of the
+reads every bound input, including the arrangements its half joins read, as of the
 tick it starts, so its answer is that tick's. The 0.0025 row was measured before
 those changes; on master-next with them (7eb7da8d) it passes again, at 1,049
 ops/s, and 0.002 still fails.

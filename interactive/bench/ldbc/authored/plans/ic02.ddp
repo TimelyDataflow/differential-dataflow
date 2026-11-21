@@ -6,9 +6,9 @@
 -- relation (a private arrangement), not looked up.
 
 let request = input 0 : ((int, int, int), ());              -- (rid, person, max date)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend"  : (int, (int, int));      -- (person, (friend, since))
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend"  : (int, (int, int));      -- (person, (friend, since))
 
 -- Every message, by author, in recency order (newest first, then smaller id).
 let by_author = message | map((id, (_, created, author, _, _, _, _, _, _, _, _, _, _)) -> (author, (created neg, id)));

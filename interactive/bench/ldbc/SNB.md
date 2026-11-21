@@ -118,9 +118,9 @@ bank entries are for transient request batches, not simultaneous BI bindings.
 | `maintained` | Standing | Standing | All bound answers maintained and checked |
 
 All query programs are installed once, with the shared graph program, before
-any data arrives. Every query imports the arrangements the graph program
+any data arrives. Every query reads the arrangements the graph program
 publishes (`snb/indexes.py`: each relation by primary key, secondary indexes,
-friendships and thread roots) and has a separate request input. Imports read
+friendships and thread roots) and has a separate request input. Bound inputs read
 the published arrangement in place. Parameter-independent parts of an installed
 query remain as dataflows even when its request input is empty; their
 maintenance is included. Other derived relations are not factored across

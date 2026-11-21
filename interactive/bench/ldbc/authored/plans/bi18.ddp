@@ -4,9 +4,9 @@
 -- paths are built (meeting in the middle).
 
 let request  = input 0 : ((int, List(int)), ());             -- (rid, tag name)
-let tag_by_name      = import "graph::tag.by_name"      : (List(int), int);   -- (name, tag)
-let interest_by_tag  = import "graph::interest.by_tag"  : (int, int);         -- (tag, person)
-let friend           = import "graph::friend"           : (int, (int, int));  -- (person, (friend, since))
+let tag_by_name      = input "tag_by_name"      : (List(int), int);   -- (name, tag)
+let interest_by_tag  = input "interest_by_tag"  : (int, int);         -- (tag, person)
+let friend           = input "friend"           : (int, (int, int));  -- (person, (friend, since))
 
 -- People interested in the tag: (rid, person).
 let fans    = request | map(((rid, name), ()) -> (name, rid))

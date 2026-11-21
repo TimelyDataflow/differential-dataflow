@@ -1,9 +1,9 @@
 let request = input 0 : ((int, int), ());
-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote = import "graph::message.by_creator" : (int, int);
-let likes = import "graph::likes.by_message" : (int, (int, int));
-let pals = import "graph::friend.pair" : ((int, int), ());
+let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = input "message_by_creator" : (int, int);
+let likes = input "likes_by_message" : (int, (int, int));
+let pals = input "friend_pair" : ((int, int), ());
 let latest = request | map(((rid, who), ()) -> (who, rid)) | join(wrote, (who, (rid, m)) -> (m, (rid, who))) | join(likes, (m, ((rid, who), (liker, when))) -> ((rid, who, liker), (when neg, m))) | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
 let rows = latest | map(((rid, who, liker), (neg, m)) -> (m, (rid, who, liker, neg neg))) | join(message, (m, ((rid, who, liker, when), (_, created, _, _, text, image, _, _, _, _, _, _, _))) -> ((who, liker), (rid, liker, when, m, ((text len, 0) gt, text, image) select, (when, created) sub)));
 let known = rows | join(pals, (pair, (row, ())) -> (pair, row));

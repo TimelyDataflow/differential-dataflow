@@ -328,14 +328,21 @@ class Server:
         return dict(encode_ms=1000*(encoded-start), wire_ms=1000*(end-encoded),
                     bytes_sent=len(wire), bytes_received=received), [replies[rid] for rid in ids]
 
-    def load(self, name, program):
-        """Collect the installed plan’s feed positions and named outputs for seals and trims."""
+    def load(self, name, program, providers=('graph',)):
+        """Collect the installed plan’s fed inputs and named outputs for seals and trims, and bind
+        each named input to the output of that name, `.` written `_`, of one of `providers`."""
         source = re.sub(r'--[^\n]*', '', program)
-        positions = re.findall(r'\binput(?:\s+(\d+)|\s+"[^"]+")?\s*:', source)
-        inputs = sorted({int(number) if number else position for position, number in enumerate(positions)})
+        inputs = sorted({int(number) for number in re.findall(r'\binput\s+(\d+)', source)})
+        bindings = []
+        for label in sorted(set(re.findall(r'\binput\s+"([^"]+)"', source))):
+            found = [f'{p}::{o}' for p in providers if p in self.interfaces
+                     for o in self.interfaces[p][1] if o.replace('.', '_') == label]
+            if len(found) != 1:
+                raise ValueError(f'{name}: input "{label}" matches {found or "no output"} of {providers}')
+            bindings.append(f' {label}={found[0]}')
         outputs = re.findall(r'\boutput\s+"([^"]+)"', source)
         self.interfaces[name] = inputs, outputs
-        return f'load {name} begin\n{program}\n{{rid}} end-load'
+        return f'load {name}{"".join(bindings)} begin\n{program}\n{{rid}} end-load'
 
     def drop(self, name):
         del self.interfaces[name]

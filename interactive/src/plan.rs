@@ -41,7 +41,7 @@ pub struct Stage {
 }
 
 /// Parse, lower, and run the passes `passes` switches on, as install would, without installing.
-/// `source` supplies published trace shapes; a declaration alone does not resolve an import.
+/// `source` supplies published trace shapes; a declaration alone does not resolve a bound input.
 /// Lambdas use the same registered functions as the DDP parser. The default as-of is
 /// zero, matching a fresh server; use `report_at` for a different import frontier.
 pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
@@ -50,12 +50,18 @@ pub fn report(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Co
 
 /// Plan with an explicit root as-of time, extended by zero lanes in nested scopes.
 pub fn report_at(text: &str, source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config, as_of: u64) -> Result<Report, String> {
-    report_with_read_floor(text, source, passes, |_| as_of)
+    report_with_read_floor(text, &[], source, passes, |_| as_of)
 }
 
-/// Plan a scalar program at the read floor supplied for its imports.
+/// Plan with inputs bound to published traces, as `load … name=trace` binds them.
+pub fn report_bound(text: &str, bindings: &[(&str, &str)], source: &dyn Fn(&str) -> Option<RowShape>, passes: &Config) -> Result<Report, String> {
+    report_with_read_floor(text, bindings, source, passes, |_| 0)
+}
+
+/// Plan a scalar program, with `bindings` applied, at the read floor supplied for its bound inputs.
 pub fn report_with_read_floor(
     text: &str,
+    bindings: &[(&str, &str)],
     source: &dyn Fn(&str) -> Option<RowShape>,
     passes: &Config,
     read_floor: impl FnOnce(&Program) -> u64,
@@ -66,7 +72,8 @@ pub fn report_with_read_floor(
         let mut parsing = Measurement::default();
         parsing.record(start.elapsed(), 0);
         let start = Instant::now();
-        let program = crate::lower::lower_tree(parsed);
+        let mut program = crate::lower::lower_tree(parsed);
+        program.bind(bindings.iter().copied())?;
         let mut lowering = Measurement::default();
         lowering.record(start.elapsed(), 0);
         let start = Instant::now();
@@ -116,7 +123,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
                 let shape = catalog.entry(name.clone()).or_insert_with(|| source(name));
                 if let Some(shape) = shape {
                     if import.shape.as_ref().is_some_and(|declared| declared != shape) {
-                        return Err(format!("import {} declares {} but its provider has {}", quote(name), row(import.shape.as_ref().unwrap()), row(shape)));
+                        return Err(format!("input {} bound to {} declares {} but its provider has {}", quote(&import.name), quote(name), row(import.shape.as_ref().unwrap()), row(shape)));
                     }
                 } else {
                     unresolved.push(name.clone());
@@ -642,17 +649,17 @@ mod tests {
     fn providers_are_required_and_as_of_filters_are_visible() {
         let provider = report(r#"output "rows" = input 0 : (int, int);"#, &|_| None, &Config::all()).unwrap();
         let text = r#"
-            let rows = import "rows" : (int, int);
+            let rows = input "rows" : (int, int);
             output "out" = rows | lift | half_join(rows, 1, (k, ((v, w), t)) -> (k, (v, t)));
         "#;
-        let missing = report(text, &|_| None, &Config::all()).unwrap();
+        let missing = report_bound(text, &[("rows", "rows")], &|_| None, &Config::all()).unwrap();
         assert_eq!(missing.unresolved, ["rows"]);
         assert!(missing.exports.is_empty());
-        let plan = report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap();
+        let plan = report_bound(text, &[("rows", "rows")], &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap();
         assert!(plan.unresolved.is_empty());
         assert!(plan.stages[3].changes.iter().any(|s| s.contains("inserted 1 filters")));
         assert!(plan.print_with(PrintOptions { lambda_source: true, ..PrintOptions::default() }).text.contains("(t0, 0) ne"));
-        assert_eq!(plan.print(), report(text, &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap().print());
-        assert!(report(text, &|_| Some((Shape::Unit, Shape::Unit)), &Config::all()).is_err());
+        assert_eq!(plan.print(), report_bound(text, &[("rows", "rows")], &|name| provider.exports.get(name).cloned(), &Config::all()).unwrap().print());
+        assert!(report_bound(text, &[("rows", "rows")], &|_| Some((Shape::Unit, Shape::Unit)), &Config::all()).is_err());
     }
 }

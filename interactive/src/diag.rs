@@ -35,12 +35,20 @@ use crate::backend::LabelEventBuilder;
 use crate::runtime::container::Updates;
 use crate::ir::Diff;
 
-/// The diagnostics sources, by the name a program imports.
+/// The diagnostics sources, by the trace name an input is bound to.
 pub(crate) const SOURCES: [&str; 4] = ["diag.operator", "diag.time", "diag.time_retired", "diag.records"];
 
 /// Whether `name` is a diagnostics source.
 pub(crate) fn is_source(name: &str) -> bool {
     SOURCES.contains(&name)
+}
+
+/// Bind each of `program`'s inputs labelled by a source's name after `diag.` (`time` for
+/// `diag.time`) to that source, as the server binds its diagnostics program.
+pub fn bind_sources(program: &mut crate::scope_ir::Program) -> Result<(), String> {
+    let bindings: Vec<(&str, &str)> = SOURCES.iter().map(|source| (&source["diag.".len()..], *source))
+        .filter(|(label, _)| program.root.imports.iter().any(|i| i.name == *label)).collect();
+    program.bind(bindings)
 }
 
 fn text() -> Shape {

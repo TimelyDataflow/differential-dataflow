@@ -6,11 +6,11 @@
 -- the date contribute just those 40.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, person, date)
-let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend" : (int, (int, int));                -- (person, (friend, since))
-let forum   = import "graph::forum" : (int, (List(int), int, int));
-let member  = import "graph::member.by_person" : (int, (int, int));      -- (person, (forum, joined))
+let person  = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend" : (int, (int, int));                -- (person, (friend, since))
+let forum   = input "forum" : (int, (List(int), int, int));
+let member  = input "member_by_person" : (int, (int, int));      -- (person, (forum, joined))
 
 -- The circle (one or two hops, not the person), with the request's date.
 let hop1   = request | map(((rid, who, date), ()) -> (who, (rid, who, date)))

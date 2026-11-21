@@ -4,10 +4,10 @@
 -- their names, keyed by message (both private: `message` and the tag index re-keyed).
 
 let request = input 0 : ((int, int, int, int), ());          -- (rid, person, start, days)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend"  : (int, (int, int));      -- (person, (friend, since))
-let tag     = import "graph::tag"     : (int, (List(int), int));
-let mtag    = import "graph::mtag.by_tag" : (int, int);         -- (tag, message)
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend"  : (int, (int, int));      -- (person, (friend, since))
+let tag     = input "tag"     : (int, (List(int), int));
+let mtag    = input "mtag_by_tag" : (int, int);         -- (tag, message)
 
 -- Friends' posts with their tags: ((rid, tag), (tag name, created, window start, window end)).
 let posts  = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)

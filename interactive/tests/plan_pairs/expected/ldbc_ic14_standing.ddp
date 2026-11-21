@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let pals = import "graph::friend.pair" : ((int, int), ());
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let pals = input "friend_pair" : ((int, int), ());
 let answered_rows = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 1) eq) | map((_, (_, _, who, _, _, _, _, _, _, parent, _, _, _)) -> (parent, who));
 let answered_idx = answered_rows | arrange;
 let message_idx = message | arrange;

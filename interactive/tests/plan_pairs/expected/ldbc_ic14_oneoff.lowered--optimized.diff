@@ -2,11 +2,11 @@
 +++ optimized
 @@ -1,8 +1,6 @@
  -- Time lanes: epoch.
- -- Trace imports use provider arrangements; history advances to G = (0, []).
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
--let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
--let pals = import "graph::friend.pair" : ((int, int), ());
- let weighted = import "ic14s::weighted" : (int, (int, int));
+-let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+-let pals = input "friend_pair" : ((int, int), ());
+ let weighted = input "weighted" : (int, (int, int));
  let starts = request | map(((rid, from, _), ()) -> ((rid, from), 0));
  dist: {
 @@ -10,8 +8,7 @@

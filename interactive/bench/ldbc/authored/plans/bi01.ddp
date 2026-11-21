@@ -5,7 +5,7 @@
 -- every message, so this plan scans the message arrangement rather than looking up in it.
 
 let request = input 0 : ((int, int), ());                    -- (rid, end time in ms)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
 
 -- Length categories: under 40, under 80, under 160, longer.

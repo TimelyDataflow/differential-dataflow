@@ -66,9 +66,10 @@ impl Server {
         }
         // An input is fed from outside, so it says what it holds, as a table declares its columns.
         for imp in &prog.root.imports {
-            if let (st::Source::Input(n), None) = (&imp.from, &imp.shape) {
+            if let (st::Source::Input(_), None) = (&imp.from, &imp.shape) {
+                let written = if imp.name.bytes().all(|b| b.is_ascii_digit()) { imp.name.clone() } else { format!("{:?}", imp.name) };
                 return Err(format!(
-                    "program {:?} reads input {n} without declaring its shape; write `input {n} : (key, val)`",
+                    "program {:?} reads input {written} without declaring its shape; write `input {written} : (key, val)`",
                     name
                 ));
             }
@@ -88,14 +89,14 @@ impl Server {
                 } else {
                     if crate::diag::is_source(key) && self.diagnostics.is_none() {
                         return Err(format!(
-                            "program {:?} imports {:?}, but diagnostics are off; start the server with DDIR_DIAGNOSTICS=1",
-                            name, t
+                            "program {:?} binds input {:?} to {:?}, but diagnostics are off; start the server with DDIR_DIAGNOSTICS=1",
+                            name, imp.name, t
                         ));
                     }
                     if !crate::diag::is_source(key) {
                         return Err(format!(
-                            "program {:?} imports unknown trace {:?}; install its producer first",
-                            name, t
+                            "program {:?} binds input {:?} to unknown trace {:?}; install its producer first",
+                            name, imp.name, t
                         ));
                     }
                     if !host_time(self.diagnostics_epoch).less_equal(&as_of) {
@@ -252,8 +253,8 @@ impl Server {
                 if let Some(shape) = published(t) {
                     if shape != *declared {
                         return Err(format!(
-                            "program {:?} declares import {:?} as {} but it is published as {}",
-                            name, t, fmt_shape(declared), fmt_shape(&shape)
+                            "program {:?} declares input {:?}, bound to {:?}, as {} but it is published as {}",
+                            name, imp.name, t, fmt_shape(declared), fmt_shape(&shape)
                         ));
                     }
                 }

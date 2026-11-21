@@ -196,7 +196,7 @@ fn resolve_expr(expr: &mut Expr, here: &[String], item: Option<&str>,
             resolve_expr(r, here, item, scopes, plan);
         }
         Expr::Concat(parts) => for part in parts { resolve_expr(part, here, item, scopes, plan); },
-        Expr::Input(..) | Expr::Import(_) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
+        Expr::Input(..) | Expr::Name(_) | Expr::ResolvedPath { .. } => {},
     }
 }
 
@@ -242,7 +242,7 @@ fn dependency_names(free: BTreeSet<RefName>, defined: &BTreeSet<&str>, self_name
 /// Names this expression refers to that the surrounding scope must resolve.
 fn expr_free_names(expr: &Expr, out: &mut BTreeSet<RefName>) {
     match expr {
-        Expr::Input(..) | Expr::Import(_) => {},
+        Expr::Input(..) => {},
         Expr::Name(n) => { out.insert(RefName::Plain(n.clone())); },
         Expr::ResolvedPath { .. } => {},
         Expr::Path(..) => unreachable!("paths must be resolved before lowering"),
@@ -292,7 +292,7 @@ fn collect_body_references(body: &[Stmt], out: &mut BTreeSet<RefName>) {
 //
 // Produces the tree IR (see `scope_ir`): each `{ .. }` becomes an
 // owned child scope, cross-scope flow becomes explicit import/export edges,
-// and feedback vars are first-class. `input`/`import` external sources are
+// and feedback vars are first-class. `input` external sources are
 // accepted at the root scope only. Shapes are not stored on the tree (beyond
 // an import's optional contract); they are derived from the data where needed.
 
@@ -300,6 +300,18 @@ use crate::scope_ir as st;
 
 pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
     matches!(input, st::Ref::Local(i) if matches!(&items[*i], st::Item::Op(st::Node::Arrange(_) | st::Node::Reduce { .. })))
+}
+
+/// Lower `text` with each named input bound to the trace its label names, for tests of programs
+/// that read published traces.
+#[cfg(test)]
+pub(crate) fn lower_bound(text: &str) -> st::Program {
+    let mut program = lower_tree(crate::parse::pipe::parse(text));
+    let labels: Vec<String> = program.root.imports.iter()
+        .filter(|i| matches!(i.from, st::Source::Input(_)) && crate::server::InputId::is_name(&i.name))
+        .map(|i| i.name.clone()).collect();
+    program.bind(labels.iter().map(|l| (l.as_str(), l.as_str()))).unwrap();
+    program
 }
 
 pub fn lower_tree(mut stmts: Vec<Stmt>) -> st::Program {
@@ -329,7 +341,6 @@ struct ScopeLower {
     statement: String,
     imports: Vec<st::Import>,
     input_import: HashMap<usize, usize>, // input n  -> import idx (root, deduped)
-    trace_import: HashMap<String, usize>, // trace name -> import idx (root, deduped)
     env: HashMap<RefName, st::Ref>,        // local names, qualified child exports, and imports
 }
 
@@ -344,28 +355,18 @@ impl ScopeLower {
         if is_arranged(&input, &self.items) { input }
         else { self.push(st::Node::Arrange(input)) }
     }
-    /// Input `n`, named as written (`input "name"`), or `input{n}` if it is unnamed.
-    fn input_ref(&mut self, n: usize, name: Option<&str>) -> st::Ref {
-        assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", n);
+    /// The root import for the input at position `n`, named by its label.
+    fn input_ref(&mut self, n: usize, label: String) -> st::Ref {
+        assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", label);
         if let Some(&i) = self.input_import.get(&n) { return st::Ref::Import(i); }
         let i = self.imports.len();
-        let name = name.map_or_else(|| format!("input{n}"), str::to_string);
-        self.imports.push(st::Import { name, from: st::Source::Input(n), shape: None });
+        self.imports.push(st::Import { name: label, from: st::Source::Input(n), shape: None });
         self.input_import.insert(n, i);
-        st::Ref::Import(i)
-    }
-    fn trace_ref(&mut self, name: &str) -> st::Ref {
-        assert!(self.is_root, "`import {:?}` used outside the root scope (not yet supported)", name);
-        if let Some(&i) = self.trace_import.get(name) { return st::Ref::Import(i); }
-        let i = self.imports.len();
-        self.imports.push(st::Import { name: name.to_string(), from: st::Source::Trace(name.to_string()), shape: None });
-        self.trace_import.insert(name.to_string(), i);
         st::Ref::Import(i)
     }
     fn lower_expr(&mut self, e: &Expr) -> st::Ref {
         match e {
-            Expr::Input(input) => self.input_ref(input.position(), input.name()),
-            Expr::Import(name) => self.trace_ref(name),
+            Expr::Input(input) => self.input_ref(input.position(), input.label()),
             Expr::TypedSource(source, key, val) => {
                 let r = self.lower_expr(source);
                 let st::Ref::Import(i) = r else { panic!("a shape ascription requires an external source") };
@@ -436,7 +437,6 @@ fn lower_scope_tree(
         statement: String::new(),
         imports: Vec::new(),
         input_import: HashMap::new(),
-        trace_import: HashMap::new(),
         env: HashMap::new(),
     };
 
@@ -674,13 +674,13 @@ mod tree_tests {
 
     #[test]
     fn keeps_explicit_arranges_and_scope_boundaries() {
-        let program = lower_tree(parse(r#"
+        let program = lower_bound(r#"
             let rows = input 0 : (int, ()) | arrange | arrange;
             inner: { let reduced = rows | min; }
             output "local" = rows | min | arrange;
             output "child" = inner::reduced | min;
-            output "trace" = import "trace" : (int, ()) | min;
-        "#));
+            output "trace" = input "trace" : (int, ()) | min;
+        "#);
         let arranges: Vec<_> = program.root.items.iter().filter_map(|item| match item {
             st::Item::Op(st::Node::Arrange(input)) => Some(input),
             _ => None,
@@ -1047,45 +1047,49 @@ mod optimize_tests {
         assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");
     }
 
-    /// Inputs without positions take them in the order they are written, and an input is named as
-    /// written; others keep `input{n}`, whatever `let` they are bound to.
+    /// A numbered input sits at its number, and named inputs after the largest number in the order
+    /// of names, whatever order inputs are written in. Each input's import is named by its label.
     #[test]
-    fn inputs_take_positions_and_names() {
-        let p = lower_tree(parse("let e = input \"edges\" : ((int), (int));\nlet roots = input : ((int), ());\noutput \"out\" = roots | join(e, (_, ((), d)) -> (d, ()));"));
-        let named: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
-        assert!(named.contains(&("edges", st::Source::Input(0))), "{named:?}");
-        assert!(named.contains(&("input1", st::Source::Input(1))), "{named:?}");
-        let p = lower_tree(parse("let rows = input 3 : ((int), ());\noutput \"out\" = rows + input 3;"));
-        assert_eq!((p.root.imports[0].name.as_str(), &p.root.imports[0].from), ("input3", &st::Source::Input(3)));
+    fn inputs_take_positions_from_labels() {
+        for text in [
+            "let b = input \"b\" : ((int), ()); let a = input \"a\" : ((int), ()); let z = input 1 : ((int), ()); output \"out\" = a + b + z;",
+            "let z = input 1 : ((int), ()); let a = input \"a\" : ((int), ()); let b = input \"b\" : ((int), ()); output \"out\" = b + a + z;",
+        ] {
+            let p = lower_tree(parse(text));
+            let mut labels: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
+            labels.sort_by_key(|(name, _)| name.to_string());
+            assert_eq!(labels, vec![("1", st::Source::Input(1)), ("a", st::Source::Input(2)), ("b", st::Source::Input(3))]);
+        }
+    }
+
+    /// Writing a label again reads the same input, numbered or named.
+    #[test]
+    fn a_label_written_twice_is_one_input() {
+        let p = lower_tree(parse("let a = input \"x\" : ((int), ()); output \"out\" = a + input \"x\" + input 0 : ((int), ()) + input 0;"));
+        assert_eq!(p.root.imports.len(), 2);
     }
 
     #[test]
-    #[should_panic(expected = "two inputs are named")]
-    fn inputs_have_distinct_names() {
-        lower_tree(parse("let a = input \"x\" : ((int), ()); let b = input \"x\" : ((int), ()); output \"out\" = a + b;"));
+    #[should_panic(expected = "takes a number or a name")]
+    fn inputs_have_labels() {
+        lower_tree(parse("let a = input : ((int), ()); output \"out\" = a;"));
     }
 
     #[test]
-    #[should_panic(expected = "number all inputs or none")]
-    fn inputs_are_numbered_all_or_none() {
-        lower_tree(parse("let a = input 0 : ((int), ()); let b = input : ((int), ()); output \"out\" = a + b;"));
+    #[should_panic(expected = "`import` is gone")]
+    fn import_is_gone() {
+        lower_tree(parse("let a = import \"p::a\" : ((int), ()); output \"out\" = a;"));
     }
 
     #[test]
     fn input_names_do_not_read_as_positions() {
-        for name in ["1", "+1", "input1", "a b", "a=b", "g::a", ""] {
+        for name in ["1", "+1", "a b", "a=b", "g::a", ""] {
             let text = format!("let a = input {name:?} : ((int), ()); output \"out\" = a;");
             assert!(std::panic::catch_unwind(|| parse(&text)).is_err(), "{name:?} is accepted");
         }
-        lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1x\" : ((int), ()); output \"out\" = a + b;"));
+        lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1\" : ((int), ()); output \"out\" = a + b;"));
         use crate::server::InputId;
         assert_eq!(InputId::parse("1"), InputId::Position(1));
         for text in ["+1", "1x", "input1"] { assert_eq!(InputId::parse(text), InputId::Name(text.into())); }
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be named")]
-    fn numbered_inputs_are_unnamed() {
-        lower_tree(parse("let a = input 0 \"a\" : ((int), ()); output \"out\" = a;"));
     }
 }
