@@ -1,0 +1,10 @@
+-- A sliding window: each key's events over the last 3 times.
+--
+-- `lift` pairs a row with its time t, and `delay` moves a copy to t + 3, where subtracting it
+-- retracts the event. State stays the size of the window, and no clock input is needed.
+
+let events = input "events" : (int, ());   -- an event for a key
+
+let expired = events | lift | delay((_, (_, (t))) -> (t, 3) add) | map((k, _) -> (k, ()));
+
+output "recent" = events - expired | count;

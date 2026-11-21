@@ -273,7 +273,7 @@ fn ddp_files(root: &Path, directory: &str) -> BTreeSet<String> {
 /// Adding a benchmark input must not silently leave it outside the reviewed corpus.
 fn check_coverage(root: &Path) {
     let inputs: BTreeSet<_> = manifest::CASES.iter().map(|case| case.input.to_owned()).collect();
-    for directory in ["bench/txn", "examples/server/programs", "bench/ldbc/interactive_v2/oneoff"] {
+    for directory in ["bench/txn", "bench/ldbc/interactive_v2/oneoff"] {
         assert_eq!(ddp_files(root, directory), inputs.iter().filter(|p| p.starts_with(&format!("{directory}/"))).cloned().collect());
     }
     for n in 1..=7 { assert!(inputs.contains(&format!("bench/ldbc/authored/plans/is{n:02}.ddp"))); }

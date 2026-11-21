@@ -93,7 +93,7 @@ Every request can begin with an arbitrary request id. If omitted, the server
 generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 `<id> err ...`. A `tail` remains active after its `ok` and ends when stopped.
 Between commands, blank lines and `#` comment lines are skipped, so command
-scripts can be piped to stdin (see `demo/`).
+scripts can be piped to stdin (see `../examples/`).
 
 `load <name> from <path>` installs
 a program file (`.ddp`, pipe syntax); `load <name> from <path>

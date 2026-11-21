@@ -792,7 +792,7 @@ mod tree_tests {
 
     #[test]
     fn lowers_scc_depth_two() {
-        let src = include_str!("../examples/programs/scc.ddp");
+        let src = include_str!("../tests/programs/scc.ddp");
         let prog = lower_tree(parse(src));
         assert_eq!(subs(&prog.root).len(), 1); // outer
         let outer = subs(&prog.root)[0];

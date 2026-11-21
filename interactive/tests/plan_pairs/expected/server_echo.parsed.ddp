@@ -1,2 +1,0 @@
-enum Node = Leaf int | Pair (int, int);
-output "out" = input 0 : (Node, ()) | inspect(echo);

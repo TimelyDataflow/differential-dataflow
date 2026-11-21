@@ -1,8 +1,8 @@
-# The access-control example from interactive/README.md. Run from the interactive/ dir:
-#   cargo run --release -p ddir-server < examples/server/sessions/access.txt
+# The access-control session that interactive/README.md walks through.
+# Run from interactive/: cargo run --release -p ddir-server < examples/access.txt
 
 # Install access.ddp under the name `demo`.
-load demo from examples/server/programs/access.ddp
+load demo from examples/access.ddp
 
 # Variants are structural, and written by position:
 # inject(0,x) is User x, inject(1,x) is Group x,

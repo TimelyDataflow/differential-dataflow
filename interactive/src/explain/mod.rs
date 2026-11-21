@@ -1104,7 +1104,7 @@ mod tests {
 
     /// The checked-in example, so the fixture cannot drift from the program
     /// the rest of the tree runs.
-    const SCC: &str = include_str!("../../examples/programs/scc.ddp");
+    const SCC: &str = include_str!("../../tests/programs/scc.ddp");
 
     fn vars_total(s: &Scope) -> usize {
         s.vars.len() + s.items.iter().map(|i| match i { Item::Sub(c) => vars_total(c), _ => 0 }).sum::<usize>()

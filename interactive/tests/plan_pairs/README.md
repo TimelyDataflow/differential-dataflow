@@ -1,9 +1,9 @@
 # Preparation plan pairs
 
-The manifest fixes 60 cases, their providers and the program names they are installed
+The manifest fixes 50 cases, their providers and the program names they are installed
 under, and the one registered host function. Inputs cover the graph and cascade
-emitters, LDBC simple and interactive queries, transaction plans, server
-examples, and focused transform cases.
+emitters, LDBC simple and interactive queries, transaction plans, and focused
+transform cases.
 
 Each valid case has a whole final `expected/NAME.ddp`. A parsed whole program
 and four unified diffs record the successive `--emit-ddp-stage` views:

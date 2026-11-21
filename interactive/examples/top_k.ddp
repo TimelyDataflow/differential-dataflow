@@ -1,0 +1,16 @@
+-- The top 3 scores, kept current as scores change.
+--
+-- `reduce(limit 3, ...)` sees only a key's first 3 values in order, so negating the score puts
+-- the highest first. One group of every player would redo its work on each update; instead
+-- players fall into 64 buckets, each keeps its top 3, and the root takes the top 3 of those.
+
+let scores = input "scores" : (int, int);   -- (player, score)
+
+let buckets = scores
+    | map((player, score) -> ((player, 64) rem, (score neg, player)))
+    | reduce(limit 3, (_, vals) -> vals);
+let top = buckets
+    | map((_, v) -> ((), v))
+    | reduce(limit 3, (_, vals) -> vals);
+
+output "top" = top | map((_, (negated, player)) -> (player, negated neg));

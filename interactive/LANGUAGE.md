@@ -2,7 +2,7 @@
 
 DDIR programs describe collections that change over time, and the server keeps every collection up to date as its inputs change.
 This page is the reference: what a program is made of, every collection operator, the scalar language inside operators, time, iteration, and the positions the language takes on purpose.
-For worked examples of the idioms that make programs fast or correct, see the [recipes](examples/recipes/README.md).
+For programs at work in the server, see the [examples](examples/README.md).
 For the commands that load programs, feed them and read them, see the [server reference](server/README.md#server-command-reference).
 
 ## A first program
@@ -17,15 +17,15 @@ output "total" = sales | sum;
 A session loads it, feeds rows at times, closes those times, and reads the result:
 
 ```
-load sum from examples/recipes/sum.ddp
-feed sum 0 1 val=5 time=0
-feed sum 0 2 val=40 time=0
-seal sum 0 1
-peek sum::total
+load sales from sales.ddp
+feed sales 0 1 val=5 time=0
+feed sales 0 2 val=40 time=0
+seal sales 0 1
+peek sales::total
 ```
 
 Later feeds at later times update `total`; nothing is recomputed from scratch.
-This program is the [`sum`](examples/recipes/sum.ddp) recipe.
+[`examples/access.txt`](examples/access.txt) is a whole session.
 
 ## Collections
 
@@ -124,7 +124,7 @@ The `time` is in the shape of the scope's time (see [Time](#time-and-scopes)), a
 A `filter` keeps the rows where `mask` is a nonzero `int`.
 Inside a nested scope each `0` above is a time of every coordinate, such as `(0, 0)` one level down.
 
-`delay` retracts rows after a fixed time ([`retention`](examples/recipes/retention.ddp)) and orders work within a loop ([`connected_components`](examples/recipes/connected_components.ddp), [`shortest_paths`](examples/recipes/shortest_paths.ddp)).
+`delay` retracts rows after a fixed time ([`retention`](examples/retention.ddp)) and orders work within a loop ([`components`](examples/components.ddp), [`shortest_paths`](examples/shortest_paths.ddp)).
 
 `a + b` is the union of two collections, adding diffs.
 It is its own operator, as it reads two inputs, and `a - b` is sugar for `a + (b | negate)`.
@@ -174,9 +174,9 @@ It groups rows by key.
 
 When the value is not `()`, `count` drops it first and `distinct` keys by the whole record, so neither reduce reads a key's values together.
 
-`sum` moves each value into its diff and counts, so it costs what `count` costs. Its `lift` only hands `join_function` each row's own time, which leaves the time as it is at any depth ([`sum`](examples/recipes/sum.ddp)).
+`sum` moves each value into its diff and counts, so it costs what `count` costs. Its `lift` only hands `join_function` each row's own time, which leaves the time as it is at any depth.
 A key whose diffs sum to zero has no row, so a total of zero is absent.
-There is no `max` or top-k operator; negate the value and use `min` or `reduce(limit n, ...)`, through a tree of groups for large inputs ([`top_k`](examples/recipes/top_k.ddp)).
+There is no `max` or top-k operator; negate the value and use `min` or `reduce(limit n, ...)`, through a tree of groups for large inputs ([`top_k`](examples/top_k.ddp)).
 
 ### Operators that read time
 
@@ -189,9 +189,9 @@ None of them is sugar.
 | `half_join(other, strict)` | for a lifted stream `(k, (v1, t))`: each update meets `other`'s rows `(k, v2)` whose times come before its own (strictly when `strict`, a bool written `0` or `1`, is `1`), giving `(k, ((v1, v2), t2))` at the update's time, where `t2` is the later of the two times, coordinate by coordinate; `other`'s own changes produce nothing |
 | `half_join(other, strict, f)` | `half_join(other, strict) \| map(f)`, without building the joined rows |
 
-`half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/recipes/triangles.ddp) recipe.
+`half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/triangles.ddp) example.
 A loop's round is the last coordinate of `lift`'s time.
-`lift` with `delay` makes an input row count at its own time only ([`upsert`](examples/recipes/upsert.ddp)).
+`lift` with `delay` makes an input row count at its own time only ([`upsert`](examples/upsert.ddp)).
 
 ### Arrangements and inspection
 
@@ -270,21 +270,21 @@ From outside, `name::x` is the fixed point of `x`.
 A scope can hold negation, reductions and further scopes.
 A recursion that never stops changing never finishes, and holds up every program on the server.
 
-Prioritized iteration uses `delay` to hold some rows back to later rounds, so that work likely to be undone waits ([`connected_components`](examples/recipes/connected_components.ddp)).
+Prioritized iteration uses `delay` to hold some rows back to later rounds, so that work likely to be undone waits ([`components`](examples/components.ddp)).
 It can make the first computation much faster, and some later edits slower.
 
 At the root, `var` and `set` carry state from one time to the next instead.
 A root variable is empty at first, and at each time `t` holds what its `set` held at `t - 1`.
-Nothing iterates, and anything may feed the `set`, as the cycle passes through the step ([`upsert`](examples/recipes/upsert.ddp)).
+Nothing iterates, and anything may feed the `set`, as the cycle passes through the step ([`upsert`](examples/upsert.ddp)).
 Root variables need a one-coordinate root time.
 
 ## Design positions
 
 These are deliberate, and differ from what SQL users expect.
 
-- **Inputs are multisets.** Feeding a row twice gives it a count of 2, and retracting an absent row gives it a count of -1. `distinct` keeps any row whose count is not zero. Replacing a key's value is a program's job ([`upsert`](examples/recipes/upsert.ddp)).
+- **Inputs are multisets.** Feeding a row twice gives it a count of 2, and retracting an absent row gives it a count of -1. `distinct` keeps any row whose count is not zero. Replacing a key's value is a program's job ([`upsert`](examples/upsert.ddp)).
 - **Arithmetic does not fail.** Integers wrap: `(9223372036854775807, 1) add` is `-9223372036854775808`. `(x, 0) div` is 0 and `(x, 0) rem` is `x`; division rounds toward zero, so `(-7, 2) div` is -3. A program that needs errors checks its operands and builds a `Result`.
-- **There is no NULL.** A missing value is a variant. Declare an enum for it ([`left_join`](examples/recipes/left_join.ddp)); `() inject None` is refused, because `Option`'s `Some` lane has no shape until a value supplies one.
+- **There is no NULL.** A missing value is a variant. Declare an enum for it; `() inject None` is refused, because `Option`'s `Some` lane has no shape until a value supplies one.
 - **Nothing is durable.** A server's programs and data last as long as its process.
 - **One server is one trust domain.** Programs share one command queue and one set of workers: a slow program delays the others, and a program that never finishes or crashes a worker stops them all.
 - **Inputs belong to their program.** Another program cannot read an input, only an output. Changing a program's schema is a migration; a stable program that only publishes its inputs, read by programs whose inputs are bound to them, keeps views replaceable.

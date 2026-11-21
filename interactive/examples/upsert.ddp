@@ -1,0 +1,21 @@
+-- A keyed table where a put replaces the key's value and a delete removes it.
+--
+-- Inputs are multisets: a second put of a key adds a second row. Here the table is a root
+-- variable, holding at each time what `now` held one time earlier, so clients only feed writes.
+
+let puts = input "puts" : (int, int);   -- (key, value)
+let dels = input "dels" : (int, ());    -- key
+
+-- A write counts at its own time only: `delay` moves a copy to t + 1, where it is subtracted.
+let put_now = puts - (puts | lift | delay((_, (_, (t))) -> (t, 1) add) | map((k, (v, _)) -> (k, v)));
+let del_now = dels - (dels | lift | delay((_, (_, (t))) -> (t, 1) add) | map((k, _) -> (k, ())));
+
+-- At one time, the least put wins, and a put beats a delete.
+let written = put_now | min;
+let touched = (written | map((k, _) -> (k, ()))) + del_now | distinct;
+
+var table : (int, int);
+let now = table - (table | join(touched, (k, (v, ())) -> (k, v))) + written;
+set table = now;
+
+output "table" = now;

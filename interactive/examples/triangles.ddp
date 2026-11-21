@@ -1,15 +1,12 @@
--- Triangle counting as a delta join: no collection of wedges is ever built.
+-- Triangle counting as a delta join, which never builds the wedges (paths of two edges).
 --
--- Triangles are T(a, b, c) :- E(a, b), E(a, c), E(b, c), with each edge pointed from its larger
--- end to its smaller, and b > c. The plain plan joins E with itself into every wedge (a path of
--- two edges) and arranges them all: 60.8M wedges for a 1M-edge graph. A delta join instead
--- handles each change to E once per use of E in the rule, and joins that change against the
--- other two uses with `half_join`, which reads the arranged edges as of the change's time.
--- For the use numbered i, a change meets later uses at or before its time (strict 0) and earlier
--- uses strictly before it (strict 1), so a change that touches two uses counts once.
--- On the 1M-edge graph a single edge update went from 2.86 ms to 0.25 ms.
+-- Triangles are T(a, b, c) :- E(a, b), E(a, c), E(b, c), with edges pointed from larger to
+-- smaller end and b > c. Each change to E is joined, once per use of E, against the other two
+-- uses with `half_join`, which reads them as of the change's time. Later uses are read at or
+-- before that time (strict 0) and earlier ones strictly before (strict 1), so each triangle
+-- counts once. On a 1M-edge graph (60.8M wedges) an edge update took 2.86 ms to 0.25 ms.
 
-let raw = input 0 : (int, int);   -- an undirected edge, either way round
+let raw = input "edges" : (int, int);   -- an undirected edge, either way round
 let down = raw
     | filter((a, b) -> (a, b) ne)
     | map((a, b) -> ((((a, b) gt, a, b) select, ((a, b) gt, b, a) select), ()))
