@@ -110,7 +110,7 @@ fn identifier(text: &str) -> String {
     let mut name: String = text.trim_start_matches("output ").chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if name.is_empty() { name.push('x'); }
     // The label of a numbered input is its digits; its local name is `input<N>`.
-    if crate::server::InputId::is_number(&name) { name.insert_str(0, "input"); }
+    if crate::scope_ir::InputId::is_number(&name) { name.insert_str(0, "input"); }
     if name.as_bytes()[0].is_ascii_digit() || crate::ir::KEYWORDS.contains(&name.as_str()) { name.insert_str(0, "x_"); }
     name
 }
@@ -123,7 +123,7 @@ fn fresh(base: &str, used: &mut BTreeSet<String>, next: &mut BTreeMap<String, us
     name
 }
 
-// IR producers can use export names such as "demand:input0". Nested exports
+// IR producers can use export names such as "demand:0". Nested exports
 // need local DDP bindings; only root trace names can remain quoted strings.
 fn export_names(scope: &Scope) -> Vec<String> {
     let mut used: BTreeSet<_> = scope.names.iter().map(|(name, _)| name.clone())
@@ -314,9 +314,9 @@ impl Printer<'_> {
             match &imp.from {
                 Source::Input(_) | Source::Trace(_) => {
                     // An input is written by its label; a bound input's binding belongs to the load.
-                    let source = if crate::server::InputId::is_number(&imp.name) {
+                    let source = if crate::scope_ir::InputId::is_number(&imp.name) {
                         format!("input {}", imp.name)
-                    } else if crate::server::InputId::is_name(&imp.name) {
+                    } else if crate::scope_ir::InputId::is_name(&imp.name) {
                         format!("input {}", quoted(&imp.name)?)
                     } else {
                         return Err(format!("source {:?} has no input label", imp.name));
@@ -518,7 +518,7 @@ mod tests {
         let output = roundtrip(text);
         assert!(output.contains(r#"input "first""#) && output.contains(r#"input "third""#), "{output}");
         assert_eq!(inputs(&plan(text)), inputs(&plan(&output)), "{output}");
-        use crate::server::InputId::{Name, Number};
+        use crate::scope_ir::InputId::{Name, Number};
         assert_eq!(inputs(&plan(text)), vec![Number(0), Name("first".into()), Name("third".into())]);
     }
 

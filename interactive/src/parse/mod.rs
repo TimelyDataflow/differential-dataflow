@@ -28,7 +28,7 @@ pub enum Reducer {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     /// An input, by its label: `input N` or `input "name"`. The label is the input's identity.
-    Input(crate::server::InputId),
+    Input(crate::scope_ir::InputId),
     /// Shape ascription on an input: `input N : (key_shape, val_shape)`.
     TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
     Name(String),

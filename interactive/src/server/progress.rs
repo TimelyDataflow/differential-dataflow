@@ -20,22 +20,23 @@ pub(super) fn caught_up(probe: &ProbeHandle<HostTime>, point: &HostTime) -> bool
 }
 
 impl Server {
-    fn input(&self, prog: &str, input: impl Into<InputId>) -> Result<&ServerInput, String> {
-        let input: InputId = input.into();
+    fn input(&self, prog: &str, input: &InputId) -> Result<&ServerInput, String> {
         let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        installed.inputs.get(&input).ok_or_else(|| no_input(prog, &input))
+        installed.inputs.get(input).ok_or_else(|| no_input(prog, input))
     }
 
     /// All minimal times at which the input can still write. Empty means finished.
     pub fn write_frontier(&self, prog: &str, input: impl Into<InputId>) -> Result<Antichain<HostTime>, String> {
-        let input: InputId = input.into();
-        Ok(self.input(prog, input.clone())?.frontier().cloned().collect())
+        Ok(self.input(prog, &input.into())?.frontier().cloned().collect())
     }
 
     /// The time chosen by time=now. Incomparable capabilities require an explicit time.
     pub fn input_time(&self, prog: &str, input: impl Into<InputId>) -> Result<&HostTime, String> {
-        let input: InputId = input.into();
-        let handle = self.input(prog, input.clone())?;
+        self.now(prog, &input.into())
+    }
+
+    pub(super) fn now(&self, prog: &str, input: &InputId) -> Result<&HostTime, String> {
+        let handle = self.input(prog, input)?;
         handle.time().ok_or_else(|| if handle.frontier().next().is_none() {
             format!("input {prog:?}/{input} is sealed to []")
         } else {
@@ -45,8 +46,7 @@ impl Server {
 
     /// Advance one input to a singleton frontier.
     pub fn advance_input(&mut self, prog: &str, input: impl Into<InputId>, point: &HostTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        self.seal(prog, input.clone(), &Antichain::from_elem(point.clone()))
+        self.seal(prog, input, &Antichain::from_elem(point.clone()))
     }
 
     /// Lower bound on the write frontier after all preceding commands take effect.

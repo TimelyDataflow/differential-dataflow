@@ -55,6 +55,59 @@ pub enum Ref {
     ChildExport(ItemId, usize),
 }
 
+/// A program's input, as a client names it: by its label, a number (`input 0`) or a name
+/// (`input "edges"`). Workers resolve a label against the program installed, so a client's view
+/// of the program cannot misdirect a feed, and a number only ever finds the input written with it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub enum InputId {
+    Number(usize),
+    Name(String),
+}
+
+impl InputId {
+    /// Digits are a number, and anything else a name.
+    pub fn parse(text: &str) -> Self {
+        let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+        match text.parse() {
+            Ok(number) if digits => InputId::Number(number),
+            _ => InputId::Name(text.to_string()),
+        }
+    }
+
+    /// Whether `label` is a number, the label of `input N`.
+    pub fn is_number(label: &str) -> bool { matches!(Self::parse(label), InputId::Number(_)) }
+
+    /// The label as a client writes it, and as an input's import is named.
+    pub fn label(&self) -> String { match self { InputId::Number(n) => n.to_string(), InputId::Name(name) => name.clone() } }
+
+    /// Whether `text` may name an input: an identifier, so that it never reads as a number.
+    pub fn is_name(text: &str) -> bool {
+        let mut chars = text.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+}
+
+/// As the label is written in a program: `0`, or `"edges"`.
+impl std::fmt::Display for InputId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { InputId::Number(n) => write!(f, "{n}"), InputId::Name(name) => write!(f, "{name:?}") }
+    }
+}
+
+/// A label as a client writes it: digits are a number, and anything else a name.
+impl From<&str> for InputId {
+    fn from(label: &str) -> Self { InputId::parse(label) }
+}
+
+impl From<&InputId> for InputId {
+    fn from(label: &InputId) -> Self { label.clone() }
+}
+
+impl From<usize> for InputId {
+    fn from(number: usize) -> Self { InputId::Number(number) }
+}
+
 /// Where an import's value comes from. Inner scopes import from the parent; the
 /// root imports the program's external sources: inputs, and the traces a load binds them to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -62,7 +115,7 @@ pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
     /// A program input, by its label (root only). Install gives it a slot of its own.
-    Input(crate::server::InputId),
+    Input(InputId),
     /// A named external trace (root only).
     Trace(String),
 }

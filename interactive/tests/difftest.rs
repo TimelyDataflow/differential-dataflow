@@ -1287,7 +1287,7 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
         let mut restricted: Vec<Vec<String>> = Vec::new();
         for (i, rows) in acc.iter().enumerate() {
             if !used.contains(&i) { restricted.push(Vec::new()); continue; }
-            let demand = out.get(&format!("demand:input{i}")).map(|u| u.clone().rows()).unwrap_or_default();
+            let demand = out.get(&format!("demand:{i}")).map(|u| u.clone().rows()).unwrap_or_default();
             let wanted: std::collections::BTreeSet<String> = demand.iter().map(|(dk, dv, _)| row_text(dk, dv, inputs.iter().find(|(n, _, _)| *n == i).expect("a demanded input is declared"))).collect();
             restricted.push(rows.iter().filter(|(r, d)| **d != 0 && wanted.contains(*r)).map(|(r, d)| format!("{r} diff={d}")).collect());
         }

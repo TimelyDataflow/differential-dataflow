@@ -170,7 +170,7 @@ fn demand_for_queries(
     let exports = evaluate_query(&ex, inputs, Some(query_rows(queries)));
     (0..inputs.len())
         .map(|i| {
-            let name = format!("demand:input{}", i);
+            let name = format!("demand:{i}");
             exports
                 .get(&name)
                 .unwrap_or_else(|| panic!("no export {:?}; have {:?}", name, exports.keys().collect::<Vec<_>>()))
@@ -811,4 +811,15 @@ fn declared_sources_shape_the_rewrite() {
         let (_, problems) = interactive::shapes::infer(&ex, &|_| None, 1);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     }
+}
+
+/// Each input's demand output is named by its label, so an input labelled `input0` beside
+/// `input 0` gives two outputs, and the explained program installs.
+#[test]
+fn demand_outputs_are_named_by_label() {
+    let ex = explain::explain(&lowered(r#"output "out" = input 0 : (int, ()) + input "input0" : (int, ());"#));
+    let mut names: Vec<&str> = ex.root.exports.iter().map(|e| e.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["demand:0", "demand:input0"]);
+    timely::execute_directly(move |worker| interactive::server::Server::new().install(worker, "p", &ex).unwrap());
 }

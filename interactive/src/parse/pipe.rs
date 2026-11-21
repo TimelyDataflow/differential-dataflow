@@ -601,10 +601,10 @@ impl Parser {
             Token::Input => {
                 self.next();
                 let input = match self.next() {
-                    Token::Int(n) => crate::server::InputId::Number(n as usize),
+                    Token::Int(n) => crate::scope_ir::InputId::Number(n as usize),
                     Token::Str(name) => {
-                        assert!(crate::server::InputId::is_name(&name), "input name {name:?} must be an identifier");
-                        crate::server::InputId::Name(name)
+                        assert!(crate::scope_ir::InputId::is_name(&name), "input name {name:?} must be an identifier");
+                        crate::scope_ir::InputId::Name(name)
                     }
                     other => panic!("`input` takes a number or a name, got {other:?}"),
                 };

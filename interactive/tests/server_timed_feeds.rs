@@ -84,9 +84,9 @@ fn one_container_can_use_incomparable_capabilities() {
         if worker.index() == 0 {
             let (Updates { keys, vals, diffs }, _) = batch(&[(7, 10, 0, 2), (8, 20, 0, -1)]);
             let mut container = HostContainer { keys, vals, diffs, times: [point(2, 0), point(1, 1)].into_iter().collect() };
-            assert!(server.feed_container("p", 0, container.clone()).is_err());
+            assert!(server.feed_container("p", &0.into(), container.clone()).is_err());
             container.times = [point(2, 0), point(0, 2)].into_iter().collect();
-            server.feed_container("p", 0, container).unwrap();
+            server.feed_container("p", &0.into(), container).unwrap();
         }
         server.spin(worker);
         assert_eq!(server.target("p::rows").unwrap(), split);

@@ -766,7 +766,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     assert!(p.root.vars.is_empty(), "explain does not cover feedback variables at a program's root");
     let p = &tuple_bare_times(p);
     let n_sources = p.root.imports.len();
-    let query = crate::server::InputId::Name("query".into());
+    let query = crate::scope_ir::InputId::Name("query".into());
     assert!(p.root.imports.iter().all(|imp| imp.from != Source::Input(query.clone())), "explain labels its query input `query`, which the program uses");
 
     // ---- output root: original sources + query input + witness clone ----
@@ -869,10 +869,10 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         let dist = ex.presence(combined);
         ex.debug_inspect(dist.clone(), format!("demand_set:{}", k));
         ex.bind(dsets[k].clone(), dist.clone());
+        // Labels are unique, so the demand outputs are; a bound input is named by its label too.
         let name = match &p.root.imports[k].from {
-            Source::Input(crate::server::InputId::Number(n)) => format!("demand:input{n}"),
-            Source::Input(crate::server::InputId::Name(name)) => format!("demand:{name}"),
-            Source::Trace(nm) => format!("demand:{}", nm),
+            Source::Input(label) => format!("demand:{}", label.label()),
+            Source::Trace(_) => format!("demand:{}", p.root.imports[k].name),
             Source::Parent(_) => unreachable!(),
         };
         let j = ex.export(name.clone(), dsets[k].clone());

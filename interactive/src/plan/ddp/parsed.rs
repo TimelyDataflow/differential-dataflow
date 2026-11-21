@@ -53,8 +53,8 @@ impl Printer<'_> {
 
     fn expression(&mut self, expr: &Expr) -> Result<String, String> {
         Ok(match expr {
-            Expr::Input(crate::server::InputId::Number(n)) => format!("input {n}"),
-            Expr::Input(crate::server::InputId::Name(name)) => format!("input {}", quoted(name)?),
+            Expr::Input(crate::scope_ir::InputId::Number(n)) => format!("input {n}"),
+            Expr::Input(crate::scope_ir::InputId::Name(name)) => format!("input {}", quoted(name)?),
             Expr::TypedSource(source, key, val) => format!("{} : {}", self.expression(source)?, self.row(&(key.clone(), val.clone()))?),
             Expr::Name(name) => name.clone(),
             Expr::Path(parts, absolute) => format!("{}{}", if *absolute { "::" } else { "" }, parts.join("::")),

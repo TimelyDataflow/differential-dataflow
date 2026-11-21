@@ -93,8 +93,8 @@ serves the small inputs (roots, queries).
 optimization, treating every source without a declared shape as `arity` key
 fields with no value; the
 rewritten program has one extra input after its own — the query input, fed as
-`(key, val ++ q)` — and outputs one `demand:inputN` trace per source, which
-you `peek` as `<name>::demand:inputN`. `,debug` taps every demand collection with an inspect.
+`(key, val ++ q)` — and outputs one `demand:<label>` trace per input, which
+you `peek` as `<name>::demand:<label>`, as `<name>::demand:0` for `input 0`. `,debug` taps every demand collection with an inspect.
 
 ## The programs
 

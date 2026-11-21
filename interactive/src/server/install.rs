@@ -53,6 +53,12 @@ impl Server {
         if name.is_empty() || name.contains("::") {
             return Err(format!("a program name must be non-empty and contain no `::`, got {:?}", name));
         }
+        // Each output is published under its own name. The language refuses two outputs of one
+        // name, but a program built as IR, such as an explanation, may not.
+        let mut outputs = std::collections::HashSet::new();
+        if let Some(e) = prog.root.exports.iter().find(|e| !outputs.insert(&e.name)) {
+            return Err(format!("program {name:?} has two outputs named {:?}", e.name));
+        }
         // A feedback variable at the root is not a loop: at each time t it holds what its `set`
         // held at t - 1, so a program can carry state from one time to the next. The step is
         // defined only when the root time has one coordinate.

@@ -11,55 +11,48 @@ impl Server {
     /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once the
     /// output's write frontier advances past `time`.
     pub fn feed(&mut self, prog: &str, input: impl Into<InputId>, rows: &str, time: OuterTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        self.feed_at(prog, input.clone(), rows, &host_time(time))
+        self.stage_rows(prog, &input.into(), rows, &host_time(time))
     }
 
     /// Convenience for an open input with a single write capability.
     pub fn feed_now(&mut self, prog: &str, input: impl Into<InputId>, rows: &str) -> Result<(), String> {
-        let input: InputId = input.into();
-        let time = self.input_time(prog, input.clone())?.clone();
-        self.feed_at(prog, input.clone(), rows, &time)
+        let input = input.into();
+        let time = self.now(prog, &input)?.clone();
+        self.stage_rows(prog, &input, rows, &time)
     }
 
     /// Feed rows at a point of the target program's declared root width.
     pub fn feed_at(&mut self, prog: &str, input: impl Into<InputId>, rows: &str, time: &HostTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        self.validate_feed(prog, input.clone(), time)?;
-        let (key, val) = &self.programs[prog].inputs[&input].shape;
+        self.stage_rows(prog, &input.into(), rows, time)
+    }
+
+    fn stage_rows(&mut self, prog: &str, input: &InputId, rows: &str, time: &HostTime) -> Result<(), String> {
+        self.validate_feed(prog, input, time)?;
+        let (key, val) = &self.programs[prog].inputs[input].shape;
         let mut decoder = crate::runtime::feed::FeedDecoder::new(key, val);
         for (number, line) in rows.lines().map(str::trim).enumerate() {
             if !line.is_empty() && !line.starts_with('#') {
                 decoder.push_line(line).map_err(|error| format!("row {}: {error}", number + 1))?;
             }
         }
-        self.feed_columns_at(prog, input.clone(), decoder.finish(), time)
+        self.feed_columns_at(prog, input, decoder.finish(), time)
     }
 
     /// Stage rows already read into columns at `time`, each with
     /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
     /// otherwise.
     pub fn feed_columns(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates, time: OuterTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        self.feed_columns_at(prog, input.clone(), columns, &host_time(time))
-    }
-
-    /// Convenience for an open input with a single write capability.
-    pub fn feed_columns_now(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates) -> Result<(), String> {
-        let input: InputId = input.into();
-        let time = self.input_time(prog, input.clone())?.clone();
-        self.feed_columns_at(prog, input.clone(), columns, &time)
+        self.feed_columns_at(prog, &input.into(), columns, &host_time(time))
     }
 
     /// Feed columns at a point; validates both the shape and the input's own frontier.
-    pub fn feed_columns_at(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates, time: &HostTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        self.validate_feed(prog, input.clone(), time)?;
+    pub fn feed_columns_at(&mut self, prog: &str, input: &InputId, columns: Updates, time: &HostTime) -> Result<(), String> {
+        self.validate_feed(prog, input, time)?;
         self.programs
             .get_mut(prog)
             .expect("feed target was prevalidated")
             .inputs
-            .get_mut(&input)
+            .get_mut(input)
             .expect("feed input was prevalidated")
             .give_columns_at(columns, time)
     }
@@ -69,18 +62,16 @@ impl Server {
     /// otherwise, nor if the shapes are not the input's declared ones. The rows of a time take
     /// effect once the input moves past it, by [`Server::seal`].
     pub fn feed_timed(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates, times: Vec<OuterTime>) -> Result<(), String> {
-        let input: InputId = input.into();
         let n = times.len();
         let Updates { keys, vals, diffs } = columns;
         let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![times], n);
-        self.feed_container(prog, input.clone(), HostContainer { keys, vals, times, diffs })
+        self.feed_container(prog, &input.into(), HostContainer { keys, vals, times, diffs })
     }
 
     /// Admit one container with arbitrary row times under the input’s full capability set.
     /// Validate all columns and times before handing anything to Timely.
-    pub fn feed_container(&mut self, prog: &str, input: impl Into<InputId>, container: HostContainer) -> Result<(), String> {
-        let input: InputId = input.into();
-        let handle = self.writable_input(prog, input.clone())?;
+    pub fn feed_container(&mut self, prog: &str, input: &InputId, container: HostContainer) -> Result<(), String> {
+        let handle = self.writable_input(prog, input)?;
         let n = container.diffs.len();
         if container.times.len() != n || container.keys.len() != n || container.vals.len() != n {
             return Err("feed: key, value, time and diff columns must have equal lengths".into());
@@ -96,15 +87,15 @@ impl Server {
         if let Some(i) = container.times.beyond(frontier.borrow()).iter().position(|valid| !valid) {
             return Err(format!("cannot feed at time {}: input {prog:?}/{input} has frontier {}", progress::coordinates(&container.times.get(i)), progress::frontier_text(frontier.iter())));
         }
-        self.programs.get_mut(prog).unwrap().inputs.get_mut(&input).unwrap().give(container);
+        self.programs.get_mut(prog).unwrap().inputs.get_mut(input).unwrap().give(container);
         Ok(())
     }
 
     /// Bulk-load at the destination input's sole frontier point (`time=now`).
     pub fn load(&mut self, worker: &Worker, prog: &str, input: impl Into<InputId>, source: &str, diff: Diff) -> Result<u64, String> {
-        let input: InputId = input.into();
-        let time = self.input_time(prog, input.clone())?.clone();
-        self.load_at(worker, prog, input, source, diff, &time)
+        let input = input.into();
+        let time = self.now(prog, &input)?.clone();
+        self.load_at(worker, prog, &input, source, diff, &time)
     }
 
     /// Bulk-load rows into the input labelled `input` of `prog` at the destination time `time`.
@@ -134,19 +125,18 @@ impl Server {
         &mut self,
         worker: &Worker,
         prog: &str,
-        input: impl Into<InputId>,
+        input: &InputId,
         source: &str,
         diff: Diff,
         time: &HostTime,
     ) -> Result<u64, String> {
-        let input: InputId = input.into();
-        self.validate_feed(prog, input.clone(), time)?;
+        self.validate_feed(prog, input, time)?;
         if self.loads_from_trace(source) {
-            return self.load_trace(prog, input.clone(), source, diff, time);
+            return self.load_trace(prog, input, source, diff, time);
         }
         let (index, peers) = (worker.index(), worker.peers());
         let mine = |e: u64| (e as usize) % peers == index;
-        let target = &self.programs[prog].inputs[&input];
+        let target = &self.programs[prog].inputs[input];
         let text = std::fs::read_to_string(source)
             .map_err(|e| format!("load: cannot read {:?}: {}", source, e))?;
         // Every line is read, whichever worker's shard it falls in: a
@@ -168,7 +158,7 @@ impl Server {
             }
             total += 1;
         }
-        self.feed_columns_at(prog, input.clone(), rows.finish(), time)?;
+        self.feed_columns_at(prog, input, rows.finish(), time)?;
         Ok(total)
     }
 
@@ -180,10 +170,9 @@ impl Server {
 
     /// [`Server::load`] from published trace `source`: this worker's share of its contents
     /// at its latest readable point, scaled by `diff`, into its own handle for `prog`'s `input`.
-    fn load_trace(&mut self, prog: &str, input: impl Into<InputId>, source: &str, diff: Diff, time: &HostTime) -> Result<u64, String> {
-        let input: InputId = input.into();
+    fn load_trace(&mut self, prog: &str, input: &InputId, source: &str, diff: Diff, time: &HostTime) -> Result<u64, String> {
         let name = source;
-        let declared = &self.programs[prog].inputs[&input].shape;
+        let declared = &self.programs[prog].inputs[input].shape;
         let shape = self.shapes[name].clone();
         if *declared != shape {
             return Err(format!(
@@ -204,36 +193,33 @@ impl Server {
             .get_mut(prog)
             .expect("load target was prevalidated")
             .inputs
-            .get_mut(&input)
+            .get_mut(input)
             .expect("load input was prevalidated")
             .give_columns_at(updates, time)?;
         Ok(rows)
     }
 
     /// Check the global time bounds before any worker submits its local shard.
-    pub fn validate_batch(&self, prog: &str, input: impl Into<InputId>, least: &[HostTime], width: usize) -> Result<(), String> {
-        let input: InputId = input.into();
-        let handle = self.writable_input(prog, input.clone())?;
+    pub fn validate_batch(&self, prog: &str, input: &InputId, least: &[HostTime], width: usize) -> Result<(), String> {
+        let handle = self.writable_input(prog, input)?;
         if width > handle.width { return Err(format!("feed: a row time exceeds the input width {}", handle.width)); }
         if handle.frontier().next().is_none() { return Err(format!("input {prog:?}/{input} is sealed to []")); }
         for time in least.iter() {
-            self.validate_feed(prog, input.clone(), time)?;
+            self.validate_feed(prog, input, time)?;
         }
         Ok(())
     }
 
     /// Check whether this writable input accepts the point before staging any rows.
-    pub(super) fn validate_feed(&self, prog: &str, input: impl Into<InputId>, time: &HostTime) -> Result<(), String> {
-        let input: InputId = input.into();
-        let handle = self.writable_input(prog, input.clone())?;
+    pub(super) fn validate_feed(&self, prog: &str, input: &InputId, time: &HostTime) -> Result<(), String> {
+        let handle = self.writable_input(prog, input)?;
         if time.len() > handle.width || !handle.frontier().any(|t| t.less_equal(time)) {
             return Err(format!("cannot feed at time {}: input {prog:?}/{input} has width {} and frontier {}", progress::coordinates(time), handle.width, progress::frontier_text(handle.frontier())));
         }
         Ok(())
     }
 
-    fn writable_input(&self, prog: &str, input: impl Into<InputId>) -> Result<&ServerInput, String> {
-        let input: InputId = input.into();
+    fn writable_input(&self, prog: &str, input: &InputId) -> Result<&ServerInput, String> {
         let installed = self
             .programs
             .get(prog)
@@ -241,6 +227,6 @@ impl Server {
         if installed.origin != Origin::Program {
             return Err(format!("{prog:?} is a diagnostics source and is not writable"));
         }
-        installed.inputs.get(&input).ok_or_else(|| no_input(prog, &input))
+        installed.inputs.get(input).ok_or_else(|| no_input(prog, input))
     }
 }

@@ -390,11 +390,11 @@ fn execute(
                 server.has_input(&prog, &input).and_then(|()| {
                     let point = match time {
                         Some(time) => time,
-                        None => server.input_time(&prog, input.clone())?.clone(),
+                        None => server.input_time(&prog, &input)?.clone(),
                     };
                     // Batches arrive sharded. A single row enters the collection once.
                     if logical_count.is_some() || worker.index() == 0 {
-                        server.feed_columns_at(&prog, input.clone(), columns, &point)?;
+                        server.feed_columns_at(&prog, &input, columns, &point)?;
                     }
                     let time = wire_time(&point);
                     match logical_count {
@@ -404,16 +404,16 @@ fn execute(
                 })
             }
             ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.has_input(&prog, &input).and_then(|()| {
-                server.validate_batch(&prog, input.clone(), &least, width)?;
+                server.validate_batch(&prog, &input, &least, width)?;
                 let times = interactive::runtime::col_times::ColTimes::from_raw_lanes(lanes, columns.len());
                 let interactive::runtime::container::Updates { keys, vals, diffs } = columns;
-                server.feed_container(&prog, input.clone(), HostContainer { keys, vals, times, diffs })?;
+                server.feed_container(&prog, &input, HostContainer { keys, vals, times, diffs })?;
                 Ok(format!("fed {} rows to {prog:?} input {input} at their times",
                     logical_count.expect("a timed batch retains its logical row count")))
             }),
             // Collective: every worker moves its own handle. Nothing is waited for.
             ServerCommand::Seal { prog, input, frontier } => server.has_input(&prog, &input).and_then(|()| {
-                server.seal(&prog, input.clone(), &frontier)?;
+                server.seal(&prog, &input, &frontier)?;
                 let text = match frontier.elements() {
                     [point] => wire_time(point),
                     points => serde_json::to_string(&points.iter().map(|p| &p[..]).collect::<Vec<_>>())
@@ -437,9 +437,9 @@ fn execute(
                 }
                 let time = match time {
                     Some(point) => point,
-                    None => server.input_time(&prog, input.clone())?.clone(),
+                    None => server.input_time(&prog, &input)?.clone(),
                 };
-                server.load_at(worker, &prog, input.clone(), &source, diff, &time).map(|rows| {
+                server.load_at(worker, &prog, &input, &source, diff, &time).map(|rows| {
                     if local {
                         format!("fed trace {source:?} with diff={diff} into {prog:?} input {input} ({rows} rows on worker 0)")
                     } else {
@@ -455,10 +455,10 @@ fn execute(
                             reqid,
                             "data",
                             format!(
-                                "program name={:?} origin={} inputs={:?} imports={:?} exports={:?}",
+                                "program name={:?} origin={} inputs=[{}] imports={:?} exports={:?}",
                                 program.name,
                                 program.origin,
-                                program.inputs,
+                                program.inputs.iter().map(|input| input.to_string()).collect::<Vec<_>>().join(", "),
                                 program.imports,
                                 program.exports
                             ),

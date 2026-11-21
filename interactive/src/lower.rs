@@ -308,7 +308,7 @@ pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
 pub(crate) fn lower_bound(text: &str) -> st::Program {
     let mut program = lower_tree(crate::parse::pipe::parse(text));
     let labels: Vec<String> = program.root.imports.iter()
-        .filter(|i| matches!(i.from, st::Source::Input(crate::server::InputId::Name(_))))
+        .filter(|i| matches!(i.from, st::Source::Input(crate::scope_ir::InputId::Name(_))))
         .map(|i| i.name.clone()).collect();
     program.bind(labels.iter().map(|l| (l.as_str(), l.as_str()))).unwrap();
     program
@@ -340,7 +340,7 @@ struct ScopeLower {
     /// The statement being lowered, which names the items it pushes.
     statement: String,
     imports: Vec<st::Import>,
-    input_import: HashMap<crate::server::InputId, usize>, // input label -> import idx (root, deduped)
+    input_import: HashMap<crate::scope_ir::InputId, usize>, // input label -> import idx (root, deduped)
     env: HashMap<RefName, st::Ref>,        // local names, qualified child exports, and imports
 }
 
@@ -356,7 +356,7 @@ impl ScopeLower {
         else { self.push(st::Node::Arrange(input)) }
     }
     /// The root import for the input with label `id`, named by its label.
-    fn input_ref(&mut self, id: &crate::server::InputId) -> st::Ref {
+    fn input_ref(&mut self, id: &crate::scope_ir::InputId) -> st::Ref {
         assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", id.label());
         if let Some(&i) = self.input_import.get(id) { return st::Ref::Import(i); }
         let i = self.imports.len();
@@ -1058,7 +1058,7 @@ mod optimize_tests {
             let p = lower_tree(parse(text));
             let mut labels: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
             labels.sort_by_key(|(name, _)| name.to_string());
-            use crate::server::InputId::{Name, Number};
+            use crate::scope_ir::InputId::{Name, Number};
             assert_eq!(labels, vec![("1", st::Source::Input(Number(1))), ("a", st::Source::Input(Name("a".into()))), ("b", st::Source::Input(Name("b".into())))]);
         }
     }
@@ -1089,7 +1089,7 @@ mod optimize_tests {
             assert!(std::panic::catch_unwind(|| parse(&text)).is_err(), "{name:?} is accepted");
         }
         lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1\" : ((int), ()); output \"out\" = a + b;"));
-        use crate::server::InputId;
+        use crate::scope_ir::InputId;
         assert_eq!(InputId::parse("1"), InputId::Number(1));
         for text in ["+1", "1x", "input1"] { assert_eq!(InputId::parse(text), InputId::Name(text.into())); }
     }
