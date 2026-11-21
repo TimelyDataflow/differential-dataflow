@@ -86,14 +86,17 @@ Within a scope the order of statements does not matter.
 
 | Source | Meaning |
 |---|---|
-| `input N : (k, v)` | input number `N`, with its shape |
-| `input : (k, v)` | the next input number, in the order inputs are written |
-| `input "name" : (k, v)` | the next input number, also fed or bound by `name` |
-| `import "prog::x"` | another program's published output, optionally with `: (k, v)` |
+| `input N : (k, v)` | the input labelled `N`, with its shape |
+| `input "name" : (k, v)` | the input labelled `name`, an identifier, with its shape |
 | `name`, `scope::name` | a binding in this scope, an enclosing one, or a child scope's result |
 
+An input's label is its identity, and the order inputs are written in never matters.
+Writing a label again reads the same input.
 An input must declare its shape.
-An import may declare one, which must match the shape the output is published at.
+
+A program does not name the traces it reads.
+The client feeds an input by its label, or the load binds it to another program's output instead, as `load p from p.ddp edges=graph::edges`.
+A bound input's shape must match the shape the output is published at.
 
 ## Operators
 
@@ -245,7 +248,7 @@ Integers are signed 64-bit; arithmetic takes its kind from its operands, so `(1,
 
 A program's root time is one integer by default, the time the client gives each feed.
 A program loaded with `width=N` has root times of `N` coordinates, written `[x,y]` in commands, compared coordinate by coordinate.
-The client advances an input's time with `seal`; a read at time `t` is complete once every input and import it depends on is past `t`.
+The client advances an input's time with `seal`; a read at time `t` is complete once every input it depends on, fed or bound, is past `t`.
 
 Inside a nested scope the time gains one coordinate per level, the loop's round: `(epoch, round)` one level down.
 A `delay` or `join_function` there names every coordinate, as in `delay((_, d) -> (0, d))`.
@@ -280,7 +283,7 @@ These are deliberate, and differ from what SQL users expect.
 - **There is no NULL.** A missing value is a variant. Declare an enum for it ([`left_join`](examples/recipes/left_join.ddp)); `() inject None` is refused, because `Option`'s `Some` lane has no shape until a value supplies one.
 - **Nothing is durable.** A server's programs and data last as long as its process.
 - **One server is one trust domain.** Programs share one command queue and one set of workers: a slow program delays the others, and a program that never finishes or crashes a worker stops them all.
-- **Inputs belong to their program.** Another program cannot read an input, only an output. Changing a program's schema is a migration; a stable program that only publishes its inputs, read by programs that import them, keeps views replaceable.
+- **Inputs belong to their program.** Another program cannot read an input, only an output. Changing a program's schema is a migration; a stable program that only publishes its inputs, read by programs whose inputs are bound to them, keeps views replaceable.
 - **There are no dates or times of day.** Use integers, such as days or seconds since an epoch.
 - **Joins match keys exactly.** A range or approximate join is a re-keying into buckets first.
 - **Strings are byte lists.** A feed and a peek spell `"ann"` as `list(97,110,110)`.
