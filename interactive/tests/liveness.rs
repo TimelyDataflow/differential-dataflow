@@ -23,7 +23,7 @@ fn unread_operators_and_recursive_scopes_are_removed() {
     let mut optimized = original.clone();
     interactive::passes::optimize(&mut optimized);
     assert_eq!(optimized.root.imports.len(), 1);
-    assert_eq!(optimized.root.imports[0].from, Source::Input(0));
+    assert_eq!(optimized.root.imports[0].from, Source::Input(0.into()));
     assert_eq!(optimized.root.items.len(), 1);
     assert_eq!(optimized.root.labels, ["used"]);
     let inputs = vec![vec!["1 val=2".to_string(), "2 val=3".to_string()]];
@@ -51,8 +51,8 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
     interactive::passes::optimize(&mut p);
     assert!(p.root.exports.is_empty());
     assert_eq!(p.root.imports.len(), 2);
-    assert_eq!(p.root.imports[0].from, Source::Input(0));
-    assert_eq!(p.root.imports[1].from, Source::Input(1));
+    assert_eq!(p.root.imports[0].from, Source::Input(0.into()));
+    assert_eq!(p.root.imports[1].from, Source::Input(1.into()));
     assert_eq!(p.op_count(), 2);
     // Invariant maps can move before the child; find it by its retained name.
     let values = p.root.items.iter().find_map(|item| match item {

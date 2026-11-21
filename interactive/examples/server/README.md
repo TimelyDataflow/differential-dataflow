@@ -71,7 +71,7 @@ nothing for unit. A feed defaults to a unit value and a diff of +1. Supply the u
 ## Running a program in batch
 
 The programs in `../programs/` (reachability, SCC, stable matching, …) read
-positional inputs. A session fills them in bulk and closes epochs; that is the
+numbered inputs. A session fills them in bulk and closes epochs; that is the
 whole of the old single-program harness, so there is no separate binary:
 
 ```

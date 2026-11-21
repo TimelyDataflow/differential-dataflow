@@ -387,14 +387,14 @@ fn execute(
             }
             ServerCommand::Feed { prog, input, columns, time }
             | ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::Shared(time) } => {
-                server.input_position(&prog, &input).and_then(|input| {
+                server.has_input(&prog, &input).and_then(|()| {
                     let point = match time {
                         Some(time) => time,
-                        None => server.input_time(&prog, input)?.clone(),
+                        None => server.input_time(&prog, input.clone())?.clone(),
                     };
                     // Batches arrive sharded. A single row enters the collection once.
                     if logical_count.is_some() || worker.index() == 0 {
-                        server.feed_columns_at(&prog, input, columns, &point)?;
+                        server.feed_columns_at(&prog, input.clone(), columns, &point)?;
                     }
                     let time = wire_time(&point);
                     match logical_count {
@@ -403,17 +403,17 @@ fn execute(
                     }
                 })
             }
-            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.input_position(&prog, &input).and_then(|input| {
-                server.validate_batch(&prog, input, &least, width)?;
+            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.has_input(&prog, &input).and_then(|()| {
+                server.validate_batch(&prog, input.clone(), &least, width)?;
                 let times = interactive::runtime::col_times::ColTimes::from_raw_lanes(lanes, columns.len());
                 let interactive::runtime::container::Updates { keys, vals, diffs } = columns;
-                server.feed_container(&prog, input, HostContainer { keys, vals, times, diffs })?;
+                server.feed_container(&prog, input.clone(), HostContainer { keys, vals, times, diffs })?;
                 Ok(format!("fed {} rows to {prog:?} input {input} at their times",
                     logical_count.expect("a timed batch retains its logical row count")))
             }),
             // Collective: every worker moves its own handle. Nothing is waited for.
-            ServerCommand::Seal { prog, input, frontier } => server.input_position(&prog, &input).and_then(|input| {
-                server.seal(&prog, input, &frontier)?;
+            ServerCommand::Seal { prog, input, frontier } => server.has_input(&prog, &input).and_then(|()| {
+                server.seal(&prog, input.clone(), &frontier)?;
                 let text = match frontier.elements() {
                     [point] => wire_time(point),
                     points => serde_json::to_string(&points.iter().map(|p| &p[..]).collect::<Vec<_>>())
@@ -429,7 +429,7 @@ fn execute(
                 Ok("spun".to_string())
             }
             // Collective: every worker sources its own shard.
-            ServerCommand::Load { prog, input, source, diff, time } => server.input_position(&prog, &input).and_then(|input| {
+            ServerCommand::Load { prog, input, source, diff, time } => server.has_input(&prog, &input).and_then(|()| {
                 let local = server.loads_from_trace(&source);
                 if local {
                     // A seal may have returned before every shard reached the snapshot cut.
@@ -437,9 +437,9 @@ fn execute(
                 }
                 let time = match time {
                     Some(point) => point,
-                    None => server.input_time(&prog, input)?.clone(),
+                    None => server.input_time(&prog, input.clone())?.clone(),
                 };
-                server.load_at(worker, &prog, input, &source, diff, &time).map(|rows| {
+                server.load_at(worker, &prog, input.clone(), &source, diff, &time).map(|rows| {
                     if local {
                         format!("fed trace {source:?} with diff={diff} into {prog:?} input {input} ({rows} rows on worker 0)")
                     } else {

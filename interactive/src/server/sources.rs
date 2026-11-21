@@ -27,7 +27,7 @@ impl CapabilityTrait<HostTime> for InputCapabilities {
 /// The number of rows an input converts to columns at once.
 pub(super) const COLUMN_BATCH: usize = 1 << 16;
 
-/// An installed program's positional `input N`, or a diagnostic source's: an input of corgi
+/// An installed program's input, or a diagnostic source's: an input of corgi
 /// containers at one shape, the input's declared one or its source's.
 pub(super) struct ServerInput {
     handle: InputHandle,

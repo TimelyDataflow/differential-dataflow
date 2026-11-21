@@ -1267,25 +1267,22 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
             }
         }
     }
-    // Explain rewrites the lowered program, before optimizing; its query input follows the
-    // program's largest positional input.
+    // Explain rewrites the lowered program, before optimizing; its query input is labelled `query`.
     let lowered = program(&case.render(false), false)?;
     let ex = quietly(|| { let mut ex = explain::explain(&lowered); interactive::passes::optimize(&mut ex); ex }).map_err(|e| format!("explain panicked: {e}"))?;
     let used: Vec<usize> = lowered.root.imports.iter().filter_map(|imp| match imp.from {
-        interactive::scope_ir::Source::Input(i) => Some(i),
+        interactive::scope_ir::Source::Input(server::InputId::Number(i)) => Some(i),
         _ => None,
     }).collect();
-    let query_input = used.iter().map(|i| i + 1).max().unwrap_or(0);
     let feed_of = |rows: &BTreeMap<String, i64>| -> Vec<String> {
         rows.iter().filter(|(_, d)| **d != 0).map(|(r, d)| format!("{r} diff={d}")).collect()
     };
     // A query is written as feed text, which has no NaN or infinity.
     for (q, (k, v, _)) in result.iter().filter(|(k, v, _)| finite(k) && finite(v)).enumerate().take(6) {
-        let mut ex_inputs: Vec<Vec<String>> = acc.iter().map(feed_of).collect();
-        ex_inputs.resize(query_input, Vec::new());
-        ex_inputs.push(vec![format!("{k} val=tuple({v},{q})")]);
+        let mut ex_inputs: BTreeMap<server::InputId, Vec<String>> = acc.iter().map(feed_of).enumerate().map(|(i, rows)| (server::InputId::Number(i), rows)).collect();
+        ex_inputs.insert(server::InputId::Name("query".into()), vec![format!("{k} val=tuple({v},{q})")]);
         let ex2 = ex.clone();
-        let out = quietly(move || server::evaluate(timely::Config::process(1), &ex2, &ex_inputs)).map_err(|e| format!("explained program panicked: {e}"))?;
+        let out = quietly(move || server::evaluate_labelled(timely::Config::process(1), &ex2, &ex_inputs)).map_err(|e| format!("explained program panicked: {e}"))?;
         // Restrict each input to its demanded rows, at their multiplicities.
         let mut restricted: Vec<Vec<String>> = Vec::new();
         for (i, rows) in acc.iter().enumerate() {

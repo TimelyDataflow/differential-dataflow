@@ -362,14 +362,11 @@ struct Parser {
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
-    /// The position of each named input: after every numbered input's, in the order of names.
-    named_inputs: std::collections::BTreeMap<String, usize>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        let named_inputs = named_inputs(&tokens);
-        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None, named_inputs }
+        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
@@ -604,10 +601,10 @@ impl Parser {
             Token::Input => {
                 self.next();
                 let input = match self.next() {
-                    Token::Int(n) => InputRef::Numbered(n as usize),
+                    Token::Int(n) => crate::server::InputId::Number(n as usize),
                     Token::Str(name) => {
                         assert!(crate::server::InputId::is_name(&name), "input name {name:?} must be an identifier");
-                        InputRef::Named(self.named_inputs[&name], name)
+                        crate::server::InputId::Name(name)
                     }
                     other => panic!("`input` takes a number or a name, got {other:?}"),
                 };
@@ -831,20 +828,6 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
     }
     let body: Vec<String> = variants.iter().map(|(v, s)| format!("{v} {}", render(s, scope, types))).collect();
     scope.declare(&format!("enum {name} = {}", body.join(" | "))).unwrap_or_else(|e| panic!("enum `{name}`: {e}"));
-}
-
-/// The position of each named input: one past the largest numbered input, in the order of names.
-fn named_inputs(tokens: &[Token]) -> std::collections::BTreeMap<String, usize> {
-    let mut numbered = 0;
-    let mut names = std::collections::BTreeSet::new();
-    for pair in tokens.windows(2) {
-        match pair {
-            [Token::Input, Token::Int(n)] => numbered = numbered.max(*n as usize + 1),
-            [Token::Input, Token::Str(name)] => { names.insert(name.clone()); }
-            _ => {}
-        }
-    }
-    names.into_iter().enumerate().map(|(i, name)| (name, numbered + i)).collect()
 }
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.collect_types(); p.parse_program() }

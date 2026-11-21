@@ -56,13 +56,13 @@ pub enum Ref {
 }
 
 /// Where an import's value comes from. Inner scopes import from the parent; the
-/// root imports the program's external sources — unifying `Input`/`Import`.
+/// root imports the program's external sources: inputs, and the traces a load binds them to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
-    /// A positional program input (root only).
-    Input(usize),
+    /// A program input, by its label (root only). Install gives it a slot of its own.
+    Input(crate::server::InputId),
     /// A named external trace (root only).
     Trace(String),
 }
@@ -238,7 +238,7 @@ impl Program {
     pub fn bind<'a>(&mut self, bindings: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<(), String> {
         for (label, trace) in bindings {
             let import = self.root.imports.iter_mut()
-                .find(|import| import.name == label && matches!(import.from, Source::Input(_)))
+                .find(|import| matches!(&import.from, Source::Input(id) if id.label() == label))
                 .ok_or_else(|| format!("binding names no input {label:?}"))?;
             if import.shape.is_none() { return Err(format!("input {label:?} declares no shape")); }
             import.from = Source::Trace(trace.to_string());
@@ -314,7 +314,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
     for (k, imp) in s.imports.iter().enumerate() {
         let from = match &imp.from {
             Source::Parent(r) => fmt_ref(r),
-            Source::Input(i) => format!("input {}", i),
+            Source::Input(id) => format!("input {}", id.label()),
             Source::Trace(n) => format!("import {:?}", n),
         };
         println!("{}in{} = {} ({:?});", pad2, k, from, imp.name);
@@ -389,8 +389,8 @@ mod tests {
         let root = Scope {
             name: "root".into(),
             imports: vec![
-                Import { name: "in0".into(), from: Source::Input(0), shape: None },
-                Import { name: "in1".into(), from: Source::Input(1), shape: None },
+                Import { name: "0".into(), from: Source::Input(0.into()), shape: None },
+                Import { name: "1".into(), from: Source::Input(1.into()), shape: None },
             ],
             items: vec![Item::Sub(inner)], // item 0 = the reach sub-scope
             exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0), shape: None }],
@@ -403,7 +403,7 @@ mod tests {
         let Item::Sub(reach) = &prog.root.items[0] else { unreachable!() };
         assert_eq!(reach.vars.len(), 1);
         assert!(matches!(prog.root.exports[0].value, Ref::ChildExport(0, 0)));
-        assert!(matches!(prog.root.imports[0].from, Source::Input(0)));
+        assert_eq!(prog.root.imports[0].from, Source::Input(0.into()));
         assert!(matches!(reach.binds[0].value, Ref::Local(1)));
     }
 }

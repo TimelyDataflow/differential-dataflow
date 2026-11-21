@@ -66,8 +66,7 @@ impl Server {
         }
         // An input is fed from outside, so it says what it holds, as a table declares its columns.
         for imp in &prog.root.imports {
-            if let (st::Source::Input(_), None) = (&imp.from, &imp.shape) {
-                let written = if super::InputId::is_number(&imp.name) { imp.name.clone() } else { format!("{:?}", imp.name) };
+            if let (st::Source::Input(written), None) = (&imp.from, &imp.shape) {
                 return Err(format!(
                     "program {:?} reads input {written} without declaring its shape; write `input {written} : (key, val)`",
                     name
@@ -132,9 +131,6 @@ impl Server {
                 _ => None,
             })
             .collect();
-        let input_names: HashMap<String, usize> = prog.root.imports.iter()
-            .filter_map(|imp| match imp.from { st::Source::Input(n) => Some((imp.name.clone(), n)), _ => None })
-            .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| output_name(name, &e.name)).collect();
 
         let mut output_probes = HashMap::new();
@@ -150,13 +146,13 @@ impl Server {
         }
 
         #[allow(clippy::type_complexity)]
-        let (published, inputs): (Vec<(String, crate::backend::corgi::ExportTrace, Option<crate::backend::corgi::ExportTap>)>, Vec<(usize, ServerInput)>) =
+        let (published, inputs): (Vec<(String, crate::backend::corgi::ExportTrace, Option<crate::backend::corgi::ExportTap>)>, Vec<(InputId, ServerInput)>) =
             host_dataflow(worker, |scope| {
                 use timely::dataflow::operators::core::UnorderedInput as _;
                 use timely::dataflow::operators::Probe;
                 use differential_dataflow::AsCollection;
                 use crate::backend::corgi::{export_containers, Arr, CorgiImport};
-                let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
+                let mut inputs: Vec<(InputId, ServerInput)> = Vec::new();
 
                 // One value per root import, rendered without rows. An input converts rows to
                 // columns as they are fed, and a published trace is read as its chunks, or with
@@ -165,11 +161,11 @@ impl Server {
                     .imports
                     .iter()
                     .map(|imp| match &imp.from {
-                        st::Source::Input(n) => {
+                        st::Source::Input(label) => {
                             let (handle, stream) = scope.new_unordered_input::<timely::container::CapacityContainerBuilder<InputContainer>>();
                             let shape = imp.shape.clone().expect("an input declares its shape (checked above)");
                             let input = ServerInput::new(handle, shape, root_width);
-                            inputs.push((*n, input));
+                            inputs.push((label.clone(), input));
                             CorgiImport::Columns(stream.as_collection())
                         }
                         st::Source::Trace(t) => {
@@ -223,16 +219,15 @@ impl Server {
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
         }
-        let mut by_pos: HashMap<usize, ServerInput> = HashMap::new();
-        for (pos, mut handle) in inputs {
+        let mut by_label: HashMap<InputId, ServerInput> = HashMap::new();
+        for (label, mut handle) in inputs {
             handle.advance_to_point(&as_of);
-            by_pos.insert(pos, handle);
+            by_label.insert(label, handle);
         }
         self.programs.insert(
             name.to_string(),
             Installed {
-                inputs: by_pos,
-                input_names,
+                inputs: by_label,
                 imports: import_names,
                 exports: export_names,
                 dataflow_id,

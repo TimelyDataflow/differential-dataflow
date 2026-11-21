@@ -8,7 +8,7 @@ use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 use crate::shapes::{self, ItemShapes, ScopeShapes};
 use super::{Form, Report};
-use crate::parse::{Expr, InputRef, Stmt};
+use crate::parse::{Expr, Stmt};
 
 mod parsed;
 
@@ -500,8 +500,7 @@ mod tests {
         output
     }
 
-    /// Inputs print by their labels, and keep their labels and positions, also when the program
-    /// reads them in another order.
+    /// Inputs print by their labels, and keep them, also when the program reads them in another order.
     #[test]
     fn named_inputs_round_trip() {
         let text = r#"
@@ -512,14 +511,15 @@ mod tests {
         "#;
         let inputs = |report: &Report| {
             let mut inputs: Vec<_> = report.stages.last().unwrap().program.root.imports.iter()
-                .filter_map(|i| match i.from { Source::Input(n) => Some((n, i.name.clone())), _ => None }).collect();
+                .filter_map(|i| match &i.from { Source::Input(id) => Some(id.clone()), _ => None }).collect();
             inputs.sort();
             inputs
         };
         let output = roundtrip(text);
         assert!(output.contains(r#"input "first""#) && output.contains(r#"input "third""#), "{output}");
         assert_eq!(inputs(&plan(text)), inputs(&plan(&output)), "{output}");
-        assert_eq!(inputs(&plan(text)), vec![(0, "0".to_string()), (1, "first".to_string()), (2, "third".to_string())]);
+        use crate::server::InputId::{Name, Number};
+        assert_eq!(inputs(&plan(text)), vec![Number(0), Name("first".into()), Name("third".into())]);
     }
 
     #[test]

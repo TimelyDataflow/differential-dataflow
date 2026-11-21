@@ -193,17 +193,15 @@ pub struct Catalog(Arc<Mutex<HashMap<String, Inputs>>>);
 /// One program's inputs: each position's declared shape, and the positions of named inputs.
 #[derive(Default)]
 struct Inputs {
-    shapes: HashMap<usize, RowShape>,
-    names: HashMap<String, usize>,
+    shapes: HashMap<InputId, RowShape>,
 }
 
 impl Catalog {
     fn record(&self, name: &str, program: &Program) {
         let mut inputs = Inputs::default();
         for import in &program.root.imports {
-            if let Source::Input(n) = &import.from {
-                if let Some(shape) = &import.shape { inputs.shapes.insert(*n, shape.clone()); }
-                inputs.names.insert(import.name.clone(), *n);
+            if let (Source::Input(label), Some(shape)) = (&import.from, &import.shape) {
+                inputs.shapes.insert(label.clone(), shape.clone());
             }
         }
         self.0.lock().unwrap().insert(name.to_string(), inputs);
@@ -213,8 +211,7 @@ impl Catalog {
     fn shape(&self, prog: &str, input: &InputId) -> Result<RowShape, String> {
         let programs = self.0.lock().unwrap();
         let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        let position = *inputs.names.get(&input.label()).ok_or_else(|| interactive::server::no_input(prog, input))?;
-        inputs.shapes.get(&position).cloned().ok_or_else(|| interactive::server::no_input(prog, input))
+        inputs.shapes.get(input).cloned().ok_or_else(|| interactive::server::no_input(prog, input))
     }
 
     /// A reader of rows for `prog`'s `input`, at its declared shapes.
@@ -1213,7 +1210,7 @@ mod tests {
         assert!(matches!(p.frame(&bytes), Some((_, Err(e))) if e.contains("shape")));
     }
 
-    /// A named or positional input can be sealed after an ordinary load.
+    /// A named or numbered input can be sealed after an ordinary load.
     #[test]
     fn loads_and_seals_parse() {
         let mut p = LineParser::new(Catalog::default());

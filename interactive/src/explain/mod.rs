@@ -733,8 +733,7 @@ fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
     Some((export.key, corgi::Shape::Prod(vec![export.val, corgi::Shape::Int])))
 }
 
-/// The transform. The query arrives as one extra input labelled `query`, at a position
-/// after the original inputs, its rows `(key, (val, q))`: a row of the first
+/// The transform. The query arrives as one extra input labelled `query`, its rows `(key, (val, q))`: a row of the first
 /// export, and a query id.
 pub fn explain(p: &Program) -> Program {
     explain_with(p, Options::default())
@@ -767,18 +766,14 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     assert!(p.root.vars.is_empty(), "explain does not cover feedback variables at a program's root");
     let p = &tuple_bare_times(p);
     let n_sources = p.root.imports.len();
-    assert!(p.root.imports.iter().all(|imp| imp.name != "query"), "explain labels its query input `query`, which the program uses");
-    // The largest positional-input index, for placing the query input after.
-    let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {
-        Source::Input(i) => Some(*i + 1),
-        _ => None,
-    }).max().unwrap_or(0);
+    let query = crate::server::InputId::Name("query".into());
+    assert!(p.root.imports.iter().all(|imp| imp.from != Source::Input(query.clone())), "explain labels its query input `query`, which the program uses");
 
     // ---- output root: original sources + query input + witness clone ----
     let mut root = Sb::new(&p.root.name);
     root.s.imports = p.root.imports.clone();
     let src_refs: Vec<Ref> = (0..n_sources).map(Ref::Import).collect();
-    let query_ref = root.import("query".into(), Source::Input(max_input));
+    let query_ref = root.import("query".into(), Source::Input(query));
     if let Ref::Import(q) = query_ref { root.s.imports[q].shape = query_shape(p); }
     let witness: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut root.s, &src_refs).into_iter().collect();
     // The witness clone re-exported the original program's exports; the
@@ -875,7 +870,8 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         ex.debug_inspect(dist.clone(), format!("demand_set:{}", k));
         ex.bind(dsets[k].clone(), dist.clone());
         let name = match &p.root.imports[k].from {
-            Source::Input(i) => format!("demand:input{}", i),
+            Source::Input(crate::server::InputId::Number(n)) => format!("demand:input{n}"),
+            Source::Input(crate::server::InputId::Name(name)) => format!("demand:{name}"),
             Source::Trace(nm) => format!("demand:{}", nm),
             Source::Parent(_) => unreachable!(),
         };

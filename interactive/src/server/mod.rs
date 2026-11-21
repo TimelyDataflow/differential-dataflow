@@ -31,7 +31,7 @@
 //!
 //! # Lifecycle
 //!
-//! - **install** builds a dataflow over imported traces + positional inputs,
+//! - **install** builds a dataflow over bound traces + labelled inputs,
 //!   publishing its exports. The dataflow's id (`next_dataflow_index`) is kept
 //!   for teardown.
 //! - **feed** stages updates, as text read at the input's declared shapes or
@@ -53,7 +53,7 @@
 //! The rest is one file per concern, each adding methods to [`Server`]:
 //!
 //! - `time`: scalar and product timestamps ([`OuterTime`], [`HostTime`], [`host_dataflow`]);
-//! - `sources`: positional inputs and diagnostic sources;
+//! - `sources`: program inputs and diagnostic sources;
 //! - `install`: installing a program;
 //! - `feed`: feeding and loading inputs;
 //! - `read`: snapshots, peeks and export taps;
@@ -86,7 +86,7 @@ mod sources;
 mod time;
 mod progress;
 
-pub use self::evaluate::evaluate;
+pub use self::evaluate::{evaluate, evaluate_labelled};
 pub use self::time::{host_dataflow, host_time, HostTime, OuterTime};
 use self::sources::{InputContainer, ServerInput, COLUMN_BATCH};
 
@@ -145,7 +145,7 @@ fn fmt_shape((k, v): &RowShape) -> String {
 /// A program's input, as a client names it: by its label, a number (`input 0`) or a name
 /// (`input "edges"`). Workers resolve a label against the program installed, so a client's view
 /// of the program cannot misdirect a feed, and a number only ever finds the input written with it.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum InputId {
     Number(usize),
     Name(String),
@@ -173,6 +173,18 @@ impl InputId {
         chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
+}
+
+/// As the label is written in a program: `0`, or `"edges"`.
+impl std::fmt::Display for InputId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { InputId::Number(n) => write!(f, "{n}"), InputId::Name(name) => write!(f, "{name:?}") }
+    }
+}
+
+/// A label as a client writes it: digits are a number, and anything else a name.
+impl From<&str> for InputId {
+    fn from(label: &str) -> Self { InputId::parse(label) }
 }
 
 impl From<usize> for InputId {
@@ -241,10 +253,8 @@ pub enum Command {
 
 /// Everything the server holds for one installed program.
 struct Installed {
-    /// Positional input index -> handle.
-    inputs: HashMap<usize, ServerInput>,
-    /// The positions of its inputs, by the names they are written with.
-    input_names: HashMap<String, usize>,
+    /// Each input's handle, by its label.
+    inputs: HashMap<InputId, ServerInput>,
     /// Names of traces this program imports (for the importer refcount).
     imports: Vec<String>,
     /// Names of traces this program publishes (registry entries it owns).
@@ -272,7 +282,7 @@ struct Output {
 #[derive(Clone, Debug)]
 pub struct ProgramInfo {
     pub name: String,
-    pub inputs: Vec<usize>,
+    pub inputs: Vec<InputId>,
     pub imports: Vec<String>,
     pub exports: Vec<String>,
     pub origin: &'static str,
@@ -368,10 +378,10 @@ impl Server {
         self.trace_shape(name).or_else(|| crate::diag::shape(name))
     }
 
-    /// The position of `prog`'s `input`, resolving its label against the program installed.
-    pub fn input_position(&self, prog: &str, input: &InputId) -> Result<usize, String> {
+    /// Whether `prog` has an input labelled `input`.
+    pub fn has_input(&self, prog: &str, input: &InputId) -> Result<(), String> {
         let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        installed.input_names.get(&input.label()).copied().ok_or_else(|| no_input(prog, input))
+        installed.inputs.get(input).map(|_| ()).ok_or_else(|| no_input(prog, input))
     }
 
     /// Return registry state without coupling a caller to stdout formatting.
@@ -380,7 +390,7 @@ impl Server {
             .programs
             .iter()
             .map(|(name, installed)| {
-                let mut inputs: Vec<_> = installed.inputs.keys().copied().collect();
+                let mut inputs: Vec<_> = installed.inputs.keys().cloned().collect();
                 inputs.sort();
                 ProgramInfo {
                     name: name.clone(),

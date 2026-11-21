@@ -129,7 +129,7 @@ fn build_report(mut program: Program, context: ddp::Context, source: &dyn Fn(&st
                     unresolved.push(name.clone());
                 }
             }
-            Source::Input(n) if import.shape.is_none() => problems.push(format!("input {n} has no declared shape")),
+            Source::Input(id) if import.shape.is_none() => problems.push(format!("input {id} has no declared shape")),
             _ => {}
         }
     }
@@ -505,7 +505,7 @@ fn print_scope(scope: &Scope, shapes: &ScopeShapes, parent: Option<(&Names, &[Fo
     writeln!(out, "{indent}scope {} {{", quote(&scope.name)).unwrap();
     let sources: Vec<_> = scope.imports.iter().enumerate().map(|(i, import)| {
         match &import.from {
-            Source::Input(n) => (format!("input {n}"), Form::Rows),
+            Source::Input(id) => (format!("input {id}"), Form::Rows),
             Source::Trace(name) if unresolved.contains(name) => (format!("unresolved trace {} (shape, if known, is declared)", quote(name)), Form::Unknown),
             Source::Trace(name) => (format!("trace {}", quote(name)), Form::Arrangement),
             Source::Parent(r) => {

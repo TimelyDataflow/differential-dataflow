@@ -25,26 +25,10 @@ pub enum Reducer {
     Expr(Lambda, Option<usize>),
 }
 
-/// An input, by its label: a number or a name.
-/// The label is the input's identity, by which a client feeds or binds it; the order inputs are
-/// written in never matters.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum InputRef {
-    /// `input N`, at position `N`.
-    Numbered(usize),
-    /// `input "name"`, at a position after every numbered input's, in the order of names.
-    Named(usize, String),
-}
-
-impl InputRef {
-    pub fn position(&self) -> usize { match self { InputRef::Numbered(n) | InputRef::Named(n, _) => *n } }
-    /// The label, as a client writes it: the number's digits, or the name.
-    pub fn label(&self) -> String { match self { InputRef::Numbered(n) => n.to_string(), InputRef::Named(_, name) => name.clone() } }
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
-    Input(InputRef),
+    /// An input, by its label: `input N` or `input "name"`. The label is the input's identity.
+    Input(crate::server::InputId),
     /// Shape ascription on an input: `input N : (key_shape, val_shape)`.
     TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
     Name(String),

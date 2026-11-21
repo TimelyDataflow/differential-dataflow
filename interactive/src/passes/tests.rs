@@ -73,7 +73,7 @@ fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
         output "child" = child::result;
     "#);
     assert!(dead_code::run(&mut p.root) > 0);
-    assert!(p.root.imports.iter().any(|i| matches!(i.from, Source::Input(7))));
+    assert!(p.root.imports.iter().any(|i| i.from == Source::Input(7.into())));
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
     assert_eq!(dead_code::run(&mut p.root), 0);

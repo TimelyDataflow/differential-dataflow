@@ -188,7 +188,7 @@ an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
 the text into columns before the workers see it, and refuses text that is not
 of the input's shapes.
 
-An input `<in>` of a program `<prog>` is its position or the name it is written with, as `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
+An input `<in>` of a program `<prog>` is its label, the number or the name it is written with, as `0` in `input 0 : …` or `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
 The workers resolve the name against the program installed.
 
 For many updates at a single time, put the time on the batch header.

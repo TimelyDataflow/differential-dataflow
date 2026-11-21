@@ -18,8 +18,8 @@ fn rows(src: &str, feeds: Vec<(usize, String)>) -> Vec<(String, String, i64)> {
         server.install(worker, "p", &p).unwrap();
         for (i, text) in feeds { server.feed("p", i, &text, 0).unwrap(); }
         for imp in &p.root.imports {
-            if let interactive::scope_ir::Source::Input(i) = imp.from {
-                server.seal("p", i, &Antichain::from_elem(host_time(1))).unwrap();
+            if let interactive::scope_ir::Source::Input(i) = &imp.from {
+                server.seal("p", i.clone(), &Antichain::from_elem(host_time(1))).unwrap();
             }
         }
         server.spin(worker);

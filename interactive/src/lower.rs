@@ -308,7 +308,7 @@ pub(crate) fn is_arranged(input: &st::Ref, items: &[st::Item]) -> bool {
 pub(crate) fn lower_bound(text: &str) -> st::Program {
     let mut program = lower_tree(crate::parse::pipe::parse(text));
     let labels: Vec<String> = program.root.imports.iter()
-        .filter(|i| matches!(i.from, st::Source::Input(_)) && crate::server::InputId::is_name(&i.name))
+        .filter(|i| matches!(i.from, st::Source::Input(crate::server::InputId::Name(_))))
         .map(|i| i.name.clone()).collect();
     program.bind(labels.iter().map(|l| (l.as_str(), l.as_str()))).unwrap();
     program
@@ -340,7 +340,7 @@ struct ScopeLower {
     /// The statement being lowered, which names the items it pushes.
     statement: String,
     imports: Vec<st::Import>,
-    input_import: HashMap<usize, usize>, // input n  -> import idx (root, deduped)
+    input_import: HashMap<crate::server::InputId, usize>, // input label -> import idx (root, deduped)
     env: HashMap<RefName, st::Ref>,        // local names, qualified child exports, and imports
 }
 
@@ -355,18 +355,18 @@ impl ScopeLower {
         if is_arranged(&input, &self.items) { input }
         else { self.push(st::Node::Arrange(input)) }
     }
-    /// The root import for the input at position `n`, named by its label.
-    fn input_ref(&mut self, n: usize, label: String) -> st::Ref {
-        assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", label);
-        if let Some(&i) = self.input_import.get(&n) { return st::Ref::Import(i); }
+    /// The root import for the input with label `id`, named by its label.
+    fn input_ref(&mut self, id: &crate::server::InputId) -> st::Ref {
+        assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", id.label());
+        if let Some(&i) = self.input_import.get(id) { return st::Ref::Import(i); }
         let i = self.imports.len();
-        self.imports.push(st::Import { name: label, from: st::Source::Input(n), shape: None });
-        self.input_import.insert(n, i);
+        self.imports.push(st::Import { name: id.label(), from: st::Source::Input(id.clone()), shape: None });
+        self.input_import.insert(id.clone(), i);
         st::Ref::Import(i)
     }
     fn lower_expr(&mut self, e: &Expr) -> st::Ref {
         match e {
-            Expr::Input(input) => self.input_ref(input.position(), input.label()),
+            Expr::Input(input) => self.input_ref(input),
             Expr::TypedSource(source, key, val) => {
                 let r = self.lower_expr(source);
                 let st::Ref::Import(i) = r else { panic!("a shape ascription requires an external source") };
@@ -1047,10 +1047,10 @@ mod optimize_tests {
         assert_eq!(linears, vec![3, 1], "the key, filter and distinct record map fuse; the inverse stays after reduce");
     }
 
-    /// A numbered input sits at its number, and named inputs after the largest number in the order
-    /// of names, whatever order inputs are written in. Each input's import is named by its label.
+    /// An input's source is its label, whatever order inputs are written in, and its import is
+    /// named by its label.
     #[test]
-    fn inputs_take_positions_from_labels() {
+    fn inputs_are_their_labels() {
         for text in [
             "let b = input \"b\" : ((int), ()); let a = input \"a\" : ((int), ()); let z = input 1 : ((int), ()); output \"out\" = a + b + z;",
             "let z = input 1 : ((int), ()); let a = input \"a\" : ((int), ()); let b = input \"b\" : ((int), ()); output \"out\" = b + a + z;",
@@ -1058,7 +1058,8 @@ mod optimize_tests {
             let p = lower_tree(parse(text));
             let mut labels: Vec<_> = p.root.imports.iter().map(|i| (i.name.as_str(), i.from.clone())).collect();
             labels.sort_by_key(|(name, _)| name.to_string());
-            assert_eq!(labels, vec![("1", st::Source::Input(1)), ("a", st::Source::Input(2)), ("b", st::Source::Input(3))]);
+            use crate::server::InputId::{Name, Number};
+            assert_eq!(labels, vec![("1", st::Source::Input(Number(1))), ("a", st::Source::Input(Name("a".into()))), ("b", st::Source::Input(Name("b".into())))]);
         }
     }
 
@@ -1082,7 +1083,7 @@ mod optimize_tests {
     }
 
     #[test]
-    fn input_names_do_not_read_as_positions() {
+    fn input_names_do_not_read_as_numbers() {
         for name in ["1", "+1", "a b", "a=b", "g::a", ""] {
             let text = format!("let a = input {name:?} : ((int), ()); output \"out\" = a;");
             assert!(std::panic::catch_unwind(|| parse(&text)).is_err(), "{name:?} is accepted");
