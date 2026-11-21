@@ -64,8 +64,7 @@ fn input_shapes(node: &Node, shapes: &ScopeShapes) -> Option<Vec<corgi::Shape>> 
         }
         Node::HalfJoin { stream, arrangement, .. } => {
             let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
-            let Shape::Prod(fields) = s.val else { return None };
-            vec![Shape::Prod(vec![s.key, fields.first()?.clone(), a.val])]
+            vec![s.half_join_row(a.val).ok()?]
         }
         Node::Reduce { input, .. } => {
             let shape = shapes.of(input)?;

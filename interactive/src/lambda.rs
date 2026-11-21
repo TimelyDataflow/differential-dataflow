@@ -93,6 +93,10 @@ impl Lambda {
     pub(crate) fn on_join_columns(&self) -> Self {
         Self::compose("(k, l, r)", &[(self, "(k, (l, r))".into())], |out| out[0].clone())
     }
+    /// Apply a half-join projection to the gathered columns and their joined data time.
+    pub(crate) fn on_half_join_columns(&self) -> Self {
+        Self::compose("(k, l, r, t)", &[(self, "(k, ((l, r), t))".into())], |out| out[0].clone())
+    }
     /// The graph, or the parse error naming the program.
     pub(crate) fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
         self.graph.as_ref().map_err(|e| format!("corgi program `{}`: {e}", self.src))

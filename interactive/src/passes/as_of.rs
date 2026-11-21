@@ -221,8 +221,8 @@ mod tests {
         let (prog, inserted) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            output "r" = ((a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
-                        + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)))));
+            output "r" = ((a | lift | half_join(b, 0))
+                        + (b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t)))));
         "#);
         assert_eq!(inserted, 1);
         let found = filters(&prog.root);
@@ -238,9 +238,9 @@ mod tests {
             let a = import "a";
             let b = import "b";
             let c = import "c";
-            let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, x)) | half_join(c, 0, (k, x, z) -> (k, x));
-            let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, x)) | half_join(c, 0, (k, x, z) -> (k, x));
-            let ca = c | lift | half_join(a, 1, (k, z, x) -> (k, x)) | half_join(b, 1, (k, x, y) -> (k, x));
+            let ab = a | lift | half_join(b, 0, (k, ((x, y), t)) -> (k, (x, t))) | half_join(c, 0, (k, ((x, z), t)) -> (k, (x, t)));
+            let ba = b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, (x, t))) | half_join(c, 0, (k, ((x, z), t)) -> (k, (x, t)));
+            let ca = c | lift | half_join(a, 1, (k, ((z, x), t)) -> (k, (x, t))) | half_join(b, 1, (k, ((x, y), t)) -> (k, (x, t)));
             output "r" = ab + ba + ca;
         "#);
         assert_eq!(inserted, 2, "every path but `a`'s, which is non-strict throughout");
@@ -250,8 +250,8 @@ mod tests {
     fn a_shared_lift_filters_only_the_edge_to_its_strict_reader() {
         let (prog, inserted) = rewrite(r#"
             let p = import "p";
-            output "r" = ((p | lift | half_join(p, 0, (k, x, y) -> (k, (x, y))))
-                        + (p | lift | half_join(p, 1, (k, x, y) -> (k, (x, y)))));
+            output "r" = ((p | lift | half_join(p, 0))
+                        + (p | lift | half_join(p, 1)));
         "#);
         assert_eq!(inserted, 1);
         let found = filters(&prog.root);
@@ -268,7 +268,7 @@ mod tests {
         let (prog, inserted) = rewrite(r#"
             let p = import "p";
             let lifted = p | lift | filter((k, _) -> (k, k) eq) | negate;
-            output "strict" = lifted | half_join(p, 1, (k, x, y) -> (k, (x, y)));
+            output "strict" = lifted | half_join(p, 1);
             output "live" = lifted;
         "#);
         assert_eq!(inserted, 1);
@@ -288,7 +288,7 @@ mod tests {
             let a = import "a";
             let b = import "b";
             let la = a | lift;
-            output "r" = la | half_join(b, 1, (k, x, y) -> (k, (x, y)));
+            output "r" = la | half_join(b, 1);
             output "lifted" = la;
         "#);
         assert_eq!(inserted, 1, "the edge to the strict half join is filtered");
@@ -299,13 +299,13 @@ mod tests {
         let (_, live) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            output "r" = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
+            output "r" = a | lift | half_join(b, 0);
         "#);
         assert_eq!(live, 0, "a non-strict path is live at the as-of time");
         let (_, moved) = rewrite(r#"
             let a = import "a";
             let b = import "b";
-            output "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1, (k, x, y) -> (k, (x, y)));
+            output "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1);
         "#);
         assert_eq!(moved, 0, "a delay between the lift and the strict half join can move the time");
     }
@@ -316,7 +316,7 @@ mod tests {
             let a = import "a";
             let b = import "b";
             s: {
-                let r = a | lift | half_join(b, 1, (k, x, y) -> (k, x)) | map((k, (x, _)) -> (k, x));
+                let r = a | lift | half_join(b, 1, (k, ((x, y), t)) -> (k, (x, t))) | map((k, (x, _)) -> (k, x));
                 set x = (r + x) | distinct;
             }
             output "r" = s::x;

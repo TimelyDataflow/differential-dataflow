@@ -252,8 +252,8 @@ impl Builder {
     ) -> Result<(), String> {
         self.presence(from, stream);
         self.presence(from, arrangement);
-        // Keys decide matching, and the lifted stream time decides whether a
-        // match is admissible and supplies the output's data time.
+        // Keys decide matching. The operator always consumes a lifted stream,
+        // including its data time, even when the projection drops the time.
         for id in from.all() {
             for &key in stream.key.iter().chain(&arrangement.key) {
                 self.edge(id, key);
@@ -269,30 +269,18 @@ impl Builder {
         let Shape::Prod(stream_parts) = &stream.shape.1 else {
             return Err("projection: half_join stream value is not (value, time)".into());
         };
-        let stream_value = stream_parts
-            .first()
-            .ok_or("projection: half_join has no value field")?;
-        let shapes = [
-            stream.shape.0.clone(),
-            stream_value.clone(),
-            arrangement.shape.1.clone(),
-        ];
+        let [stream_value, time] = stream_parts.as_slice() else {
+            return Err("projection: half_join stream value is not (value, time)".into());
+        };
+        let shapes = [stream.shape.0.clone(), stream_value.clone(), arrangement.shape.1.clone(), time.clone()];
+        let columns = lambda.on_half_join_columns();
         for (output_id, path) in from.field_paths() {
-            if path.as_slice() == [1, 1] {
-                continue;
-            }
-            // The half join appends time after the projected value. Its value
-            // is one atomic fact at this top-level field precision.
-            let projected = if path.as_slice() == [1, 0] {
-                vec![1]
-            } else {
-                path
-            };
-            for (slot, field) in graph_fields(lambda, &shapes, &projected) {
+            for (slot, field) in graph_fields(&columns, &shapes, &path) {
                 let source = match slot {
                     0 => stream.key.get(field),
                     1 => stream.val.first(),
                     2 => arrangement.val.get(field),
+                    3 => stream.val.get(1),
                     _ => None,
                 };
                 if let Some(&source) = source {
@@ -623,46 +611,16 @@ fn mask_part(name: &str, shape: &Shape, facts: &[usize], live: &[bool]) -> Strin
     }
 }
 
-fn mask_lambda(
-    original: &Lambda,
-    key_shape: &Shape,
-    key_facts: &[usize],
-    value_shape: Option<&Shape>,
-    value_facts: &[usize],
-    live: &[bool],
-) -> Option<Lambda> {
-    // A half join appends time after its projection. Its projected value is
-    // one demand fact even when the value itself is a tuple.
-    if width(key_shape) != key_facts.len()
-        || match value_shape {
-            Some(shape) => width(shape) != value_facts.len(),
-            None => value_facts.len() != 1,
-        }
-    {
+fn mask_site_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
+    if !needs_mask(&output.shape.0, &output.key, live) && !needs_mask(&output.shape.1, &output.val, live) {
         return None;
     }
-    if !needs_mask(key_shape, key_facts, live) && match value_shape {
-        Some(shape) => !needs_mask(shape, value_facts, live),
-        None => live[value_facts[0]],
-    } {
-        return None;
-    }
-    // Select live fields directly from the call result. Corgi can fold those
-    // field selections through the tuple and eliminate dead work. The parsed
-    // source and the running graph then take the same optimization path.
-    Some(Lambda::compose(
-        "arg",
-        &[(original, "arg".into())],
-        |result| {
-            let key = mask_part(&format!("{}.0", result[0]), key_shape, key_facts, live);
-            let val = match value_shape {
-                Some(shape) => mask_part(&format!("{}.1", result[0]), shape, value_facts, live),
-                None if live[value_facts[0]] => format!("{}.1", result[0]),
-                None => "()".into(),
-            };
-            format!("({key}, {val})")
-        },
-    ))
+    // Select live fields directly from the call result so corgi can eliminate dead work.
+    Some(Lambda::compose("arg", &[(original, "arg".into())], |result| {
+        let key = mask_part(&format!("{}.0", result[0]), &output.shape.0, &output.key, live);
+        let val = mask_part(&format!("{}.1", result[0]), &output.shape.1, &output.val, live);
+        format!("({key}, {val})")
+    }))
 }
 
 fn needs_mask(shape: &Shape, facts: &[usize], live: &[bool]) -> bool {
@@ -671,46 +629,6 @@ fn needs_mask(shape: &Shape, facts: &[usize], live: &[bool]) -> bool {
         Shape::Prod(parts) => parts.iter().zip(facts).any(|(s, &id)| *s != Shape::Unit && !live[id]),
         _ => !live[facts[0]],
     }
-}
-
-fn mask_site_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
-    mask_lambda(
-        original,
-        &output.shape.0,
-        &output.key,
-        Some(&output.shape.1),
-        &output.val,
-        live,
-    )
-}
-
-fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
-    // The half-join operator appends time after this lambda has produced
-    // (key, value), so only the first output value fact belongs to the lambda.
-    let Shape::Prod(parts) = &output.shape.1 else {
-        return None;
-    };
-    if parts.len() != 2 {
-        return None;
-    }
-    let Some(&value_fact) = output.val.first() else {
-        return None;
-    };
-    // A unit value has nothing to mask, though the half join keeps a fact for it.
-    // Masking it again would count a change each round, and never converge.
-    let (value_shape, value_facts) = if parts[0] == Shape::Unit {
-        (Some(&parts[0]), &[][..])
-    } else {
-        (None, std::slice::from_ref(&value_fact))
-    };
-    mask_lambda(
-        original,
-        &output.shape.0,
-        &output.key,
-        value_shape,
-        value_facts,
-        live,
-    )
 }
 
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
@@ -741,7 +659,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     }
                 }
             }
-            (Item::Op(Node::Join { projection, .. }), PlannedItem::Op { output, .. }) => {
+            (Item::Op(Node::Join { projection, .. } | Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
                 if let Some(new) = mask_site_lambda(projection, output, live) {
                     masked += output
                         .key
@@ -749,14 +667,6 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                         .chain(&output.val)
                         .filter(|&&id| !live[id])
                         .count();
-                    *projection = new;
-                }
-            }
-            (Item::Op(Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
-                if let Some(new) = mask_half_join(projection, output, live) {
-                    masked += output.key.iter().filter(|&&id| !live[id]).count();
-                    let unit = matches!(&output.shape.1, Shape::Prod(parts) if parts[0] == Shape::Unit);
-                    masked += usize::from(!unit && !live[output.val[0]]);
                     *projection = new;
                 }
             }
@@ -1165,12 +1075,29 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+                    | half_join(b, 0, (k, ((x, yz), t)) -> (k, (x, t))) | count;";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut program);
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 4);
+        // Count needs neither the payload nor the joined data time in the output.
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 5);
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
         let (_, check) = shapes::infer(&program, &|_| None, 1);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
+    }
+
+    #[test]
+    fn half_join_with_unit_payload_reaches_a_fixed_point() {
+        let text = r#"let rows = input 0 : (int, ());
+            output "out" = rows | lift
+                | half_join(rows, 0, (k, (_, t)) -> (k, ((), t))) | count;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        crate::passes::optimize(&mut program);
+        // The unread time can be masked on the first pass. The unit payload must
+        // not keep reporting changes until pushdown gives up and reverts the plan.
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let once = format!("{program:?}");
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+        assert_eq!(format!("{program:?}"), once);
     }
 
     #[test]
@@ -1181,11 +1108,11 @@ mod tests {
                     let b = input 1 : ((int, int, int), ())
                     | map(((k, y, z), ()) -> (k, (y, z)));
                     output \"out\" = a | lift
-                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+                    | half_join(b, 0, (k, ((x, yz), t)) -> (k, (x, t))) | count;";
         let mut original = lower::lower_tree(parse::pipe::parse(text));
         crate::passes::optimize(&mut original);
         let mut projected = original.clone();
-        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 4);
+        assert_eq!(pushdown(&mut projected, &|_| None).unwrap(), 5);
         timely::execute_directly(move |worker| {
             let mut server = Server::new();
             server.install(worker, "before", &original).unwrap();

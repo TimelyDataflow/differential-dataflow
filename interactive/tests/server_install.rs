@@ -44,7 +44,7 @@ fn unread_imports_are_validated_before_passes() {
 #[test]
 fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
     let text = r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
-        output "out" = a | lift | half_join(b, 1, (k, v, _) -> (k, v));"#;
+        output "out" = a | lift | half_join(b, 1, (k, ((v, _), t)) -> (k, (v, t)));"#;
     let path = std::env::temp_dir().join(format!("ddir-as-of-{}.ddp", std::process::id()));
     std::fs::write(&path, text).unwrap();
     let emit = |args: &[&str]| {

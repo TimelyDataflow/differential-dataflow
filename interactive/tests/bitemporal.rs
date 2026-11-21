@@ -462,8 +462,8 @@ fn independent_inputs_and_time_shapes() {
                 output "left" = a;
                 output "right" = b;
                 output "seen" = s::seen;
-                output "delta" = (a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))))
-                               + (b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))));
+                output "delta" = (a | lift | half_join(b, 0))
+                               + (b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t))));
             "#));
             server.install_with_root(worker, "split", &program, 2, at((0, 0))).unwrap();
             if worker.index() == 0 {

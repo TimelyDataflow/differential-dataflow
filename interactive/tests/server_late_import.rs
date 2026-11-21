@@ -161,8 +161,8 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
 const DELTA_CONSUMER: &str = r#"
     let pairs = import "producer::pairs";
     let weights = import "producer::weights";
-    let r = ((pairs | lift | half_join(pairs, 0, ((a, b), (), _) -> ((b, (a, b) min) eq, 0)))
-           + (pairs | lift | half_join(pairs, 1, ((a, b), (), _) -> ((b, (a, b) min) eq, 0))))
+    let r = ((pairs | lift | half_join(pairs, 0, ((a, b), (((), _), t)) -> ((b, (a, b) min) eq, (0, t))))
+           + (pairs | lift | half_join(pairs, 1, ((a, b), (((), _), t)) -> ((b, (a, b) min) eq, (0, t)))))
           | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v)) | distinct;
     s: {
         let step = x | join(weights, (k, (v, _)) -> (k, v));
@@ -257,9 +257,9 @@ const TRIPLE_DELTA: &str = r#"
     let a = import "producer::a";
     let b = import "producer::b";
     let c = import "producer::c";
-    let pa = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
-    let pb = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y))) | half_join(c, 0, (k, (x, y), z) -> (k, (x, y, z)));
-    let pc = c | lift | half_join(a, 1, (k, z, x) -> (k, (x, z))) | half_join(b, 1, (k, (x, z), y) -> (k, (x, y, z)));
+    let pa = a | lift | half_join(b, 0) | half_join(c, 0, (k, (((x, y), z), t)) -> (k, ((x, y, z), t)));
+    let pb = b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t))) | half_join(c, 0, (k, (((x, y), z), t)) -> (k, ((x, y, z), t)));
+    let pc = c | lift | half_join(a, 1, (k, ((z, x), t)) -> (k, ((x, z), t))) | half_join(b, 1, (k, (((x, z), y), t)) -> (k, ((x, y, z), t)));
     output "r" = (pa + pb + pc) | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v));
 "#;
 

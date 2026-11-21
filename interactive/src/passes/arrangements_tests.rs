@@ -210,7 +210,7 @@ fn variant_inputs_and_half_joins_stop_motion_before_fusion() {
     let p = rewrite(r#"
         let x = input 0 : (int, int);
         let timed = x | map((k, v) -> (k, (v, (0, 0))));
-        child: { let out = ::timed | half_join(::x, 0, (k, l, r) -> (k, l)); }
+        child: { let out = ::timed | half_join(::x, 0, (k, ((l, r), t)) -> (k, (l, t))); }
         output "out" = child::out;
     "#, hoist(), 0);
     let Item::Sub(child) = p.root.items.last().unwrap() else { panic!() };

@@ -12,8 +12,8 @@ const PROGRAM: &str = r#"
 
     -- Each of `a`'s updates meets `b`'s at or before it, and each of `b`'s meets `a`'s strictly
     -- before it, so every pair meets once, at the later of its two times.
-    let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
-    let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)));
+    let ab = a | lift | half_join(b, 0);
+    let ba = b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t)));
     output "delta" = (ab + ba) | delay((_, (_, t)) -> t) | map((k, (xy, _)) -> (k, xy));
     output "join" = a | join(b);
 
@@ -24,8 +24,8 @@ const PROGRAM: &str = r#"
         set reach = roots + step | distinct;
     }
     halved: {
-        let fwd = reach | lift | half_join(b, 0, (_, (), dst) -> (dst, ()));
-        let rev = b | lift | half_join(reach, 1, (_, dst, ()) -> (dst, ()));
+        let fwd = reach | lift | half_join(b, 0, (_, (((), dst), t)) -> (dst, ((), t)));
+        let rev = b | lift | half_join(reach, 1, (_, ((dst, ()), t)) -> (dst, ((), t)));
         let step = (fwd + rev) | delay((_, (_, t)) -> t) | map((n, _) -> (n, ()));
         set reach = roots + step | distinct;
     }
@@ -90,4 +90,46 @@ fn delta_joins_are_joins() {
             assert_eq!(reach_delta, reach_join, "tick {tick}, {workers} workers: reachability");
         }
     }
+}
+
+#[test]
+fn projection_sees_joined_data_time_at_the_stream_timestamp() {
+    use interactive::server::HostTime;
+
+    timely::execute_directly(|worker| {
+        let src = r#"
+            let a = input 0 : (int, int);
+            let b = input 1 : (int, int);
+            let stream = a | lift;
+            let match_row = stream | half_join(b, 1);
+            output "bare" = match_row;
+            output "identity" = stream | half_join(b, 1, row -> row);
+            output "mapped" = match_row | map((k, ((l, r), (_, y))) -> (y, (k, (r, l))));
+            output "projected" = stream | half_join(b, 1, (k, ((l, r), (_, y))) -> (y, (k, (r, l))));
+            output "changed" = stream | half_join(b, 1, (k, ((l, _), (x, y))) -> (k, (l, (y, x))));
+            output "dropped" = stream | half_join(b, 1, (_, ((l, r), _)) -> (r, l));
+        "#;
+        let point = |x, y| HostTime::new(smallvec::smallvec![x, y]);
+        let mut server = Server::new();
+        server.set_passes(interactive::passes::Config::all());
+        let program = lower::lower_tree(parse::pipe::parse(src));
+        server.install_with_width(worker, "p", &program, 2).unwrap();
+        server.feed_at("p", 0, "7 val=10 diff=2", &point(1, 0)).unwrap();
+        server.feed_at("p", 1, "7 val=20 diff=-3", &point(0, 2)).unwrap();
+        for input in [0, 1] { server.seal("p", input, &Antichain::new()).unwrap(); }
+
+        // The arrangement is earlier in the total order. Its second coordinate
+        // contributes to the data time (1, 2), even in a snapshot at (1, 0).
+        for (name, key, val) in [
+            ("bare", "7", "tuple(tuple(10,20),tuple(1,2))"),
+            ("identity", "7", "tuple(tuple(10,20),tuple(1,2))"),
+            ("mapped", "2", "tuple(7,tuple(20,10))"),
+            ("projected", "2", "tuple(7,tuple(20,10))"),
+            ("changed", "7", "tuple(10,tuple(2,1))"),
+            ("dropped", "20", "10"),
+        ] {
+            let rows = server.snapshot_as_of(worker, &format!("p::{name}"), &point(1, 0)).unwrap().rows();
+            assert_eq!(rows, vec![(key.into(), val.into(), -6)], "{name}");
+        }
+    });
 }
