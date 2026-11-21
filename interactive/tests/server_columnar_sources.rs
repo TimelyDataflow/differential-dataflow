@@ -32,10 +32,10 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         for epoch in 1..5i64 {
             if worker.index() == 0 {
                 for i in 0..10 {
-                    server.feed("undeclared", 0, &(i * epoch).to_string(), epoch as u64 - 1).unwrap();
+                    server.feed("undeclared", &0.into(), &(i * epoch).to_string(), epoch as u64 - 1).unwrap();
                 }
             }
-            server.seal("undeclared", 0, &Antichain::from_elem(host_time(epoch as u64))).unwrap();
+            server.seal("undeclared", &0.into(), &Antichain::from_elem(host_time(epoch as u64))).unwrap();
             server.spin(worker);
             for name in ["undeclared::loose", "declaring::doubled"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());

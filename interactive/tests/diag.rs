@@ -62,14 +62,14 @@ fn views_see_programs_and_state_stays_bounded() {
         interactive::passes::optimize(&mut views);
         server.install(worker, "diag", &views).unwrap();
         server.install(worker, "p", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
-        server.feed("p", 0, "1,2\n2,3\n3,1\n2,1", 0).unwrap();
-        server.seal("p", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.feed("p", &0.into(), "1,2\n2,3\n3,1\n2,1", 0).unwrap();
+        server.seal("p", &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
         server.spin(worker);
         for _ in 0..2 {
             server.sample_diagnostics(worker).unwrap();
             server.spin(worker);
         }
-        assert_eq!(server.input_time("p", 0).unwrap(), &host_time(1));
+        assert_eq!(server.input_time("p", &0.into()).unwrap(), &host_time(1));
 
         let time = view(&mut server, worker, "diag::time_by_statement");
         assert!(time.iter().any(|(k, &ns)| k.contains("\"p\"") && k.contains("\"pairs\"") && ns > 0), "{time:#?}");
@@ -84,8 +84,8 @@ fn views_see_programs_and_state_stays_bounded() {
         let mut held = Vec::new();
         for round in 0..30 {
             server.install(worker, "q", &program(&PAIRS.replace("NAME", "pairs"))).unwrap();
-            server.feed("q", 0, "1,2\n2,3", 0).unwrap();
-            server.seal("q", 0, &Antichain::from_elem(host_time(1))).unwrap();
+            server.feed("q", &0.into(), "1,2\n2,3", 0).unwrap();
+            server.seal("q", &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
             server.spin(worker);
             server.sample_diagnostics(worker).unwrap();
             server.spin(worker);

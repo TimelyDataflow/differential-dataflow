@@ -46,7 +46,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 | command | effect |
 |---|---|
-| `load <name> from <file> [<label>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, the inputs with those labels bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `load <name> from <file> [<label>=<trace> ...] [explain \| explain=debug]` | parse + lower + install a program file under `<name>`, the inputs with those labels bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
 | `feed <prog> <in> <value> [val=<value>] time=<t> [diff=<int>]` | stage an input update |
 | `feed <prog> <in> time=now from <file-or-trace>` | fill an input from a published trace or a file of integer rows, sharded across workers |
 | `seal <prog> <in> <frontier>` | advance an input’s write frontier; a scalar frontier of 1 closes time 0 |
@@ -89,12 +89,10 @@ whitespace-separated integers, each becoming `(Tuple[ints], ())`; the
 `aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
 serves the small inputs (roots, queries).
 
-`load … explain=<arity>` applies the explanation rewrite before
-optimization, treating every source without a declared shape as `arity` key
-fields with no value; the
-rewritten program has one extra input after its own — the query input, fed as
-`(key, val ++ q)` — and outputs one `demand:<label>` trace per input, which
-you `peek` as `<name>::demand:<label>`, as `<name>::demand:0` for `input 0`. `,debug` taps every demand collection with an inspect.
+`load … explain` applies the explanation rewrite before
+optimization. The rewritten program has one more input, labelled `query` and fed as
+`(key, (val, q))`, and outputs one `demand:<label>` trace per input, which
+you `peek` as `<name>::demand:<label>`, as `<name>::demand:0` for `input 0`. `explain=debug` also taps every demand collection with an inspect.
 
 ## The programs
 

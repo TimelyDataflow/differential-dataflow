@@ -68,10 +68,10 @@ fn run(late: u64, arranged: bool) -> Vec<(String, String, i64)> {
         for epoch in 0..22 {
             if epoch == late { server.install(worker, "consumer", &program(CONSUMER)).unwrap(); }
             for (_, input, rows) in FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, epoch).unwrap();
+                server.feed("producer", &(*input).into(), rows, epoch).unwrap();
             }
             for input in [0, 1] {
-                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+                server.seal("producer", &input.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             }
             server.spin(worker);
             for export in ["producer::seeds", "producer::edges"] {
@@ -148,10 +148,10 @@ fn run_arranged(late: u64) -> (Vec<(String, String, i64)>, Vec<(String, String, 
         for epoch in 0..27 {
             if epoch == late { server.install(worker, "consumer", &program(ARRANGED_CONSUMER)).unwrap(); }
             for (_, input, rows) in ARRANGED_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, epoch).unwrap();
+                server.feed("producer", &(*input).into(), rows, epoch).unwrap();
             }
             for input in [0, 5] {
-                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+                server.seal("producer", &input.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             }
             server.spin(worker);
             for export in ["producer::pairs", "producer::weights"] {
@@ -191,10 +191,10 @@ fn run_consumer(consumer: &'static str, late: u64) -> (Vec<(String, String, i64)
         for epoch in 0..27 {
             if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
             for (_, input, rows) in ARRANGED_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, epoch).unwrap();
+                server.feed("producer", &(*input).into(), rows, epoch).unwrap();
             }
             for input in [0, 5] {
-                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+                server.seal("producer", &input.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             }
             server.spin(worker);
             for export in ["producer::pairs", "producer::weights"] {
@@ -282,10 +282,10 @@ fn run_triple(consumer: &'static str, late: u64, arranged: bool) -> Vec<(String,
         for epoch in 0..13 {
             if epoch == late { server.install(worker, "consumer", &program(consumer)).unwrap(); }
             for (_, input, rows) in TRIPLE_FEEDS.iter().filter(|(e, _, _)| *e == epoch) {
-                server.feed("producer", *input, rows, epoch).unwrap();
+                server.feed("producer", &(*input).into(), rows, epoch).unwrap();
             }
             for input in [0, 1, 2] {
-                server.seal("producer", input, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+                server.seal("producer", &input.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             }
             server.spin(worker);
             for export in ["producer::a", "producer::b", "producer::c"] {

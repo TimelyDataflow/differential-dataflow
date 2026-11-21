@@ -40,10 +40,10 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         for tick in 0..3 {
             if worker.index() == 0 {
                 for (k, v, d) in feeds(tick) {
-                    server.feed("p", 0, &format!("{k},{v} diff={d}"), tick as u64).unwrap();
+                    server.feed("p", &0.into(), &format!("{k},{v} diff={d}"), tick as u64).unwrap();
                 }
             }
-            server.seal("p", 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            server.seal("p", &0.into(), &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
             server.spin(worker);
         }
         NAMES.map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()).to_vec()
@@ -109,9 +109,9 @@ fn one_coordinate_times_may_be_bare() {
         server.install(worker, "p", &program).unwrap();
         for tick in 0..3 {
             for (k, v, d) in feeds(tick) {
-                server.feed("p", 0, &format!("{k},{v} diff={d}"), tick as u64).unwrap();
+                server.feed("p", &0.into(), &format!("{k},{v} diff={d}"), tick as u64).unwrap();
             }
-            server.seal("p", 0, &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
+            server.seal("p", &0.into(), &Antichain::from_elem(host_time(tick as u64 + 1))).unwrap();
             server.spin(worker);
         }
         ["epoch", "join_function"].map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()).to_vec()

@@ -943,7 +943,7 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
         if ahead && worker.index() == 0 {
             for (time, epoch) in epochs.iter().enumerate() {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), time as u64)?;
+                    server.feed(&fed, &(*input).into(), &lines.join("\n"), time as u64)?;
                 }
             }
         }
@@ -959,12 +959,12 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
             }
             if !ahead && worker.index() == 0 {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), e as u64)?;
+                    server.feed(&fed, &(*input).into(), &lines.join("\n"), e as u64)?;
                 }
             }
             let frontier = Antichain::from_elem(server::host_time(e as u64 + 1));
             for p in server.program_info() {
-                for input in p.inputs { server.seal(&p.name, input, &frontier)?; }
+                for input in p.inputs { server.seal(&p.name, &input.into(), &frontier)?; }
             }
             server.spin(worker);
             for (trace, _) in server.trace_info() {

@@ -66,18 +66,18 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
             let text = text.replace("\"out\"", &format!("{name:?}"));
             let program = lower::lower_tree(parse::pipe::parse(&text));
             server.install(worker, name, &program).unwrap();
-            server.feed(name, 1, "1 val=20", 0).unwrap();
+            server.feed(name, &1.into(), "1 val=20", 0).unwrap();
         }
         for name in ["original", "emitted"] {
             for input in [0, 1] {
-                server.seal(name, input, &Antichain::from_elem(host_time(1))).unwrap();
+                server.seal(name, &input.into(), &Antichain::from_elem(host_time(1))).unwrap();
             }
         }
         server.spin(worker);
-        for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", 1).unwrap(); }
+        for name in ["original", "emitted"] { server.feed(name, &0.into(), "1 val=10", 1).unwrap(); }
         for name in ["original", "emitted"] {
             for input in [0, 1] {
-                server.seal(name, input, &Antichain::from_elem(host_time(2))).unwrap();
+                server.seal(name, &input.into(), &Antichain::from_elem(host_time(2))).unwrap();
             }
         }
         server.spin(worker);

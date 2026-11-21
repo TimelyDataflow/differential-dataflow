@@ -154,22 +154,22 @@ fn rows_of_another_shape_are_refused() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        let fed = server.feed("producer", 0, "1", 0).unwrap_err();
+        let fed = server.feed("producer", &0.into(), "1", 0).unwrap_err();
         assert!(fed.contains("row 1") && fed.contains("expected 2 comma-separated integers"), "{fed}");
-        let batch = server.feed("producer", 0, "1,2\n3", 0).unwrap_err();
+        let batch = server.feed("producer", &0.into(), "1,2\n3", 0).unwrap_err();
         assert!(batch.contains("row 2"), "{batch}");
         let file = std::env::temp_dir().join(format!("ddir-rows-{}.txt", std::process::id()));
         std::fs::write(&file, "1 2\n3 4 5\n").unwrap();
-        let loaded = server.load(worker, "producer", 0, file.to_str().unwrap(), 1).unwrap_err();
+        let loaded = server.load(worker, "producer", &0.into(), file.to_str().unwrap(), 1).unwrap_err();
         assert!(loaded.contains("line 2"), "{loaded}");
-        server.seal("producer", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.seal("producer", &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
         server.spin(worker);
         assert!(server.snapshot(worker, "producer::edges").unwrap().is_empty(), "nothing refused was staged");
-        server.feed("producer", 0, "1,2\n3,4", 1).unwrap();
+        server.feed("producer", &0.into(), "1,2\n3,4", 1).unwrap();
         // Integers read as Rust reads them, a leading `+` included.
         std::fs::write(&file, "5 6\n+7 -8\n").unwrap();
-        server.load(worker, "producer", 0, file.to_str().unwrap(), 1).unwrap();
-        server.seal("producer", 0, &Antichain::from_elem(host_time(2))).unwrap();
+        server.load(worker, "producer", &0.into(), file.to_str().unwrap(), 1).unwrap();
+        server.seal("producer", &0.into(), &Antichain::from_elem(host_time(2))).unwrap();
         server.spin(worker);
         assert_eq!(server.snapshot(worker, "producer::edges").unwrap().rows().len(), 4);
         std::fs::remove_file(&file).unwrap();
@@ -188,7 +188,7 @@ fn dead_bound_inputs_release_provider_dependencies_but_exports_keep_them() {
         "#));
         unused.bind([("edges", "producer::edges")]).unwrap();
         server.install(worker, "unused", &unused).unwrap();
-        server.feed("unused", 7, "1", 0).unwrap();
+        server.feed("unused", &7.into(), "1", 0).unwrap();
         server.drop_program(worker, "producer").unwrap();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
         server.install(worker, "contract", &bound(r#"output "contract" = input "edges" : ((int), (int));"#, &[("edges", "producer::edges")])).unwrap();

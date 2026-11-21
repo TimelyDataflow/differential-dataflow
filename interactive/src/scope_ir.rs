@@ -100,10 +100,6 @@ impl From<&str> for InputId {
     fn from(label: &str) -> Self { InputId::parse(label) }
 }
 
-impl From<&InputId> for InputId {
-    fn from(label: &InputId) -> Self { label.clone() }
-}
-
 impl From<usize> for InputId {
     fn from(number: usize) -> Self { InputId::Number(number) }
 }

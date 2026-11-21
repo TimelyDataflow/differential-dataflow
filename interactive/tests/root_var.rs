@@ -10,8 +10,8 @@ fn run(src: &'static str, epochs: Vec<Vec<&'static str>>) -> Vec<(Vec<(String, S
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
         for (epoch, feeds) in epochs.iter().enumerate() {
-            server.feed("p", 0, &feeds.join("\n"), epoch as u64).unwrap();
-            server.seal("p", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+            server.feed("p", &0.into(), &feeds.join("\n"), epoch as u64).unwrap();
+            server.seal("p", &0.into(), &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
             server.spin(worker);
             let mut a = server.snapshot(worker, "p::seen").unwrap().rows();
             let mut b = server.snapshot(worker, "p::fresh").unwrap().rows();

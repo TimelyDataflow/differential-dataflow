@@ -26,8 +26,8 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
         let mut taken_by_export: Vec<Vec<Updates>> = vec![Vec::new(); 3];
         // Two sets of rows, the first retracted and then added again.
         for (epoch, (shift, diff)) in (0u64..).zip([(0, 1), (1000, 1), (0, -1), (0, 1)]) {
-            server.feed("taps", 0, &rows(shift, diff), epoch).unwrap();
-            server.seal("taps", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            server.feed("taps", &0.into(), &rows(shift, diff), epoch).unwrap();
+            server.seal("taps", &0.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             server.spin(worker);
             for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
                 let changes = server.take_changes(&format!("taps::{name}"));

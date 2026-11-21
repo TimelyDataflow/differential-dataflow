@@ -10,23 +10,18 @@ impl Server {
     /// shapes as a feed reads them ([`crate::runtime::feed`]); blank lines and `#` comments are
     /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once the
     /// output's write frontier advances past `time`.
-    pub fn feed(&mut self, prog: &str, input: impl Into<InputId>, rows: &str, time: OuterTime) -> Result<(), String> {
-        self.stage_rows(prog, &input.into(), rows, &host_time(time))
+    pub fn feed(&mut self, prog: &str, input: &InputId, rows: &str, time: OuterTime) -> Result<(), String> {
+        self.feed_at(prog, input, rows, &host_time(time))
     }
 
     /// Convenience for an open input with a single write capability.
-    pub fn feed_now(&mut self, prog: &str, input: impl Into<InputId>, rows: &str) -> Result<(), String> {
-        let input = input.into();
-        let time = self.now(prog, &input)?.clone();
-        self.stage_rows(prog, &input, rows, &time)
+    pub fn feed_now(&mut self, prog: &str, input: &InputId, rows: &str) -> Result<(), String> {
+        let time = self.input_time(prog, input)?.clone();
+        self.feed_at(prog, input, rows, &time)
     }
 
     /// Feed rows at a point of the target program's declared root width.
-    pub fn feed_at(&mut self, prog: &str, input: impl Into<InputId>, rows: &str, time: &HostTime) -> Result<(), String> {
-        self.stage_rows(prog, &input.into(), rows, time)
-    }
-
-    fn stage_rows(&mut self, prog: &str, input: &InputId, rows: &str, time: &HostTime) -> Result<(), String> {
+    pub fn feed_at(&mut self, prog: &str, input: &InputId, rows: &str, time: &HostTime) -> Result<(), String> {
         self.validate_feed(prog, input, time)?;
         let (key, val) = &self.programs[prog].inputs[input].shape;
         let mut decoder = crate::runtime::feed::FeedDecoder::new(key, val);
@@ -41,8 +36,8 @@ impl Server {
     /// Stage rows already read into columns at `time`, each with
     /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
     /// otherwise.
-    pub fn feed_columns(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates, time: OuterTime) -> Result<(), String> {
-        self.feed_columns_at(prog, &input.into(), columns, &host_time(time))
+    pub fn feed_columns(&mut self, prog: &str, input: &InputId, columns: Updates, time: OuterTime) -> Result<(), String> {
+        self.feed_columns_at(prog, input, columns, &host_time(time))
     }
 
     /// Feed columns at a point; validates both the shape and the input's own frontier.
@@ -61,11 +56,11 @@ impl Server {
     /// root coordinate. Every time must be at or after the input's frontier; nothing is staged
     /// otherwise, nor if the shapes are not the input's declared ones. The rows of a time take
     /// effect once the input moves past it, by [`Server::seal`].
-    pub fn feed_timed(&mut self, prog: &str, input: impl Into<InputId>, columns: Updates, times: Vec<OuterTime>) -> Result<(), String> {
+    pub fn feed_timed(&mut self, prog: &str, input: &InputId, columns: Updates, times: Vec<OuterTime>) -> Result<(), String> {
         let n = times.len();
         let Updates { keys, vals, diffs } = columns;
         let times = crate::runtime::col_times::ColTimes::from_raw_lanes(vec![times], n);
-        self.feed_container(prog, &input.into(), HostContainer { keys, vals, times, diffs })
+        self.feed_container(prog, input, HostContainer { keys, vals, times, diffs })
     }
 
     /// Admit one container with arbitrary row times under the input’s full capability set.
@@ -92,10 +87,9 @@ impl Server {
     }
 
     /// Bulk-load at the destination input's sole frontier point (`time=now`).
-    pub fn load(&mut self, worker: &Worker, prog: &str, input: impl Into<InputId>, source: &str, diff: Diff) -> Result<u64, String> {
-        let input = input.into();
-        let time = self.now(prog, &input)?.clone();
-        self.load_at(worker, prog, &input, source, diff, &time)
+    pub fn load(&mut self, worker: &Worker, prog: &str, input: &InputId, source: &str, diff: Diff) -> Result<u64, String> {
+        let time = self.input_time(prog, input)?.clone();
+        self.load_at(worker, prog, input, source, diff, &time)
     }
 
     /// Bulk-load rows into the input labelled `input` of `prog` at the destination time `time`.

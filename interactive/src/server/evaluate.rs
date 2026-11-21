@@ -42,9 +42,9 @@ pub fn evaluate_labelled(
         for input in labels {
             if let Some(rows) = inputs.get(&input) {
                 let shard: Vec<&str> = rows.iter().skip(worker.index()).step_by(worker.peers()).map(String::as_str).collect();
-                server.feed("evaluate", input.clone(), &shard.join("\n"), 0).expect("evaluate: feed");
+                server.feed("evaluate", &input, &shard.join("\n"), 0).expect("evaluate: feed");
             }
-            server.seal("evaluate", input, &Antichain::new()).expect("evaluate: seal");
+            server.seal("evaluate", &input, &Antichain::new()).expect("evaluate: seal");
         }
         // `snapshot` gathers to worker 0; the other workers' results are empty.
         program

@@ -49,10 +49,10 @@ fn lanes_diffs_retractions_and_times() {
             server.install(worker, "p", &program).unwrap();
             for (epoch, diff) in [3, -2, -1].into_iter().enumerate() {
                 if worker.index() == 0 {
-                    server.feed("p", 0, &format!(
+                    server.feed("p", &0.into(), &format!(
                         "10 val=tuple(inject(0,2),7) diff={diff}\n20 val=tuple(inject(1,0),0) diff={diff}"), epoch as u64).unwrap();
                 }
-                server.seal("p", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+                server.seal("p", &0.into(), &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
                 server.spin(worker);
                 let count = [3, 1, 0][epoch];
                 for (name, k, v) in [("users", "2", "tuple(10,7)"), ("literal", "7", "10")] {

@@ -26,16 +26,12 @@ impl Server {
     }
 
     /// All minimal times at which the input can still write. Empty means finished.
-    pub fn write_frontier(&self, prog: &str, input: impl Into<InputId>) -> Result<Antichain<HostTime>, String> {
-        Ok(self.input(prog, &input.into())?.frontier().cloned().collect())
+    pub fn write_frontier(&self, prog: &str, input: &InputId) -> Result<Antichain<HostTime>, String> {
+        Ok(self.input(prog, input)?.frontier().cloned().collect())
     }
 
     /// The time chosen by time=now. Incomparable capabilities require an explicit time.
-    pub fn input_time(&self, prog: &str, input: impl Into<InputId>) -> Result<&HostTime, String> {
-        self.now(prog, &input.into())
-    }
-
-    pub(super) fn now(&self, prog: &str, input: &InputId) -> Result<&HostTime, String> {
+    pub fn input_time(&self, prog: &str, input: &InputId) -> Result<&HostTime, String> {
         let handle = self.input(prog, input)?;
         handle.time().ok_or_else(|| if handle.frontier().next().is_none() {
             format!("input {prog:?}/{input} is sealed to []")
@@ -45,7 +41,7 @@ impl Server {
     }
 
     /// Advance one input to a singleton frontier.
-    pub fn advance_input(&mut self, prog: &str, input: impl Into<InputId>, point: &HostTime) -> Result<(), String> {
+    pub fn advance_input(&mut self, prog: &str, input: &InputId, point: &HostTime) -> Result<(), String> {
         self.seal(prog, input, &Antichain::from_elem(point.clone()))
     }
 
@@ -59,11 +55,10 @@ impl Server {
     }
 
     /// Advance one input to a reachable antichain. An empty frontier finishes it permanently.
-    pub fn seal(&mut self, prog: &str, input: impl Into<InputId>, frontier: &Antichain<HostTime>) -> Result<(), String> {
-        let input: InputId = input.into();
+    pub fn seal(&mut self, prog: &str, input: &InputId, frontier: &Antichain<HostTime>) -> Result<(), String> {
         let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {prog:?}"))?;
         if installed.origin != Origin::Program { return Err(format!("source {prog:?} is not writable")); }
-        let handle = installed.inputs.get_mut(&input).ok_or_else(|| no_input(prog, &input))?;
+        let handle = installed.inputs.get_mut(input).ok_or_else(|| no_input(prog, input))?;
         if frontier.iter().any(|point| point.len() > handle.width || !handle.frontier().any(|t| t.less_equal(point))) {
             return Err(format!("cannot seal input {prog:?}/{input} to {} from {} at width {}", frontier_text(frontier.iter()), frontier_text(handle.frontier()), handle.width));
         }

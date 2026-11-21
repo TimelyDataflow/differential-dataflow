@@ -66,11 +66,11 @@ fn run(workers: usize) -> Vec<[Vec<(String, String, i64)>; 4]> {
         for tick in 0..TICKS {
             if worker.index() == 0 {
                 for (input, k, v, d) in feeds(tick) {
-                    server.feed("p", input, &format!("{k},{v} diff={d}"), tick).unwrap();
+                    server.feed("p", &input.into(), &format!("{k},{v} diff={d}"), tick).unwrap();
                 }
             }
             for input in [0, 1] {
-                server.seal("p", input, &Antichain::from_elem(host_time(tick + 1))).unwrap();
+                server.seal("p", &input.into(), &Antichain::from_elem(host_time(tick + 1))).unwrap();
             }
             server.spin(worker);
             seen.push(["delta", "join", "reach_delta", "reach_join"].map(|name| server.snapshot(worker, &format!("p::{name}")).unwrap().rows()));
@@ -114,9 +114,9 @@ fn projection_sees_joined_data_time_at_the_stream_timestamp() {
         server.set_passes(interactive::passes::Config::all());
         let program = lower::lower_tree(parse::pipe::parse(src));
         server.install_with_width(worker, "p", &program, 2).unwrap();
-        server.feed_at("p", 0, "7 val=10 diff=2", &point(1, 0)).unwrap();
-        server.feed_at("p", 1, "7 val=20 diff=-3", &point(0, 2)).unwrap();
-        for input in [0, 1] { server.seal("p", input, &Antichain::new()).unwrap(); }
+        server.feed_at("p", &0.into(), "7 val=10 diff=2", &point(1, 0)).unwrap();
+        server.feed_at("p", &1.into(), "7 val=20 diff=-3", &point(0, 2)).unwrap();
+        for input in [0, 1] { server.seal("p", &input.into(), &Antichain::new()).unwrap(); }
 
         // The arrangement is earlier in the total order. Its second coordinate
         // contributes to the data time (1, 2), even in a snapshot at (1, 0).
