@@ -1,0 +1,5 @@
+let orders = input "orders" : (int, (int, int));
+let events = orders | map((_, (customer, _)) -> (customer, ()));
+let expired = events | lift | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, (t))) = input in (t, 3) add in ((k, v), _call0, 1) enlist) | map((k, _) -> (k, ()));
+let recent = events + (expired | negate);
+output "recent" = recent | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

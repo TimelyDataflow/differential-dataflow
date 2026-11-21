@@ -1,0 +1,8 @@
+--- parsed
++++ lowered
+@@ -1 +1,4 @@
+-output "orders" = input "orders" : (int, (int, int));
++-- Time lanes: epoch.
++let orders2 = input "orders" : (int, (int, int));
++-- Renderer: build an export arrangement.
++output "orders" = orders2;

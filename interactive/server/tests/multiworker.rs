@@ -931,12 +931,22 @@ fn a_bound_consumer_follows_its_producer() {
     server.stop();
 }
 
+/// Publishes input 0 as the trace `edges`, keyed by source.
+const PRODUCER: &str = "output \"edges\" = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));";
+/// Reachability from the fed `roots` along the bound `edges`.
+const REACH: &str = "let edges = input \"edges\" : (int, int);
+let roots = input \"roots\" : (int, ());
+reach: {
+    let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
+    set reach = roots + proposals | distinct;
+}
+output \"result\" = reach::reach;";
+
 #[test]
 fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
-    let programs = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/server/programs");
     for workers in [1, 3] {
         let (server, mut writer, mut reader) = start_server(workers);
-        request(&mut writer, &mut reader, "l", &format!("l load prod from {programs}/producer.ddp\n"));
+        request(&mut writer, &mut reader, "l", &format!("l load prod begin\n{PRODUCER}\nl end-load\n"));
         request(&mut writer, &mut reader, "f", "f feed prod 0 1,2 time=0\n");
 
         let error = framed(&mut writer, &mut reader, "t", "t trim prod::edges 3\n", &[]).unwrap_err();
@@ -946,8 +956,8 @@ fn trim_waits_for_the_export_and_refuses_uncommanded_progress() {
         assert_eq!(request(&mut writer, &mut reader, "p", "p peek prod::edges as-of 0\n"), ["1 val=2"]);
 
         // Send the seal, trim and joining import together, without an intervening peek or spin.
-        request(&mut writer, &mut reader, "l", &format!("l load fresh from {programs}/producer.ddp\n"));
-        let install = format!("f feed fresh 0 1,2 time=0\ns seal fresh 0 4\nt trim fresh::edges 3\nl load reach from {programs}/reach_import.ddp edges=fresh::edges\n");
+        request(&mut writer, &mut reader, "l", &format!("l load fresh begin\n{PRODUCER}\nl end-load\n"));
+        let install = format!("f feed fresh 0 1,2 time=0\ns seal fresh 0 4\nt trim fresh::edges 3\nl load reach edges=fresh::edges begin\n{REACH}\nl end-load\n");
         let mut replies = Vec::new();
         request_observing(&mut writer, &mut reader, "l", &install, |line, _| replies.push(line.to_string()));
         for id in ["f", "s", "t", "l"] {

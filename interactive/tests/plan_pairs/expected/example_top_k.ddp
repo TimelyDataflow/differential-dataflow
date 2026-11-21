@@ -1,0 +1,12 @@
+-- Time lanes: epoch.
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let totals = input "totals" : (int, int);
+let buckets_map = totals | map((customer, total) -> ((customer, 64) rem, (total neg, customer)));
+let buckets_idx = buckets_map | arrange;
+let buckets = buckets_idx | reduce(limit 3, (_, vals) -> vals);
+let top_map = buckets | map((_, v) -> ((), v));
+let top_idx = top_map | arrange;
+let top = top_idx | reduce(limit 3, (_, vals) -> vals);
+let top_map2 = top | map((_, (negated, customer)) -> (customer, negated neg));
+-- Renderer: build an export arrangement.
+output "top" = top_map2;

@@ -1,0 +1,5 @@
+let weighted = input "weighted" : (int, (int, int));
+let roots = input "roots" : (int, ());
+output "weighted" = weighted;
+output "edges" = weighted | map((src, (dst, _)) -> (src, dst));
+output "roots" = roots;

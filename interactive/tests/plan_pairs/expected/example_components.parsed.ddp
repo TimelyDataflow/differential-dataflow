@@ -1,0 +1,9 @@
+let raw = input "edges" : (int, int);
+let edges = raw + (raw | map((a, b) -> (b, a))) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
+let nodes = edges | map((a, _) -> (a, ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
+cc: {
+    let seeds = nodes | map((n, _) -> (n, n)) | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+    let proposals = labels | join(edges, (_, (label, dst)) -> (dst, label));
+    set labels = seeds + proposals | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+}
+output "labels" = cc::labels;

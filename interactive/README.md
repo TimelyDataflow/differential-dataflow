@@ -1,6 +1,6 @@
 # DDIR
 
-[Language reference](LANGUAGE.md) · [Recipes](examples/recipes/README.md) · [Server command reference](server/README.md#server-command-reference)
+[Examples](examples/README.md) · [Language reference](LANGUAGE.md) · [Server command reference](server/README.md#server-command-reference)
 
 
 An interpreted language (and runtime) for computation over continually changing collections.
@@ -177,12 +177,12 @@ The intent is that the operation of the system is conducted less by humans and k
 
 The examples will feed and read data with textual, row-oriented versions.
 This is better done through binary columnar forms, which exist but aren't easy to present.
-The program is [`examples/server/programs/access.ddp`](examples/server/programs/access.ddp), and the whole session is [`examples/server/sessions/access.txt`](examples/server/sessions/access.txt).
-From `interactive/`, `cargo run --release -p ddir-server < examples/server/sessions/access.txt` runs it end to end.
+The program is [`examples/apps/access.ddp`](examples/apps/access.ddp), and the whole session is the first part of [`examples/apps/apps.txt`](examples/apps/apps.txt).
+From `interactive/`, `cargo run --release -p ddir-server < examples/apps/apps.txt` runs it end to end.
 
 ```
 # Install access.ddp under the name `demo`.
-load demo from examples/server/programs/access.ddp
+load demo from examples/apps/access.ddp
 ```
 This binds the name `demo` to the root scope of `access.ddp`.
 There are now three inputs we can reference, and the output `access`.
@@ -329,26 +329,18 @@ The stack aims to stay generic over two things: the expression language and the 
 Another expression language or backend should plug in at those two places, without the rest of
 the stack depending on it.
 
-The `examples/programs/` directory contains example programs, intentionally simple at the moment.
 The one executable is the server (the `ddir-server` crate in `server/`, documented in
-`server/README.md`; the session scripts in `examples/server/` show it at work); a program runs by
-loading it, feeding its inputs at a time, and sealing them past that time. For example, feed a two-edge path and its root on four workers.
+`server/README.md`); a program runs by loading it, feeding its inputs at a time, and sealing
+them past that time. The sessions in [`examples/`](examples/README.md) show it at work. For
+example, run the tour on four workers:
 ```
 cd interactive
-printf 'load reach from examples/programs/reach.ddp
-feed reach 0 0,1 time=0
-feed reach 0 1,2 time=0
-feed reach 1 0 time=0
-seal reach 0 1
-seal reach 1 1
-peek reach::result as-of 0
-exit
-' | DDIR_WORKERS=4 cargo run --release -p ddir-server
+DDIR_WORKERS=4 cargo run --release -p ddir-server < examples/tour/tour.txt
 ```
 
 For the full command vocabulary — `load`, `feed`, `seal`, `peek`, `tail`, and the rest — see
-[`examples/server/README.md`](examples/server/README.md), and `server/README.md` for the
-protocol and configuration.
+[`server/README.md`](server/README.md#server-command-reference), which also has the protocol
+and configuration.
 
 ## Differential testing
 

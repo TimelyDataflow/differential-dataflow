@@ -1,0 +1,7 @@
+enum Tier = Known int | Unknown;
+let orders = input "orders" : (int, (int, int));
+let customers = input "customers" : (int, int);
+let by_customer = orders | map((order, (customer, _)) -> (customer, order));
+let matched = by_customer | join(customers, (c, (order, tier)) -> (order, (c, tier inject Tier::Known)));
+let unmatched = by_customer + (by_customer | join(customers, (c, (order, _)) -> (c, order)) | negate);
+output "orders" = matched + (unmatched | map((c, order) -> (order, (c, () inject Tier::Unknown))));

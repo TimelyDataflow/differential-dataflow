@@ -1,0 +1,54 @@
+-- A minimal but genuine e-graph in DDIR: congruence closure PLUS one rewrite
+-- rule (arrange-idempotence). Unlike pure CSE, the rule asserts an equality
+-- between *structurally different* nodes, and congruence then propagates it to
+-- a fixpoint — equality saturation, expressed as a differential dataflow.
+--
+-- The inner `eqsat:` scope is the reusable saturation core on its own: variable-
+-- arity congruence closure (flatmap/collect) driven to a fixpoint by min-leader
+-- propagation — the whole of an equality-saturation engine. Everything outside
+-- the rule block is that engine; the `rule` lines are the one rewrite plugged
+-- into it. Swap or add rules there.
+--
+-- input 0: nodes  — feed  key=<id>  val=tuple(<op>, list(<child ids…>))
+-- Op convention (this demo): 1 = Arrange, 2 = Reduce. Both yield an
+-- arrangement, so a class containing either is "already arranged".
+--
+-- RULE  arrange(x) ≡ x   when x's class is already arranged.
+-- output trace "classes": (node-id, class-leader).
+
+let node  = input 0 : (int, (int, List(int))) | map((id, v) -> (id, v));    -- (id, (op, [children]))
+let elems = node | map((id, _) -> (id, id));                     -- id ; id   (seed each to itself)
+
+-- explode each node's children (UNNEST via flatmap) so they can be
+-- canonicalized through the current class map, then regrouped into a signature
+let pc = node
+    | map((id, (op, cs)) -> ((id, op), cs))
+    | flatmap((k, cs) -> (k, ((0, cs len) range, cs) zip) cap_list)
+    | map(((id, op), (pos, child)) -> (child, (id, op, pos)));              -- (child, (id, op, pos))
+
+-- nodes that produce an arrangement (op 1 = Arrange, op 2 = Reduce)
+let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ())))
+              + (node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ())));        -- id ;
+
+-- arrange nodes paired with their single child
+let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, (0, cs) get));      -- arrange_id ; child
+
+eqsat: {
+    -- congruence closure: group nodes by (op ++ canonicalized children)
+    let canon = pc | join(eq, (_, ((id, op, pos), cls)) -> ((id, op), (pos, cls)));   -- ((id,op), (pos,class))
+    let bsig  = canon | collect | map(((id, op), cs) -> ((op, cs), id));       -- signature ; id
+    let reps  = bsig | min;                                     -- signature ; min id
+    let cong  = bsig | join(reps, (_, (id, rep)) -> (id, rep));             -- id ; representative
+
+    -- arrange-idempotence rule:
+    let arranged = producing | join(eq, (_, (_, cls)) -> (cls, ())) | distinct;     -- arranged class ;
+    let arr_cls  = arr | map((a, c) -> (c, a)) | join(eq, (_, (a, cls)) -> (a, cls));    -- arrange_id ; child class
+    let rule     = arr_cls | map((a, cls) -> (cls, a)) | join(arranged, (cls, (a, _)) -> (a, cls));  -- arrange_id ; child class
+
+    -- congruence edges + rule edges, symmetrized, then one min-label hop
+    let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
+    let prop  = eq | join(edges, (_, (l, n)) -> (n, l));
+    set eq = elems + prop | min;
+}
+
+output "classes" = eqsat::eq;

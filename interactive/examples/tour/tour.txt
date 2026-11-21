@@ -1,0 +1,59 @@
+# A tour of the server: install programs, feed them, read their results, and remove them.
+# Run from interactive/: cargo run --release -p ddir-server < examples/tour/tour.txt
+# Every response line starts with its request's number, as `_3 ok ...` or `_3 data ...`.
+
+# Install a program from a file, under the name `shapes`. Its outputs are published as
+# `shapes::shapes` and `shapes::kinds`, and its input is `shapes`, the label it declares.
+load shapes from examples/tour/tour.ddp
+list
+
+# A feed names the program, the input, the key, the value and the time.
+# Variants are written by position: `inject(0,r)` is Circle r, `inject(1,tuple(w,h))` is Rect.
+feed shapes shapes 1 val=inject(0,5) time=0
+# Several rows at one time go in one block.
+feed shapes shapes time=0 begin
+2 val=inject(1,tuple(3,4))
+3 val=inject(1,tuple(1,1))
+end-feed
+# A row may be fed for a later time; it changes nothing until that time.
+feed shapes shapes 4 val=inject(0,9) time=2
+
+# Sealing an input to 1 says no more rows come for time 0, so time 0 can be read.
+seal shapes shapes 1
+peek shapes::kinds
+peek shapes::shapes
+# Read one key.
+peek shapes::shapes 2
+
+# Time 1: a retraction removes a row; it is the same row with `diff=-1`.
+feed shapes shapes 3 val=inject(1,tuple(1,1)) time=1 diff=-1
+seal shapes shapes 3
+# Each time's result stays readable.
+peek shapes::kinds as-of 0
+peek shapes::kinds as-of 1
+peek shapes::kinds as-of 2
+
+# A program can also be written inline, ending at `<name> end-load`.
+# This one has a numbered input, fed as input 0.
+load counter begin
+output "counts" = input 0 : (int, ()) | count;
+counter end-load
+# `open` ... `shut` sends several commands as one request, with one answer.
+open
+feed counter 0 7 time=0
+feed counter 0 7 time=0
+feed counter 0 8 time=0
+seal counter 0 1
+shut
+peek counter::counts
+
+# Mistakes are reported, and the server keeps running.
+feed shapes shapes 5 val=inject(oops) time=3
+peek nope
+peek shapes::kinds as-of 9
+
+# Remove the programs. Their names are free again.
+drop counter
+drop shapes
+list
+exit

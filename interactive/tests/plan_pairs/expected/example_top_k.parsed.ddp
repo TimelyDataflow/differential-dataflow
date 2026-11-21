@@ -1,0 +1,4 @@
+let totals = input "totals" : (int, int);
+let buckets = totals | map((customer, total) -> ((customer, 64) rem, (total neg, customer))) | reduce(limit 3, (_, vals) -> vals);
+let top = buckets | map((_, v) -> ((), v)) | reduce(limit 3, (_, vals) -> vals);
+output "top" = top | map((_, (negated, customer)) -> (customer, negated neg));

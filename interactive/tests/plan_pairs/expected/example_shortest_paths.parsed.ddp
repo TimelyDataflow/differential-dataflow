@@ -1,0 +1,7 @@
+let edges = input "weighted" : (int, (int, int));
+let roots = input "roots" : (int, ());
+sssp: {
+    let proposals = dist | join(edges, (_, (d, (dst, w))) -> (dst, (d, w) add)) | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, d) = input in (0, ((d, 64) div, 16) mul) in ((k, v), _call0, 1) enlist);
+    set dist = (roots | map((n, ()) -> (n, 0))) + proposals | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+}
+output "dist" = sssp::dist;

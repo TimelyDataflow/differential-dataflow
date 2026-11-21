@@ -1,0 +1,21 @@
+--- lowered
++++ optimized
+@@ -2,15 +2,14 @@
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
+ let edges = input "weighted" : (int, (int, int));
+ let roots = input "roots" : (int, ());
++let roots_map = roots | map((n, ()) -> (n, 0));
+ sssp: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var dist;
+     let dist_idx = dist | arrange;
+-    let edges_idx = ::edges | arrange;
+-    let proposals_join = dist_idx | join(edges_idx, (_, (d, (dst, w))) -> (dst, (d, w) add));
++    let proposals_join = dist_idx | join(::edges, (_, (d, (dst, w))) -> (dst, (d, w) add));
+     let proposals = proposals_join | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, d) = input in (0, ((d, 64) div, 16) mul) in ((k, v), _call0, 1) enlist);
+-    let dist_map = ::roots | map((n, ()) -> (n, 0));
+-    let dist_rows = dist_map + proposals;
++    let dist_rows = ::roots_map + proposals;
+     let dist_idx2 = dist_rows | arrange;
+     let dist_reduce = dist_idx2 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+     set dist = dist_reduce;

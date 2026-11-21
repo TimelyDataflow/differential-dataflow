@@ -1,0 +1,14 @@
+-- A sliding window: count each customer's orders over the last 3 times.
+--
+-- `lift` pairs each row with its time t, and `delay` moves a copy of the row to t + 3.
+-- Subtracting that copy retracts each order 3 times after it arrived, so the window holds only
+-- recent orders, and its state stays the size of the window rather than of the whole history.
+-- Joining against a clock input instead would redo the work for every order at every tick.
+
+let orders = input "orders" : (int, (int, int));   -- (order, (customer, amount))
+let events = orders | map((_, (customer, _)) -> (customer, ()));
+
+let expired = events | lift | delay((_, (_, (t))) -> (t, 3) add) | map((k, _) -> (k, ()));
+let recent = events - expired;
+
+output "recent" = recent | count;

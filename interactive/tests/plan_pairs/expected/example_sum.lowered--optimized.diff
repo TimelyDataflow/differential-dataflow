@@ -1,0 +1,15 @@
+--- lowered
++++ optimized
+@@ -1,10 +1,8 @@
+ -- Time lanes: epoch.
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
+ let orders = input "orders" : (int, (int, int));
+-let totals_map = orders | map((_, (customer, amount)) -> (customer, amount));
+-let totals_rows = totals_map | lift;
+-let totals_rows2 = totals_rows | join_function((k, (v, t)) -> ((k, ()), t, v) enlist);
+-let totals_idx = totals_rows2 | arrange;
++let totals_rows = orders | map((_, (customer, amount)) -> (customer, amount)) | lift | join_function((k, (v, t)) -> ((k, ()), t, v) enlist);
++let totals_idx = totals_rows | arrange;
+ let totals_reduce = totals_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+ -- Renderer: publish the existing arrangement.
+ output "totals" = totals_reduce;

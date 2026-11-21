@@ -1,0 +1,74 @@
+--- lowered
++++ optimized
+@@ -2,52 +2,47 @@
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
+ let edges = input "edges" : (int, int);
+ let trans = edges | map((src, dst) -> (dst, src));
++let trans_map = trans | map((_, dst) -> (dst, dst));
++let trans_idx = trans | arrange;
++let edges_map = edges | map((_, dst) -> (dst, dst));
++let edges_neg = edges | negate;
+ outer: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var trim;
+     let scc = ::edges + trim;
++    let scc_idx = scc | arrange;
+     fwd: {
+         -- Time lanes: epoch, then 2 scope coordinates; this scope enters at zero.
+         var proposals;
+-        let nodes_map = ::edges | map((_, dst) -> (dst, dst));
+-        let nodes = nodes_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
++        let nodes = ::edges_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+         let labels_rows = proposals + nodes;
+         let labels_idx = labels_rows | arrange;
+         let labels = labels_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-        let scc_idx = outer::scc | arrange;
+-        let proposals_join = labels | join(scc_idx, (_, (label, dst)) -> (dst, label));
++        let proposals_join = labels | join(outer::scc_idx, (_, (label, dst)) -> (dst, label));
+         set proposals = proposals_join;
+     }
+-    let edges_idx = ::edges | arrange;
+-    let trim_fwd_idx = fwd::labels | arrange;
+-    let trim_fwd_join = edges_idx | join(trim_fwd_idx, (src, (dst, label)) -> (dst, (src, label)));
+-    let trim_fwd_idx2 = trim_fwd_join | arrange;
+-    let trim_fwd_idx3 = fwd::labels | arrange;
+-    let trim_fwd_join2 = trim_fwd_idx2 | join(trim_fwd_idx3, (dst, ((src, label), other)) -> (dst, (src, label, other)));
+-    let trim_fwd_filter = trim_fwd_join2 | filter((_, (_, a, b)) -> (a, b) eq);
+-    let trim_fwd = trim_fwd_filter | map((dst, (src, _, _)) -> (dst, src));
++    let trim_fwd_idx2 = fwd::labels | arrange;
++    let trim_fwd_join = ::edges | join(trim_fwd_idx2, (src, (dst, label)) -> (dst, (src, label)));
++    let trim_fwd_idx3 = trim_fwd_join | arrange;
++    let trim_fwd_join2 = trim_fwd_idx3 | join(trim_fwd_idx2, (dst, ((src, label), other)) -> (dst, (src, label, other)));
++    let trim_fwd = trim_fwd_join2 | filter((_, (_, a, b)) -> (a, b) eq) | map((dst, (src, _, _)) -> (dst, src));
++    let trim_fwd_idx = trim_fwd | arrange;
+     bwd: {
+         -- Time lanes: epoch, then 2 scope coordinates; this scope enters at zero.
+         var proposals;
+-        let nodes_map = ::trans | map((_, dst) -> (dst, dst));
+-        let nodes = nodes_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
++        let nodes = ::trans_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+         let labels_rows = proposals + nodes;
+         let labels_idx = labels_rows | arrange;
+         let labels = labels_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+-        let trim_fwd_idx = outer::trim_fwd | arrange;
+-        let proposals_join = labels | join(trim_fwd_idx, (_, (label, dst)) -> (dst, label));
++        let proposals_join = labels | join(outer::trim_fwd_idx, (_, (label, dst)) -> (dst, label));
+         set proposals = proposals_join;
+     }
+-    let trans_idx = ::trans | arrange;
+     let trim_bwd_idx = bwd::labels | arrange;
+-    let trim_bwd_join = trans_idx | join(trim_bwd_idx, (src, (dst, label)) -> (dst, (src, label)));
++    let trim_bwd_join = ::trans_idx | join(trim_bwd_idx, (src, (dst, label)) -> (dst, (src, label)));
+     let trim_bwd_idx2 = trim_bwd_join | arrange;
+-    let trim_bwd_idx3 = bwd::labels | arrange;
+-    let trim_bwd_join2 = trim_bwd_idx2 | join(trim_bwd_idx3, (dst, ((src, label), other)) -> (dst, (src, label, other)));
+-    let trim_bwd_filter = trim_bwd_join2 | filter((_, (_, a, b)) -> (a, b) eq);
+-    let trim_bwd = trim_bwd_filter | map((dst, (src, _, _)) -> (dst, src));
+-    let trim_neg = ::edges | negate;
+-    let trim_rows = trim_bwd + trim_neg;
++    let trim_bwd_join2 = trim_bwd_idx2 | join(trim_bwd_idx, (dst, ((src, label), other)) -> (dst, (src, label, other)));
++    let trim_bwd = trim_bwd_join2 | filter((_, (_, a, b)) -> (a, b) eq) | map((dst, (src, _, _)) -> (dst, src));
++    let trim_rows = trim_bwd + ::edges_neg;
+     set trim = trim_rows;
+ }
+ -- Renderer: build an export arrangement.

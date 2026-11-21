@@ -1,0 +1,2 @@
+let orders = input "orders" : (int, (int, int));
+output "totals" = orders | map((_, (customer, amount)) -> (customer, amount)) | lift | join_function((k, (v, t)) -> ((k, ()), t, v) enlist) | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
