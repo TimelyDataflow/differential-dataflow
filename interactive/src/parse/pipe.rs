@@ -51,10 +51,11 @@
 //!   of the epoch and every scope coordinate.
 //! - `| join_function((k, v) -> list)` — replace each row by the lambda's list of
 //!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
-//! - `| half_join(other, strict, (k, v, v1) -> (k', v'))` — each update of a lifted stream,
+//! - `| half_join(other, strict)` — each update of a lifted stream,
 //!   `(k, (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
 //!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
-//!   `(k', (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
+//!   `(k, ((v, v1), time ∨ t2))`. `half_join(other, strict, f)` projects this whole row.
+//!   The output retains the stream update's timestamp. `other`'s changes produce nothing.
 //! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
 //!   each row to at least the time the lambda gives. The tuple names the epoch, then each
 //!   enclosing loop from outermost to innermost; `0` leaves a coordinate unchanged. Inside one
@@ -666,6 +667,15 @@ impl Parser {
         Some((key, val))
     }
 
+    fn join_projection(&mut self) -> Lambda {
+        if *self.peek() == Token::Comma {
+            self.next();
+            self.lambda()
+        } else {
+            Lambda::new("let row = input in row".into(), &corgi::Scope::default())
+        }
+    }
+
     fn parse_pipe_op(&mut self, lhs: Expr) -> Expr {
         match self.peek().clone() {
             Token::Map => { self.next(); Expr::Map(Box::new(lhs), self.slot()) },
@@ -673,12 +683,7 @@ impl Parser {
                 self.next();
                 self.expect(&Token::LParen);
                 let rhs = self.parse_pipe_expr();
-                let projection = if *self.peek() == Token::Comma {
-                    self.next();
-                    self.lambda()
-                } else {
-                    Lambda::new("let row = input in row".into(), &corgi::Scope::default())
-                };
+                let projection = self.join_projection();
                 self.expect(&Token::RParen);
                 Expr::Join(Box::new(lhs), Box::new(rhs), projection)
             },
@@ -727,8 +732,7 @@ impl Parser {
                     Token::Int(1) => true,
                     other => panic!("half_join: strict is 0 or 1, not {other:?}"),
                 };
-                self.expect(&Token::Comma);
-                let p = self.lambda();
+                let p = self.join_projection();
                 self.expect(&Token::RParen);
                 Expr::HalfJoin(Box::new(lhs), Box::new(r), strict, p)
             },

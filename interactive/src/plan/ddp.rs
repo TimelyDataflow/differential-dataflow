@@ -414,11 +414,9 @@ impl Printer<'_> {
                 let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
                 format!("{} | join({}, {})", names.of(left), names.of(right), self.lambda(projection, input)?)
             }
+            Node::HalfJoin { stream, arrangement, strict, projection } if projection.returns_input() => format!("{} | half_join({}, {})", names.of(stream), names.of(arrangement), u8::from(*strict)),
             Node::HalfJoin { stream, arrangement, strict, projection } => {
-                let input = shapes.of(stream).zip(shapes.of(arrangement)).and_then(|(s, a)| {
-                    let Shape::Prod(fs) = s.val else { return None };
-                    Some(Shape::Prod(vec![s.key, fs[0].clone(), a.val]))
-                });
+                let input = shapes.of(stream).zip(shapes.of(arrangement)).and_then(|(s, a)| s.half_join_row(a.val).ok());
                 format!("{} | half_join({}, {}, {})", names.of(stream), names.of(arrangement), u8::from(*strict), self.lambda(projection, input)?)
             }
             Node::Reduce { input, reducer, limit } => {
@@ -545,17 +543,21 @@ mod tests {
 
     #[test]
     fn identity_joins_print_without_a_projection() {
-        for (args, explicit) in [
-            ("b", false),
-            ("b, x -> x", false),
-            ("b, (k, (l, r)) -> (k, (r, l))", true),
+        for (operator, args, explicit) in [
+            ("join", "b", false),
+            ("join", "b, x -> x", false),
+            ("join", "b, (k, (l, r)) -> (k, (r, l))", true),
+            ("half_join", "b, 0", false),
+            ("half_join", "b, 0, x -> x", false),
+            ("half_join", "b, 0, (k, ((l, r), _)) -> (k, (r, l))", true),
         ] {
+            let left = if operator == "half_join" { "a | lift" } else { "a" };
             let text = format!(r#"let a = input 0 : (int, int); let b = input 1 : (int, int);
-                output "out" = a | join({args});"#);
+                output "out" = {left} | {operator}({args});"#);
             let report = plan(&text);
             for stage in DdpStage::ALL {
                 let printed = report.emit_ddp_at(stage).unwrap().text;
-                let join_args = printed.split_once("| join(").unwrap().1.split_once(';').unwrap().0;
+                let join_args = printed.split_once(&format!("| {operator}(")).unwrap().1.split_once(';').unwrap().0;
                 assert_eq!(join_args.contains(" -> "), explicit, "{stage:?}: {printed}");
                 assert!(report.compare_final(&plan(&printed)).is_empty(), "{stage:?}: {printed}");
             }
@@ -646,7 +648,7 @@ mod tests {
         assert!(before.compare_final(&plan(&output.text)).is_empty());
         assert_eq!(output.text, plan(&output.text).emit_ddp().unwrap().text);
         let before = plan(r#"let a = input 0 : (int, ()); let b = input 1 : (int, ());
-            output "out" = a | lift | half_join(b, 1, (k, x, _) -> (k, x));"#);
+            output "out" = a | lift | half_join(b, 1, (k, ((x, _), t)) -> (k, (x, t)));"#);
         let output = before.emit_ddp().unwrap().text;
         assert!(output.contains("| lift | filter("), "{output}");
         assert!(!output.contains("Added by"));

@@ -412,14 +412,14 @@ fn node(node: &Node, names: &Names) -> String {
         Node::Arrange(input) => format!("{} | arrange", names.of(input)),
         Node::Join { left, right, projection } if projection.returns_input() => format!("{} | join({})", names.of(left), names.of(right)),
         Node::Join { left, right, projection } => format!("{} | join({}, {})", names.of(left), names.of(right), source_lambda(projection)),
+        Node::HalfJoin { stream, arrangement, strict, projection } if projection.returns_input() => format!("{} | half_join({}, strict={strict})", names.of(stream), names.of(arrangement)),
         Node::HalfJoin { stream, arrangement, strict, projection } => format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), source_lambda(projection)),
         Node::Reduce { input, reducer: r, limit } => format!("{} | {}", names.of(input), reducer(r, *limit)),
         Node::Inspect { input, label } => format!("{} | inspect({})", names.of(input), quote(label)),
     }
 }
 
-// Slot inputs mirror shapes::linear_shapes and the join/reduce typing rules. In particular a
-// half join's lambda sees neither the lifted time nor the arrangement's time.
+// Slot inputs mirror shapes::linear_shapes and the join/reduce typing rules.
 fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, at: &str, slots: &mut Slots) -> String {
     match node {
         Node::Linear { input, ops } => {
@@ -446,11 +446,8 @@ fn printed_node(node: &Node, names: &Names, shapes: &ScopeShapes, depth: usize, 
             let input = shapes.of(left).zip(shapes.of(right)).map(|(l, r)| Shape::Prod(vec![l.key, Shape::Prod(vec![l.val, r.val])]));
             format!("{} | join({}, {})", names.of(left), names.of(right), slots.lambda(projection, input, &format!("{at}/join")))
         }
-        Node::HalfJoin { stream, arrangement, strict, projection } => {
-            let input = shapes.of(stream).zip(shapes.of(arrangement)).and_then(|(s, a)| {
-                let Shape::Prod(fs) = s.val else { return None };
-                (fs.len() == 2).then(|| Shape::Prod(vec![s.key, fs[0].clone(), a.val]))
-            });
+        Node::HalfJoin { stream, arrangement, strict, projection } if !projection.returns_input() => {
+            let input = shapes.of(stream).zip(shapes.of(arrangement)).and_then(|(s, a)| s.half_join_row(a.val).ok());
             format!("{} | half_join({}, strict={strict}, {})", names.of(stream), names.of(arrangement), slots.lambda(projection, input, &format!("{at}/half_join")))
         }
         Node::Reduce { input, reducer: Reducer::Expr(l), limit } => {
@@ -646,7 +643,7 @@ mod tests {
         let provider = report(r#"output "rows" = input 0 : (int, int);"#, &|_| None, &Config::all()).unwrap();
         let text = r#"
             let rows = import "rows" : (int, int);
-            output "out" = rows | lift | half_join(rows, 1, (k, v, w) -> (k, v));
+            output "out" = rows | lift | half_join(rows, 1, (k, ((v, w), t)) -> (k, (v, t)));
         "#;
         let missing = report(text, &|_| None, &Config::all()).unwrap();
         assert_eq!(missing.unresolved, ["rows"]);

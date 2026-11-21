@@ -4,8 +4,8 @@ let rows = import "rows::rows" : (int, int);
 let lifted = rows | lift;
 let lifted_filter = lifted | filter((_, (_, (t0))) -> (t0, 0) ne);
 let rows_idx = rows | arrange;
-let strict_join = lifted_filter | half_join(rows_idx, 1, (k, v, _) -> (k, v));
-let inclusive_join = lifted | half_join(rows_idx, 0, (k, v, _) -> (k, v));
+let strict_join = lifted_filter | half_join(rows_idx, 1, (k, ((v, _), t)) -> (k, (v, t)));
+let inclusive_join = lifted | half_join(rows_idx, 0, (k, ((v, _), t)) -> (k, (v, t)));
 -- Renderer: build an export arrangement.
 output "strict" = strict_join;
 -- Renderer: build an export arrangement.

@@ -638,7 +638,7 @@ mod tree_tests {
         let text = format!(r#"
             let rows = input 0 : (int, ()) | {producer};
             output "join" = rows | join(rows, (k, (_, _)) -> (k, ()));
-            output "half" = rows | lift | half_join(rows, 0, (k, _, _) -> (k, ()));
+            output "half" = rows | lift | half_join(rows, 0, (k, ((_, _), t)) -> (k, ((), t)));
             output "reduce" = rows | min;
             output "distinct" = rows | distinct;
         "#);
@@ -657,7 +657,7 @@ mod tree_tests {
         let program = lower_tree(parse(r#"
             let rows = input 0 : (int, int) | distinct;
             output "join" = rows | join(rows, (k, (a, _)) -> (k, a));
-            output "half" = rows | lift | half_join(rows, 0, (k, a, _) -> (k, a));
+            output "half" = rows | lift | half_join(rows, 0, (k, ((a, _), t)) -> (k, (a, t)));
             output "reduce" = rows | min;
             output "distinct" = rows | distinct;
         "#));

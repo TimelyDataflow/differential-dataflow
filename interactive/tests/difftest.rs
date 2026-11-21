@@ -256,7 +256,7 @@ fn render_let(l: &Let, delta: bool, indent: &str) -> String {
                     // Each side's updates meet the other's at or before them (strictly, for the
                     // second), then wait until the later of the two times.
                     text = format!(
-                        "(({text} | lift | half_join({other}, 0, ({k}, {lp}, {r}) -> {body})) + ({other} | lift | half_join({text}, 1, ({k}, {r}, {lp}) -> {body}))) | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v))"
+                        "(({text} | lift | half_join({other}, 0, ({k}, (({lp}, {r}), joined_time)) -> let (out_key, out_val) = {body} in (out_key, (out_val, joined_time)))) + ({other} | lift | half_join({text}, 1, ({k}, (({r}, {lp}), joined_time)) -> let (out_key, out_val) = {body} in (out_key, (out_val, joined_time))))) | delay((_, (_, t)) -> t) | map((k, (v, _)) -> (k, v))"
                     );
                 } else {
                     text = format!("{text} | join({other}, ({k}, ({lp}, {r})) -> {body})");

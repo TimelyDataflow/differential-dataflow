@@ -34,6 +34,18 @@ pub struct CollShape {
 }
 
 impl CollShape {
+    /// The row a half join presents to its projection, including the joined time as data.
+    pub(crate) fn half_join_row(self, arranged_val: Shape) -> Result<Shape, String> {
+        let time = Shape::Prod(vec![Shape::Int; self.time]);
+        match self.val {
+            Shape::Prod(mut fields) if fields.len() == 2 && fields[1] == time => {
+                let pair = Shape::Prod(vec![fields.swap_remove(0), arranged_val]);
+                Ok(Shape::Prod(vec![self.key, Shape::Prod(vec![pair, time])]))
+            }
+            other => Err(format!("a stream value of shape {other}, not (val, {time}) as `lift` makes it")),
+        }
+    }
+
     fn new(key: Shape, val: Shape, level: Level) -> Self {
         CollShape { key, val, time: level.width(), diff: Shape::Int }
     }
@@ -341,13 +353,13 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, level: Level, at: &str, pro
         st::Node::HalfJoin { stream, arrangement, projection, .. } => {
             let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
             if s.key != a.key { return fail(format!("half_join keys {} and {}", s.key, a.key)); }
-            let v = match s.val {
-                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(level) => fs[0].clone(),
-                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(level))),
+            let input = match s.half_join_row(a.val) {
+                Ok(shape) => shape,
+                Err(e) => return fail(format!("half_join: {e}")),
             };
-            match pair_shape(projection, &[s.key, v, a.val]) {
-                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(level)]), level)),
-                Err(e) => fail(format!("half_join: {e}")),
+            match projection.graph().and_then(|g| corgi::shape_of(g, &input)).and_then(row_shape) {
+                Ok((k, v)) => Some(CollShape::new(k, v, level)),
+                Err(e) => fail(format!("half_join: {e}. The projection takes (key, ((left, right), time)) as its input.")),
             }
         }
         st::Node::Reduce { input, reducer, .. } => {

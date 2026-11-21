@@ -57,24 +57,23 @@ const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
 pub(super) const COORD_BITS: u32 = 48;
 
-/// What a projection reads of its three inputs `(key, val0, val1)`; the half join's are the
-/// key, the update's value and the arranged value.
-pub(super) struct Reads {
+/// What a projection reads from the columns gathered for each match.
+pub(super) struct Reads<const N: usize> {
     /// Each input's demand, applied to its columns before gathering.
-    pub(super) columns: [Demand; 3],
+    pub(super) columns: [Demand; N],
     /// Once gathered, retained inputs are taken whole; unread inputs are dropped.
     pub(super) argument: Demand,
     /// The shape the narrowed graph takes.
     pub(super) shape: Shape,
 }
 
-impl Reads {
+impl<const N: usize> Reads<N> {
     pub(super) fn new(demand: Demand, input: &Shape) -> Self {
         let shape = demand.projected_shape(input).expect("a demand on the join's input");
         let Demand::Prod(parts) = &demand else {
             return Reads { columns: std::array::from_fn(|_| demand.clone()), argument: demand, shape };
         };
-        let columns = parts.clone().try_into().expect("the join's three inputs");
+        let columns = parts.clone().try_into().expect("one demand per input column");
         let argument = Demand::Prod(parts.iter().map(|part| if *part == Demand::None { Demand::None } else { Demand::All }).collect());
         Reads { columns, argument, shape }
     }
@@ -90,7 +89,7 @@ pub(crate) struct CorgiJoinBackend<T: ColTime> {
     /// The projection, narrowed to take its input projected by `reads.argument`.
     graph: Graph<NumOp>,
     /// What the graph reads of its input.
-    reads: Reads,
+    reads: Reads<3>,
     _t: PhantomData<T>,
 }
 

@@ -70,6 +70,12 @@ For each pair of matches `(k, l)` and `(k, r)`, `left | join(right)` produces `(
 Passing `f` to the join lets it emit the projected fields directly. A separate `map` can require the full joined row as an intermediate result.
 Existing three-field join patterns migrate from `(k, l, r) -> …` to `(k, (l, r)) -> …`.
 
+For updates from `left`, `left | lift | half_join(right, 0)` produces `(k, ((l, r), t))`.
+Here `t` is the coordinate-wise maximum of the lifted data time and the matching right update's timestamp.
+Use `0` to include equal timestamps and `1` for strictly earlier right updates in the total order.
+An optional projection receives the entire row. For example, `half_join(right, 0, (k, ((l, r), _)) -> (k, r))` drops the data time.
+The output update still has the left update's timestamp. To migrate an old projection `(k, l, r) -> (k2, v2)`, write `(k, ((l, r), t)) -> (k2, (v2, t))` to retain its previous output.
+
 A currently unfortunate amount of symbolic load is in shuffling around fields of collection elements.
 The `map` operator applies to each record, and the `->` fragment is an expression converting the input to the output.
 `flatmap` gives a `List((key, val))` of complete rows, choosing both keys and values.
