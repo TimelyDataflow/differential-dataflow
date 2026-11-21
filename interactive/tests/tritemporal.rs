@@ -21,7 +21,7 @@ use timely::order::PartialOrder;
 const PROGRAM: &str = r#"
     let edges = input 0 : ((int, int), ()) | map(((src, dst), ()) -> (src, dst));
     let trans = edges | map((src, dst) -> (dst, src));
-    let allowed = import "allow::allowed";
+    let allowed = input "allowed" : (int, ());
     outer: {
         let scc = edges + trim;
         let degrees = scc | map((src, _) -> (src, ())) | count;
@@ -157,7 +157,8 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         let allow = lower::lower_tree(parse::pipe::parse(r#"output "allowed" = input 0 : (int, ());"#));
-        let program = lower::lower_tree(parse::pipe::parse(PROGRAM));
+        let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
+        program.bind([("allowed", "allow::allowed")]).unwrap();
         server.install(worker, "allow", &allow).unwrap();
         server.install_with_root(worker, "graph", &program, 3, at([0, 0, 0])).unwrap();
         assert_eq!(server.trace_width("allow::allowed"), Some(1));
@@ -171,7 +172,7 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                 Step::Edges { time, rows } => {
                     if w0 {
                         let text = rows.iter().map(|((src, dst), d)| format!("{src},{dst} diff={d}")).collect::<Vec<_>>().join("\n");
-                        server.feed_at("graph", 0, &text, &at(*time)).unwrap();
+                        server.feed_at("graph", &0.into(), &text, &at(*time)).unwrap();
                     }
                     fed.edges.extend(rows.iter().map(|&(edge, diff)| (*time, edge, diff)));
                     continue;
@@ -179,19 +180,19 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                 Step::Allowed { system, rows } => {
                     if w0 {
                         let text = rows.iter().map(|(n, d)| format!("{n} diff={d}")).collect::<Vec<_>>().join("\n");
-                        server.feed_at("allow", 0, &text, &at([*system, 0, 0])).unwrap();
+                        server.feed_at("allow", &0.into(), &text, &at([*system, 0, 0])).unwrap();
                     }
                     fed.allowed.extend(rows.iter().map(|&(node, diff)| (*system, node, diff)));
                     continue;
                 }
                 Step::Advance(input, point) => {
-                    let previous = server.input_time(input.program(), 0).unwrap().clone();
-                    server.seal(input.program(), 0, &Antichain::from_elem(at(*point))).unwrap();
+                    let previous = server.input_time(input.program(), &0.into()).unwrap().clone();
+                    server.seal(input.program(), &0.into(), &Antichain::from_elem(at(*point))).unwrap();
                     // Each advance moves exactly one coordinate, and feeds below that
                     // input's own frontier must be refused even if other inputs lag.
                     assert_eq!((0..3).filter(|&i| previous.get(i).copied().unwrap_or(0) != point[i]).count(), 1);
                     let row = match input { Input::Edges => "1,2", Input::Allowed => "1" };
-                    assert!(server.feed_at(input.program(), 0, row, &previous).is_err());
+                    assert!(server.feed_at(input.program(), &0.into(), row, &previous).is_err());
                     if matches!(input, Input::Allowed) { server.wait_for(worker, "allow::allowed", &at(*point)).unwrap(); }
                 }
                 Step::Compact(since) => {
@@ -215,8 +216,8 @@ fn run(steps: Vec<Step>, workers: usize) -> Checks {
                     compacted = true;
                 }
             }
-            let edge_frontier = server.input_time("graph", 0).unwrap().clone();
-            let allow_frontier = server.input_time("allow", 0).unwrap().clone();
+            let edge_frontier = server.input_time("graph", &0.into()).unwrap().clone();
+            let allow_frontier = server.input_time("allow", &0.into()).unwrap().clone();
             let system = edge_frontier.get(0).copied().unwrap_or(0).min(allow_frontier.get(0).copied().unwrap_or(0));
             for export in EXPORTS { server.wait_for(worker, export, &at([system, 0, 0])).unwrap(); }
             let mut peeked = false;

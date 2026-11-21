@@ -5,7 +5,7 @@
 
 A live instance that hosts interpreted DDIR dataflows in one running timely
 computation and lets them **share results by name**. You install dataflows one
-at a time; each may `import` traces other dataflows `output`, so a
+at a time; a load may bind a dataflow's inputs to traces other dataflows `output`, so a
 consumer maintains a computation incrementally over a producer's output. It is
 the interpreter-driven successor to the old `dd_server` crate (which hot-loaded
 compiled `.so`s); here "install" means render a DDIR program, not `dlopen`.
@@ -18,9 +18,9 @@ and the configuration). The session scripts here are piped into its stdin.
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
-  The ones here are server-oriented (they use `import`/`output`); the programs
-  in `../programs/` read positional `input`s instead, which you fill with
-  `feed` (see "Running a program in batch" below).
+  The ones here are server-oriented (their named inputs are bound to other programs'
+  outputs at load); the programs in `../programs/` read numbered `input`s, which you
+  fill with `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
   (`load`/`feed`/`seal`/…) you hand to the server. You do **not** `load` a
   session; you run the server *on* it.
@@ -46,7 +46,7 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 
 | command | effect |
 |---|---|
-| `load <name> from <file> [<in>=<trace> ...] [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`, its named inputs (or imports) bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
+| `load <name> from <file> [<label>=<trace> ...] [explain \| explain=debug]` | parse + lower + install a program file under `<name>`, the inputs with those labels bound to published traces; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
 | `feed <prog> <in> <value> [val=<value>] time=<t> [diff=<int>]` | stage an input update |
 | `feed <prog> <in> time=now from <file-or-trace>` | fill an input from a published trace or a file of integer rows, sharded across workers |
 | `seal <prog> <in> <frontier>` | advance an input’s write frontier; a scalar frontier of 1 closes time 0 |
@@ -71,7 +71,7 @@ nothing for unit. A feed defaults to a unit value and a diff of +1. Supply the u
 ## Running a program in batch
 
 The programs in `../programs/` (reachability, SCC, stable matching, …) read
-positional inputs. A session fills them in bulk and closes epochs; that is the
+numbered inputs. A session fills them in bulk and closes epochs; that is the
 whole of the old single-program harness, so there is no separate binary:
 
 ```
@@ -89,12 +89,10 @@ whitespace-separated integers, each becoming `(Tuple[ints], ())`; the
 `aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
 serves the small inputs (roots, queries).
 
-`load … explain=<arity>` applies the explanation rewrite before
-optimization, treating every source without a declared shape as `arity` key
-fields with no value; the
-rewritten program has one extra input after its own — the query input, fed as
-`(key, val ++ q)` — and outputs one `demand:inputN` trace per source, which
-you `peek` as `<name>::demand:inputN`. `,debug` taps every demand collection with an inspect.
+`load … explain` applies the explanation rewrite before
+optimization. The rewritten program has one more input, labelled `query` and fed as
+`(key, (val, q))`, and outputs one `demand:<label>` trace per input, which
+you `peek` as `<name>::demand:<label>`, as `<name>::demand:0` for `input 0`. `explain=debug` also taps every demand collection with an inspect.
 
 ## The programs
 

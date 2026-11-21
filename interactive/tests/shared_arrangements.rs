@@ -64,8 +64,8 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String,
         let mut seen = Vec::new();
         for (epoch, batch) in epochs.iter().enumerate() {
             let mine = if worker.index() == 0 { batch.as_str() } else { "" };
-            server.feed("p", 0, mine, epoch as u64).unwrap();
-            server.seal("p", 0, &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
+            server.feed("p", &0.into(), mine, epoch as u64).unwrap();
+            server.seal("p", &0.into(), &Antichain::from_elem(host_time(epoch as u64 + 1))).unwrap();
             server.spin(worker);
             let mut rows = server.snapshot(worker, "p::result").unwrap().rows();
             rows.sort();

@@ -17,8 +17,10 @@ An authored plan is a drop-in replacement for the generated one:
   query's `@query(...)` declaration in `snb/queries.py`, prefixed by `rid`. For
   example IC3 is `(rid, person, country X, country Y, start, days)`. Byte strings
   are `List(int)`.
-- **Graph.** Plans import the arrangements the suite's shared graph program publishes
-  (`snb/indexes.py`), and join against them directly:
+- **Graph.** Plans read the arrangements the suite's shared graph program publishes
+  (`snb/indexes.py`), and join against them directly.
+  Each is a named input, its label the output's name with `.` written `_` (`message_by_creator`
+  for `graph::message.by_creator`), and the driver binds it at load (`bench/ldbc/client.py`):
   - **primary keys**, `graph::person`, `graph::message`, `graph::forum`, `graph::tag`,
     `graph::tagclass`, `graph::place`, `graph::org`: `(id, (the other fields))`, in
     `snb/data.py`'s field order;
@@ -31,7 +33,7 @@ An authored plan is a drop-in replacement for the generated one:
     `graph::message.root` (message, root post) and `graph::message.by_root`.
 
   Every query's server shares these, so a plan pays only for what it builds itself.
-  A `map` or `filter` on an import makes a private copy; the plans do that only for
+  A `map` or `filter` on a graph input makes a private copy; the plans do that only for
   parts kept for all requests, and each header says which.
 - **Answer.** `output "answer"`, read as `<query>::answer`, is arranged as `((rid, rank), (fields…))`,
   where rank is the 0-based position in the query's order and the fields are the
@@ -186,4 +188,4 @@ Two conventions apply throughout:
 
 Recurring fragments (where people live, the interaction weights) are repeated in
 each file, so that every plan is complete on its own; friendships and threads are
-imported.
+read from the graph.

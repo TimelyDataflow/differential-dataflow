@@ -1,11 +1,11 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let friend = import "graph::friend" : (int, (int, int));
-let tags_of = import "graph::mtag.by_message" : (int, int);
-let people = import "ic10s::people" : (int, (List(int), List(int), List(int), List(int), int, int));
-let posts = import "ic10s::posts" : (int, int);
-let likes = import "ic10s::likes" : ((int, int), ());
+let friend = input "friend" : (int, (int, int));
+let tags_of = input "mtag_by_message" : (int, int);
+let people = input "people" : (int, (List(int), List(int), List(int), List(int), int, int));
+let posts = input "posts" : (int, int);
+let likes = input "likes" : ((int, int), ());
 let hop1_map = request | map(((rid, who, month), ()) -> (who, (rid, who, month)));
 let hop1_idx = hop1_map | arrange;
 let friend_idx = friend | arrange;

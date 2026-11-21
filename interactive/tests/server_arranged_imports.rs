@@ -16,7 +16,7 @@ const PRODUCER: &str = r#"output "edges" = input 0 : ((int, int), ()) | map(((sr
 fn consumer() -> String {
     format!(
         r#"
-        let edges = import "prod::edges";
+        let edges = input "edges" : (int, int);
         let roots = input 0 : ((int), ()) | map(((n), ()) -> (n, ()));
         r: {{
             let step = reach | join(edges, (_, (_, dst)) -> (dst, ()));
@@ -33,16 +33,18 @@ fn consumer() -> String {
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
+    // A consumer reads the producer's `edges`; the producer has no named input.
+    if program.root.imports.iter().any(|i| i.name == "edges") { program.bind([("edges", "prod::edges")]).unwrap(); }
     interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
 
 fn edge(server: &mut Server, src: i64, dst: i64, diff: i64, time: u64) {
-    server.feed("prod", 0, &format!("{src},{dst} diff={diff}"), time).unwrap();
+    server.feed("prod", &0.into(), &format!("{src},{dst} diff={diff}"), time).unwrap();
 }
 
 fn root(server: &mut Server, name: &str, node: i64, time: u64) {
-    server.feed(name, 0, &node.to_string(), time).unwrap();
+    server.feed(name, &0.into(), &node.to_string(), time).unwrap();
 }
 
 /// Snapshot each named export, each expected to be non-empty.
@@ -62,7 +64,7 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         server.set_arranged_imports(arranged);
         install(&mut server, worker, "prod", PRODUCER);
         for (s, d) in [(1, 2), (2, 3), (3, 4), (5, 6), (2, 7)] { edge(&mut server, s, d, 1, 0); }
-        server.seal("prod", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        server.seal("prod", &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
         server.spin(worker);
 
         let mut exports: Vec<String> = Vec::new();
@@ -72,7 +74,7 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         exports.extend(["early::hop", "early::degree", "early::reach", "early::flipped"].map(String::from));
         root(&mut server, "early", 1, 1);
         for name in ["prod", "early"] {
-            server.seal(name, 0, &Antichain::from_elem(host_time(2))).unwrap();
+            server.seal(name, &0.into(), &Antichain::from_elem(host_time(2))).unwrap();
         }
         server.spin(worker);
         take(&mut server, worker, &exports, &mut snapshots);
@@ -81,7 +83,7 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         edge(&mut server, 4, 5, 1, 2);
         edge(&mut server, 2, 3, -1, 2);
         for name in ["prod", "early"] {
-            server.seal(name, 0, &Antichain::from_elem(host_time(3))).unwrap();
+            server.seal(name, &0.into(), &Antichain::from_elem(host_time(3))).unwrap();
         }
         server.spin(worker);
         server.trim(worker, "prod::edges", Some(&host_time(2))).unwrap();
@@ -93,7 +95,7 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
         root(&mut server, "late", 2, 3);
         edge(&mut server, 2, 3, 1, 3);
         for name in ["prod", "early", "late"] {
-            server.seal(name, 0, &Antichain::from_elem(host_time(4))).unwrap();
+            server.seal(name, &0.into(), &Antichain::from_elem(host_time(4))).unwrap();
         }
         server.spin(worker);
         take(&mut server, worker, &exports, &mut snapshots);
@@ -102,7 +104,7 @@ fn scenario(arranged: bool) -> Vec<Snapshot> {
             edge(&mut server, 6, 1, 1, time);
             edge(&mut server, 6, 1, -1, time);
             for name in ["prod", "early", "late"] {
-                server.seal(name, 0, &Antichain::from_elem(host_time(time + 1))).unwrap();
+                server.seal(name, &0.into(), &Antichain::from_elem(host_time(time + 1))).unwrap();
             }
             server.spin(worker);
         }

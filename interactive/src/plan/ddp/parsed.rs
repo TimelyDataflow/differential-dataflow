@@ -46,17 +46,15 @@ impl Printer<'_> {
     fn atom(&mut self, expr: &Expr) -> Result<String, String> {
         let text = self.expression(expr)?;
         Ok(match expr {
-            Expr::Input(..) | Expr::Import(_) | Expr::TypedSource(..) | Expr::Name(_) | Expr::Path(..) => text,
+            Expr::Input(..) | Expr::TypedSource(..) | Expr::Name(_) | Expr::Path(..) => text,
             _ => format!("({text})"),
         })
     }
 
     fn expression(&mut self, expr: &Expr) -> Result<String, String> {
         Ok(match expr {
-            Expr::Input(InputRef::Numbered(n)) => format!("input {n}"),
-            Expr::Input(InputRef::Next(_, None)) => "input".to_string(),
-            Expr::Input(InputRef::Next(_, Some(name))) => format!("input {}", quoted(name)?),
-            Expr::Import(name) => format!("import {}", quoted(name)?),
+            Expr::Input(crate::scope_ir::InputId::Number(n)) => format!("input {n}"),
+            Expr::Input(crate::scope_ir::InputId::Name(name)) => format!("input {}", quoted(name)?),
             Expr::TypedSource(source, key, val) => format!("{} : {}", self.expression(source)?, self.row(&(key.clone(), val.clone()))?),
             Expr::Name(name) => name.clone(),
             Expr::Path(parts, absolute) => format!("{}{}", if *absolute { "::" } else { "" }, parts.join("::")),

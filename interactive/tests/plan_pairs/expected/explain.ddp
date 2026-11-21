@@ -1,5 +1,5 @@
 -- Time lanes: epoch.
-let input0 = input : (int, int);
+let input0 = input 0 : (int, int);
 let query = input "query" : (int, (int, int));
 let rows_map2_map = input0 | map((_, a) -> ((a, (())), ()));
 let rows_map2_map_idx = rows_map2_map | arrange;
@@ -20,7 +20,7 @@ let query_map_idx_reduce_map_map_idx = query_map_idx_reduce_map_map | arrange;
 explain: {
     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
     var demand_set_0 : (int, int);
-    let demand_input0 = demand_set_0;
+    let demand_0 = demand_set_0;
     let item_map = demand_set_0 | map((k, v) -> ((k, v), ()));
     let item_idx = item_map | arrange;
     let item_join = ::input0_map_idx | join(item_idx, (k, (v, r)) -> (k, ()));
@@ -58,4 +58,4 @@ explain: {
     set demand_set_0 = item_map13;
 }
 -- Renderer: build an export arrangement.
-output "demand:input0" = explain::demand_input0;
+output "demand:0" = explain::demand_0;

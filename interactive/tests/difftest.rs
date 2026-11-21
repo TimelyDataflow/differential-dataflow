@@ -874,6 +874,10 @@ fn program(src: &str, optimize: bool) -> Result<Program, String> {
     let src = src.to_string();
     quietly(move || {
         let mut p = lower::lower_tree(parse::pipe::parse(&src));
+        // A consumer's `shared_` inputs read the producer's outputs of those names.
+        let shared: Vec<String> = p.root.imports.iter().filter(|i| i.name.starts_with("shared_")).map(|i| i.name.clone()).collect();
+        let traces: Vec<String> = shared.iter().map(|label| format!("producer::{label}")).collect();
+        p.bind(shared.iter().map(String::as_str).zip(traces.iter().map(String::as_str))).unwrap();
         if optimize { interactive::passes::optimize(&mut p); }
         p
     })
@@ -939,7 +943,7 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
         if ahead && worker.index() == 0 {
             for (time, epoch) in epochs.iter().enumerate() {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), time as u64)?;
+                    server.feed(&fed, &(*input).into(), &lines.join("\n"), time as u64)?;
                 }
             }
         }
@@ -955,12 +959,12 @@ fn run_with_options(programs: &[(String, Program, usize)], workers: usize, case:
             }
             if !ahead && worker.index() == 0 {
                 for (input, lines) in epoch {
-                    server.feed(&fed, *input, &lines.join("\n"), e as u64)?;
+                    server.feed(&fed, &(*input).into(), &lines.join("\n"), e as u64)?;
                 }
             }
             let frontier = Antichain::from_elem(server::host_time(e as u64 + 1));
             for p in server.program_info() {
-                for input in p.inputs { server.seal(&p.name, input, &frontier)?; }
+                for input in p.inputs { server.seal(&p.name, &input.into(), &frontier)?; }
             }
             server.spin(worker);
             for (trace, _) in server.trace_info() {
@@ -1073,9 +1077,9 @@ fn split(case: &Case) -> Option<(String, String, bool, usize)> {
     let mut producer = String::new();
     render_stmts(before, false, "", &mut producer);
     let mut consumer = format!("{SUM_DECL}\n");
-    for (name, _, _) in &named {
+    for (name, key, val) in &named {
         writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
-        writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
+        writeln!(consumer, "let {name} = input \"shared_{name}\" : ({}, {});", key.text(), val.text()).unwrap();
     }
     render_stmts(after, false, "", &mut consumer);
     Some((producer, consumer, rng.chance(50), late))
@@ -1091,10 +1095,10 @@ fn asof_programs(case: &Case, optimize: bool) -> Result<Vec<(String, Program, us
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut consumer);
             }
-            Stmt::Input { name, .. } => {
+            Stmt::Input { name, key, val, .. } => {
                 render_stmts(std::slice::from_ref(stmt), false, "", &mut producer);
                 writeln!(producer, "output \"shared_{name}\" = {name};").unwrap();
-                writeln!(consumer, "let {name} = import \"producer::shared_{name}\";").unwrap();
+                writeln!(consumer, "let {name} = input \"shared_{name}\" : ({}, {});", key.text(), val.text()).unwrap();
             }
             _ => render_stmts(std::slice::from_ref(stmt), true, "", &mut consumer),
         }
@@ -1263,30 +1267,27 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
             }
         }
     }
-    // Explain rewrites the lowered program, before optimizing; its query input follows the
-    // program's largest positional input.
+    // Explain rewrites the lowered program, before optimizing; its query input is labelled `query`.
     let lowered = program(&case.render(false), false)?;
     let ex = quietly(|| { let mut ex = explain::explain(&lowered); interactive::passes::optimize(&mut ex); ex }).map_err(|e| format!("explain panicked: {e}"))?;
     let used: Vec<usize> = lowered.root.imports.iter().filter_map(|imp| match imp.from {
-        interactive::scope_ir::Source::Input(i) => Some(i),
+        interactive::scope_ir::Source::Input(server::InputId::Number(i)) => Some(i),
         _ => None,
     }).collect();
-    let query_input = used.iter().map(|i| i + 1).max().unwrap_or(0);
     let feed_of = |rows: &BTreeMap<String, i64>| -> Vec<String> {
         rows.iter().filter(|(_, d)| **d != 0).map(|(r, d)| format!("{r} diff={d}")).collect()
     };
     // A query is written as feed text, which has no NaN or infinity.
     for (q, (k, v, _)) in result.iter().filter(|(k, v, _)| finite(k) && finite(v)).enumerate().take(6) {
-        let mut ex_inputs: Vec<Vec<String>> = acc.iter().map(feed_of).collect();
-        ex_inputs.resize(query_input, Vec::new());
-        ex_inputs.push(vec![format!("{k} val=tuple({v},{q})")]);
+        let mut ex_inputs: BTreeMap<server::InputId, Vec<String>> = acc.iter().map(feed_of).enumerate().map(|(i, rows)| (server::InputId::Number(i), rows)).collect();
+        ex_inputs.insert(server::InputId::Name("query".into()), vec![format!("{k} val=tuple({v},{q})")]);
         let ex2 = ex.clone();
-        let out = quietly(move || server::evaluate(timely::Config::process(1), &ex2, &ex_inputs)).map_err(|e| format!("explained program panicked: {e}"))?;
+        let out = quietly(move || server::evaluate_labelled(timely::Config::process(1), &ex2, &ex_inputs)).map_err(|e| format!("explained program panicked: {e}"))?;
         // Restrict each input to its demanded rows, at their multiplicities.
         let mut restricted: Vec<Vec<String>> = Vec::new();
         for (i, rows) in acc.iter().enumerate() {
             if !used.contains(&i) { restricted.push(Vec::new()); continue; }
-            let demand = out.get(&format!("demand:input{i}")).map(|u| u.clone().rows()).unwrap_or_default();
+            let demand = out.get(&format!("demand:{i}")).map(|u| u.clone().rows()).unwrap_or_default();
             let wanted: std::collections::BTreeSet<String> = demand.iter().map(|(dk, dv, _)| row_text(dk, dv, inputs.iter().find(|(n, _, _)| *n == i).expect("a demanded input is declared"))).collect();
             restricted.push(rows.iter().filter(|(r, d)| **d != 0 && wanted.contains(*r)).map(|(r, d)| format!("{r} diff={d}")).collect());
         }

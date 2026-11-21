@@ -325,10 +325,10 @@ fn join_projects_the_same_row_as_map() {
         let mut program = lower::lower_tree(parse::pipe::parse(source));
         interactive::passes::optimize(&mut program);
         server.install(worker, "p", &program).unwrap();
-        server.feed("p", 0, "1 val=10 diff=2\n2 val=20", 0).unwrap();
-        server.feed("p", 1, "1 val=tuple(3,4) diff=3", 0).unwrap();
-        server.feed("p", 0, "1 val=10 diff=-1", 1).unwrap();
-        for input in [0, 1] { server.advance_input("p", input, &host_time(2)).unwrap(); }
+        server.feed("p", &0.into(), "1 val=10 diff=2\n2 val=20", 0).unwrap();
+        server.feed("p", &1.into(), "1 val=tuple(3,4) diff=3", 0).unwrap();
+        server.feed("p", &0.into(), "1 val=10 diff=-1", 1).unwrap();
+        for input in [0, 1] { server.advance_input("p", &input.into(), &host_time(2)).unwrap(); }
         for (t, diff) in [(0, 6), (1, 3)] {
             for (name, key, val) in [
                 ("pairs", "1", "tuple(10,tuple(3,4))"),

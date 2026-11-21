@@ -5,18 +5,19 @@ use interactive::{lower, parse};
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
+    if program.root.imports.iter().any(|i| i.name == "loose") { program.bind([("loose", "undeclared::loose")]).unwrap(); }
     interactive::passes::optimize(&mut program);
     server.install(worker, name, &program).unwrap();
 }
 
-/// A fed input, read through another program's import.
+/// A fed input, read through another program's bound input.
 const LOOSE: &str = r#"
     output "loose" = input 0 : ((int), ());
 "#;
 
-/// A declared import of that input's export, checked against its shape at install.
+/// An input bound to that input's export, its shape checked at install.
 const DECLARING: &str = r#"
-    let l = import "undeclared::loose" : ((int), ());
+    let l = input "loose" : ((int), ());
     output "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
 
 "#;
@@ -31,10 +32,10 @@ fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
         for epoch in 1..5i64 {
             if worker.index() == 0 {
                 for i in 0..10 {
-                    server.feed("undeclared", 0, &(i * epoch).to_string(), epoch as u64 - 1).unwrap();
+                    server.feed("undeclared", &0.into(), &(i * epoch).to_string(), epoch as u64 - 1).unwrap();
                 }
             }
-            server.seal("undeclared", 0, &Antichain::from_elem(host_time(epoch as u64))).unwrap();
+            server.seal("undeclared", &0.into(), &Antichain::from_elem(host_time(epoch as u64))).unwrap();
             server.spin(worker);
             for name in ["undeclared::loose", "declaring::doubled"] {
                 seen.push(server.snapshot(worker, name).unwrap().rows());

@@ -371,11 +371,12 @@ I would not recommend relying on any of this yet.
 
 ## Plan without running
 
-`cargo run -p interactive --bin ddir-plan -- [name=]file.ddp [[name=]more.ddp ...]` prints
+`cargo run -p interactive --bin ddir-plan -- [--bind label=trace ...] [name=]file.ddp [[--bind label=trace ...] [name=]more.ddp ...]` prints
 lowering, optimization, projection, and as-of-drop stages. `--passes LIST` switches
 passes off as the server's `DDIR_PASSES` does; a switched-off stage is shown unchanged. Earlier files supply
-their inferred output shapes to later files, as `<name>::<output>`, where `name` is given or is the file's stem. No dataflow or generated source is
-installed. A missing provider is unresolved even if its import declares a shape;
+their inferred output shapes to later files, as `<name>::<output>`, where `name` is given or is the file's stem.
+`--bind label=trace` binds an input of the next file to such a trace, as a load does. No dataflow or generated source is
+installed. A missing provider is unresolved even though the bound input declares a shape;
 the tool prints the partial report and exits unsuccessfully.
 
 `ddir-plan --timings file.ddp` adds wall times, call counts, rewrite counts, and

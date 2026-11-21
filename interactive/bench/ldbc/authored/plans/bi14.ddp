@@ -3,13 +3,13 @@
 -- message of person2's, 1 for the reverse. The best pair per person1's city; top 100.
 
 let request = input 0 : ((int, List(int), List(int)), ());    -- (rid, country 1, country 2)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let likes   = import "graph::likes.by_message" : (int, (int, int));     -- (message, (liker, created))
-let place   = import "graph::place" : (int, (List(int), List(int), int));
-let friend  = import "graph::friend" : (int, (int, int));             -- (person, (friend, since))
-let place_by_name   = import "graph::place.by_name"   : (List(int), int);
-let place_by_parent = import "graph::place.by_parent" : (int, int);
-let person_by_city  = import "graph::person.by_city"  : (int, int);
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let likes   = input "likes_by_message" : (int, (int, int));     -- (message, (liker, created))
+let place   = input "place" : (int, (List(int), List(int), int));
+let friend  = input "friend" : (int, (int, int));             -- (person, (friend, since))
+let place_by_name   = input "place_by_name"   : (List(int), int);
+let place_by_parent = input "place_by_parent" : (int, int);
+let person_by_city  = input "person_by_city"  : (int, int);
 
 -- Residents of country 1 with their city and its name; residents of country 2
 -- (country name -> country -> cities -> people).

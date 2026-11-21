@@ -4,14 +4,14 @@
 -- city by primary key, emails, languages, study and work by their person indexes.
 
 let request  = input 0 : ((int, int, List(int)), ());           -- (rid, person, first name)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let friend  = import "graph::friend"  : (int, (int, int));      -- (person, (friend, since))
-let place   = import "graph::place"   : (int, (List(int), List(int), int));
-let org      = import "graph::org"      : (int, (List(int), List(int), int));
-let study    = import "graph::study.by_person" : (int, (int, int));   -- (person, (org, year))
-let work     = import "graph::work.by_person"  : (int, (int, int));
-let email    = import "graph::email.by_person"    : (int, List(int));
-let language = import "graph::language.by_person" : (int, List(int));
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let friend  = input "friend"  : (int, (int, int));      -- (person, (friend, since))
+let place   = input "place"   : (int, (List(int), List(int), int));
+let org      = input "org"      : (int, (List(int), List(int), int));
+let study    = input "study_by_person" : (int, (int, int));   -- (person, (org, year))
+let work     = input "work_by_person"  : (int, (int, int));
+let email    = input "email_by_person"    : (int, List(int));
+let language = input "language_by_person" : (int, List(int));
 
 -- The circle with distances: least hops (1 to 3) to each person, not the person.
 let hop1   = request | map(((rid, who, name), ()) -> (who, (rid, who, name)))

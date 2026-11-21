@@ -4,10 +4,10 @@
 -- found from the friendships (each person's few schools), not from all pairs of classmates.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, company name, person)
-let friend          = import "graph::friend"          : (int, (int, int));  -- (person, (friend, since))
-let study_by_person = import "graph::study.by_person" : (int, (int, int));  -- (person, (school, year))
-let org_by_name     = import "graph::org.by_name"     : (List(int), int);   -- (name, org)
-let work_by_org     = import "graph::work.by_org"     : (int, (int, int));  -- (org, (person, year))
+let friend          = input "friend"          : (int, (int, int));  -- (person, (friend, since))
+let study_by_person = input "study_by_person" : (int, (int, int));  -- (person, (school, year))
+let org_by_name     = input "org_by_name"     : (List(int), int);   -- (name, org)
+let work_by_org     = input "work_by_org"     : (int, (int, int));  -- (org, (person, year))
 
 -- Classmate friendships, weighted by the closest pair of graduation years: start from
 -- each friendship and look up both people's schools.

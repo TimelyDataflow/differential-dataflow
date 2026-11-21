@@ -6,11 +6,13 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N : (key_shape, val_shape)` (positional input), `input : (key_shape, val_shape)`
-//! (the next position, in the order inputs are written; a program numbers all of its inputs or
-//! none), `input "name" : …` (the next position, and the name a client may feed or bind it by;
-//! no two inputs share a name, which is an identifier other than `input<N>`), `import "name"` (named trace), `name` (a `let` or `set` in this or any enclosing scope), or a
-//! scope path such as `a::b::f` or `::a::b::f`.
+//! Sources: `input N : (key_shape, val_shape)` or `input "name" : (key_shape, val_shape)` (an
+//! input, labelled by a number or by a name that is an identifier), `name` (a `let` or `set` in
+//! this or any enclosing scope), or a scope path such as `a::b::f` or `::a::b::f`.
+//! A label is the input's identity: a client feeds an input by its label, and a load may bind it
+//! to a published trace instead, as `load p from f.ddp edges=graph::edges`. A program does not
+//! name the traces it reads. Writing the same label again reads the same input, and the order
+//! inputs are written in never matters.
 //! A leading `::` reads the rest of the path in the root. Otherwise the first
 //! component names one visible scope: the current scope, an ancestor, or a child
 //! of one of these. Scope names cannot shadow one another, so that scope is unique.
@@ -25,7 +27,7 @@
 //! An input declares its shape, using the shape syntax below, as a table
 //! declares its columns: the server refuses to install a program with an undeclared
 //! input. The shape is the column encoding, also for empty lists and inactive sum
-//! lanes, which a row cannot reveal. An `import` may declare a shape too, which must
+//! lanes, which a row cannot reveal. A bound input's declared shape must
 //! match the shape its trace is published at. A fed row is asserted to have its
 //! input's shape during execution, where a mismatch can panic a dataflow worker and
 //! take down the shared server; there is no per-program failure isolation.
@@ -104,7 +106,7 @@
 //! may name other types declared anywhere in the program, including inside a scope. Types are
 //! global to the program and may appear in any order, but cannot be recursive.
 //!
-//! A collection's shape, as `input`, `import`, `var` and `output` declare it, is the pair
+//! A collection's shape, as `input`, `var` and `output` declare it, is the pair
 //! `(key_shape, val_shape)`: its root has exactly two fields, the key and the value, as a slot's
 //! input `(key, val)` does. `((int, int), ())` is a two-field key with a unit value, and
 //! `(int, int)` keys by the first int with the second as the value. The older `(key ; val)` is
@@ -301,7 +303,7 @@ fn lex(input: &str) -> Vec<Token> {
             ']' => { chars.next(); tokens.push(Token::RBracket); },
             '=' => { chars.next(); tokens.push(Token::Eq); },
             '"' => {
-                // String literal: the quoted name in `import "..."` / `output "..." = ...`.
+                // String literal: the quoted name in `input "..."` / `output "..." = ...`.
                 // Names carry no escapes, so read verbatim up to the closing quote.
                 chars.next();
                 let mut s = String::new();
@@ -360,18 +362,11 @@ struct Parser {
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
-    /// Inputs written without a position (`input : shape`) take positions in the order they are
-    /// written: this many so far. A program numbers all of its inputs or none of them.
-    unnumbered_inputs: usize,
-    /// Whether an input has been written with a position (`input N`).
-    numbered_inputs: bool,
-    /// The names inputs are given (`input "name"`): no two inputs share a name.
-    input_names: std::collections::HashSet<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None, unnumbered_inputs: 0, numbered_inputs: false, input_names: Default::default() }
+        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
@@ -605,26 +600,17 @@ impl Parser {
         match self.peek().clone() {
             Token::Input => {
                 self.next();
-                let input = if let Token::Int(n) = *self.peek() {
-                    self.next();
-                    assert!(self.unnumbered_inputs == 0, "`input {n}` in a program whose other inputs have no positions; number all inputs or none");
-                    assert!(!matches!(self.peek(), Token::Str(_)), "`input {n}` cannot be named; a named input takes its position from the order inputs are written");
-                    self.numbered_inputs = true;
-                    InputRef::Numbered(n as usize)
-                } else {
-                    assert!(!self.numbered_inputs, "`input` without a position in a program whose other inputs have them; number all inputs or none");
-                    let name = if let Token::Str(name) = self.peek().clone() {
-                        self.next();
-                        assert!(crate::server::InputId::is_name(&name), "input name {name:?} must be an identifier other than `input<N>`, the name of an unnamed input");
-                        assert!(self.input_names.insert(name.clone()), "two inputs are named {name:?}");
-                        Some(name)
-                    } else { None };
-                    self.unnumbered_inputs += 1;
-                    InputRef::Next(self.unnumbered_inputs - 1, name)
+                let input = match self.next() {
+                    Token::Int(n) => crate::scope_ir::InputId::Number(n as usize),
+                    Token::Str(name) => {
+                        assert!(crate::scope_ir::InputId::is_name(&name), "input name {name:?} must be an identifier");
+                        crate::scope_ir::InputId::Name(name)
+                    }
+                    other => panic!("`input` takes a number or a name, got {other:?}"),
                 };
                 self.source_shape(Expr::Input(input))
             },
-            Token::Import => { self.next(); let source = match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) }; self.source_shape(source) },
+            Token::Import => panic!("`import` is gone: write `input \"name\" : shape`, and bind the name to a trace at load, as `name=prog::output`"),
             Token::Ident(_) | Token::ColonColon => {
                 let root = *self.peek() == Token::ColonColon;
                 if root { self.next(); }

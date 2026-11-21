@@ -19,7 +19,8 @@ fn a_rejected_install_leaves_no_generated_sources() {
         let valid = program(r#"output "taken" = input 0 : ((int), ());"#);
         server.install(worker, "first", &valid).unwrap();
         assert!(server.install(worker, "first", &valid).is_err());
-        let invalid = program(r#"output "x" = import "first::taken" + import "nope";"#);
+        let mut invalid = program(r#"output "x" = input "taken" : ((int), ()) + input "nope" : ((int), ());"#);
+        invalid.bind([("taken", "first::taken"), ("nope", "nope")]).unwrap();
         assert!(server.install(worker, "second", &invalid).is_err());
         assert!(server.trace_shape("second::x").is_none());
         server.drop_program(worker, "first").unwrap();
@@ -32,9 +33,10 @@ fn unread_imports_are_validated_before_passes() {
         let mut server = Server::new();
         for passes in [interactive::passes::Config::default(), interactive::passes::Config::none()] {
             server.set_passes(passes);
-            let invalid = lower::lower_tree(parse::pipe::parse(r#"let dead = import "nope";"#));
+            let mut invalid = lower::lower_tree(parse::pipe::parse(r#"let dead = input "nope" : ((int), ());"#));
+            invalid.bind([("nope", "nope")]).unwrap();
             let error = server.install(worker, "invalid", &invalid).unwrap_err();
-            assert!(error.contains("imports unknown trace \"nope\""), "{error}");
+            assert!(error.contains("to unknown trace \"nope\""), "{error}");
 
 
         }
@@ -64,23 +66,36 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
             let text = text.replace("\"out\"", &format!("{name:?}"));
             let program = lower::lower_tree(parse::pipe::parse(&text));
             server.install(worker, name, &program).unwrap();
-            server.feed(name, 1, "1 val=20", 0).unwrap();
+            server.feed(name, &1.into(), "1 val=20", 0).unwrap();
         }
         for name in ["original", "emitted"] {
             for input in [0, 1] {
-                server.seal(name, input, &Antichain::from_elem(host_time(1))).unwrap();
+                server.seal(name, &input.into(), &Antichain::from_elem(host_time(1))).unwrap();
             }
         }
         server.spin(worker);
-        for name in ["original", "emitted"] { server.feed(name, 0, "1 val=10", 1).unwrap(); }
+        for name in ["original", "emitted"] { server.feed(name, &0.into(), "1 val=10", 1).unwrap(); }
         for name in ["original", "emitted"] {
             for input in [0, 1] {
-                server.seal(name, input, &Antichain::from_elem(host_time(2))).unwrap();
+                server.seal(name, &input.into(), &Antichain::from_elem(host_time(2))).unwrap();
             }
         }
         server.spin(worker);
         let original = server.snapshot(worker, "original::original").unwrap().rows();
         assert_eq!(original, vec![("1".into(), "tuple(10,tuple(1))".into(), 1)]);
         assert_eq!(server.snapshot(worker, "emitted::emitted").unwrap().rows(), original);
+    });
+}
+
+/// A number finds only the input written with it.
+#[test]
+fn numbers_find_only_numbered_inputs() {
+    use interactive::server::InputId;
+    timely::execute_directly(|worker| {
+        let mut server = Server::new();
+        server.install(worker, "p", &program(r#"output "out" = input 0 : (int, ()) + input "b" : (int, ());"#)).unwrap();
+        assert_eq!(server.has_input("p", &InputId::Number(0)), Ok(()));
+        assert_eq!(server.has_input("p", &InputId::Name("b".into())), Ok(()));
+        assert_eq!(server.has_input("p", &InputId::Number(1)), Err("program \"p\" has no input 1".into()));
     });
 }

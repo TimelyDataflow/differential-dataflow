@@ -55,14 +55,63 @@ pub enum Ref {
     ChildExport(ItemId, usize),
 }
 
+/// A program's input, as a client names it: by its label, a number (`input 0`) or a name
+/// (`input "edges"`). Workers resolve a label against the program installed, so a client's view
+/// of the program cannot misdirect a feed, and a number only ever finds the input written with it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub enum InputId {
+    Number(usize),
+    Name(String),
+}
+
+impl InputId {
+    /// Digits are a number, and anything else a name.
+    pub fn parse(text: &str) -> Self {
+        let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+        match text.parse() {
+            Ok(number) if digits => InputId::Number(number),
+            _ => InputId::Name(text.to_string()),
+        }
+    }
+
+    /// Whether `label` is a number, the label of `input N`.
+    pub fn is_number(label: &str) -> bool { matches!(Self::parse(label), InputId::Number(_)) }
+
+    /// The label as a client writes it, and as an input's import is named.
+    pub fn label(&self) -> String { match self { InputId::Number(n) => n.to_string(), InputId::Name(name) => name.clone() } }
+
+    /// Whether `text` may name an input: an identifier, so that it never reads as a number.
+    pub fn is_name(text: &str) -> bool {
+        let mut chars = text.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+}
+
+/// As the label is written in a program: `0`, or `"edges"`.
+impl std::fmt::Display for InputId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { InputId::Number(n) => write!(f, "{n}"), InputId::Name(name) => write!(f, "{name:?}") }
+    }
+}
+
+/// A label as a client writes it: digits are a number, and anything else a name.
+impl From<&str> for InputId {
+    fn from(label: &str) -> Self { InputId::parse(label) }
+}
+
+impl From<usize> for InputId {
+    fn from(number: usize) -> Self { InputId::Number(number) }
+}
+
 /// Where an import's value comes from. Inner scopes import from the parent; the
-/// root imports the program's external sources — unifying `Input`/`Import`.
+/// root imports the program's external sources: inputs, and the traces a load binds them to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
-    /// A positional program input (root only).
-    Input(usize),
+    /// A program input, by its label (root only). Install gives it a slot of its own.
+    Input(InputId),
     /// A named external trace (root only).
     Trace(String),
 }
@@ -232,6 +281,20 @@ pub struct Program {
 }
 
 impl Program {
+    /// Bind root inputs to published traces, as a load does: each `(label, trace)` makes the input
+    /// with that label read the trace instead of being fed. A bound input keeps the shape it
+    /// declares, which install checks against the trace's.
+    pub fn bind<'a>(&mut self, bindings: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<(), String> {
+        for (label, trace) in bindings {
+            let import = self.root.imports.iter_mut()
+                .find(|import| matches!(&import.from, Source::Input(id) if id.label() == label))
+                .ok_or_else(|| format!("binding names no input {label:?}"))?;
+            if import.shape.is_none() { return Err(format!("input {label:?} declares no shape")); }
+            import.from = Source::Trace(trace.to_string());
+        }
+        Ok(())
+    }
+
     /// Print the tree as indented structural text (readability, not
     /// parseability): imports and vars first, items in order (`Sub`s nest),
     /// then binds and exports.
@@ -300,7 +363,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
     for (k, imp) in s.imports.iter().enumerate() {
         let from = match &imp.from {
             Source::Parent(r) => fmt_ref(r),
-            Source::Input(i) => format!("input {}", i),
+            Source::Input(id) => format!("input {}", id.label()),
             Source::Trace(n) => format!("import {:?}", n),
         };
         println!("{}in{} = {} ({:?});", pad2, k, from, imp.name);
@@ -375,8 +438,8 @@ mod tests {
         let root = Scope {
             name: "root".into(),
             imports: vec![
-                Import { name: "in0".into(), from: Source::Input(0), shape: None },
-                Import { name: "in1".into(), from: Source::Input(1), shape: None },
+                Import { name: "0".into(), from: Source::Input(0.into()), shape: None },
+                Import { name: "1".into(), from: Source::Input(1.into()), shape: None },
             ],
             items: vec![Item::Sub(inner)], // item 0 = the reach sub-scope
             exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0), shape: None }],
@@ -389,7 +452,7 @@ mod tests {
         let Item::Sub(reach) = &prog.root.items[0] else { unreachable!() };
         assert_eq!(reach.vars.len(), 1);
         assert!(matches!(prog.root.exports[0].value, Ref::ChildExport(0, 0)));
-        assert!(matches!(prog.root.imports[0].from, Source::Input(0)));
+        assert_eq!(prog.root.imports[0].from, Source::Input(0.into()));
         assert!(matches!(reach.binds[0].value, Ref::Local(1)));
     }
 }

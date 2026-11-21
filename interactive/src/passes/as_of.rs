@@ -185,7 +185,7 @@ mod tests {
 
     /// The program, optimized as install sees it, and the filters the rewrite inserts.
     fn rewrite(src: &str) -> (Program, usize) {
-        let mut prog = crate::lower::lower_tree(crate::parse::pipe::parse(src));
+        let mut prog = crate::lower::lower_bound(src);
         crate::passes::optimize(&mut prog);
         let as_of = crate::server::host_time(AS_OF);
         let inserted = drop_dead_as_of(&mut prog, &as_of, 1);
@@ -219,8 +219,8 @@ mod tests {
     #[test]
     fn a_delta_join_drops_the_as_of_time_on_its_strict_path_only() {
         let (prog, inserted) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
             output "r" = ((a | lift | half_join(b, 0))
                         + (b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, ((x, y), t)))));
         "#);
@@ -235,9 +235,9 @@ mod tests {
     #[test]
     fn a_three_way_path_through_a_non_strict_half_join_is_dead_at_its_strict_one() {
         let (_, inserted) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
-            let c = import "c";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
+            let c = input "c" : ((int, int), ());
             let ab = a | lift | half_join(b, 0, (k, ((x, y), t)) -> (k, (x, t))) | half_join(c, 0, (k, ((x, z), t)) -> (k, (x, t)));
             let ba = b | lift | half_join(a, 1, (k, ((y, x), t)) -> (k, (x, t))) | half_join(c, 0, (k, ((x, z), t)) -> (k, (x, t)));
             let ca = c | lift | half_join(a, 1, (k, ((z, x), t)) -> (k, (x, t))) | half_join(b, 1, (k, ((x, y), t)) -> (k, (x, t)));
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn a_shared_lift_filters_only_the_edge_to_its_strict_reader() {
         let (prog, inserted) = rewrite(r#"
-            let p = import "p";
+            let p = input "p" : ((int, int), ());
             output "r" = ((p | lift | half_join(p, 0))
                         + (p | lift | half_join(p, 1)));
         "#);
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn a_shared_lift_with_filter_and_negate_filters_its_strict_edge() {
         let (prog, inserted) = rewrite(r#"
-            let p = import "p";
+            let p = input "p" : ((int, int), ());
             let lifted = p | lift | filter((k, _) -> (k, k) eq) | negate;
             output "strict" = lifted | half_join(p, 1);
             output "live" = lifted;
@@ -285,8 +285,8 @@ mod tests {
     #[test]
     fn a_lifted_stream_read_any_other_way_keeps_its_rows_there() {
         let (prog, inserted) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
             let la = a | lift;
             output "r" = la | half_join(b, 1);
             output "lifted" = la;
@@ -297,14 +297,14 @@ mod tests {
         let Item::Op(Node::Linear { ops, .. }) = &prog.root.items[i] else { panic!("the lift") };
         assert!(matches!(ops.last(), Some(LinearOp::Lift)), "the export reads the lift unfiltered");
         let (_, live) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
             output "r" = a | lift | half_join(b, 0);
         "#);
         assert_eq!(live, 0, "a non-strict path is live at the as-of time");
         let (_, moved) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
             output "r" = a | lift | delay((_, (_, t)) -> t) | half_join(b, 1);
         "#);
         assert_eq!(moved, 0, "a delay between the lift and the strict half join can move the time");
@@ -313,8 +313,8 @@ mod tests {
     #[test]
     fn a_nested_scope_compares_every_lane() {
         let (prog, inserted) = rewrite(r#"
-            let a = import "a";
-            let b = import "b";
+            let a = input "a" : ((int, int), ());
+            let b = input "b" : ((int, int), ());
             s: {
                 let r = a | lift | half_join(b, 1, (k, ((x, y), t)) -> (k, (x, t))) | map((k, (x, _)) -> (k, x));
                 set x = (r + x) | distinct;

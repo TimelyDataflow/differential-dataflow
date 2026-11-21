@@ -144,8 +144,9 @@ impl Fed {
 /// `(point, export)` checks made on worker 0.
 fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let text = if shared { PROGRAM.replace("let owners = input 1 : (int, int);", "let owners = (input 1 : (int, int)) + (import \"seed::seed_owners\");") } else { PROGRAM.to_string() };
-        let program = lower::lower_tree(parse::pipe::parse(&text));
+        let text = if shared { PROGRAM.replace("let owners = input 1 : (int, int);", "let owners = (input 1 : (int, int)) + (input \"seed_owners\" : (int, int));") } else { PROGRAM.to_string() };
+        let mut program = lower::lower_tree(parse::pipe::parse(&text));
+        if shared { program.bind([("seed_owners", "seed::seed_owners")]).unwrap(); }
         let mut server = Server::new();
         if shared {
             let seed = lower::lower_tree(parse::pipe::parse(r#"output "seed_owners" = input 0 : (int, int);"#));
@@ -161,29 +162,29 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 Step::Feed { input, rows, time } => {
                     if w0 {
                         if shared && *input == 1 && time.1 == 0 {
-                            server.feed("seed", 0, &feed_text(*input, rows), time.0).unwrap();
+                            server.feed("seed", &0.into(), &feed_text(*input, rows), time.0).unwrap();
                         } else {
-                            server.feed_at("bank", *input, &feed_text(*input, rows), &at(*time)).unwrap();
+                            server.feed_at("bank", &(*input).into(), &feed_text(*input, rows), &at(*time)).unwrap();
                         }
                     }
                     for (fields, diff) in rows { fed.rows.push((*input, fields.clone(), *diff, *time)); }
                 }
                 Step::Refused { input, rows, time } => {
-                    let result = server.feed_at("bank", *input, &feed_text(*input, rows), &at(*time));
-                    assert!(result.is_err(), "a feed at {time:?} below its input frontier {:?} was accepted", server.input_time("bank", *input).unwrap());
+                    let result = server.feed_at("bank", &(*input).into(), &feed_text(*input, rows), &at(*time));
+                    assert!(result.is_err(), "a feed at {time:?} below its input frontier {:?} was accepted", server.input_time("bank", &(*input).into()).unwrap());
                 }
                 Step::NextDay | Step::AdvanceEvent(_) => {
-                    let current = server.input_time("bank", 0).unwrap();
+                    let current = server.input_time("bank", &0.into()).unwrap();
                     let (s, e) = (lane(current, 0), lane(current, 1));
                     let next = match step {
                         Step::AdvanceEvent(by) => (s, e + by),
                         _ => (s + 1, e),
                     };
                     if shared {
-                        server.seal("seed", 0, &Antichain::from_elem(at((s + 1, 0)))).unwrap();
+                        server.seal("seed", &0.into(), &Antichain::from_elem(at((s + 1, 0)))).unwrap();
                     }
                     let frontier = Antichain::from_elem(at(next));
-                    for input in 0..3 { server.seal("bank", input, &frontier).unwrap(); }
+                    for input in 0..3 { server.seal("bank", &input.into(), &frontier).unwrap(); }
                     server.spin(worker);
                     let floor = at((next.0.saturating_sub(1), 0));
                     for export in EXPORTS {
@@ -195,7 +196,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             // Every point of the grid that is closed and not compacted away, under the chosen
             // read floor: the last closed epoch at every event time, and the open epoch below its event
             // time.
-            let now = server.input_time("bank", 0).unwrap().clone();
+            let now = server.input_time("bank", &0.into()).unwrap().clone();
             let s = lane(&now, 0);
             let mut points: Vec<Point> = (0..=max_event + 1).chain([u64::MAX]).flat_map(|ev| [(s.saturating_sub(1), ev), (s, ev)]).collect();
             points.retain(|p| !now.less_equal(&at(*p))
@@ -204,7 +205,7 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
                 let expected = fed.expected(point);
                 for export in EXPORTS {
                     // Reads conservatively require the whole program and its imports to close the point.
-                    if shared && server.input_time("seed", 0).unwrap().less_equal(&at(point)) { continue; }
+                    if shared && server.input_time("seed", &0.into()).unwrap().less_equal(&at(point)) { continue; }
                     let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at(point)).unwrap().rows().into_iter()
                         .map(|(k, v, d)| (numbers(&k), numbers(&v), d)).collect();
                     if !w0 { continue; }
@@ -214,10 +215,11 @@ fn run(steps: Vec<Step>, workers: usize, shared: bool) -> usize {
             }
         }
         // A point compacted away is refused.
-        let now = server.input_time("bank", 0).unwrap().clone();
+        let now = server.input_time("bank", &0.into()).unwrap().clone();
         if lane(&now, 0) >= 2 { assert!(server.snapshot_as_of(worker, "bank::balance", &at((lane(&now, 0) - 2, 0))).is_err()); }
         if shared {
-            let narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = import "bank::balance";"#));
+            let mut narrow = lower::lower_tree(parse::pipe::parse(r#"output "bad" = input "balance" : (int, int);"#));
+            narrow.bind([("balance", "bank::balance")]).unwrap();
             assert!(server.install(worker, "narrow", &narrow).unwrap_err().contains("width 2 into width 1"));
             assert!(server.trace_width("narrow::bad").is_none());
             assert_eq!(server.trace_width("seed::seed_owners"), Some(1));
@@ -376,16 +378,16 @@ fn bitemporal_demo() {
             for step in &steps {
                 match step {
                     Step::Feed { input, rows, time } => {
-                        server.feed_at("bank", *input, &feed_text(*input, rows), &at(*time)).unwrap();
+                        server.feed_at("bank", &(*input).into(), &feed_text(*input, rows), &at(*time)).unwrap();
                         for (fields, diff) in rows {
                             fed.rows.push((*input, fields.clone(), *diff, *time));
                             fed_json.push(format!("{{\"input\": {input}, \"fields\": {fields:?}, \"diff\": {diff}, \"system\": {}, \"event\": {}}}", time.0, time.1));
                         }
                     }
                     Step::NextDay => {
-                        let day = lane(server.input_time("bank", 0).unwrap(), 0);
+                        let day = lane(server.input_time("bank", &0.into()).unwrap(), 0);
                         let frontier = Antichain::from_elem(at((day + 1, 0)));
-                        for input in 0..3 { server.seal("bank", input, &frontier).unwrap(); }
+                        for input in 0..3 { server.seal("bank", &input.into(), &frontier).unwrap(); }
                         server.spin(worker);
                         for export in EXPORTS {
                             server.trim(worker, &format!("bank::{export}"), Some(&at((day, 0)))).unwrap();
@@ -395,8 +397,8 @@ fn bitemporal_demo() {
                 }
             }
             // The day just closed is readable at every event time; read it, check it, keep it.
-            let closed = lane(server.input_time("bank", 0).unwrap(), 0) - 1;
-            println!("\n== {label}\n   (now: bookkeeping day {} open)", lane(server.input_time("bank", 0).unwrap(), 0));
+            let closed = lane(server.input_time("bank", &0.into()).unwrap(), 0) - 1;
+            println!("\n== {label}\n   (now: bookkeeping day {} open)", lane(server.input_time("bank", &0.into()).unwrap(), 0));
             for export in DEMO_EXPORTS {
                 let row: Vec<Rows> = events.iter().map(|&(_, e)| {
                     let got: Rows = server.snapshot_as_of(worker, &format!("bank::{export}"), &at((closed, e))).unwrap().rows().into_iter()
@@ -467,25 +469,25 @@ fn independent_inputs_and_time_shapes() {
             "#));
             server.install_with_root(worker, "split", &program, 2, at((0, 0))).unwrap();
             if worker.index() == 0 {
-                server.feed_at("split", 0, "7 val=1", &at((0, 0))).unwrap();
-                server.feed_at("split", 0, "8 val=1", &at((0, 5))).unwrap();
+                server.feed_at("split", &0.into(), "7 val=1", &at((0, 0))).unwrap();
+                server.feed_at("split", &0.into(), "8 val=1", &at((0, 5))).unwrap();
             }
-            server.seal("split", 0, &Antichain::from_elem(at((1, 0)))).unwrap();
+            server.seal("split", &0.into(), &Antichain::from_elem(at((1, 0)))).unwrap();
             server.wait_for(worker, "split::left", &at((1, 0))).unwrap();
             // Input 1 and the exports using it remain open at the minimum.
             let error = server.snapshot(worker, "split::left").unwrap_err();
             assert!(error.contains("width 2") && error.contains("snapshot_as_of") && error.contains("peek_as_of"), "{error}");
             assert_eq!(server.peek(worker, "split::left", None).unwrap_err(), error);
-            assert_eq!(server.input_time("split", 1).unwrap(), &at((0, 0)));
-            server.seal("split", 0, &Antichain::from_elem(at((5, 0)))).unwrap();
-            let error = server.seal("split", 0, &Antichain::from_elem(at((3, 7)))).unwrap_err();
+            assert_eq!(server.input_time("split", &1.into()).unwrap(), &at((0, 0)));
+            server.seal("split", &0.into(), &Antichain::from_elem(at((5, 0)))).unwrap();
+            let error = server.seal("split", &0.into(), &Antichain::from_elem(at((3, 7)))).unwrap_err();
             assert_eq!(error, "cannot seal input \"split\"/0 to [3,7] from 5 at width 2");
-            assert_eq!(server.input_time("split", 0).unwrap(), &at((5, 0)));
-            assert_eq!(server.input_time("split", 1).unwrap(), &at((0, 0)), "a rejected seal leaves the other input alone");
-            assert!(server.feed_at("split", 0, "9 val=1", &at((1, 5))).is_err());
-            assert!(server.feed_at("split", 0, "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
-            if worker.index() == 0 { server.feed_at("split", 1, "7 val=2", &at((0, 0))).unwrap(); }
-            server.seal("split", 1, &Antichain::from_elem(at((2, 0)))).unwrap();
+            assert_eq!(server.input_time("split", &0.into()).unwrap(), &at((5, 0)));
+            assert_eq!(server.input_time("split", &1.into()).unwrap(), &at((0, 0)), "a rejected seal leaves the other input alone");
+            assert!(server.feed_at("split", &0.into(), "9 val=1", &at((1, 5))).is_err());
+            assert!(server.feed_at("split", &0.into(), "9 val=1", &HostTime::new(smallvec::smallvec![2, 0, 1])).is_err());
+            if worker.index() == 0 { server.feed_at("split", &1.into(), "7 val=2", &at((0, 0))).unwrap(); }
+            server.seal("split", &1.into(), &Antichain::from_elem(at((2, 0)))).unwrap();
             for export in ["split::left", "split::seen", "split::delta"] { server.wait_for(worker, export, &at((2, 0))).unwrap(); }
             let left = server.snapshot_as_of(worker, "split::left", &at((0, u64::MAX))).unwrap();
             let seen = server.snapshot_as_of(worker, "split::seen", &at((0, u64::MAX))).unwrap();
@@ -503,12 +505,13 @@ fn independent_inputs_and_time_shapes() {
             }
             // Both contributing input frontiers must dominate the new read floor.
             assert!(server.trim(worker, "split::left", Some(&at((0, 3)))).is_err());
-            server.seal("split", 0, &Antichain::from_elem(at((5, 3)))).unwrap();
-            server.seal("split", 1, &Antichain::from_elem(at((2, 3)))).unwrap();
+            server.seal("split", &0.into(), &Antichain::from_elem(at((5, 3)))).unwrap();
+            server.seal("split", &1.into(), &Antichain::from_elem(at((2, 3)))).unwrap();
             server.trim(worker, "split::left", Some(&at((0, 3)))).unwrap();
             assert!(server.snapshot_as_of(worker, "split::left", &at((0, 2))).is_err());
             assert!(server.trim(worker, "split::left", Some(&at((0, 1)))).is_err());
-            let import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = import "split::left" | lift;"#));
+            let mut import = lower::lower_tree(parse::pipe::parse(r#"output "wide" = input "left" : (int, int) | lift;"#));
+            import.bind([("left", "split::left")]).unwrap();
             assert!(server.install_with_root(worker, "wide", &import, 3, at((0, 0))).is_err());
             server.install_with_root(worker, "wide", &import, 3, at((0, 3))).unwrap();
             server.wait_for(worker, "wide::wide", &at((2, 0))).unwrap();
@@ -523,9 +526,10 @@ fn independent_inputs_and_time_shapes() {
             server.install(worker, "producer", &producer).unwrap();
             for width in [1, 2] {
                 let name = format!("consumer{width}");
-                let consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = (input 0 : (int, int)) + (import \"producer::lagging\");")));
+                let mut consumer = lower::lower_tree(parse::pipe::parse(&format!("output \"{name}\" = (input 0 : (int, int)) + (input \"lagging\" : (int, int));")));
+                consumer.bind([("lagging", "producer::lagging")]).unwrap();
                 server.install_with_root(worker, &name, &consumer, width, at((0, 0))).unwrap();
-                server.seal(&name, 0, &Antichain::from_elem(at((3, 0)))).unwrap();
+                server.seal(&name, &0.into(), &Antichain::from_elem(at((3, 0)))).unwrap();
                 server.spin(worker);
                 let point = if width == 1 { at((2, 0)) } else { at((2, u64::MAX)) };
                 let error = server.snapshot_as_of(worker, &format!("{name}::{name}"), &point).unwrap_err();
@@ -536,12 +540,12 @@ fn independent_inputs_and_time_shapes() {
                     // A scalar latest read sees the closed past of the lagging producer.
                     assert!(server.snapshot(worker, &trace).unwrap().is_empty());
                     assert!(server.peek(worker, &trace, None).unwrap().is_empty());
-                    assert_eq!(server.load(worker, "split", 1, &trace, 1).unwrap(), 0);
+                    assert_eq!(server.load(worker, "split", &1.into(), &trace, 1).unwrap(), 0);
                 } else {
                     let default_error = server.snapshot(worker, &trace).unwrap_err();
                     assert!(default_error.contains("width 2"), "{default_error}");
                     assert_eq!(server.peek(worker, &trace, None).unwrap_err(), default_error);
-                    assert_eq!(server.load(worker, "split", 1, &trace, 1).unwrap_err(), default_error);
+                    assert_eq!(server.load(worker, "split", &1.into(), &trace, 1).unwrap_err(), default_error);
                 }
             }
         }).unwrap();

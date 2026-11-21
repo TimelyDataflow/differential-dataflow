@@ -1,8 +1,8 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let tag = import "graph::tag" : (int, (List(int), int));
-let mtag = import "graph::mtag.by_tag" : (int, int);
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tag = input "tag" : (int, (List(int), int));
+let mtag = input "mtag_by_tag" : (int, int);
 let posts = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq) | map((id, (_, created, who, _, _, _, _, _, _, _, _, _, _)) -> (who, (id, created)));
 let mtag_idx = mtag | arrange;
 let tag_idx = tag | arrange;

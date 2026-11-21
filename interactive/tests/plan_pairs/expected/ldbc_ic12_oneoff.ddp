@@ -1,15 +1,15 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, List(int)), ());
-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "graph::friend" : (int, (int, int));
-let tag = import "graph::tag" : (int, (List(int), int));
-let by_class = import "graph::tag.by_class" : (int, int);
-let classes = import "graph::tagclass.by_name" : (List(int), int);
-let mtag = import "graph::mtag.by_tag" : (int, int);
-let below_hl = import "ic12s::below_hl" : (int, int);
-let reply = import "ic12s::reply" : (int, (int, int));
+let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = input "friend" : (int, (int, int));
+let tag = input "tag" : (int, (List(int), int));
+let by_class = input "tag_by_class" : (int, int);
+let classes = input "tagclass_by_name" : (List(int), int);
+let mtag = input "mtag_by_tag" : (int, int);
+let below_hl = input "below_hl" : (int, int);
+let reply = input "reply" : (int, (int, int));
 let intag_map = request | map(((rid, _, name), ()) -> (name, rid));
 let intag_idx = intag_map | arrange;
 let classes_idx = classes | arrange;

@@ -93,11 +93,11 @@ inclusive interval. Reference implementations:
 [BI5](https://github.com/ldbc/ldbc_snb_bi/blob/47dd38b40844ecdb0e42e5a610c369535304786d/umbra/queries/bi-5.sql),
 [BI11](https://github.com/ldbc/ldbc_snb_bi/blob/47dd38b40844ecdb0e42e5a610c369535304786d/umbra/queries/bi-11.sql).
 
-All selected plans are installed once and import a shared graph program
+All selected plans are installed once and read a shared graph program
 (`snb/indexes.py`). It publishes each relation by primary key, secondary indexes
 from foreign keys, friendships in both directions and each message's thread root;
 its load and maintenance costs are included. Even isolated
-controls retain this fixed substrate. This uses existing named-import semantics;
+controls retain this fixed substrate. Each plan's named inputs are bound to the graph's outputs at load;
 it does not introduce native Corgi trace sharing or a new prepared-query feature.
 
 Each round runs requests on the initial graph, retracts those bindings, removes

@@ -1,10 +1,10 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int), ());
-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote = import "graph::message.by_creator" : (int, int);
-let replies = import "graph::message.by_parent" : (int, int);
+let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote = input "message_by_creator" : (int, int);
+let replies = input "message_by_parent" : (int, int);
 let top_map = request | map(((rid, who), ()) -> (who, rid));
 let top_idx = top_map | arrange;
 let wrote_idx = wrote | arrange;

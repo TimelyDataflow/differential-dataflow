@@ -130,8 +130,9 @@ class Client:
         data, _ = self._exchange(reqid, f"{reqid} {command}\n")
         return data, (time.perf_counter() - start) * 1000.0
 
-    def load(self, name: str, program: Path) -> float:
-        return self.request(f"load {name} from {program}")[1]
+    def load(self, name: str, program: Path, bindings: str = "") -> float:
+        """Install `program`; `bindings` is `label=trace ...`, binding its named inputs."""
+        return self.request(f"load {name} from {program} {bindings}".rstrip())[1]
 
     def drop(self, name: str) -> float:
         return self.request(f"drop {name}")[1]
@@ -365,7 +366,7 @@ def run_cycle(
         for trace in (*exports, *client.diagnostics):
             maintain_ms += client.request(f"trim {trace} {epoch + 1}")[1]
     else:
-        install_ms = client.load("res", resolver)
+        install_ms = client.load("res", resolver, "store=store::store")
         submit_ms = client.feed("res", transactions, epoch)
         resolve_ms = client.request(f"seal store 0 {epoch + 1}")[1]
         resolve_ms += client.request(f"seal res 0 {epoch + 1}")[1]

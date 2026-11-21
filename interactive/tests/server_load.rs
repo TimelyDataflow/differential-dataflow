@@ -32,8 +32,8 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>
         interactive::passes::optimize(&mut program);
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
-        let outcome = server.load(worker, "world", 0, &path, 1);
-        server.seal("world", 0, &Antichain::from_elem(host_time(1))).unwrap();
+        let outcome = server.load(worker, "world", &0.into(), &path, 1);
+        server.seal("world", &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
         server.spin(worker);
         let rows = server
             .snapshot(worker, "world::rows")
@@ -85,19 +85,19 @@ fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
         install(&mut server, worker, "world");
         install(&mut server, worker, "gone");
         if worker.index() == 0 {
-            server.feed("world", 0, "1\n2\n3\n4\n5\n6", 0).unwrap();
-            server.feed("gone", 0, "2\n4\n6", 0).unwrap();
+            server.feed("world", &0.into(), "1\n2\n3\n4\n5\n6", 0).unwrap();
+            server.feed("gone", &0.into(), "2\n4\n6", 0).unwrap();
         }
         for name in ["world", "gone"] {
-            server.seal(name, 0, &Antichain::from_elem(host_time(1))).unwrap();
+            server.seal(name, &0.into(), &Antichain::from_elem(host_time(1))).unwrap();
         }
         server.spin(worker);
         assert!(server.loads_from_trace("gone::rows"));
-        server.load(worker, "world", 0, "gone::rows", -1).unwrap();
-        server.seal("world", 0, &Antichain::from_elem(host_time(2))).unwrap();
+        server.load(worker, "world", &0.into(), "gone::rows", -1).unwrap();
+        server.seal("world", &0.into(), &Antichain::from_elem(host_time(2))).unwrap();
         server.spin(worker);
-        server.load(worker, "world", 0, "world::rows", 2).unwrap();
-        server.seal("world", 0, &Antichain::from_elem(host_time(3))).unwrap();
+        server.load(worker, "world", &0.into(), "world::rows", 2).unwrap();
+        server.seal("world", &0.into(), &Antichain::from_elem(host_time(3))).unwrap();
         server.spin(worker);
         server
             .snapshot(worker, "world::rows")

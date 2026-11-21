@@ -1,7 +1,9 @@
 """Writes <plan>.standing.ddp and <plan>.oneoff.ddp here.
 
 Split an authored plan into a standing program (binding-independent statements, published)
-and a one-off program (the request and everything that depends on it, importing those)."""
+and a one-off program (the request and everything that depends on it, reading those).
+A one-off's named inputs are bound at load: the graph's to `graph::<name>`, and the standing
+program's to `<plan>s::<name>`."""
 import re, sys
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
@@ -47,7 +49,7 @@ def split(plan):
     for a, b in edits:
         text = text.replace(a, b) if plan != 'ic12' else text.replace('join(' + a, 'join(' + b)
     stmts = statements(text)
-    imports = [s for s in stmts if re.match(r'let\s+\w+\s*=\s*import', s)]
+    imports = [s for s in stmts if re.match(r'let\s+\w+\s*=\s*input\s+"', s)]
     request = [s for s in stmts if re.match(r'let\s+request\s*=\s*input', s)]
     exports = [s for s in stmts if s.startswith('export')]
     body = [s for s in stmts if s not in imports + request + exports]
@@ -56,7 +58,7 @@ def split(plan):
     oneoff = [s for s in body if s not in standing]
     p = plan[:2] + str(int(plan[2:]))
     st = imports + standing + [f'output "{n}" = {n} | arrange;' for n in standing_names]
-    oo = request + imports + [f'let {n} = import "{p}s::{n}" : {t};' for n, t in standing_names.items()] + oneoff + exports
+    oo = request + imports + [f'let {n} = input "{n}" : {t};' for n, t in standing_names.items()] + oneoff + exports
     return '\n'.join(st) + '\n', '\n'.join(oo) + '\n'
 
 for plan in SPEC:

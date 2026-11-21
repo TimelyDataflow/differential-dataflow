@@ -1,12 +1,12 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int, int), ());
-let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend = import "graph::friend" : (int, (int, int));
-let by_author = import "ic9s::by_author" : (int, (int, int));
-let latest = import "ic9s::latest" : (int, (int, int));
-let newest = import "ic9s::newest" : (int, int);
+let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend = input "friend" : (int, (int, int));
+let by_author = input "by_author" : (int, (int, int));
+let latest = input "latest" : (int, (int, int));
+let newest = input "newest" : (int, int);
 let hop1_map = request | map(((rid, who, max), ()) -> (who, (rid, who, max)));
 let hop1_idx = hop1_map | arrange;
 let person_idx = person | arrange;

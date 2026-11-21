@@ -3,13 +3,13 @@
 -- from other zombies (likers created before the end date); top 100.
 
 let request = input 0 : ((int, List(int), int, int), ());    -- (rid, country, end, end month as year*12+month)
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote   = import "graph::message.by_creator" : (int, int);          -- (person, message)
-let liked   = import "graph::likes.by_message"   : (int, (int, int));   -- (message, (liker, created))
-let place_by_name   = import "graph::place.by_name"   : (List(int), int);
-let place_by_parent = import "graph::place.by_parent" : (int, int);
-let person_by_city  = import "graph::person.by_city"  : (int, int);
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = input "message_by_creator" : (int, int);          -- (person, message)
+let liked   = input "likes_by_message"   : (int, (int, int));   -- (message, (liker, created))
+let place_by_name   = input "place_by_name"   : (List(int), int);
+let place_by_parent = input "place_by_parent" : (int, int);
+let person_by_city  = input "person_by_city"  : (int, int);
 
 -- Candidates: residents (country name -> country -> cities -> people) created before
 -- the end, with their creation date and month.

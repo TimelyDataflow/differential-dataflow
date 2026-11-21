@@ -166,7 +166,8 @@ pub fn run_worker(
     // The diagnostics program: views over the `diag.*` sources, published as `diag.*` traces.
     if let Some(diagnostics) = &diagnostics {
         server.set_diagnostics(Rc::clone(diagnostics));
-        let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(DIAG_PROGRAM));
+        interactive::diag::bind_sources(&mut program).expect("the diagnostics program binds its sources");
         server.install(worker, "diag", &program).expect("the diagnostics program installs");
     }
     // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
@@ -386,14 +387,14 @@ fn execute(
             }
             ServerCommand::Feed { prog, input, columns, time }
             | ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::Shared(time) } => {
-                server.input_position(&prog, &input).and_then(|input| {
+                server.has_input(&prog, &input).and_then(|()| {
                     let point = match time {
                         Some(time) => time,
-                        None => server.input_time(&prog, input)?.clone(),
+                        None => server.input_time(&prog, &input)?.clone(),
                     };
                     // Batches arrive sharded. A single row enters the collection once.
                     if logical_count.is_some() || worker.index() == 0 {
-                        server.feed_columns_at(&prog, input, columns, &point)?;
+                        server.feed_columns_at(&prog, &input, columns, &point)?;
                     }
                     let time = wire_time(&point);
                     match logical_count {
@@ -402,17 +403,17 @@ fn execute(
                     }
                 })
             }
-            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.input_position(&prog, &input).and_then(|input| {
-                server.validate_batch(&prog, input, &least, width)?;
+            ServerCommand::FeedBatch { prog, input, columns, times: FeedTimes::PerRow { lanes, least, width } } => server.has_input(&prog, &input).and_then(|()| {
+                server.validate_batch(&prog, &input, &least, width)?;
                 let times = interactive::runtime::col_times::ColTimes::from_raw_lanes(lanes, columns.len());
                 let interactive::runtime::container::Updates { keys, vals, diffs } = columns;
-                server.feed_container(&prog, input, HostContainer { keys, vals, times, diffs })?;
+                server.feed_container(&prog, &input, HostContainer { keys, vals, times, diffs })?;
                 Ok(format!("fed {} rows to {prog:?} input {input} at their times",
                     logical_count.expect("a timed batch retains its logical row count")))
             }),
             // Collective: every worker moves its own handle. Nothing is waited for.
-            ServerCommand::Seal { prog, input, frontier } => server.input_position(&prog, &input).and_then(|input| {
-                server.seal(&prog, input, &frontier)?;
+            ServerCommand::Seal { prog, input, frontier } => server.has_input(&prog, &input).and_then(|()| {
+                server.seal(&prog, &input, &frontier)?;
                 let text = match frontier.elements() {
                     [point] => wire_time(point),
                     points => serde_json::to_string(&points.iter().map(|p| &p[..]).collect::<Vec<_>>())
@@ -428,7 +429,7 @@ fn execute(
                 Ok("spun".to_string())
             }
             // Collective: every worker sources its own shard.
-            ServerCommand::Load { prog, input, source, diff, time } => server.input_position(&prog, &input).and_then(|input| {
+            ServerCommand::Load { prog, input, source, diff, time } => server.has_input(&prog, &input).and_then(|()| {
                 let local = server.loads_from_trace(&source);
                 if local {
                     // A seal may have returned before every shard reached the snapshot cut.
@@ -436,9 +437,9 @@ fn execute(
                 }
                 let time = match time {
                     Some(point) => point,
-                    None => server.input_time(&prog, input)?.clone(),
+                    None => server.input_time(&prog, &input)?.clone(),
                 };
-                server.load_at(worker, &prog, input, &source, diff, &time).map(|rows| {
+                server.load_at(worker, &prog, &input, &source, diff, &time).map(|rows| {
                     if local {
                         format!("fed trace {source:?} with diff={diff} into {prog:?} input {input} ({rows} rows on worker 0)")
                     } else {
@@ -454,10 +455,10 @@ fn execute(
                             reqid,
                             "data",
                             format!(
-                                "program name={:?} origin={} inputs={:?} imports={:?} exports={:?}",
+                                "program name={:?} origin={} inputs=[{}] imports={:?} exports={:?}",
                                 program.name,
                                 program.origin,
-                                program.inputs,
+                                program.inputs.iter().map(|input| input.to_string()).collect::<Vec<_>>().join(", "),
                                 program.imports,
                                 program.exports
                             ),
@@ -480,12 +481,13 @@ fn execute(
                 Ok("bye".into())
             }
         },
-        Ok(PreparedCommand::Plan { name, program, timings }) => {
+        Ok(PreparedCommand::Plan { name, program, timings, bindings }) => {
             // Only the responding worker needs the report. It reads the catalog in command
             // order, including successful loads and drops from this or other sessions.
             if let Some(response) = response.as_ref() {
+                let bindings: Vec<(&str, &str)> = bindings.iter().map(|(label, trace)| (label.as_str(), trace.as_str())).collect();
                 interactive::plan::report_with_read_floor(
-                    &program, &|trace| server.source_shape(trace), &server.passes(),
+                    &program, &bindings, &|trace| server.source_shape(trace), &server.passes(),
                     |program| server.install_read_floor(program).first().copied().unwrap_or(0),
                 ).and_then(|report| {
                     let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -736,7 +738,7 @@ mod tests {
         for key in ["0", "1", "2", "3"] { decoder.push(key, None, 1).unwrap(); }
         let times = vec![vec![8, 0, 4, 8], vec![0, 7, 7, 1]];
         let command = Cmd::FeedTimed {
-            prog: "p".into(), input: InputId::Position(0), columns: decoder.finish(), times: times.clone(),
+            prog: "p".into(), input: InputId::Number(0), columns: decoder.finish(), times: times.clone(),
         };
         let work = Work::Request {
             token: 0, reqid: "f".into(), connection_id: 0, logical_count: None,

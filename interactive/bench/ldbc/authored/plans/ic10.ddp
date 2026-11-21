@@ -1,16 +1,16 @@
 -- IC10. Friend recommendation: friends-of-friends (exactly two hops) born between the
 -- 21st of the given month and the 22nd of the next, scored by their posts: +1 for each
 -- post with a tag the person is interested in, -1 for each other post; top 10.
--- Kept for all requests (private copies of imports): every person with the name of
+-- Kept for all requests (private copies of the graph traces it reads): every person with the name of
 -- their city, every post keyed by its author, and interests keyed by (person, tag).
 
 let request  = input 0 : ((int, int, int), ());               -- (rid, person, month)
-let person   = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message  = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend   = import "graph::friend" : (int, (int, int));              -- (person, (friend, since))
-let place    = import "graph::place" : (int, (List(int), List(int), int));
-let tags_of  = import "graph::mtag.by_message" : (int, int);            -- (message, tag)
-let interest = import "graph::interest.by_person" : (int, int);         -- (person, tag)
+let person   = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = input "friend" : (int, (int, int));              -- (person, (friend, since))
+let place    = input "place" : (int, (List(int), List(int), int));
+let tags_of  = input "mtag_by_message" : (int, int);            -- (message, tag)
+let interest = input "interest_by_person" : (int, int);         -- (person, tag)
 
 -- Least hops to each person within two, keeping those at exactly two.
 let hop1   = request | map(((rid, who, month), ()) -> (who, (rid, who, month)))

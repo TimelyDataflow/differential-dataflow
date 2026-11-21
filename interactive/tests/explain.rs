@@ -113,13 +113,18 @@ fn unit() -> Row { "tuple()".into() }
 type Row = String;
 
 /// Run `p` on `inputs` through the server: every export's consolidated rows, by name.
-fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
-    let lines: Vec<Vec<String>> = inputs.iter().map(|rows| rows.iter().map(|(k, v)| format!("{k} val={v}")).collect()).collect();
-    server::evaluate(timely::Config::process(1), p, &lines)
+/// `inputs[i]` feeds `input i`, and `query`, if given, feeds explain's query input.
+fn evaluate_query(p: &Program, inputs: &[Vec<(Row, Row)>], query: Option<Vec<(Row, Row)>>) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
+    let lines = |rows: &[(Row, Row)]| -> Vec<String> { rows.iter().map(|(k, v)| format!("{k} val={v}")).collect() };
+    let mut labelled: BTreeMap<server::InputId, Vec<String>> = inputs.iter().enumerate().map(|(i, rows)| (server::InputId::Number(i), lines(rows))).collect();
+    if let Some(query) = query { labelled.insert(server::InputId::Name("query".into()), lines(&query)); }
+    server::evaluate_labelled(timely::Config::process(1), p, &labelled)
         .into_iter()
         .map(|(name, updates)| (name, updates.rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
         .collect()
 }
+
+fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> { evaluate_query(p, inputs, None) }
 
 /// Run `p` on `inputs` and return one export's rows (asserting positive
 /// multiplicities — a set-like result).
@@ -162,12 +167,10 @@ fn demand_for_queries(
     let tree = lowered(src);
     let mut ex = explain::explain(&tree);
     interactive::passes::optimize(&mut ex);
-    let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
-    ex_inputs.push(query_rows(queries));
-    let exports = evaluate(&ex, &ex_inputs);
+    let exports = evaluate_query(&ex, inputs, Some(query_rows(queries)));
     (0..inputs.len())
         .map(|i| {
-            let name = format!("demand:input{}", i);
+            let name = format!("demand:{i}");
             exports
                 .get(&name)
                 .unwrap_or_else(|| panic!("no export {:?}; have {:?}", name, exports.keys().collect::<Vec<_>>()))
@@ -808,4 +811,15 @@ fn declared_sources_shape_the_rewrite() {
         let (_, problems) = interactive::shapes::infer(&ex, &|_| None, 1);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     }
+}
+
+/// Each input's demand output is named by its label, so an input labelled `input0` beside
+/// `input 0` gives two outputs, and the explained program installs.
+#[test]
+fn demand_outputs_are_named_by_label() {
+    let ex = explain::explain(&lowered(r#"output "out" = input 0 : (int, ()) + input "input0" : (int, ());"#));
+    let mut names: Vec<&str> = ex.root.exports.iter().map(|e| e.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["demand:0", "demand:input0"]);
+    timely::execute_directly(move |worker| interactive::server::Server::new().install(worker, "p", &ex).unwrap());
 }

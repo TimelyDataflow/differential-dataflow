@@ -1,13 +1,13 @@
 let request  = input 0 : ((int, int, int), ());
-let person   = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message  = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend   = import "graph::friend" : (int, (int, int));
-let place    = import "graph::place" : (int, (List(int), List(int), int));
-let tags_of  = import "graph::mtag.by_message" : (int, int);
-let interest = import "graph::interest.by_person" : (int, int);
-let people = import "ic10s::people" : (int, (List(int), List(int), List(int), List(int), int, int));
-let posts = import "ic10s::posts" : (int, int);
-let likes = import "ic10s::likes" : ((int, int), ());
+let person   = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message  = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend   = input "friend" : (int, (int, int));
+let place    = input "place" : (int, (List(int), List(int), int));
+let tags_of  = input "mtag_by_message" : (int, int);
+let interest = input "interest_by_person" : (int, int);
+let people = input "people" : (int, (List(int), List(int), List(int), List(int), int, int));
+let posts = input "posts" : (int, int);
+let likes = input "likes" : ((int, int), ());
 let hop1   = request | map(((rid, who, month), ()) -> (who, (rid, who, month)))
                      | join(friend, (_, (req, (f, _))) -> (f, (req, 1)));
 let hop2   = hop1 | join(friend, (_, ((req, _), (g, _))) -> (g, (req, 2)));

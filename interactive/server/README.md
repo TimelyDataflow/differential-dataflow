@@ -1,8 +1,8 @@
 # Live DDIR server
 
 A long-running Timely worker group hosts interpreted DDIR dataflows through a
-load-run-drop lifecycle. Programs share results by name — each may import
-collections that others output, a program installed as `p` publishing its
+load-run-drop lifecycle. Programs share results by name — a load may bind a
+program's inputs to collections that others output, a program installed as `p` publishing its
 `output "x"` as `p::x` — and clients follow along over TCP, WebSocket, or stdin.
 
 ## Server command reference
@@ -99,7 +99,7 @@ scripts can be piped to stdin (see `demo/`).
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
-the one after the program's own, its rows `(key, (val, q))`, and the demand
+labelled `query`, its rows `(key, (val, q))`, and the demand
 sets are `peek`able exports. `feed <prog> <in> time=T from <source>` fills an input from a
 file of integer rows. Each worker feeds its shard. The source may also be a published trace, read at its latest complete scalar time, each worker reading its own share of the arrangement, and
 `diff=<d>` scales every row: `feed bank 0 time=now from bank::retire diff=-1` deletes from an
@@ -117,15 +117,15 @@ an inline pipe-syntax program:
     seal graph 0 1
     peek graph::edges as-of 0
 
-A load may bind its program's inputs and imports, as `load <name> from <path> <param>=<trace> ...`.
-A parameter is an input, by its name (`edges` in `input "edges" : …`, or `input<N>` if it has none), or an import, by the name it imports.
-A bound input reads the trace as an import does, checked against the shape the input declares, and is no longer fed.
+A program does not name the traces it reads: a load binds its inputs to them, as `load <name> from <path> <label>=<trace> ...`.
+The label is the input's: `0` for `input 0`, and `edges` for `input "edges"`.
+A bound input reads the trace, checked against the shape the input declares, and is no longer fed.
 For example, `load reach from reach_import.ddp edges=prod::edges` reads `prod`'s output `edges` as `reach`'s input `edges`.
 `plan <name> from <path>` prints the same four preparation stages as
-`ddir-plan`, using the server's currently published import shapes. The inline
+`ddir-plan`, using the server's currently published trace shapes, and takes the same bindings as a load. The inline
 form is `plan <name> begin`, DDP lines, then `<name> end-plan`. Each report line
 is an `<id> data` reply, followed by `<id> ok planned ...`. The name labels the
-reply; it does not reserve a name or install anything. Unresolved imports and
+reply; it does not reserve a name or install anything. Bindings to traces not published and
 shape problems appear in the report and mark the reply incomplete.
 
 Add `--timings` as `plan <name> from <path> --timings` or
@@ -133,10 +133,9 @@ Add `--timings` as `plan <name> from <path> --timings` or
 call/change counts, and fixed-point rounds. Timings are a display option;
 ordinary plan replies remain deterministic.
 
-Planning uses the configured passes, assumes arranged imports, and derives its scalar
-as-of point from the read floors of the program’s imports, just as a scalar install does. Reports are not yet
-parseable DDP. Command-line load bindings and the explain transform are not
-options of `plan`. The report prints compiled lambda graphs.
+Planning uses the configured passes, assumes bound inputs arrive arranged, and derives its scalar
+as-of point from the read floors of the traces they read, just as a scalar install does. Reports are not yet
+parseable DDP. The explain transform is not an option of `plan`. The report prints compiled lambda graphs.
 The command does not run the optional generated-row checks.
 
 ## Reads: text, or binary frames
@@ -189,7 +188,7 @@ an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
 the text into columns before the workers see it, and refuses text that is not
 of the input's shapes.
 
-An input `<in>` of a program `<prog>` is its position or the name it is written with, as `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
+An input `<in>` of a program `<prog>` is its label, the number or the name it is written with, as `0` in `input 0 : …` or `rows` in `input "rows" : …`, and `<prog> <in>` may also be written `<prog>::<in>`.
 The workers resolve the name against the program installed.
 
 For many updates at a single time, put the time on the batch header.

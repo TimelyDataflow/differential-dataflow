@@ -97,10 +97,10 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
         ]) {
             // Separate admissions exercise presentation across more than one input buffer.
             for chunk in updates.chunks(2) {
-                col.feed("col", 0, &chunk.iter().map(line).collect::<Vec<_>>().join("\n"), epoch).unwrap();
+                col.feed("col", &0.into(), &chunk.iter().map(line).collect::<Vec<_>>().join("\n"), epoch).unwrap();
             }
             for (k, n, xs, diff) in updates { apply(&mut net, (k, (n, xs)), diff) }
-            col.seal("col", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            col.seal("col", &0.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             col.spin(worker);
             assert_eq!(sorted(col.snapshot(worker, "col::keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted", "distinct"] {
@@ -131,9 +131,9 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
         let mut net = BTreeMap::new();
         for (epoch, diff) in (0u64..).zip([1, 1, -2]) {
             let updates: Vec<String> = (-2500..2500).map(|k| format!("tuple({k},list({k},{},{})) diff={diff}", -k, k + 1)).collect();
-            col.feed("col", 0, &updates.join("\n"), epoch).unwrap();
+            col.feed("col", &0.into(), &updates.join("\n"), epoch).unwrap();
             for k in -2500..2500 { apply(&mut net, ((k, k * 7), vec![k, -k, k + 1]), diff) }
-            col.seal("col", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            col.seal("col", &0.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             col.spin(worker);
             assert_eq!(sorted(col.snapshot(worker, "col::keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted"] {
@@ -192,9 +192,9 @@ fn lambdas_reading_part_of_their_input_match_their_definitions() {
         ];
         for (epoch, batch) in (0u64..).zip(batches) {
             let lines: Vec<String> = batch.iter().map(|(k, n, xs, d)| format!("tuple({k},{n},list({})) diff={d}", join(xs.iter(), i64::to_string))).collect();
-            col.feed("col", 0, &lines.join("\n"), epoch).unwrap();
+            col.feed("col", &0.into(), &lines.join("\n"), epoch).unwrap();
             for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
-            col.seal("col", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            col.seal("col", &0.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             col.spin(worker);
             for name in ["lengths", "sums", "firsts", "sizes"] {
                 assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net), "{name}");
@@ -246,9 +246,9 @@ fn limited_reduces_see_each_keys_first_values() {
         ];
         for (epoch, batch) in (0u64..).zip(batches) {
             let lines: Vec<String> = batch.iter().map(|(k, n, xs, d)| format!("tuple({k},{n},list({})) diff={d}", join(xs.iter(), i64::to_string))).collect();
-            col.feed("col", 0, &lines.join("\n"), epoch).unwrap();
+            col.feed("col", &0.into(), &lines.join("\n"), epoch).unwrap();
             for (k, n, xs, d) in batch { apply(&mut net, (*k, (*n, xs.to_vec())), *d) }
-            col.seal("col", 0, &Antichain::from_elem(host_time(epoch + 1))).unwrap();
+            col.seal("col", &0.into(), &Antichain::from_elem(host_time(epoch + 1))).unwrap();
             col.spin(worker);
             for name in ["first_two", "how_many", "minimum"] {
                 assert_eq!(sorted(col.snapshot(worker, &format!("col::{name}")).unwrap().rows()), reference(name, &net), "{name}");

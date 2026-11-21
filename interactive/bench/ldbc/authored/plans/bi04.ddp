@@ -5,17 +5,17 @@
 -- creation date and ranks, then looks up the winners' members, posts and threads.
 
 let request   = input 0 : ((int, int), ());                  -- (rid, date)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
     -- (id, (first, last, gender, birthday, created, ip, browser, city, birth month, birth day, creation month))
-let forum     = import "graph::forum"            : (int, (List(int), int, int));    -- (id, (title, created, moderator))
-let place     = import "graph::place"            : (int, (List(int), List(int), int));  -- (id, (name, type, parent))
-let residents = import "graph::person.by_city"   : (int, int);                      -- (city, person)
-let members   = import "graph::member.by_forum"  : (int, (int, int));               -- (forum, (person, joined))
-let joins     = import "graph::member.by_person" : (int, (int, int));               -- (person, (forum, joined))
-let posts_in  = import "graph::message.by_forum" : (int, int);                      -- (forum, post)
-let thread    = import "graph::message.by_root"  : (int, int);                      -- (root, message)
+let forum     = input "forum"            : (int, (List(int), int, int));    -- (id, (title, created, moderator))
+let place     = input "place"            : (int, (List(int), List(int), int));  -- (id, (name, type, parent))
+let residents = input "person_by_city"   : (int, int);                      -- (city, person)
+let members   = input "member_by_forum"  : (int, (int, int));               -- (forum, (person, joined))
+let joins     = input "member_by_person" : (int, (int, int));               -- (person, (forum, joined))
+let posts_in  = input "message_by_forum" : (int, int);                      -- (forum, post)
+let thread    = input "message_by_root"  : (int, int);                      -- (root, message)
 
 -- Each person's country, and each forum's popularity (negated, so min is max).
 let country_of = place | join(residents, (_, ((_, _, country), who)) -> (who, country));

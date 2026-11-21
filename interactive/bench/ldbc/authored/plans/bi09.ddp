@@ -7,12 +7,12 @@
 -- (no published index is keyed by day).
 
 let request = input 0 : ((int, int, int), ());               -- (rid, start, end)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let person  = import "graph::person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let person  = input "person"  : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
     -- (id, (first, last, gender, birthday, created, ip, browser, city, birth month, birth day, creation month))
-let root_of = import "graph::message.root"    : (int, int);    -- (message, thread root)
-let thread  = import "graph::message.by_root" : (int, int);    -- (root, message)
+let root_of = input "message_root"    : (int, int);    -- (message, thread root)
+let thread  = input "message_by_root" : (int, int);    -- (root, message)
 
 -- Messages by day, and the request's window days.
 let byday   = message | map((id, (kind, created, who, _, _, _, _, _, _, _, _, _, day)) -> (day, (id, kind, created, who)));

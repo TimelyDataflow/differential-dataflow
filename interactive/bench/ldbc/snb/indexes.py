@@ -59,20 +59,21 @@ def binders(schema):
     return ['typ' if n == 'type' else n for n in schema]
 
 
-def import_rows(name):
-    """DDP for a source relation's rows, `((fields...), ())`, from its published arrangement."""
+def input_rows(name):
+    """DDP for a source relation's rows, `((fields...), ())`, from its published arrangement.
+    The input's label is the graph output's name with `.` written `_`, and a load binds it."""
     schema = SCHEMA[name]
     fields = list(schema)
     b = binders(schema)
     if name in PRIMARY:
         rest = fields[1:]
-        return (f'(import "graph::{name}" : (int, {shape(rest, schema)}) '
+        return (f'(input "{name}" : (int, {shape(rest, schema)}) '
                 f'| map(({b[0]}, ({", ".join(b[1:])})) -> (({", ".join(b)}), ())))')
     first = INDEXES[name][0]
     assert first == fields[0], name
     rest = fields[1:]
     value = f'({", ".join(b[1:])})' if len(rest) > 1 else b[1]
-    return (f'(import "graph::{name}.by_{first}" : ({SHAPE[schema[first]]}, {shape(rest, schema) if len(rest) > 1 else SHAPE[schema[rest[0]]]}) '
+    return (f'(input "{name}_by_{first}" : ({SHAPE[schema[first]]}, {shape(rest, schema) if len(rest) > 1 else SHAPE[schema[rest[0]]]}) '
             f'| map(({b[0]}, {value}) -> (({", ".join(b)}), ())))')
 
 

@@ -3,7 +3,7 @@
 -- distance reaches the best meeting found so far.
 
 let request = input 0 : ((int, int, int), ());               -- (rid, from, to)
-let friend  = import "graph::friend" : (int, (int, int));              -- (person, (friend, since))
+let friend  = input "friend" : (int, (int, int));              -- (person, (friend, since))
 
 -- Searches are rows (rid, side, node, hops): side 0 grows from `from`, side 1 from `to`.
 let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ())))

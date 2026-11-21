@@ -23,7 +23,7 @@ fn unread_operators_and_recursive_scopes_are_removed() {
     let mut optimized = original.clone();
     interactive::passes::optimize(&mut optimized);
     assert_eq!(optimized.root.imports.len(), 1);
-    assert_eq!(optimized.root.imports[0].from, Source::Input(0));
+    assert_eq!(optimized.root.imports[0].from, Source::Input(0.into()));
     assert_eq!(optimized.root.items.len(), 1);
     assert_eq!(optimized.root.labels, ["used"]);
     let inputs = vec![vec!["1 val=2".to_string(), "2 val=3".to_string()]];
@@ -51,8 +51,8 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
     interactive::passes::optimize(&mut p);
     assert!(p.root.exports.is_empty());
     assert_eq!(p.root.imports.len(), 2);
-    assert_eq!(p.root.imports[0].from, Source::Input(0));
-    assert_eq!(p.root.imports[1].from, Source::Input(1));
+    assert_eq!(p.root.imports[0].from, Source::Input(0.into()));
+    assert_eq!(p.root.imports[1].from, Source::Input(1.into()));
     assert_eq!(p.op_count(), 2);
     // Invariant maps can move before the child; find it by its retained name.
     let values = p.root.items.iter().find_map(|item| match item {
@@ -66,10 +66,10 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
         let mut server = Server::new();
         server.install(worker, "p", &p).unwrap();
         // The unread root input is still part of the client interface.
-        server.feed("p", 0, "3 val=4", 0).unwrap();
-        server.feed("p", 1, "1 val=2", 0).unwrap();
+        server.feed("p", &0.into(), "3 val=4", 0).unwrap();
+        server.feed("p", &1.into(), "1 val=2", 0).unwrap();
         for input in [0, 1] {
-            server.seal("p", input, &Antichain::from_elem(host_time(1))).unwrap();
+            server.seal("p", &input.into(), &Antichain::from_elem(host_time(1))).unwrap();
         }
         server.spin(worker);
     });
@@ -78,16 +78,17 @@ fn inspect_keeps_its_input_and_enclosing_scopes() {
 #[test]
 fn dead_code_switch_controls_pruning_before_fusion() {
     use interactive::passes::{self, Config, Pass};
-    let original = program(r#"
+    let mut original = program(r#"
         let x = input 0 : (int, int);
         let alias = x;
         let unused = input 1 : (int, int);
-        let absent = import "absent" : (int, int);
+        let absent = input "absent" : (int, int);
         let prefix = x | map((k, v) -> (k, (v, 1) add));
         let dead = prefix | filter((_, v) -> (v, 0) gt);
         lost: { let dead = ::absent | map((k, v) -> (v, k)); }
         output "out" = prefix | map((k, v) -> (v, k));
     "#);
+    original.bind([("absent", "absent")]).unwrap();
     let off = Config::parse("none,structural").unwrap();
     let on = Config::parse("none,structural,dead-code").unwrap();
     assert!(Config::default().dead_code);

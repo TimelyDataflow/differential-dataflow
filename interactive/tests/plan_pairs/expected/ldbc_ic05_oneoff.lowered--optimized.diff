@@ -1,13 +1,13 @@
 --- lowered
 +++ optimized
 @@ -2,7 +2,6 @@
- -- Trace imports use provider arrangements; history advances to G = (0, []).
+ -- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, int), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
--let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
- let friend = import "graph::friend" : (int, (int, int));
- let forum = import "graph::forum" : (int, (List(int), int, int));
- let member = import "graph::member.by_person" : (int, (int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+-let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let friend = input "friend" : (int, (int, int));
+ let forum = input "forum" : (int, (List(int), int, int));
+ let member = input "member_by_person" : (int, (int, int));
 @@ -17,37 +16,32 @@
  let friend_idx = friend | arrange;
  let hop1 = hop1_idx2 | join(friend_idx, (_, (req, (f, _))) -> (f, req));

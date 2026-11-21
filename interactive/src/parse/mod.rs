@@ -25,29 +25,12 @@ pub enum Reducer {
     Expr(Lambda, Option<usize>),
 }
 
-/// An input, by the position it is written with or the next position in the order inputs are written.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum InputRef {
-    /// `input N`.
-    Numbered(usize),
-    /// `input` or `input "name"`: the next position, and the name a client may feed or bind it by.
-    Next(usize, Option<String>),
-}
-
-impl InputRef {
-    pub fn position(&self) -> usize { match self { InputRef::Numbered(n) | InputRef::Next(n, _) => *n } }
-    pub fn name(&self) -> Option<&str> { match self { InputRef::Numbered(_) => None, InputRef::Next(_, name) => name.as_deref() } }
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
-    Input(InputRef),
-    /// Shape ascription on an external source: `input N : (key_shape, val_shape)`.
-    /// The same syntax follows `import "name"` for independently installed consumers.
+    /// An input, by its label: `input N` or `input "name"`. The label is the input's identity.
+    Input(crate::scope_ir::InputId),
+    /// Shape ascription on an input: `input N : (key_shape, val_shape)`.
     TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
-    /// Named external trace resolved at install time. Carries only the name;
-    /// shape comes from the registry the program is installed against.
-    Import(String),
     Name(String),
     /// A scope path. The bool marks a leading `::`.
     Path(Vec<String>, bool),

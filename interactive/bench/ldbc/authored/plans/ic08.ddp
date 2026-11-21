@@ -3,10 +3,10 @@
 -- Reaches the replies through the author and parent indexes.
 
 let request = input 0 : ((int, int), ());                    -- (rid, person)
-let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let wrote   = import "graph::message.by_creator" : (int, int);          -- (author, message)
-let replies = import "graph::message.by_parent" : (int, int);           -- (parent, message)
+let person  = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let wrote   = input "message_by_creator" : (int, int);          -- (author, message)
+let replies = input "message_by_parent" : (int, int);           -- (parent, message)
 
 -- Top k: `reduce` sees a key's values in sort order and keeps the first k (copies capped
 -- at k), emitting (rank, value). Changes below the top k produce no output.

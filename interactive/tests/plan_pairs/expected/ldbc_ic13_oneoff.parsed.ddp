@@ -1,5 +1,5 @@
 let request = input 0 : ((int, int, int), ());
-let friend = import "graph::friend" : (int, (int, int));
+let friend = input "friend" : (int, (int, int));
 let starts = (request | map(((rid, from, _), ()) -> ((rid, 0, from, 0), ()))) + (request | map(((rid, _, to), ()) -> ((rid, 1, to, 0), ())));
 search: {
     let side0 = search | filter(((_, side, _, _), ()) -> (side, 0) eq) | map(((rid, _, node, d), ()) -> ((rid, node), d));

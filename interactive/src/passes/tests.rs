@@ -2,7 +2,7 @@ use super::*;
 use crate::scope_ir::{Program, Source};
 use super::super::dead_code;
 
-fn program(text: &str) -> Program { crate::lower::lower_tree(crate::parse::pipe::parse(text)) }
+fn program(text: &str) -> Program { crate::lower::lower_bound(text) }
 fn optimized(text: &str) -> Program { let mut p = program(text); crate::passes::optimize(&mut p); p }
 fn linears(scope: &Scope) -> Vec<&[LinearOp]> {
     scope.items.iter().filter_map(|item| match item {
@@ -62,22 +62,22 @@ fn unprintable_composition_keeps_maps() {
 #[test]
 fn dead_imports_keep_contracts_inputs_inspects_and_nested_readers() {
     let mut p = program(r#"
-        let unused = import "unused" : (int, int);
+        let unused = input "unused" : (int, int);
         let fed = input 7 : (int, int);
         let alias = fed;
-        let republished = import "republished" : (int, int);
-        let observed = import "observed" : (int, int) | inspect(observed);
-        let nested = import "nested" : (int, int);
+        let republished = input "republished" : (int, int);
+        let observed = input "observed" : (int, int) | inspect(observed);
+        let nested = input "nested" : (int, int);
         child: { let result = nested; }
         output "out" = republished;
         output "child" = child::result;
     "#);
     assert!(dead_code::run(&mut p.root) > 0);
-    assert!(p.root.imports.iter().any(|i| matches!(i.from, Source::Input(7))));
+    assert!(p.root.imports.iter().any(|i| i.from == Source::Input(7.into())));
     assert!(!p.root.names.iter().any(|(n, _)| n == "alias" || n == "unused"));
     assert!(crate::shapes::infer(&p, &|_| None, 1).1.conflicts.is_empty());
     assert_eq!(dead_code::run(&mut p.root), 0);
-    let report = crate::plan::report(r#"let dead = import "absent"; output "out" = input 0 : (int, ());"#, &|_| None, &crate::passes::Config::all()).unwrap();
+    let report = crate::plan::report_bound(r#"let dead = input "absent" : (int, ()); output "out" = input 0 : (int, ());"#, &[("absent", "absent")], &|_| None, &crate::passes::Config::all()).unwrap();
     assert!(report.unresolved.is_empty());
     assert!(report.emit_ddp().is_ok());
 }

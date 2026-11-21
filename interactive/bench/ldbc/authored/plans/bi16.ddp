@@ -2,10 +2,10 @@
 -- `maxknows` of the others posting about each; top 20 by messages on both days.
 
 let request = input 0 : ((int, List(int), int, List(int), int, int), ());   -- (rid, tag A, day A, tag B, day B, max knows)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let tag_by_name = import "graph::tag.by_name" : (List(int), int);     -- (name, tag)
-let mtag_by_tag = import "graph::mtag.by_tag" : (int, int);           -- (tag, message)
-let friend  = import "graph::friend" : (int, (int, int));             -- (person, (friend, since))
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let tag_by_name = input "tag_by_name" : (List(int), int);     -- (name, tag)
+let mtag_by_tag = input "mtag_by_tag" : (int, int);           -- (tag, message)
+let friend  = input "friend" : (int, (int, int));             -- (person, (friend, since))
 
 -- The two (tag, day) groups of a request, as side 0 and side 1.
 let sides   = (request | map(((rid, ta, da, _, _, k), ()) -> (ta, (rid, 0, da, k))))

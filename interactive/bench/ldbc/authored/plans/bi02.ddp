@@ -5,11 +5,11 @@
 -- each message's date in the message arrangement.
 
 let request  = input 0 : ((int, int, List(int)), ());        -- (rid, date, class name)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
     -- (id, (kind, created, creator, country, content, image, length, language, forum, parent, year, month, day))
-let tag      = import "graph::tag"           : (int, (List(int), int));        -- (id, (name, class))
-let tagged   = import "graph::mtag.by_tag"   : (int, int);                     -- (tag, message)
-let class_id = import "graph::tagclass.by_name" : (List(int), int);            -- (name, id)
+let tag      = input "tag"           : (int, (List(int), int));        -- (id, (name, class))
+let tagged   = input "mtag_by_tag"   : (int, int);                     -- (tag, message)
+let class_id = input "tagclass_by_name" : (List(int), int);            -- (name, id)
 
 -- ((class, day), (tag name, created)) for every tagged message, and each class's days.
 let byday   = tag | join(tagged, (_, ((name, cls), m)) -> (m, (cls, name)))

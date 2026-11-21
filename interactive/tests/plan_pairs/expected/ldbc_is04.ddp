@@ -1,7 +1,7 @@
 -- Time lanes: epoch.
--- Trace imports use provider arrangements; history advances to G = (0, []).
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
 let request = input 0 : ((int, int), ());
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 let answer_map = request | map(((rid, m), ()) -> (m, rid));
 let answer_idx = answer_map | arrange;
 let message_idx = message | arrange;

@@ -6,11 +6,11 @@
 -- person's tagged posts in a forum are reduced to their earliest.
 
 let request = input 0 : ((int, List(int), int), ());         -- (rid, tag name, delta hours)
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let root    = import "graph::message.root" : (int, int);              -- (message, root post of its thread)
-let tag_by_name = import "graph::tag.by_name" : (List(int), int);     -- (name, tag)
-let mtag_by_tag = import "graph::mtag.by_tag" : (int, int);           -- (tag, message)
-let member  = import "graph::member.by_forum" : (int, (int, int));    -- (forum, (person, joined))
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let root    = input "message_root" : (int, int);              -- (message, root post of its thread)
+let tag_by_name = input "tag_by_name" : (List(int), int);     -- (name, tag)
+let mtag_by_tag = input "mtag_by_tag" : (int, int);           -- (tag, message)
+let member  = input "member_by_forum" : (int, (int, int));    -- (forum, (person, joined))
 
 -- The request's tagged messages: (rid, message, author, created, parent, forum), where a
 -- message's forum is its thread's (the root post's). Tag names are unique and

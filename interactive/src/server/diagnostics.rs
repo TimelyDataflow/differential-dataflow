@@ -33,7 +33,7 @@ impl Server {
         let mut diagnostics = diagnostics.borrow_mut();
         for (name, installed) in self.programs.iter_mut() {
             if installed.origin != Origin::Diagnostics { continue; }
-            if let (Some(rows), Some(input)) = (diagnostics.take_pending(name), installed.inputs.get_mut(&0)) {
+            if let (Some(rows), Some(input)) = (diagnostics.take_pending(name), installed.inputs.get_mut(&InputId::Number(0))) {
                 input.give_columns(rows, time).expect("diagnostics rows have their source's shape");
             }
         }
@@ -48,7 +48,7 @@ impl Server {
         self.process_diagnostics(worker);
         self.feed_diagnostics(self.diagnostics_epoch);
         for source in self.programs.values_mut().filter(|p| p.origin == Origin::Diagnostics) {
-            source.inputs.get_mut(&0).expect("diagnostic source input").advance_to_point(&host_time(next));
+            source.inputs.get_mut(&InputId::Number(0)).expect("diagnostic source input").advance_to_point(&host_time(next));
         }
         self.diagnostics_epoch = next;
         Ok(next)
@@ -70,12 +70,11 @@ impl Server {
         input.advance_to_point(&host_time(self.diagnostics_epoch));
 
         let mut inputs = HashMap::new();
-        inputs.insert(0usize, input);
+        inputs.insert(InputId::Number(0), input);
         self.programs.insert(
             name.to_string(),
             Installed {
                 inputs,
-                input_names: HashMap::new(),
                 imports: Vec::new(),
                 exports: vec![name.to_string()],
                 dataflow_id,

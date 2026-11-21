@@ -2,14 +2,14 @@
 +++ lowered
 @@ -1,3 +1,5 @@
 +-- Time lanes: epoch.
-+-- Trace imports use provider arrangements; history advances to G = (0, []).
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
  let request = input 0 : ((int, int, List(int)), ());
- let person = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
- let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+ let person = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+ let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
 @@ -6,11 +8,48 @@
- let by_name = import "graph::tag.by_name" : (List(int), int);
- let tagged = import "graph::mtag.by_tag" : (int, int);
- let tags_of = import "graph::mtag.by_message" : (int, int);
+ let by_name = input "tag_by_name" : (List(int), int);
+ let tagged = input "mtag_by_tag" : (int, int);
+ let tags_of = input "mtag_by_message" : (int, int);
 -let hop1 = request | map(((rid, who, _), ()) -> (who, (rid, who))) | join(person, (who, (req, _)) -> (who, req)) | join(friend, (_, ((rid, who), (f, _))) -> (f, (rid, who)));
 -let hop2 = hop1 | join(friend, (_, ((rid, who), (g, _))) -> (g, (rid, who)));
 -let circle = hop1 + hop2 | filter((node, (_, who)) -> (node, who) ne) | map((node, (rid, _)) -> ((rid, node), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);

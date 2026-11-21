@@ -304,8 +304,8 @@ class Compiler:
         if op == 'source':
             self.inputs.append((args[0],args[1]))
             if self.imports and args[0] != 'request':
-                from .indexes import import_rows
-                code = import_rows(args[0])
+                from .indexes import input_rows
+                code = input_rows(args[0])
             else:
                 code = f'input {0 if self.imports else len(self.inputs)-1} : ({source_shape(args[1])}, ())'
         elif op == 'select':

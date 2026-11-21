@@ -16,10 +16,10 @@ fn signed_sums_at_product_times() {
         interactive::passes::optimize(&mut program);
         server.install_with_width(worker, "p", &program, 2).unwrap();
         let time = |a, b| HostTime::new(smallvec::smallvec![a, b]);
-        server.feed_at("p", 0, "1 val=5 diff=2\n2 val=-3\n3 val=0", &time(0, 1)).unwrap();
-        server.feed_at("p", 0, "1 val=10 diff=-1\n2 val=-3 diff=-2", &time(1, 0)).unwrap();
-        server.feed_at("p", 0, "1 val=4", &time(2, 1)).unwrap();
-        server.seal("p", 0, &Antichain::new()).unwrap();
+        server.feed_at("p", &"amounts".into(), "1 val=5 diff=2\n2 val=-3\n3 val=0", &time(0, 1)).unwrap();
+        server.feed_at("p", &"amounts".into(), "1 val=10 diff=-1\n2 val=-3 diff=-2", &time(1, 0)).unwrap();
+        server.feed_at("p", &"amounts".into(), "1 val=4", &time(2, 1)).unwrap();
+        server.seal("p", &"amounts".into(), &Antichain::new()).unwrap();
 
         for output in ["p::root", "p::nested"] {
             for (point, expected) in [

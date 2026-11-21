@@ -1,8 +1,8 @@
-let person  = import "graph::person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
-let message = import "graph::message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
-let friend  = import "graph::friend" : (int, (int, int));
-let forum   = import "graph::forum" : (int, (List(int), int, int));
-let member  = import "graph::member.by_person" : (int, (int, int));
+let person  = input "person" : (int, (List(int), List(int), List(int), int, int, List(int), List(int), int, int, int, int));
+let message = input "message" : (int, (int, int, int, int, List(int), List(int), int, List(int), int, int, int, int, int));
+let friend  = input "friend" : (int, (int, int));
+let forum   = input "forum" : (int, (List(int), int, int));
+let member  = input "member_by_person" : (int, (int, int));
 let posted = message | filter((_, (kind, _, _, _, _, _, _, _, _, _, _, _, _)) -> (kind, 0) eq)
                      | map((_, (_, _, who, _, _, _, _, _, f, _, _, _, _)) -> ((who, f), ())) | count;
 let first  = member | map((who, (_, since)) -> (who, since)) | min;

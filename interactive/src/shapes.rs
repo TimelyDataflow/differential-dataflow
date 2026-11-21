@@ -429,7 +429,7 @@ mod tests {
     fn undeclared_sources_leave_collections_unshaped() {
         let (_, problems) = shapes_of(&REACH.replace(" : ((int, int), ())", "").replace(" : ((int), ())", ""));
         assert!(problems.conflicts.is_empty(), "{problems:?}");
-        assert!(problems.unknown.iter().any(|e| e.contains("`input0` has no shape")), "{problems:?}");
+        assert!(problems.unknown.iter().any(|e| e.contains("`0` has no shape")), "{problems:?}");
         assert!(problems.unknown.iter().any(|e| e.contains("variable `reach` has no shape")), "{problems:?}");
     }
 
