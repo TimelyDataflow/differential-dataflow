@@ -733,8 +733,8 @@ fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
     Some((export.key, corgi::Shape::Prod(vec![export.val, corgi::Shape::Int])))
 }
 
-/// The transform. The query arrives as one extra positional input appended
-/// after the original inputs and labelled `query`, its rows `(key, (val, q))`: a row of the first
+/// The transform. The query arrives as one extra input labelled `query`, at a position
+/// after the original inputs, its rows `(key, (val, q))`: a row of the first
 /// export, and a query id.
 pub fn explain(p: &Program) -> Program {
     explain_with(p, Options::default())

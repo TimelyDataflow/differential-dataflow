@@ -67,7 +67,7 @@ impl Server {
         // An input is fed from outside, so it says what it holds, as a table declares its columns.
         for imp in &prog.root.imports {
             if let (st::Source::Input(_), None) = (&imp.from, &imp.shape) {
-                let written = if imp.name.bytes().all(|b| b.is_ascii_digit()) { imp.name.clone() } else { format!("{:?}", imp.name) };
+                let written = if super::InputId::is_number(&imp.name) { imp.name.clone() } else { format!("{:?}", imp.name) };
                 return Err(format!(
                     "program {:?} reads input {written} without declaring its shape; write `input {written} : (key, val)`",
                     name

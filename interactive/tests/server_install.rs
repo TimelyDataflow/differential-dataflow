@@ -86,3 +86,16 @@ fn emitted_strict_join_keeps_updates_after_a_fresh_servers_as_of() {
         assert_eq!(server.snapshot(worker, "emitted::emitted").unwrap().rows(), original);
     });
 }
+
+/// A number finds only the input written with it: a named input's position is not a label.
+#[test]
+fn numbers_find_only_numbered_inputs() {
+    use interactive::server::InputId;
+    timely::execute_directly(|worker| {
+        let mut server = Server::new();
+        server.install(worker, "p", &program(r#"output "out" = input 0 : (int, ()) + input "b" : (int, ());"#)).unwrap();
+        assert_eq!(server.input_position("p", &InputId::Number(0)), Ok(0));
+        assert_eq!(server.input_position("p", &InputId::Name("b".into())), Ok(1));
+        assert_eq!(server.input_position("p", &InputId::Number(1)), Err("program \"p\" has no input 1".into()));
+    });
+}

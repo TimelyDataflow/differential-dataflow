@@ -99,7 +99,7 @@ scripts can be piped to stdin (see `demo/`).
 a program file (`.ddp`, pipe syntax); `load <name> from <path>
 explain` applies the explanation rewrite first (`explain=debug` also taps
 every demand collection with an inspect), after which the query input is
-the one after the program's own, its rows `(key, (val, q))`, and the demand
+labelled `query`, its rows `(key, (val, q))`, and the demand
 sets are `peek`able exports. `feed <prog> <in> time=T from <source>` fills an input from a
 file of integer rows. Each worker feeds its shard. The source may also be a published trace, read at its latest complete scalar time, each worker reading its own share of the arrangement, and
 `diff=<d>` scales every row: `feed bank 0 time=now from bank::retire diff=-1` deletes from an

@@ -92,7 +92,7 @@ pub enum Cmd {
     /// from a file (`load <name> from <path>`).
     /// `explain` — `explain` or `explain=debug`: apply the explanation rewrite,
     /// with `debug` tapping every demand collection with an inspect; the query
-    /// input is the one after the program's own, the demand sets its exports.
+    /// input is labelled `query`, and the demand sets are its exports.
     Load {
         id_hint: String,
         width: usize,
@@ -209,15 +209,12 @@ impl Catalog {
         self.0.lock().unwrap().insert(name.to_string(), inputs);
     }
 
-    /// The declared shapes of `prog`'s `input`, by its position or its name.
+    /// The declared shapes of `prog`'s `input`, by its label.
     fn shape(&self, prog: &str, input: &InputId) -> Result<RowShape, String> {
         let programs = self.0.lock().unwrap();
         let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        let position = match input {
-            InputId::Position(n) => *n,
-            InputId::Name(name) => *inputs.names.get(name).ok_or_else(|| format!("program {prog:?} has no input named {name:?}"))?,
-        };
-        inputs.shapes.get(&position).cloned().ok_or_else(|| format!("program {prog:?} has no input {position}"))
+        let position = *inputs.names.get(&input.label()).ok_or_else(|| interactive::server::no_input(prog, input))?;
+        inputs.shapes.get(&position).cloned().ok_or_else(|| interactive::server::no_input(prog, input))
     }
 
     /// A reader of rows for `prog`'s `input`, at its declared shapes.
@@ -1089,7 +1086,7 @@ mod tests {
     #[test]
     fn framed_feeds_are_columns_at_the_input_shapes() {
         let mut p = world();
-        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        let mut rows = p.catalog.decoder("world", &InputId::Number(0)).unwrap();
         rows.push("tuple(1,2)", None, 1).unwrap();
         rows.push("tuple(3,-4)", None, 2).unwrap();
         let columns = rows.finish();
@@ -1098,7 +1095,7 @@ mod tests {
         assert_eq!(p.frame_bytes(), Some((bytes.len(), true)));
         match p.frame(&bytes) {
             Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got, time: None }))) => {
-                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Position(0)));
+                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Number(0)));
                 assert_eq!(got, columns);
             }
             other => panic!("unexpected parse: {other:?}"),
@@ -1126,7 +1123,7 @@ mod tests {
     #[test]
     fn groups_gather_into_one_command() {
         let mut p = world();
-        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        let mut rows = p.catalog.decoder("world", &InputId::Number(0)).unwrap();
         rows.push("tuple(1,2)", None, 1).unwrap();
         let bytes = interactive::runtime::frame::encode(&rows.finish(), &[]);
         let header = format!("feed world 0 time=now frame {}", bytes.len());
@@ -1186,7 +1183,7 @@ mod tests {
         assert!(records[3].1.as_ref().unwrap_err().contains("requires time=T or time=now"));
         assert!(matches!(records[4].1, Ok(Cmd::List)));
 
-        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        let mut rows = p.catalog.decoder("world", &InputId::Number(0)).unwrap();
         rows.push("tuple(1,2)", None, 1).unwrap();
         let bytes = interactive::runtime::frame::encode(&rows.finish(), &[]);
         assert!(p.feed(&format!("r6 feed world 0 frame {}", bytes.len())).is_none());
@@ -1199,7 +1196,7 @@ mod tests {
     #[test]
     fn framed_feeds_with_times_preserve_row_times() {
         let mut p = world();
-        let mut rows = p.catalog.decoder("world", &InputId::Position(0)).unwrap();
+        let mut rows = p.catalog.decoder("world", &InputId::Number(0)).unwrap();
         rows.push("tuple(1,2)", None, 1).unwrap();
         rows.push("tuple(3,-4)", None, 2).unwrap();
         let columns = rows.finish();
@@ -1207,7 +1204,7 @@ mod tests {
         assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
         match p.frame(&bytes) {
             Some((reqid, Ok(Cmd::FeedTimed { prog, input, columns: got, times }))) => {
-                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Position(0)));
+                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", InputId::Number(0)));
                 assert_eq!((got, times), (columns, vec![vec![5, 9]]));
             }
             other => panic!("unexpected parse: {other:?}"),
@@ -1226,7 +1223,7 @@ mod tests {
             "r5 seal p 0", "r6 seal p 0 soon", "r7 seal p 0 -1",
         ]);
         assert!(matches!(&got[0].1, Ok(Cmd::Load { bindings, .. }) if bindings.len() == 1));
-        assert!(matches!(&got[1].1, Ok(Cmd::Seal { prog, input: InputId::Position(0), frontier }) if prog == "p" && frontier == &Antichain::from_elem(host_time(7))));
+        assert!(matches!(&got[1].1, Ok(Cmd::Seal { prog, input: InputId::Number(0), frontier }) if prog == "p" && frontier == &Antichain::from_elem(host_time(7))));
         assert!(matches!(&got[2].1, Ok(Cmd::Seal { prog, input: InputId::Name(name), frontier }) if prog == "p" && name == "rows" && frontier == &Antichain::from_elem(host_time(12))));
         assert!(matches!(&got[3].1, Ok(Cmd::Seal { input: InputId::Name(name), frontier, .. }) if name == "rows" && frontier == &Antichain::from_elem(host_time(3))), "a bare command gets a reqid");
         assert!(matches!(&got[4].1, Err(e) if e.contains("expected")));
@@ -1241,7 +1238,7 @@ mod tests {
         match &out[..] {
             [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1, time: None }))] => {
                 assert_eq!(reqid.as_str(), "r1");
-                assert_eq!((prog.as_str(), input.clone(), source.as_str()), ("world", InputId::Position(0), "edges.txt"));
+                assert_eq!((prog.as_str(), input.clone(), source.as_str()), ("world", InputId::Number(0), "edges.txt"));
             }
             other => panic!("unexpected parse: {other:?}"),
         }
@@ -1281,7 +1278,7 @@ mod tests {
         assert!(!timings);
         let prepared = prepare(Cmd::Plan { name: name.clone(), program: program.clone(), timings: *timings, bindings: BTreeMap::new() }, &p.catalog).unwrap();
         assert!(matches!(prepared, PreparedCommand::Plan { .. }));
-        assert!(p.catalog.shape("preview", &InputId::Position(0)).is_err());
+        assert!(p.catalog.shape("preview", &InputId::Number(0)).is_err());
         assert!(matches!(p.feed("plan p from /nonexistent/plan.ddp"), Some((_, Err(e))) if e.starts_with("plan: cannot read")));
         let mut p = LineParser::with_cap(8);
         assert!(p.feed("plan p begin").is_none());
@@ -1450,7 +1447,7 @@ mod tests {
         let Ok(Cmd::Feed { columns: wrapped, .. }) = &got[9].1 else { panic!("expected Feed, got {:?}", got[9].1) };
         match &got[0].1 {
             Ok(Cmd::Feed { prog, input, columns, time }) => {
-                assert_eq!((prog.as_str(), input.clone(), time.as_ref()), ("world", InputId::Position(0), None));
+                assert_eq!((prog.as_str(), input.clone(), time.as_ref()), ("world", InputId::Number(0), None));
                 assert_eq!((&columns.keys, &columns.diffs), (&wrapped.keys, &vec![1]));
             }
             other => panic!("expected Feed, got {:?}", other),
@@ -1492,7 +1489,7 @@ mod tests {
         else {
             panic!("expected prepared columnar feed, got {prepared:?}");
         };
-        assert_eq!((prog.as_str(), input), ("world", InputId::Position(3)));
+        assert_eq!((prog.as_str(), input), ("world", InputId::Number(3)));
         assert_eq!(columns.diffs, vec![1, -1]);
         // The same rows, written out in full.
         let wrapped = feed_all(&mut p, &["r1 feed world 3 time=now begin", "tuple(1) val=tuple(10)", "tuple(2) val=tuple(-20) diff=-1", "end-feed"]);
@@ -1576,8 +1573,8 @@ mod tests {
         assert!(matches!(got[2].1, Err(_)));
     }
 
-    /// An input is fed or bound by its position or by the name it is written with, not by the
-    /// `let` it is bound to, and the program and the input may be written apart or as `<prog>::<in>`.
+    /// An input is fed or bound by its label, not by the `let` it is bound to, and the program and
+    /// the input may be written apart or as `<prog>::<in>`. A number finds no named input.
     /// The catalog reads a fed row at the named input's shapes, and the workers resolve the name.
     #[test]
     fn inputs_are_fed_by_name() {
@@ -1590,12 +1587,12 @@ mod tests {
         let named = |input: &InputId, name: &str| *input == InputId::Name(name.into());
         assert!(matches!(&got[0].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "roots")), "{:?}", got[0]);
         assert!(matches!(&got[1].1, Ok(Cmd::Feed { prog, input, .. }) if prog == "g" && named(input, "edges")), "{:?}", got[1]);
-        assert!(matches!(&got[2].1, Ok(Cmd::Feed { input: InputId::Position(1), .. })), "{:?}", got[2]);
+        assert!(matches!(&got[2].1, Err(e) if e.contains("no input 1")), "{:?}", got[2]);
         assert!(matches!(&got[3].1, Err(e) if e.contains("no input named \"e\"")), "{:?}", got[3]);
     }
 
-    /// A load binds an input to a published trace: the input becomes an import of it, and is no
-    /// longer fed. A binding that names no input or import is refused.
+    /// A load binds an input to a published trace: the input reads it, and is no
+    /// longer fed. A binding that names no input is refused.
     #[test]
     fn loads_bind_inputs_to_traces() {
         let catalog = Catalog::default();

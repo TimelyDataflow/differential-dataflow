@@ -110,7 +110,7 @@ fn identifier(text: &str) -> String {
     let mut name: String = text.trim_start_matches("output ").chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if name.is_empty() { name.push('x'); }
     // The label of a numbered input is its digits; its local name is `input<N>`.
-    if name.bytes().all(|b| b.is_ascii_digit()) { name.insert_str(0, "input"); }
+    if crate::server::InputId::is_number(&name) { name.insert_str(0, "input"); }
     if name.as_bytes()[0].is_ascii_digit() || crate::ir::KEYWORDS.contains(&name.as_str()) { name.insert_str(0, "x_"); }
     name
 }
@@ -314,7 +314,7 @@ impl Printer<'_> {
             match &imp.from {
                 Source::Input(_) | Source::Trace(_) => {
                     // An input is written by its label; a bound input's binding belongs to the load.
-                    let source = if imp.name.bytes().all(|b| b.is_ascii_digit()) && !imp.name.is_empty() {
+                    let source = if crate::server::InputId::is_number(&imp.name) {
                         format!("input {}", imp.name)
                     } else if crate::server::InputId::is_name(&imp.name) {
                         format!("input {}", quoted(&imp.name)?)

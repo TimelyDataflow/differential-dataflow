@@ -58,7 +58,7 @@ fn binding(scope: &Scope, r: &Ref) -> String {
         Ref::Local(i) => scope.labels.get(*i).cloned().unwrap_or_else(|| "rows".into()),
         // A numbered input's label is its digits, and its binding `input<N>`.
         Ref::Import(i) => match scope.imports[*i].name.rsplit("::").next().unwrap() {
-            digits if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => format!("input{digits}"),
+            digits if crate::server::InputId::is_number(digits) => format!("input{digits}"),
             name => name.into(),
         },
         Ref::Var(i) => scope.vars[*i].name.clone(),

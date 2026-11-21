@@ -738,7 +738,7 @@ mod tests {
         for key in ["0", "1", "2", "3"] { decoder.push(key, None, 1).unwrap(); }
         let times = vec![vec![8, 0, 4, 8], vec![0, 7, 7, 1]];
         let command = Cmd::FeedTimed {
-            prog: "p".into(), input: InputId::Position(0), columns: decoder.finish(), times: times.clone(),
+            prog: "p".into(), input: InputId::Number(0), columns: decoder.finish(), times: times.clone(),
         };
         let work = Work::Request {
             token: 0, reqid: "f".into(), connection_id: 0, logical_count: None,

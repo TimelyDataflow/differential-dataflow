@@ -1089,7 +1089,7 @@ mod optimize_tests {
         }
         lower_tree(parse("let a = input \"input\" : ((int), ()); let b = input \"input1\" : ((int), ()); output \"out\" = a + b;"));
         use crate::server::InputId;
-        assert_eq!(InputId::parse("1"), InputId::Position(1));
+        assert_eq!(InputId::parse("1"), InputId::Number(1));
         for text in ["+1", "1x", "input1"] { assert_eq!(InputId::parse(text), InputId::Name(text.into())); }
     }
 }

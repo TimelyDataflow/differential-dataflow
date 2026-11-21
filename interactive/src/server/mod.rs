@@ -142,24 +142,30 @@ fn fmt_shape((k, v): &RowShape) -> String {
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
-/// A program's input, as a client names it: by its label, a number (`input 0`), which is also its
-/// position, or a name (`input "edges"`). Workers resolve a name against the program installed,
-/// so a client's view of the program cannot misdirect a feed.
+/// A program's input, as a client names it: by its label, a number (`input 0`) or a name
+/// (`input "edges"`). Workers resolve a label against the program installed, so a client's view
+/// of the program cannot misdirect a feed, and a number only ever finds the input written with it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InputId {
-    Position(usize),
+    Number(usize),
     Name(String),
 }
 
 impl InputId {
-    /// Digits are a position, and anything else a name.
+    /// Digits are a number, and anything else a name.
     pub fn parse(text: &str) -> Self {
         let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
         match text.parse() {
-            Ok(position) if digits => InputId::Position(position),
+            Ok(number) if digits => InputId::Number(number),
             _ => InputId::Name(text.to_string()),
         }
     }
+
+    /// Whether `label` is a number, the label of `input N`.
+    pub fn is_number(label: &str) -> bool { matches!(Self::parse(label), InputId::Number(_)) }
+
+    /// The label as a client writes it, and as an input's import is named.
+    pub fn label(&self) -> String { match self { InputId::Number(n) => n.to_string(), InputId::Name(name) => name.clone() } }
 
     /// Whether `text` may name an input: an identifier, so that it never reads as a number.
     pub fn is_name(text: &str) -> bool {
@@ -170,7 +176,15 @@ impl InputId {
 }
 
 impl From<usize> for InputId {
-    fn from(position: usize) -> Self { InputId::Position(position) }
+    fn from(number: usize) -> Self { InputId::Number(number) }
+}
+
+/// The error for a label `prog` has no input with.
+pub fn no_input(prog: &str, input: &InputId) -> String {
+    match input {
+        InputId::Number(n) => format!("program {prog:?} has no input {n}"),
+        InputId::Name(name) => format!("program {prog:?} has no input named {name:?}"),
+    }
 }
 
 /// Update times for a batch. Every shard of a per-row batch retains its global admission bounds.
@@ -354,15 +368,10 @@ impl Server {
         self.trace_shape(name).or_else(|| crate::diag::shape(name))
     }
 
-    /// The position of `prog`'s `input`, resolving a name against the program installed.
+    /// The position of `prog`'s `input`, resolving its label against the program installed.
     pub fn input_position(&self, prog: &str, input: &InputId) -> Result<usize, String> {
-        match input {
-            InputId::Position(n) => Ok(*n),
-            InputId::Name(name) => {
-                let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-                installed.input_names.get(name).copied().ok_or_else(|| format!("program {prog:?} has no input named {name:?}"))
-            }
-        }
+        let installed = self.programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
+        installed.input_names.get(&input.label()).copied().ok_or_else(|| no_input(prog, input))
     }
 
     /// Return registry state without coupling a caller to stdout formatting.

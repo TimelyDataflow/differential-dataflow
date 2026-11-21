@@ -18,7 +18,7 @@ use interactive::{lower, parse};
 /// Bind each named input to the producer's output of that name, as a load would.
 fn bind_to_producer(program: &mut Program) {
     let bindings: Vec<(String, String)> = program.root.imports.iter()
-        .filter(|i| matches!(i.from, Source::Input(_)) && !i.name.bytes().all(|b| b.is_ascii_digit()))
+        .filter(|i| matches!(i.from, Source::Input(_)) && !interactive::server::InputId::is_number(&i.name))
         .map(|i| (i.name.clone(), format!("producer::{}", i.name))).collect();
     program.bind(bindings.iter().map(|(l, t)| (l.as_str(), t.as_str()))).unwrap();
 }
