@@ -1086,6 +1086,21 @@ mod tests {
     }
 
     #[test]
+    fn half_join_with_unit_payload_reaches_a_fixed_point() {
+        let text = r#"let rows = input 0 : (int, ());
+            output "out" = rows | lift
+                | half_join(rows, 0, (k, (_, t)) -> (k, ((), t))) | count;"#;
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        crate::passes::optimize(&mut program);
+        // The unread time can be masked on the first pass. The unit payload must
+        // not keep reporting changes until pushdown gives up and reverts the plan.
+        assert!(pushdown(&mut program, &|_| None).unwrap() > 0);
+        let once = format!("{program:?}");
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+        assert_eq!(format!("{program:?}"), once);
+    }
+
+    #[test]
     fn masked_half_join_matches_the_original_rows() {
         use crate::server::Server;
         let text = "let a = input 0 : ((int, int), ())

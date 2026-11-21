@@ -36,7 +36,7 @@ pub struct CollShape {
 impl CollShape {
     /// The row a half join presents to its projection, including the joined time as data.
     pub(crate) fn half_join_row(self, arranged_val: Shape) -> Result<Shape, String> {
-        let time = Shape::Prod(vec![Shape::Int; self.time]);
+        let time = time_shape(self.time);
         match self.val {
             Shape::Prod(mut fields) if fields.len() == 2 && fields[1] == time => {
                 let pair = Shape::Prod(vec![fields.swap_remove(0), arranged_val]);
@@ -242,9 +242,9 @@ fn infer_variables(s: &st::Scope, imports: &[Option<CollShape>], vars: Vec<Optio
     shapes.vars
 }
 
-/// The shape of a time at `level` as data: the root coordinates and one per loop.
-fn time_shape(level: Level) -> Shape {
-    Shape::Prod(vec![Shape::Int; level.width()])
+/// The shape of a time carried as data, with one integer per coordinate.
+pub(crate) fn time_shape(width: usize) -> Shape {
+    Shape::Prod(vec![Shape::Int; width])
 }
 
 /// Whether a `join_function` lambda may write a time of shape `shape` at a time `width` wide:
@@ -275,7 +275,7 @@ pub(crate) fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, level: Lev
                 Shape::List(e) => (k, v) = row_shape(*e)?,
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
-            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(level)]),
+            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(level.width())]),
             LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, level)?,
         }
     }
@@ -311,7 +311,7 @@ fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, Stri
 /// The `(key, val)` shapes of a `join_function` lambda's output rows. The lambda gives a list of
 /// `((key, val), time, diff)`, with `time` the shape of a time at this level (see `writes_time`).
 fn join_function_shape(lambda: &Lambda, env: &[Shape], level: Level) -> Result<(Shape, Shape), String> {
-    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(level));
+    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(level.width()));
     let shape = slot_shape(lambda, env).map_err(|e| format!("join_function: {e}"))?;
     let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
     match &**elem {
