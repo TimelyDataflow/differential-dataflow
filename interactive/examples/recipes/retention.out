@@ -1,0 +1,16 @@
+_1 ok installed "win"
+_2 ok fed "win" input 0 at t=0
+_3 ok fed "win" input 0 at t=1
+_4 ok fed "win" input 0 at t=1
+_5 ok fed "win" input 0 at t=2
+_6 ok sealed "win" input 0 to 3
+_7 data 7 val=3
+_7 data 8 val=1
+_7 ok as-of=2
+_8 ok sealed "win" input 0 to 5
+_9 data 7 val=2
+_9 data 8 val=1
+_9 ok as-of=3
+_10 data 7 val=1
+_10 ok as-of=4
+_11 ok bye

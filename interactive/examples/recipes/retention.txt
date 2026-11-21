@@ -1,0 +1,17 @@
+# A sliding window with `delay`: see retention.ddp.
+# Run from interactive/: ddir_server < examples/recipes/retention.txt
+load win from examples/recipes/retention.ddp
+
+feed win 0 7 time=0
+feed win 0 7 time=1
+feed win 0 8 time=1
+feed win 0 7 time=2
+seal win 0 3
+# Times 0, 1 and 2 are all in the window at time 2.
+peek win::recent
+
+# At time 3 the event from time 0 leaves the window; at time 4, those from time 1 leave.
+seal win 0 5
+peek win::recent as-of 3
+peek win::recent as-of 4
+exit

@@ -1,0 +1,17 @@
+-- A left join: every order, with its customer's name when there is one.
+--
+-- There is no NULL; a missing value is a variant. Declaring the enum gives each variant its
+-- payload shape, so `() inject Unknown` needs nothing more. (The built-in `Option` cannot yet
+-- build `None` this way: its `Some` lane has no shape until a value supplies one.)
+-- The unmatched rows are the input minus the ones the join matched.
+
+enum Name = Known List(int) | Unknown;
+
+let orders = input 0 : (int, int);             -- (order, customer)
+let customers = input 1 : (int, List(int));    -- (customer, name); a string is a list of bytes
+
+let by_customer = orders | map((order, customer) -> (customer, order));
+let matched = by_customer | join(customers, (c, (order, name)) -> (order, (c, name inject Known)));
+let unmatched = by_customer - (by_customer | join(customers, (c, (order, _)) -> (c, order)));
+
+output "orders" = matched + (unmatched | map((c, order) -> (order, (c, () inject Unknown))));

@@ -1,0 +1,21 @@
+# Connected components with prioritized label propagation: see connected_components.ddp.
+# Run from interactive/: ddir_server < examples/recipes/connected_components.txt
+load cc from examples/recipes/connected_components.ddp
+
+# Time 0: two components, {1, 2, 3} and {4, 5}.
+feed cc 0 1 val=2 time=0
+feed cc 0 3 val=2 time=0
+feed cc 0 5 val=4 time=0
+seal cc 0 1
+peek cc::labels
+
+# Time 1: the edge 3-4 joins them.
+feed cc 0 3 val=4 time=1
+seal cc 0 2
+peek cc::labels
+
+# Time 2: removing 1-2 leaves node 1 with no edges, so no label; the rest take label 2.
+feed cc 0 1 val=2 time=2 diff=-1
+seal cc 0 3
+peek cc::labels
+exit

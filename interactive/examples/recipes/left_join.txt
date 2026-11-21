@@ -1,0 +1,19 @@
+# A left join with a declared enum for the missing side: see left_join.ddp.
+# Run from interactive/: ddir_server < examples/recipes/left_join.txt
+load lj from examples/recipes/left_join.ddp
+
+# A feed spells a string as its bytes: "ann" is list(97,110,110).
+feed lj 1 1 val=list(97,110,110) time=0
+feed lj 0 100 val=1 time=0
+feed lj 0 101 val=2 time=0
+seal lj 0 1
+seal lj 1 1
+# Order 101's customer is unknown: `inject(1,tuple())`. Order 100's is `inject(0,<name>)`.
+peek lj::orders
+
+# Customer 2 arrives, and order 101 moves from Unknown to Known.
+feed lj 1 2 val=list(98,111) time=1
+seal lj 0 2
+seal lj 1 2
+peek lj::orders
+exit

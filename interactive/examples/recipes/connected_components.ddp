@@ -1,0 +1,22 @@
+-- Connected components by label propagation, with prioritized iteration.
+--
+-- Each node starts labeled by itself, and repeatedly takes the least label among its neighbors.
+-- Unprioritized, every node's own label starts spreading in the first round, and most of that
+-- work is undone when a smaller label arrives. Here `delay` holds node n's own label back to round
+-- 256 * bit_length(n), so small labels spread before large ones enter; `scc.ddp` does the same.
+-- On a 1M-edge graph this took the first computation from 1.39 s to 0.55 s.
+-- The cost moves to some later edits: deleting and re-adding a bridge to a long path took
+-- longer with the delay than without (0.7 s and 3.4 s against 37 ms, for a 300-node path).
+
+let raw = input 0 : (int, int);    -- an undirected edge, either way round
+let edges = raw + (raw | map((a, b) -> (b, a))) | distinct;
+let nodes = edges | map((a, _) -> (a, ())) | distinct;
+
+cc: {
+    -- The inner time is (epoch, round): `0` leaves the epoch alone and sets the round.
+    let seeds = nodes | map((n, _) -> (n, n)) | delay((_, n) -> (0, (256, n call bit_length) mul));
+    let proposals = labels | join(edges, (_, (label, dst)) -> (dst, label));
+    set labels = seeds + proposals | min;
+}
+
+output "labels" = cc::labels;
