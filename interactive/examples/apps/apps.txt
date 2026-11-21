@@ -1,0 +1,86 @@
+# Applications: two small systems, each one program.
+# Run from interactive/: cargo run --release -p ddir-server < examples/apps/apps.txt
+
+# Access control, the example in interactive/README.md.
+
+# Install access.ddp under the name `demo`.
+load demo from examples/apps/access.ddp
+
+# Variants are structural, and written by position:
+# inject(0,x) is User x, inject(1,x) is Group x,
+# inject(0,tuple()), inject(1,tuple()), inject(2,tuple()) are Owner, Edit, View.
+
+# Input 1, `groups`: group 10 holds user 2 and group 11; group 11 holds user 3.
+feed demo 1 time=0 begin
+10 val=inject(0,2)
+10 val=inject(1,11)
+11 val=inject(0,3)
+end-feed
+
+# Input 0, `grants`: user 1 owns doc 100, group 10 can view doc 100 and edit
+# doc 200, and user 3 can edit doc 100.
+feed demo 0 time=0 begin
+100 val=tuple(inject(0,1),inject(0,tuple()))
+100 val=tuple(inject(1,10),inject(2,tuple()))
+200 val=tuple(inject(1,10),inject(1,tuple()))
+100 val=tuple(inject(0,3),inject(1,tuple()))
+end-feed
+
+# Grants and groups are finished. Blocks can still arrive at time 1.
+seal demo 0 []
+seal demo 1 []
+seal demo 2 1
+initial peek demo::access as-of 0
+
+# Input 2, `blocks`: block group 10 on doc 100. It reaches users 2 and 3 through
+# groups 10 and 11, even past user 3's own grant.
+feed demo 2 100 val=inject(1,10) time=1
+seal demo 2 2
+blocked peek demo::access as-of 1
+
+# Read one key: user 3 on doc 100. Nothing comes back while the block holds.
+lookup peek demo::access tuple(inject(0,3),100) as-of 1
+
+# Remove the block by retracting the same row, and read the key again.
+feed demo 2 100 val=inject(1,10) time=2 diff=-1
+seal demo 2 3
+restored peek demo::access tuple(inject(0,3),100) as-of 2
+
+# Arrange-idempotence as an e-graph rewrite rule, saturating incrementally.
+#
+# `egraph.ddp` is congruence closure plus one rule: arrange(x) ≡ x when x
+# is already arranged. Unlike pure CSE, the rule equates *structurally
+# different* nodes, and congruence propagates it to a fixpoint. Op convention:
+# 1 = Arrange, 2 = Reduce (both produce an arrangement).
+
+load eg from examples/apps/egraph.ddp
+
+# Base: node 0 (a source), 1 = Arrange(0), 2 = Reduce(1).
+feed eg 0 0 val=tuple(5,list()) time=0
+feed eg 0 1 val=tuple(1,list(0)) time=0
+feed eg 0 2 val=tuple(2,list(1)) time=0
+seal eg 0 1
+peek eg::classes
+# -> all singletons. Note 1 = Arrange(0) does NOT fold: 0 is not arranged.
+
+# Add node 3 = Arrange(2). Node 2 is a Reduce (already arranged), so the rule
+# fires: Arrange(2) ≡ 2.
+feed eg 0 3 val=tuple(1,list(2)) time=1
+seal eg 0 2
+peek eg::classes
+# -> 3->2 appears: the rule fired incrementally.
+
+# Add node 4 = Arrange(3). Node 3 now lives in class 2 (arranged), so 4 folds
+# too — saturation across the equality we just derived.
+feed eg 0 4 val=tuple(1,list(3)) time=2
+seal eg 0 3
+peek eg::classes
+# -> 4->2.
+
+# Retract node 4; the fold undoes incrementally (4 is a sink, nothing else
+# depends on it).
+feed eg 0 4 val=tuple(1,list(3)) diff=-1 time=3
+seal eg 0 4
+peek eg::classes
+# -> back to {0, 1, 2, 3->2}.
+exit

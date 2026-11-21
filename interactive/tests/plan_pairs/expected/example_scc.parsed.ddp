@@ -1,0 +1,19 @@
+let edges = input "edges" : (int, int);
+let trans = edges | map((src, dst) -> (dst, src));
+outer: {
+    let scc = edges + trim;
+    fwd: {
+        let nodes = edges | map((_, dst) -> (dst, dst)) | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+        let labels = proposals + nodes | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+        set proposals = labels | join(scc, (_, (label, dst)) -> (dst, label));
+    }
+    let trim_fwd = edges | join(fwd::labels, (src, (dst, label)) -> (dst, (src, label))) | join(fwd::labels, (dst, ((src, label), other)) -> (dst, (src, label, other))) | filter((_, (_, a, b)) -> (a, b) eq) | map((dst, (src, _, _)) -> (dst, src));
+    bwd: {
+        let nodes = trans | map((_, dst) -> (dst, dst)) | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, 0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+        let labels = proposals + nodes | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+        set proposals = labels | join(trim_fwd, (_, (label, dst)) -> (dst, label));
+    }
+    let trim_bwd = trans | join(bwd::labels, (src, (dst, label)) -> (dst, (src, label))) | join(bwd::labels, (dst, ((src, label), other)) -> (dst, (src, label, other))) | filter((_, (_, a, b)) -> (a, b) eq) | map((dst, (src, _, _)) -> (dst, src));
+    set trim = trim_bwd + (edges | negate);
+}
+output "within" = outer::scc;

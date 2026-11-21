@@ -1,0 +1,11 @@
+let puts = input "puts" : (int, int);
+let dels = input "dels" : (int, ());
+let put_now = puts + (puts | lift | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, (t))) = input in (t, 1) add in ((k, v), _call0, 1) enlist) | map((k, (v, _)) -> (k, v)) | negate);
+let del_now = dels + (dels | lift | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, (t))) = input in (t, 1) add in ((k, v), _call0, 1) enlist) | map((k, _) -> (k, ())) | negate);
+let written = put_now | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+let touched = (written | map((k, _) -> (k, ()))) + del_now | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
+var table : (int, int);
+let kept = table + (table | join(touched, (k, (v, ())) -> (k, v)) | negate);
+let now = kept + written;
+set table = now;
+output "customers" = now;

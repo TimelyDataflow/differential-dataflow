@@ -1,0 +1,4 @@
+enum Shape = Circle int | Rect (int, int);
+let shapes = input "shapes" : (int, Shape);
+output "shapes" = shapes;
+output "kinds" = shapes | map((_, s) -> (s match (Circle (_ -> 0), Rect (_ -> 1)), ())) | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);

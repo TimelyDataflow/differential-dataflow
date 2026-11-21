@@ -1,0 +1,69 @@
+# Tables: a shop's orders and customers, and the programs that read them.
+# Run from interactive/: cargo run --release -p ddir-server < examples/tables/tables.txt
+
+# Two programs take the fed inputs: `shop` the orders, and `customers` the writes to the
+# customer table. The others bind their inputs to published outputs, by label.
+load shop from examples/tables/shop.ddp
+load customers from examples/tables/upsert.ddp
+load totals from examples/tables/sum.ddp orders=shop::orders
+load top from examples/tables/top_k.ddp totals=totals::totals
+load joined from examples/tables/left_join.ddp orders=shop::orders customers=customers::customers
+load recent from examples/tables/retention.ddp orders=shop::orders
+
+# Time 0: customers 1 and 2, and five orders. Customers 3 and 5 are not in the table.
+feed customers puts 1 val=1 time=0
+feed customers puts 2 val=2 time=0
+feed shop orders time=0 begin
+100 val=1,50
+101 val=1,20
+102 val=2,80
+103 val=3,10
+106 val=5,5
+end-feed
+seal shop orders 1
+seal customers puts 1
+seal customers dels 1
+peek customers::customers
+peek totals::totals
+peek top::top
+# An order's customer is `inject(0,tier)` when known, and `inject(1,tuple())` when not.
+peek joined::orders
+peek recent::recent
+
+# Time 1: customer 3 arrives, and customer 1 changes tier. Customer 4 spends the most, and a
+# refund brings customer 2 to zero, so its total has no row.
+feed customers puts 3 val=1 time=1
+feed customers puts 1 val=3 time=1
+feed shop orders time=1 begin
+104 val=4,200
+105 val=2,-80
+end-feed
+seal shop orders 2
+seal customers puts 2
+seal customers dels 2
+peek customers::customers
+peek totals::totals
+peek top::top
+peek joined::orders
+
+# Time 2: customer 2 is deleted, and their orders are unknown again. A put and a delete of one
+# customer at one time: the put wins.
+feed customers dels 2 time=2
+feed customers dels 4 time=2
+feed customers puts 4 val=2 time=2
+seal shop orders 3
+seal customers puts 3
+seal customers dels 3
+peek customers::customers
+peek joined::orders
+
+# Time 3: no writes. The orders from time 0 leave the window, and the table stays as it was.
+seal shop orders 4
+seal customers puts 4
+seal customers dels 4
+peek recent::recent as-of 2
+peek recent::recent as-of 3
+peek customers::customers
+# Reading back in time still works.
+peek customers::customers as-of 0
+exit

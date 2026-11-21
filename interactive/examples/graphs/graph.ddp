@@ -1,0 +1,10 @@
+-- The graph the other programs here read: weighted directed edges, and the nodes to start from.
+-- Install it once, and bind each reader's inputs to its outputs at load, as `edges=graph::edges`.
+-- Each output is an arrangement that every reader shares, rather than a copy per reader.
+
+let weighted = input "weighted" : (int, (int, int));   -- (src, (dst, weight))
+let roots = input "roots" : (int, ());                 -- the nodes to start from
+
+output "weighted" = weighted;
+output "edges" = weighted | map((src, (dst, _)) -> (src, dst));
+output "roots" = roots;

@@ -1,0 +1,16 @@
+-- Time lanes: epoch.
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let edges = input "edges" : (int, int);
+let roots = input "roots" : (int, ());
+reach: {
+    -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+    var reach;
+    let reach_idx = reach | arrange;
+    let proposals = reach_idx | join(::edges, (_, (_, dst)) -> (dst, ()));
+    let reach_rows = ::roots + proposals;
+    let reach_idx2 = reach_rows | arrange;
+    let reach_reduce = reach_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+    set reach = reach_reduce;
+}
+-- Renderer: build an export arrangement.
+output "reach" = reach::reach;

@@ -1,0 +1,25 @@
+-- Upsert: the customer table, where a put replaces a customer's tier and a delete removes it.
+--
+-- Inputs are multisets, so feeding `5 val=2` after `5 val=1` leaves both rows.
+-- Here the table is instead a root feedback variable: at each time it holds what `now` held
+-- one time earlier, and `now` is that table with this time's writes applied.
+-- The client never retracts anything; it only feeds the writes.
+
+let puts = input "puts" : (int, int);   -- (customer, tier): set the customer's tier
+let dels = input "dels" : (int, ());    -- customer: remove the customer
+
+-- A write counts at its own time only: `lift` pairs each row with its time t, and `delay`
+-- moves a copy to t + 1, where subtracting it retracts the row.
+let put_now = puts - (puts | lift | delay((_, (_, (t))) -> (t, 1) add) | map((k, (v, _)) -> (k, v)));
+let del_now = dels - (dels | lift | delay((_, (_, (t))) -> (t, 1) add) | map((k, _) -> (k, ())));
+
+-- Several puts to one key at one time: the least value wins. A put beats a delete at one time.
+let written = put_now | min;
+let touched = (written | map((k, _) -> (k, ()))) + del_now | distinct;
+
+var table : (int, int);
+let kept = table - (table | join(touched, (k, (v, ())) -> (k, v)));
+let now = kept + written;
+set table = now;
+
+output "customers" = now;

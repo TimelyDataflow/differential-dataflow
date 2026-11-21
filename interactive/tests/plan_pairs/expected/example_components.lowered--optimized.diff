@@ -1,0 +1,31 @@
+--- lowered
++++ optimized
+@@ -4,20 +4,20 @@
+ let edges_map = raw | map((a, b) -> (b, a));
+ let edges_rows = raw + edges_map;
+ let edges_map2 = edges_rows | map((k, v) -> ((k, v), ()));
+-let edges_idx = edges_map2 | arrange;
+-let edges_reduce = edges_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
++let edges_idx2 = edges_map2 | arrange;
++let edges_reduce = edges_idx2 | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let edges = edges_reduce | map((kv, ()) -> kv);
+-let nodes_map = edges | map((a, _) -> (a, ()));
+-let nodes_idx = nodes_map | arrange;
++let nodes_map2 = edges | map((a, _) -> (a, ()));
++let nodes_idx = nodes_map2 | arrange;
+ let nodes = nodes_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
++let nodes_map = nodes | map((n, _) -> (n, n));
++let edges_idx = edges | arrange;
+ cc: {
+     -- Time lanes: epoch, then 1 scope coordinates; this scope enters at zero.
+     var labels;
+-    let seeds_map = ::nodes | map((n, _) -> (n, n));
+-    let seeds = seeds_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
++    let seeds = ::nodes_map | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, n) = input in (0, (256, n call bit_length) mul) in ((k, v), _call0, 1) enlist);
+     let labels_idx = labels | arrange;
+-    let edges_idx = ::edges | arrange;
+-    let proposals = labels_idx | join(edges_idx, (_, (label, dst)) -> (dst, label));
++    let proposals = labels_idx | join(::edges_idx, (_, (label, dst)) -> (dst, label));
+     let labels_rows = seeds + proposals;
+     let labels_idx2 = labels_rows | arrange;
+     let labels_reduce = labels_idx2 | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);

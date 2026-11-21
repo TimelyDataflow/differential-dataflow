@@ -1,0 +1,100 @@
+_1 ok installed "shop"
+_2 ok installed "customers"
+_3 ok installed "totals"
+_4 ok installed "top"
+_5 ok installed "joined"
+_6 ok installed "recent"
+_7 ok fed "customers" input "puts" at t=0
+_8 ok fed "customers" input "puts" at t=0
+_9 ok fed 5 rows to "shop" input "orders" at t=0
+_10 ok sealed "shop" input "orders" to 1
+_11 ok sealed "customers" input "puts" to 1
+_12 ok sealed "customers" input "dels" to 1
+_13 data 1 val=1
+_13 data 2 val=2
+_13 ok as-of=0
+_14 data 1 val=70
+_14 data 2 val=80
+_14 data 3 val=10
+_14 data 5 val=5
+_14 ok as-of=0
+_15 data 1 val=70
+_15 data 2 val=80
+_15 data 3 val=10
+_15 ok as-of=0
+_16 data 100 val=tuple(1,inject(0,1))
+_16 data 101 val=tuple(1,inject(0,1))
+_16 data 102 val=tuple(2,inject(0,2))
+_16 data 103 val=tuple(3,inject(1,tuple()))
+_16 data 106 val=tuple(5,inject(1,tuple()))
+_16 ok as-of=0
+_17 data 1 val=2
+_17 data 2 val=1
+_17 data 3 val=1
+_17 data 5 val=1
+_17 ok as-of=0
+_18 ok fed "customers" input "puts" at t=1
+_19 ok fed "customers" input "puts" at t=1
+_20 ok fed 2 rows to "shop" input "orders" at t=1
+_21 ok sealed "shop" input "orders" to 2
+_22 ok sealed "customers" input "puts" to 2
+_23 ok sealed "customers" input "dels" to 2
+_24 data 1 val=3
+_24 data 2 val=2
+_24 data 3 val=1
+_24 ok as-of=1
+_25 data 1 val=70
+_25 data 3 val=10
+_25 data 4 val=200
+_25 data 5 val=5
+_25 ok as-of=1
+_26 data 1 val=70
+_26 data 3 val=10
+_26 data 4 val=200
+_26 ok as-of=1
+_27 data 100 val=tuple(1,inject(0,3))
+_27 data 101 val=tuple(1,inject(0,3))
+_27 data 102 val=tuple(2,inject(0,2))
+_27 data 103 val=tuple(3,inject(0,1))
+_27 data 104 val=tuple(4,inject(1,tuple()))
+_27 data 105 val=tuple(2,inject(0,2))
+_27 data 106 val=tuple(5,inject(1,tuple()))
+_27 ok as-of=1
+_28 ok fed "customers" input "dels" at t=2
+_29 ok fed "customers" input "dels" at t=2
+_30 ok fed "customers" input "puts" at t=2
+_31 ok sealed "shop" input "orders" to 3
+_32 ok sealed "customers" input "puts" to 3
+_33 ok sealed "customers" input "dels" to 3
+_34 data 1 val=3
+_34 data 3 val=1
+_34 data 4 val=2
+_34 ok as-of=2
+_35 data 100 val=tuple(1,inject(0,3))
+_35 data 101 val=tuple(1,inject(0,3))
+_35 data 102 val=tuple(2,inject(1,tuple()))
+_35 data 103 val=tuple(3,inject(0,1))
+_35 data 104 val=tuple(4,inject(0,2))
+_35 data 105 val=tuple(2,inject(1,tuple()))
+_35 data 106 val=tuple(5,inject(1,tuple()))
+_35 ok as-of=2
+_36 ok sealed "shop" input "orders" to 4
+_37 ok sealed "customers" input "puts" to 4
+_38 ok sealed "customers" input "dels" to 4
+_39 data 1 val=2
+_39 data 2 val=2
+_39 data 3 val=1
+_39 data 4 val=1
+_39 data 5 val=1
+_39 ok as-of=2
+_40 data 2 val=1
+_40 data 4 val=1
+_40 ok as-of=3
+_41 data 1 val=3
+_41 data 3 val=1
+_41 data 4 val=2
+_41 ok as-of=3
+_42 data 1 val=1
+_42 data 2 val=2
+_42 ok as-of=0
+_43 ok bye

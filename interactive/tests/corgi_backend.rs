@@ -79,14 +79,7 @@ fn inputs_for(prog: &str) -> Vec<Vec<String>> {
 
 /// Evaluate `prog` and assert the output is its recorded answer.
 fn assert_matches_expected(prog: &str) {
-    // Fixtures pinning individual lowerings live with the gate (tests/programs); the
-    // algorithm programs double as examples and stay in examples/programs.
-    let fixture = format!("{}/tests/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"));
-    let path = if std::path::Path::new(&fixture).exists() {
-        fixture
-    } else {
-        format!("{}/examples/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"))
-    };
+    let path = format!("{}/tests/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"));
     register_test_functions();
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
@@ -167,7 +160,7 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test]
 fn scc_with_explicit_anchors_matches_shorthand() {
-    let src = include_str!("../examples/programs/scc.ddp");
+    let src = include_str!("../tests/programs/scc.ddp");
     let explicit = src.replace("join(fwd::labels", "join(outer::fwd::labels")
         .replace("join(bwd::labels", "join(outer::bwd::labels")
         .replace("output \"result\" = outer::scc", "output \"result\" = ::outer::scc")
@@ -178,7 +171,7 @@ fn scc_with_explicit_anchors_matches_shorthand() {
     let want = render(&evaluate(timely::Config::process(1), &original, &inputs));
     let got = render(&evaluate(timely::Config::process(1), &anchored, &inputs));
     assert_eq!(got, want);
-    assert_eq!(got, include_str!("../examples/programs/scc.expected").trim_end());
+    assert_eq!(got, include_str!("../tests/programs/scc.expected").trim_end());
 }
 #[test] fn cc_stages() { assert_matches_expected("cc_stages"); }
 #[test] fn cc_records() { assert_matches_expected("cc_records"); }

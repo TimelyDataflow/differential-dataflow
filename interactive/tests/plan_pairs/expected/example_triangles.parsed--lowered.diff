@@ -1,0 +1,44 @@
+--- parsed
++++ lowered
+@@ -1,11 +1,35 @@
++-- Time lanes: epoch.
++-- Bound inputs use provider arrangements; history advances to G = (0, []).
+ let raw = input "edges" : (int, int);
+-let down = raw | filter((a, b) -> (a, b) ne) | map((a, b) -> ((((a, b) gt, a, b) select, ((a, b) gt, b, a) select), ())) | map((k, v) -> ((k, v), ())) | reduce((_, vals) -> vals map (((), _) -> ((), 1))) | map((kv, ()) -> kv);
++let down_filter = raw | filter((a, b) -> (a, b) ne);
++let down_map = down_filter | map((a, b) -> ((((a, b) gt, a, b) select, ((a, b) gt, b, a) select), ()));
++let down_idx = down_map | arrange;
++let down = down_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+ let out = down | map(((a, b), ()) -> (a, b));
+ let rev = down | map(((a, b), ()) -> (b, a));
+ let pairs = down | arrange;
+-let p1 = out | lift | half_join(out, 0, (a, ((b, c), t)) -> ((b, c), (a, t))) | filter(((b, c), _) -> (b, c) gt) | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
+-let p2 = out | lift | half_join(out, 1, (a, ((c, b), t)) -> ((b, c), (a, t))) | filter(((b, c), _) -> (b, c) gt) | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
+-let p3 = down | map(((b, c), ()) -> (b, c)) | lift | half_join(rev, 1, (b, ((c, a), t)) -> ((a, c), (b, t))) | half_join(pairs, 1, ((a, c), ((b, ()), t)) -> (a, ((b, c), t)));
+-let triangles = p1 + p2 + p3 | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, t)) = input in t in ((k, v), _call0, 1) enlist) | map((a, (bc, _)) -> (a, bc));
++let p1_rows = out | lift;
++let out_idx = out | arrange;
++let p1_join = p1_rows | half_join(out_idx, 0, (a, ((b, c), t)) -> ((b, c), (a, t)));
++let p1_filter = p1_join | filter(((b, c), _) -> (b, c) gt);
++let p1 = p1_filter | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
++let p2_rows = out | lift;
++let out_idx2 = out | arrange;
++let p2_join = p2_rows | half_join(out_idx2, 1, (a, ((c, b), t)) -> ((b, c), (a, t)));
++let p2_filter = p2_join | filter(((b, c), _) -> (b, c) gt);
++let p2 = p2_filter | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
++let p3_map = down | map(((b, c), ()) -> (b, c));
++let p3_rows = p3_map | lift;
++let rev_idx = rev | arrange;
++let p3_join = p3_rows | half_join(rev_idx, 1, (b, ((c, a), t)) -> ((a, c), (b, t)));
++let p3 = p3_join | half_join(pairs, 1, ((a, c), ((b, ()), t)) -> (a, ((b, c), t)));
++let triangles_rows = p1 + p2 + p3;
++let triangles_rows2 = triangles_rows | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, t)) = input in t in ((k, v), _call0, 1) enlist);
++let triangles = triangles_rows2 | map((a, (bc, _)) -> (a, bc));
++let total_map = triangles | map(_ -> ((), ()));
++let total_idx = total_map | arrange;
++let total_reduce = total_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
++-- Renderer: build an export arrangement.
+ output "triangles" = triangles;
+-output "total" = triangles | map(_ -> ((), ())) | map((k, _) -> (k, ())) | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
++-- Renderer: publish the existing arrangement.
++output "total" = total_reduce;

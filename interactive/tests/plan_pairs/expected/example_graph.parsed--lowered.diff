@@ -1,0 +1,14 @@
+--- parsed
++++ lowered
+@@ -1,5 +1,10 @@
++-- Time lanes: epoch.
+ let weighted = input "weighted" : (int, (int, int));
+ let roots = input "roots" : (int, ());
++let edges_map = weighted | map((src, (dst, _)) -> (src, dst));
++-- Renderer: build an export arrangement.
+ output "weighted" = weighted;
+-output "edges" = weighted | map((src, (dst, _)) -> (src, dst));
++-- Renderer: build an export arrangement.
++output "edges" = edges_map;
++-- Renderer: build an export arrangement.
+ output "roots" = roots;

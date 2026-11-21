@@ -1,0 +1,62 @@
+# Graphs: one program holds the graph, and five programs read it.
+# Run from interactive/: cargo run --release -p ddir-server < examples/graphs/graphs.txt
+
+# `graph` publishes its inputs as `graph::weighted`, `graph::edges` and `graph::roots`.
+load graph from examples/graphs/graph.ddp
+# Each reader binds its inputs to those outputs, by label; none of them is fed directly.
+load reach from examples/graphs/reach.ddp edges=graph::edges roots=graph::roots
+load paths from examples/graphs/shortest_paths.ddp weighted=graph::weighted roots=graph::roots
+load components from examples/graphs/components.ddp edges=graph::edges
+load scc from examples/graphs/scc.ddp edges=graph::edges
+load triangles from examples/graphs/triangles.ddp edges=graph::edges
+list
+
+# Time 0: the cycles 1 -> 2 -> 3 -> 1 and 4 -> 5 -> 4, joined by 3 -> 4, and a separate 7 -> 8.
+# The path 1 -> 2 -> 3 costs 200 + 200; the direct edge 1 -> 3 costs 500. The root is 1.
+feed graph weighted time=0 begin
+1 val=2,200
+2 val=3,200
+1 val=3,500
+3 val=1,5
+3 val=4,10
+4 val=5,1
+5 val=4,1
+7 val=8,1
+end-feed
+feed graph roots 1 time=0
+seal graph weighted 1
+seal graph roots 1
+peek reach::reach
+peek paths::dist
+peek components::labels
+peek scc::within
+peek triangles::total
+peek triangles::triangles
+
+# Time 1: 3 -> 1 goes, so 1, 2 and 3 are no longer a component; 2 -> 3 gets dearer, so the
+# direct edge 1 -> 3 wins; and 5 -> 6 reaches a new node. The triangle 1, 2, 3 stays, as
+# triangles and components read each edge in both directions.
+feed graph weighted time=1 begin
+3 val=1,5 diff=-1
+2 val=3,200 diff=-1
+2 val=3,900
+5 val=6,1
+end-feed
+seal graph weighted 2
+seal graph roots 2
+peek reach::reach
+peek paths::dist
+peek components::labels
+peek scc::within
+peek triangles::total
+
+# A program cannot be dropped while others read its outputs.
+drop graph
+drop reach
+drop paths
+drop components
+drop scc
+drop triangles
+drop graph
+list
+exit

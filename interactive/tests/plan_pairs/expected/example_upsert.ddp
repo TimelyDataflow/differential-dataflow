@@ -1,0 +1,22 @@
+-- Time lanes: epoch.
+let puts = input "puts" : (int, int);
+let dels = input "dels" : (int, ());
+var table : (int, int);
+let put_now_rows = puts | lift | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, (t))) = input in (t, 1) add in ((k, v), _call0, 1) enlist) | map((k, (v, _)) -> (k, v)) | negate;
+let put_now = puts + put_now_rows;
+let del_now_rows = dels | lift | join_function((k, v) -> let _call0 = let input = (k, v) in let (_, (_, (t))) = input in (t, 1) add in ((k, v), _call0, 1) enlist) | map((k, _) -> (k, ())) | negate;
+let del_now = dels + del_now_rows;
+let put_now_idx = put_now | arrange;
+let written = put_now_idx | reduce(limit 1, (_, vals) -> let first = vals head in (first.0, 1) enlist);
+let touched_map = written | map((k, _) -> (k, ()));
+let touched_rows = touched_map + del_now;
+let touched_idx = touched_rows | arrange;
+let touched = touched_idx | reduce((_, vals) -> vals map (((), _) -> ((), 1)));
+let table_idx = table | arrange;
+let kept_join = table_idx | join(touched, (k, (v, ())) -> (k, v));
+let kept_neg = kept_join | negate;
+let kept = table + kept_neg;
+let now = kept + written;
+set table = now;
+-- Renderer: build an export arrangement.
+output "customers" = now;

@@ -1,0 +1,19 @@
+-- The 3 customers who spent the most, maintained as their totals change.
+--
+-- `reduce(limit 3, ...)` hands its lambda only a key's first 3 values in value order, so storing
+-- the negated total puts the highest first. One group holding every customer would redo that
+-- group's work on every update; a tree of groups keeps each update small. Here customers fall into
+-- 64 buckets, each bucket keeps its own top 3, and the root takes the top 3 of those.
+-- An update then touches one bucket and the 64 * 3 candidates at the root.
+-- Ties order by customer, the second field of the value.
+
+let totals = input "totals" : (int, int);   -- (customer, total)
+
+let buckets = totals
+    | map((customer, total) -> ((customer, 64) rem, (total neg, customer)))
+    | reduce(limit 3, (_, vals) -> vals);
+let top = buckets
+    | map((_, v) -> ((), v))
+    | reduce(limit 3, (_, vals) -> vals);
+
+output "top" = top | map((_, (negated, customer)) -> (customer, negated neg));

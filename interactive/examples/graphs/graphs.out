@@ -1,0 +1,97 @@
+_1 ok installed "graph"
+_2 ok installed "reach"
+_3 ok installed "paths"
+_4 ok installed "components"
+_5 ok installed "scc"
+_6 ok installed "triangles"
+_7 data program name="components" origin=program inputs=[] imports=["graph::edges"] exports=["components::labels"]
+_7 data program name="graph" origin=program inputs=["roots", "weighted"] imports=[] exports=["graph::weighted", "graph::edges", "graph::roots"]
+_7 data program name="paths" origin=program inputs=[] imports=["graph::weighted", "graph::roots"] exports=["paths::dist"]
+_7 data program name="reach" origin=program inputs=[] imports=["graph::edges", "graph::roots"] exports=["reach::reach"]
+_7 data program name="scc" origin=program inputs=[] imports=["graph::edges"] exports=["scc::within"]
+_7 data program name="triangles" origin=program inputs=[] imports=["graph::edges"] exports=["triangles::triangles", "triangles::total"]
+_7 data trace name="components::labels" importers=0
+_7 data trace name="graph::edges" importers=4
+_7 data trace name="graph::roots" importers=2
+_7 data trace name="graph::weighted" importers=1
+_7 data trace name="paths::dist" importers=0
+_7 data trace name="reach::reach" importers=0
+_7 data trace name="scc::within" importers=0
+_7 data trace name="triangles::total" importers=0
+_7 data trace name="triangles::triangles" importers=0
+_7 ok
+_8 ok fed 8 rows to "graph" input "weighted" at t=0
+_9 ok fed "graph" input "roots" at t=0
+_10 ok sealed "graph" input "weighted" to 1
+_11 ok sealed "graph" input "roots" to 1
+_12 data 1
+_12 data 2
+_12 data 3
+_12 data 4
+_12 data 5
+_12 ok as-of=0
+_13 data 1 val=0
+_13 data 2 val=200
+_13 data 3 val=400
+_13 data 4 val=410
+_13 data 5 val=411
+_13 ok as-of=0
+_14 data 1 val=1
+_14 data 2 val=1
+_14 data 3 val=1
+_14 data 4 val=1
+_14 data 5 val=1
+_14 data 7 val=7
+_14 data 8 val=7
+_14 ok as-of=0
+_15 data 1 val=2
+_15 data 1 val=3
+_15 data 2 val=3
+_15 data 3 val=1
+_15 data 4 val=5
+_15 data 5 val=4
+_15 ok as-of=0
+_16 data tuple() val=1
+_16 ok as-of=0
+_17 data 3 val=tuple(2,1)
+_17 ok as-of=0
+_18 ok fed 4 rows to "graph" input "weighted" at t=1
+_19 ok sealed "graph" input "weighted" to 2
+_20 ok sealed "graph" input "roots" to 2
+_21 data 1
+_21 data 2
+_21 data 3
+_21 data 4
+_21 data 5
+_21 data 6
+_21 ok as-of=1
+_22 data 1 val=0
+_22 data 2 val=200
+_22 data 3 val=500
+_22 data 4 val=510
+_22 data 5 val=511
+_22 data 6 val=512
+_22 ok as-of=1
+_23 data 1 val=1
+_23 data 2 val=1
+_23 data 3 val=1
+_23 data 4 val=1
+_23 data 5 val=1
+_23 data 6 val=1
+_23 data 7 val=7
+_23 data 8 val=7
+_23 ok as-of=1
+_24 data 4 val=5
+_24 data 5 val=4
+_24 ok as-of=1
+_25 data tuple() val=1
+_25 ok as-of=1
+_26 err cannot drop "graph": its trace "graph::weighted" has 1 live importer(s); drop them first
+_27 ok dropped "reach"
+_28 ok dropped "paths"
+_29 ok dropped "components"
+_30 ok dropped "scc"
+_31 ok dropped "triangles"
+_32 ok dropped "graph"
+_33 ok
+_34 ok bye

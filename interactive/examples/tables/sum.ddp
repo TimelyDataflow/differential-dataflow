@@ -1,0 +1,9 @@
+-- Each customer's total spend, with `sum`, which adds each key's values weighted by their diffs.
+--
+-- `sum` is sugar: it moves each value into its row's diff, and `count` adds up the diffs.
+-- The sum is maintained incrementally, where folding a list of values would rebuild it per change.
+-- A total of zero has no row, like any record whose diffs cancel; it is bounded by `i64`.
+
+let orders = input "orders" : (int, (int, int));   -- (order, (customer, amount)); a refund is a negative amount
+
+output "totals" = orders | map((_, (customer, amount)) -> (customer, amount)) | sum;

@@ -1,0 +1,17 @@
+-- A left join: every order, with its customer's tier when the customer is known.
+--
+-- There is no NULL; a missing value is a variant. Declaring the enum gives each variant its
+-- payload shape, so `() inject Unknown` needs nothing more. (The built-in `Option` cannot yet
+-- build `None` this way: its `Some` lane has no shape until a value supplies one.)
+-- The unmatched rows are the input minus the ones the join matched.
+
+enum Tier = Known int | Unknown;
+
+let orders = input "orders" : (int, (int, int));   -- (order, (customer, amount))
+let customers = input "customers" : (int, int);    -- (customer, tier)
+
+let by_customer = orders | map((order, (customer, _)) -> (customer, order));
+let matched = by_customer | join(customers, (c, (order, tier)) -> (order, (c, tier inject Known)));
+let unmatched = by_customer - (by_customer | join(customers, (c, (order, _)) -> (c, order)));
+
+output "orders" = matched + (unmatched | map((c, order) -> (order, (c, () inject Unknown))));

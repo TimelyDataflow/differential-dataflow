@@ -1,0 +1,10 @@
+enum Shape = Circle int | Rect (int, int);
+-- Time lanes: epoch.
+let shapes = input "shapes" : (int, Shape);
+let kinds_map = shapes | map((_, s) -> (s match (Circle (_ -> 0), Rect (_ -> 1)), ()));
+let kinds_idx = kinds_map | arrange;
+let kinds_reduce = kinds_idx | reduce((_, vals) -> let diffs = vals map ((_, d) -> d) in let n = diffs fold_add in (n, (n, 1)) enlist filter);
+-- Renderer: build an export arrangement.
+output "shapes" = shapes;
+-- Renderer: publish the existing arrangement.
+output "kinds" = kinds_reduce;

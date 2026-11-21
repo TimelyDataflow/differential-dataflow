@@ -1,0 +1,41 @@
+_1 ok installed "shapes"
+_2 data program name="shapes" origin=program inputs=["shapes"] imports=[] exports=["shapes::shapes", "shapes::kinds"]
+_2 data trace name="shapes::kinds" importers=0
+_2 data trace name="shapes::shapes" importers=0
+_2 ok
+_3 ok fed "shapes" input "shapes" at t=0
+_4 ok fed 2 rows to "shapes" input "shapes" at t=0
+_5 ok fed "shapes" input "shapes" at t=2
+_6 ok sealed "shapes" input "shapes" to 1
+_7 data 0 val=1
+_7 data 1 val=2
+_7 ok as-of=0
+_8 data 1 val=inject(0,5)
+_8 data 2 val=inject(1,tuple(3,4))
+_8 data 3 val=inject(1,tuple(1,1))
+_8 ok as-of=0
+_9 data 2 val=inject(1,tuple(3,4))
+_9 ok as-of=0
+_10 ok fed "shapes" input "shapes" at t=1
+_11 ok sealed "shapes" input "shapes" to 3
+_12 data 0 val=1
+_12 data 1 val=2
+_12 ok as-of=0
+_13 data 0 val=1
+_13 data 1 val=1
+_13 ok as-of=1
+_14 data 0 val=2
+_14 data 1 val=1
+_14 ok as-of=2
+_15 ok installed "counter"
+_16 ok ran 4 commands
+_22 data 7 val=2
+_22 data 8 val=1
+_22 ok as-of=0
+_23 err feed: val "inject(oops)": expected an integer at byte 7, found `oops)`
+_24 err no trace "nope"
+_25 err trace "shapes::kinds" is not closed at 9: input/import frontier 3; advance its inputs and imports before reading
+_26 ok dropped "counter"
+_27 ok dropped "shapes"
+_28 ok
+_29 ok bye

@@ -1,0 +1,12 @@
+-- The nodes reachable from the roots.
+-- A loop body says how one round's results make the next round's; `set` names the result.
+
+let edges = input "edges" : (int, int);   -- (src, dst)
+let roots = input "roots" : (int, ());
+
+reach: {
+    let proposals = reach | join(edges, (_, (_, dst)) -> (dst, ()));
+    set reach = roots + proposals | distinct;
+}
+
+output "reach" = reach::reach;

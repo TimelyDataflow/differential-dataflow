@@ -1,0 +1,4 @@
+-- The orders the other programs here read. Install it once, and bind each reader's `orders`
+-- input to its output at load, as `orders=shop::orders`.
+
+output "orders" = input "orders" : (int, (int, int));   -- (order, (customer, amount))

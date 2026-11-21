@@ -1,0 +1,16 @@
+enum Tier = Known int | Unknown;
+-- Time lanes: epoch.
+-- Bound inputs use provider arrangements; history advances to G = (0, []).
+let orders = input "orders" : (int, (int, int));
+let customers = input "customers" : (int, int);
+let by_customer = orders | map((order, (customer, _)) -> (customer, order));
+let by_customer_idx = by_customer | arrange;
+let customers_idx = customers | arrange;
+let matched = by_customer_idx | join(customers_idx, (c, (order, tier)) -> (order, (c, tier inject Tier::Known)));
+let unmatched_join = by_customer_idx | join(customers_idx, (c, (order, _)) -> (c, order));
+let unmatched_neg = unmatched_join | negate;
+let unmatched = by_customer + unmatched_neg;
+let orders_map = unmatched | map((c, order) -> (order, (c, () inject Tier::Unknown)));
+let orders_rows = matched + orders_map;
+-- Renderer: build an export arrangement.
+output "orders" = orders_rows;

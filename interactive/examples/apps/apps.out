@@ -1,0 +1,61 @@
+_1 ok installed "demo"
+_2 ok fed 3 rows to "demo" input 1 at t=0
+_3 ok fed 4 rows to "demo" input 0 at t=0
+_4 ok sealed "demo" input 0 to []
+_5 ok sealed "demo" input 1 to []
+_6 ok sealed "demo" input 2 to 1
+initial data tuple(inject(0,1),100) val=inject(0,tuple())
+initial data tuple(inject(0,2),100) val=inject(2,tuple())
+initial data tuple(inject(0,2),200) val=inject(1,tuple())
+initial data tuple(inject(0,3),100) val=inject(1,tuple())
+initial data tuple(inject(0,3),200) val=inject(1,tuple())
+initial data tuple(inject(1,10),100) val=inject(2,tuple())
+initial data tuple(inject(1,10),200) val=inject(1,tuple())
+initial data tuple(inject(1,11),100) val=inject(2,tuple())
+initial data tuple(inject(1,11),200) val=inject(1,tuple())
+initial ok as-of=0
+_7 ok fed "demo" input 2 at t=1
+_8 ok sealed "demo" input 2 to 2
+blocked data tuple(inject(0,1),100) val=inject(0,tuple())
+blocked data tuple(inject(0,2),200) val=inject(1,tuple())
+blocked data tuple(inject(0,3),200) val=inject(1,tuple())
+blocked data tuple(inject(1,10),200) val=inject(1,tuple())
+blocked data tuple(inject(1,11),200) val=inject(1,tuple())
+blocked ok as-of=1
+lookup ok as-of=1
+_9 ok fed "demo" input 2 at t=2
+_10 ok sealed "demo" input 2 to 3
+restored data tuple(inject(0,3),100) val=inject(1,tuple())
+restored ok as-of=2
+_11 ok installed "eg"
+_12 ok fed "eg" input 0 at t=0
+_13 ok fed "eg" input 0 at t=0
+_14 ok fed "eg" input 0 at t=0
+_15 ok sealed "eg" input 0 to 1
+_16 data 0 val=0
+_16 data 1 val=1
+_16 data 2 val=2
+_16 ok as-of=0
+_17 ok fed "eg" input 0 at t=1
+_18 ok sealed "eg" input 0 to 2
+_19 data 0 val=0
+_19 data 1 val=1
+_19 data 2 val=2
+_19 data 3 val=2
+_19 ok as-of=1
+_20 ok fed "eg" input 0 at t=2
+_21 ok sealed "eg" input 0 to 3
+_22 data 0 val=0
+_22 data 1 val=1
+_22 data 2 val=2
+_22 data 3 val=2
+_22 data 4 val=2
+_22 ok as-of=2
+_23 ok fed "eg" input 0 at t=3
+_24 ok sealed "eg" input 0 to 4
+_25 data 0 val=0
+_25 data 1 val=1
+_25 data 2 val=2
+_25 data 3 val=2
+_25 ok as-of=3
+_26 ok bye
