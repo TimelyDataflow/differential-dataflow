@@ -15,7 +15,7 @@ let nodes = edges | map((a, _) -> (a, ())) | distinct;
 cc: {
     -- The inner time is (epoch, round): `0` leaves the epoch alone and sets the round.
     let seeds = nodes | map((n, _) -> (n, n)) | delay((_, n) -> (0, (256, n call bit_length) mul));
-    let proposals = labels | join(edges, (_, label, dst) -> (dst, label));
+    let proposals = labels | join(edges, (_, (label, dst)) -> (dst, label));
     set labels = seeds + proposals | min;
 }
 

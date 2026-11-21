@@ -1,4 +1,4 @@
-# Sum per key with `count`: see sum.ddp.
+# Sum per key with `sum`: see sum.ddp.
 # Run from interactive/: ddir_server < examples/recipes/sum.txt
 load sum from examples/recipes/sum.ddp
 

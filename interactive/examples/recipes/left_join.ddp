@@ -11,7 +11,7 @@ let orders = input 0 : (int, int);             -- (order, customer)
 let customers = input 1 : (int, List(int));    -- (customer, name); a string is a list of bytes
 
 let by_customer = orders | map((order, customer) -> (customer, order));
-let matched = by_customer | join(customers, (c, order, name) -> (order, (c, name inject Known)));
-let unmatched = by_customer - (by_customer | join(customers, (c, order, _) -> (c, order)));
+let matched = by_customer | join(customers, (c, (order, name)) -> (order, (c, name inject Known)));
+let unmatched = by_customer - (by_customer | join(customers, (c, (order, _)) -> (c, order)));
 
 output "orders" = matched + (unmatched | map((c, order) -> (order, (c, () inject Unknown))));

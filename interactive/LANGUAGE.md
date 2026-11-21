@@ -11,9 +11,7 @@ For the commands that load programs, feed them and read them, see the [server re
 -- Total sales per store, kept current as sales and refunds arrive.
 let sales = input 0 : (int, int);    -- (store, amount)
 
-output "total" = sales
-    | join_function((store, amount) -> ((store, ()), 0, amount) enlist)
-    | count;
+output "total" = sales | sum;
 ```
 
 A session loads it, feeds rows at times, closes those times, and reads the result:
@@ -135,8 +133,12 @@ The operators in this group are functions of data: a result at time `t` depends 
 
 ### Joins
 
-The reference form is `join(other, (k, v1, v2) -> (k2, v3))`.
-For each key it pairs every row on the left with every row on the right, and multiplies their diffs.
+The reference form is `join(other)`.
+For each key it pairs every row `(k, v1)` on the left with every row `(k, v2)` on the right, giving `(k, (v1, v2))`, and multiplies their diffs.
+
+| Sugar | Expansion |
+|---|---|
+| `join(other, (k, (v1, v2)) -> (k2, v3))` | `join(other) \| map((k, (v1, v2)) -> (k2, v3))`, without building the joined rows |
 
 [Join fragments](#join-fragments) are sugar for a chain of `join`s.
 
@@ -166,12 +168,13 @@ It groups rows by key.
 |---|---|---|
 | `min` | the least value | `reduce(limit 1, (k, vals) -> (vals head .0, 1) enlist)` |
 | `count` | the sum of the diffs | `map((k, _) -> (k, ())) \| reduce((k, vals) -> (vals head .1, 1) enlist)` |
+| `sum` | the sum of the integer values, each weighted by its diff | `lift \| join_function((k, (v, t)) -> ((k, ()), t, v) enlist) \| count` |
 | `distinct` | each present value once | `reduce((k, vals) -> vals map ((v, _) -> (v, 1)))` |
 | `collect` | a `List` of the values, each repeated by its count | `reduce((k, vals) -> (vals map ((v, d) -> (v, (0, d) range) cap_list map ((v, _) -> v)) flatten .1, 1) enlist)` |
 
 When the value is not `()`, `count` drops it first and `distinct` keys by the whole record, so neither reduce reads a key's values together.
 
-`count` adds diffs, which makes it the way to sum integers: move the value into the diff with `join_function`, then `count` ([`sum`](examples/recipes/sum.ddp)).
+`sum` moves each value into its diff and counts, so it costs what `count` costs. Its `lift` only hands `join_function` each row's own time, which leaves the time as it is at any depth ([`sum`](examples/recipes/sum.ddp)).
 A key whose diffs sum to zero has no row, so a total of zero is absent.
 There is no `max` or top-k operator; negate the value and use `min` or `reduce(limit n, ...)`, through a tree of groups for large inputs ([`top_k`](examples/recipes/top_k.ddp)).
 
@@ -183,7 +186,8 @@ None of them is sugar.
 | Operator | Result |
 |---|---|
 | `lift` | each value paired with its row's time: `(k, (v, t))` |
-| `half_join(other, strict, (k, v1, v2) -> (k2, v3))` | for a lifted stream `(k, (v, t))`: each update meets `other`'s rows whose times come before `t` (strictly when `strict`, a bool written `0` or `1`, is `1`); `other`'s own changes produce nothing |
+| `half_join(other, strict)` | for a lifted stream `(k, (v1, t))`: each update meets `other`'s rows `(k, v2)` whose times come before its own (strictly when `strict`, a bool written `0` or `1`, is `1`), giving `(k, ((v1, v2), t2))` at the update's time, where `t2` is the later of the two times, coordinate by coordinate; `other`'s own changes produce nothing |
+| `half_join(other, strict, f)` | `half_join(other, strict) \| map(f)`, without building the joined rows |
 
 `half_join` is the building block of delta joins, which never build the intermediate results of a multiway join; see the [`triangles`](examples/recipes/triangles.ddp) recipe.
 A loop's round is the last coordinate of `lift`'s time.
@@ -198,7 +202,7 @@ A loop's round is the last coordinate of `lift`'s time.
 
 ## Lambdas
 
-A lambda runs `let pattern = input in body`, where `input` is the tuple of the operator's rows: `(key, value)` for a row-by-row operator, `(key, left value, right value)` for a join, and `(key, vals)` for `reduce`.
+A lambda runs `let pattern = input in body`, where `input` is the tuple of the operator's rows: `(key, value)` for a row-by-row operator, `(key, (left value, right value))` for a join, and `(key, vals)` for `reduce`.
 The language is corgi's.
 
 Patterns are names, `_`, and tuples of patterns, each optionally with a shape: `((src, dst), ())`, `(k, v : int)`.

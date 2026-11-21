@@ -20,18 +20,18 @@ let pairs = down | arrange;                      -- keyed by the whole edge
 
 -- A change to E(a, b): find E(a, c), then check E(b, c).
 let p1 = out | lift
-    | half_join(out, 0, (a, b, c) -> ((b, c), a))
+    | half_join(out, 0, (a, ((b, c), t)) -> ((b, c), (a, t)))
     | filter(((b, c), _) -> (b, c) gt)
-    | half_join(pairs, 0, ((b, c), a, ()) -> (a, (b, c)));
+    | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
 -- A change to E(a, c): find E(a, b) strictly earlier, then check E(b, c).
 let p2 = out | lift
-    | half_join(out, 1, (a, c, b) -> ((b, c), a))
+    | half_join(out, 1, (a, ((c, b), t)) -> ((b, c), (a, t)))
     | filter(((b, c), _) -> (b, c) gt)
-    | half_join(pairs, 0, ((b, c), a, ()) -> (a, (b, c)));
+    | half_join(pairs, 0, ((b, c), ((a, ()), t)) -> (a, ((b, c), t)));
 -- A change to E(b, c): find E(a, b) and then E(a, c), both strictly earlier.
 let p3 = down | map(((b, c), ()) -> (b, c)) | lift
-    | half_join(rev, 1, (b, c, a) -> ((a, c), b))
-    | half_join(pairs, 1, ((a, c), b, ()) -> (a, (b, c)));
+    | half_join(rev, 1, (b, ((c, a), t)) -> ((a, c), (b, t)))
+    | half_join(pairs, 1, ((a, c), ((b, ()), t)) -> (a, ((b, c), t)));
 
 -- Each found triangle carries the time of the change that found it; `delay` puts it there.
 let triangles = (p1 + p2 + p3) | delay((_, (_, t)) -> t) | map((a, (bc, _)) -> (a, bc));

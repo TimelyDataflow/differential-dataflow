@@ -1,13 +1,9 @@
--- Sum an integer per key: move the value into the diff, and `count` adds up the diffs.
+-- Sum an integer per key with `sum`, which adds each key's values weighted by their diffs.
 --
--- `join_function` replaces each row with a list of `((key, val), time, diff)`.
--- Here each sale becomes one row `(store, ())` at its own time (`0` leaves the time as it is),
--- with the amount as its diff; `count` then gives each store the total of its diffs.
+-- `sum` is sugar: it moves each value into its row's diff, and `count` adds up the diffs.
 -- The sum is maintained incrementally, where folding a list of values would rebuild it per change.
 -- A total of zero has no row, like any record whose diffs cancel; it is bounded by `i64`.
 
 let sales = input 0 : (int, int);   -- (store, amount); a refund is a negative amount
 
-output "total" = sales
-    | join_function((store, amount) -> ((store, ()), 0, amount) enlist)
-    | count;
+output "total" = sales | sum;

@@ -18,7 +18,7 @@ let written = put_now | min;
 let touched = (written | map((k, _) -> (k, ()))) + del_now | distinct;
 
 var table : (int, int);
-let kept = table - (table | join(touched, (k, v, ()) -> (k, v)));
+let kept = table - (table | join(touched, (k, (v, ())) -> (k, v)));
 let now = kept + written;
 set table = now;
 

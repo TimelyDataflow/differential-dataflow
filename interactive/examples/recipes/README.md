@@ -16,7 +16,7 @@ After an intended change, `UPDATE_RECIPES=1 cargo test --release -p ddir-server 
 
 | Recipe | Idiom | Use it for |
 |---|---|---|
-| [`sum`](sum.ddp) | `join_function` moves a value into the diff, and `count` adds up the diffs | sums of integers, incrementally |
+| [`sum`](sum.ddp) | `sum` adds each key's values, weighted by their diffs | sums of integers, incrementally |
 | [`top_k`](top_k.ddp) | a tree of `reduce(limit k)` groups | top k over many rows, with small updates |
 | [`retention`](retention.ddp) | `lift` and `delay` retract each row a fixed time after it arrives | sliding windows, expiry |
 | [`upsert`](upsert.ddp) | a root `var` holds the table one time ago; writes count at their own time only | a keyed table with put and delete |
