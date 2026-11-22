@@ -197,6 +197,11 @@ impl<T> ColTimes<T> {
         Ordering::Equal
     }
 
+    /// Whether the rows of `rows` are all one time.
+    pub(crate) fn uniform(&self, rows: std::ops::Range<usize>) -> bool {
+        self.lanes.iter().all(|lane| lane[rows.clone()].iter().all(|x| *x == lane[rows.start]))
+    }
+
     /// Coordinate `j` of row `i`, zero beyond the column's width.
     pub(crate) fn coordinate(&self, j: usize, i: usize) -> u64 { self.at(j, i) }
 
