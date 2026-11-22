@@ -897,7 +897,7 @@ mod tests {
                 chunks(rows, size, key_shape, val_shape).into_iter().map(|chunk| Rc::new(ChunkBatch::new(vec![chunk]))).collect()
             };
             let (source, input, out) = (batches(&prior, 70), batches(&novel, 30), batches(&output, 50));
-            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow() };
+            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow(), present_all: false };
             let mut in_chunks = chunks_of(&source);
             in_chunks.extend(chunks_of(&input));
             // Changed keys, two of them held by no batch, and the input records each retire key holds.

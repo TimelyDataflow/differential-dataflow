@@ -172,6 +172,8 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
         matches: &mut JoinMatches<T, Diff, i64>,
         output: &mut Vec<CorgiContainer<T, Diff>>,
     ) {
+        // The tactic calls `cross` after every block, including those with no matches.
+        if matches.ids.is_empty() { return; }
         let chunks0 = side_chunks(&instance.batches0);
         let chunks1 = side_chunks(&instance.batches1);
         // Project columns before gathering; collision checks still compare the original keys.
@@ -1090,7 +1092,8 @@ mod tests {
                     keys, vals, [row].into_iter().collect(), vec![if row == 0 { 2 } else { -3 }],
                 )]))
             };
-            let instance = JoinInstance { batches0: vec![make(true, 0), make(true, 1)], batches1: vec![make(false, 0), make(false, 1)], lower: 5 };
+            let inputs = Inputs { batches0: vec![make(true, 0), make(true, 1)], batches1: vec![make(false, 0), make(false, 1)], lower: 5 };
+            let instance = inputs.instance();
             let shapes = [if hashed { pair() } else { Shape::Prod(vec![Shape::Int]) }, Shape::Prod(vec![Shape::Int; 4]), Shape::Prod(vec![Shape::Int])];
             for body in ["((), c)", "(k, c)", "(k, v)", "((), ())", if hashed { "let (x, y) = k in (x, c)" } else { "(k, (v, c))" }] {
                 let lambda = Lambda::new(format!("let (k, (a, b, c, d), v) = input in {body}"), &corgi::Scope::default());
@@ -1125,6 +1128,19 @@ mod tests {
         }
     }
 
+    /// A join unit's inputs, owned, for tests to build and change before presenting them.
+    struct Inputs {
+        batches0: Vec<CBatch<u64>>,
+        batches1: Vec<CBatch<u64>>,
+        lower: u64,
+    }
+
+    impl Inputs {
+        fn instance(&self) -> JoinInstance<'_, u64, CBatch<u64>, CBatch<u64>> {
+            JoinInstance { batches0: &self.batches0, batches1: &self.batches1, lower: &self.lower, present_all: false }
+        }
+    }
+
     fn cross_bridges(
         backend: &mut CorgiJoinBackend<u64>,
         instance: &JoinInstance<u64, CBatch<u64>, CBatch<u64>>,
@@ -1154,7 +1170,8 @@ mod tests {
                 ints(vec![7]), CValue::Prod(vec![ints(vec![1]), ints(vec![noise]), ints(vec![3])]),
                 [0].into_iter().collect(), vec![diff],
             )]));
-            let instance = JoinInstance { batches0: vec![make(10, -1), make(11, 1)], batches1: vec![make(12, 1)], lower: 0 };
+            let inputs = Inputs { batches0: vec![make(10, -1), make(11, 1)], batches1: vec![make(12, 1)], lower: 0 };
+            let instance = inputs.instance();
             let lambda = Lambda::new(format!("let (k, (a, _, c), _) = input in {body}"), &corgi::Scope::default());
             let shape = Shape::Prod(vec![Shape::Int; 3]);
             let mut backend = CorgiJoinBackend::new(&lambda, [Shape::Int, shape.clone(), shape]);
@@ -1189,15 +1206,16 @@ mod tests {
                         make(compound, vec![0, i64::MIN as u64, u64::MAX], vec![1, 1, 2], 0),
                         make(compound, vec![0, i64::MIN as u64], vec![-1, -1], 3),
                     ];
-                    let mut instance = JoinInstance { batches0: side(compound0), batches1: side(compound1), lower: 5 };
+                    let mut inputs = Inputs { batches0: side(compound0), batches1: side(compound1), lower: 5 };
                     if let Some(right) = padded_side {
                         let extra = CorgiChunk::from_columns(
                             wrap(ints(vec![8; 20])), values(vec![0; 20], if right { compound1 } else { compound0 }),
                             (0..20).collect(), vec![1; 20],
                         );
-                        if right { &mut instance.batches1 } else { &mut instance.batches0 }
+                        if right { &mut inputs.batches1 } else { &mut inputs.batches0 }
                             .push(Rc::new(ChunkBatch::new(vec![extra])));
                     }
+                    let instance = inputs.instance();
                     let shape = |v: &CValue| corgi::shape_of_value(v);
                     let mut backend = backend([shape(&wrap(ints(vec![7]))), shape(&values(vec![0], compound0)), shape(&values(vec![0], compound1))]);
                     let (mut left, mut right) = (Vec::new(), Vec::new());
@@ -1214,7 +1232,9 @@ mod tests {
                     assert_eq!(output[0].vals, CValue::Prod(vec![values(vec![u64::MAX], compound0), values(vec![u64::MAX], compound1)]));
                     assert_eq!(output[0].diffs, vec![4]);
                     assert_eq!(output[0].times.get(0), 5);
-                    instance.batches0.push(make(compound0, vec![u64::MAX], vec![-2], 3));
+                    drop(instance);
+                    inputs.batches0.push(make(compound0, vec![u64::MAX], vec![-2], 3));
+                    let instance = inputs.instance();
                     left.clear(); right.clear();
                     backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
                     assert!(left.is_empty() && right.is_empty(), "suppress a fully cancelled key");
@@ -1229,7 +1249,8 @@ mod tests {
         let make = |keys: Vec<i64>| Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
             CValue::i64(keys.clone()), CValue::i64(keys.clone()), keys.iter().map(|_| 0u64).collect(), vec![1; keys.len()],
         )]));
-        let instance = JoinInstance { batches0: vec![make(vec![i64::MIN, -5, 3])], batches1: vec![make(vec![-5, -1, 3])], lower: 0 };
+        let inputs = Inputs { batches0: vec![make(vec![i64::MIN, -5, 3])], batches1: vec![make(vec![-5, -1, 3])], lower: 0 };
+        let instance = inputs.instance();
         let mut backend = backend([Shape::Int, Shape::Int, Shape::Int]);
         let (mut from, mut left, mut right) = (KeyPosition::Start, Vec::new(), Vec::new());
         while from != KeyPosition::End {
@@ -1262,7 +1283,8 @@ mod tests {
                 vec![if chunk < 4 { 1 } else { -1 }; rows.len()],
             )]))
         }).collect();
-        let instance = JoinInstance { batches0: batches.clone(), batches1: batches, lower: 5 };
+        let inputs = Inputs { batches0: batches.clone(), batches1: batches, lower: 5 };
+        let instance = inputs.instance();
         let mut backend = backend([Shape::Int, pair(), pair()]);
         let (mut left, mut right) = (Vec::new(), Vec::new());
         backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
@@ -1349,11 +1371,12 @@ mod tests {
         let collision = PULL as u64 + 1;
         let mut rows: Vec<_> = (0..collision).map(|id| (id, id, 0)).collect();
         rows.extend([(collision, 7, 0), (collision, 8, 0)]);
-        let instance = JoinInstance {
+        let inputs = Inputs {
             batches0: vec![batch(&rows)],
             batches1: vec![batch(&rows)],
             lower: 0,
         };
+        let instance = inputs.instance();
         let mut backend = backend([pair(), Shape::Int, Shape::Int]);
         let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());
@@ -1374,15 +1397,16 @@ mod tests {
     #[test]
     fn block_checks_compare_real_keys_across_sides_and_chunks() {
         for padded in [None, Some(false), Some(true)] {
-            let mut instance = JoinInstance {
+            let mut inputs = Inputs {
                 batches0: vec![batch(&[(4, 1, 0), (5, 2, 0), (6, 3, 0)])],
                 batches1: vec![batch(&[(4, 9, 0), (5, 2, 0), (6, 3, 0)]), batch(&[(6, 4, 0)])],
                 lower: 0,
             };
             if let Some(right) = padded {
                 let padding: Vec<_> = (100..150).map(|id| (id, id, 0)).collect();
-                if right { &mut instance.batches1 } else { &mut instance.batches0 }.push(batch(&padding));
+                if right { &mut inputs.batches1 } else { &mut inputs.batches0 }.push(batch(&padding));
             }
+            let instance = inputs.instance();
             let mut backend = backend([pair(), Shape::Int, Shape::Int]);
             let (mut left, mut right) = (Vec::new(), Vec::new());
             backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
@@ -1397,11 +1421,12 @@ mod tests {
         let left_rows = [(collision, 7, 0), (collision, 8, 0)];
         let mut right_rows: Vec<_> = (0..8).map(|id| (id, id, 0)).collect();
         right_rows.extend([(collision, 7, 0), (collision, 8, 0)]);
-        let instance = JoinInstance {
+        let inputs = Inputs {
             batches0: vec![batch(&left_rows)],
             batches1: vec![batch(&right_rows)],
             lower: 0,
         };
+        let instance = inputs.instance();
         let mut backend = backend([pair(), Shape::Int, Shape::Int]);
         let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());

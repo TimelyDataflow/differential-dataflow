@@ -2,6 +2,12 @@
 //!
 //! A conventional differential reduce against ordered, copyable proxies.
 //! The backend supplies their interpretation.
+//!
+//! A backend need not present every key.
+//! A key that is not owed a carried time, and where [`direct`] finds the one time it can change at in the retire,
+//! needs one evaluation, over its records at or before that time.
+//! A backend may do that itself, *completing* the key, and leave it out of the window.
+//! What the tactic adds is the schedule for a key with several times to evaluate at: which they are, in what order, and what each must read.
 
 use super::pending::Pending;
 
@@ -25,6 +31,38 @@ pub struct ReduceInstance<'a, T, B1, B2> {
     pub output_batches: &'a [B2],
     /// The compaction frontier for loading (the retire's lower bound).
     pub lower: AntichainRef<'a, T>,
+    /// The backend must present every key, and complete none itself.
+    ///
+    /// Set by a caller that reads the presentations other than as the backend stores them,
+    /// as [`BackendFrontier`](super::BackendFrontier) does for a retire it reads as of a frontier.
+    pub present_all: bool,
+}
+
+/// The one time a key's reduction can change at in a retire, if there is such a time.
+///
+/// `seeds` are the key's raw novel times, and `records` the times of its input and output records.
+/// The answer is `Some(at)` when `at` is the key's only seed, is not at or beyond `upper`, and every record is either at or before `at`,
+/// or joins with `at` to a time at or beyond `upper`.
+///
+/// Each interesting time of the key is a join of a seed with records. Here that is `at`, or the join of `at` with records
+/// not at or before it, which the retire does not reach. So the retire evaluates the key at `at` alone, where the accumulations
+/// are the records at or before `at`. The other records' joins with `at` are times to carry to later retires.
+///
+/// A backend completes such a key by evaluating it once over its input and output records at or before `at`, committing
+/// the difference at `at` to the batch in progress, and reporting the carried times in [`ReduceWindow::carried`].
+/// It may leave out of the carried times those whose records net to nothing once each is advanced to its join with `at`.
+/// This function is the test; a backend that reads times in its own layout must agree with it.
+pub fn direct<'a, T: Timestamp + Lattice>(
+    seeds: impl IntoIterator<Item = &'a T>,
+    records: impl IntoIterator<Item = &'a T>,
+    upper: AntichainRef<'_, T>,
+) -> Option<&'a T> {
+    let mut seeds = seeds.into_iter();
+    let at = seeds.next()?;
+    (seeds.all(|seed| seed == at)
+        && !upper.less_equal(at)
+        && records.into_iter().all(|time| time.less_equal(at) || upper.less_equal(&time.join(at)))
+    ).then_some(at)
 }
 
 /// One window of the key space: the presentations a bounded, key-contiguous snip needs.
@@ -47,10 +85,13 @@ pub struct ReduceWindow<T, RIn, ROut, K = u64, VIn = u64, VOut = u64> {
     pub seeds: Vec<(K, T)>,
     /// Accumulated output preceding the retire's interval, same ordering as `input`.
     pub output: ProxyBridge<T, ROut, K, VOut>,
+    /// The interesting times, at or beyond the retire's `upper`, of the keys the backend completed
+    /// rather than presented: `(time, key)` pairs, in any order.
+    pub carried: Vec<(T, K)>,
 }
 
 impl<T, RIn, ROut, K, VIn, VOut> Default for ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
-    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
+    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new(), carried: Vec::new() } }
 }
 
 impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
@@ -59,6 +100,7 @@ impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
         self.input.clear();
         self.seeds.clear();
         self.output.clear();
+        self.carried.clear();
     }
 }
 
@@ -96,6 +138,12 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// For each key, present merged input (novel and prior together, netted), raw novel time support in `seeds`, and accumulated output.
     /// A key must be reported entirely within the window that first mentions it: splitting one across windows drops the interaction between the halves.
     /// `changed` is ascending; the harness reads no key outside the window's range, so a backend that keeps its own key order need not consult the whole space.
+    ///
+    /// The exception is a key the backend *completes*, which it may do for a key not in `changed` where [`direct`] finds its time,
+    /// unless [`ReduceInstance::present_all`] is set.
+    /// It leaves the key out of the window's presentations, commits the key's output to the batch in progress itself,
+    /// and adds the key's carried times to `window.carried`, as [`direct`] describes.
+    /// The retire's `upper`, which that needs, is the upper bound of the description passed to [`Self::begin`].
     ///
     /// `seeds` must be recorded from the novel batches before any consolidation or advancement:
     /// a novel record that nets to zero against compacted history vanishes from `input`, but its
@@ -190,6 +238,7 @@ where
             input_batches: &input_batches,
             output_batches: &output_batches,
             lower: lower.borrow(),
+            present_all: false,
         };
 
         // Split the carried interesting times against `upper`.
@@ -258,16 +307,23 @@ where
             );
             debug_assert!(
                 {
-                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0));
+                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0)).chain(window.carried.iter().map(|c| c.1));
                     keys.all(|k| before <= KeyPosition::At(k) && KeyPosition::At(k) < from)
                 },
                 "next_window must report a key entirely within the window that first mentions it",
             );
+            debug_assert!(
+                window.carried.iter().all(|(time, _)| upper.less_equal(time)),
+                "next_window must carry only times at or beyond the retire's upper bound",
+            );
+            // The times the backend's completed keys carry.
+            self.pending.insert(std::mem::take(&mut window.carried));
 
             deltas.clear();
 
             // The window's keys are the proxies its presentations mention: the least of the three
-            // heads, each iteration, until all three are drained. A `changed` key that appears in
+            // heads, each iteration, until all three are drained. Keys the backend completed are
+            // absent, and done. A `changed` key that appears in
             // none of them has no records at all, so its reduction has nothing to read and nothing
             // to retract — the time its due moment would raise reaches the evaluation gate with an
             // empty input and an empty output, and produces nothing. Skipping it is exactly what

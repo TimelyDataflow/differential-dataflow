@@ -55,6 +55,14 @@
 //!   `since`, which is all a trace read as of `since` promises its readers anyway: for `t'` beyond
 //!   `since`, `advance(t ∨ c) ≤ t' ⟺ t ≤ t' ∧ c ≤ t'`, and `c ≤ lower ≤` the fresh time `≤ t'`.
 //!
+//! # Keys the inner backend completes
+//!
+//! A backend may complete a key itself rather than present it, and the wrapper sees only what is
+//! presented. Where the unit's bound is beyond `since` the wrapper changes nothing, and the
+//! argument above is for any inner backend, so the inner backend may complete what it likes. For a
+//! unit the wrapper reads, it asks the inner backend to present every key (`present_all`), and the
+//! reading above applies to all of them.
+//!
 //! # The join reads both inputs
 //!
 //! Reading one input of a join as of `since` and reading both agree at every time beyond `since`,
@@ -148,14 +156,17 @@ where
 
     fn advance(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
+        instance: &JoinInstance<'_, T, B0, B1>,
         from: &mut KeyPosition<Self::Key>,
         bridge0: &mut ProxyBridge<T, Self::R0, Self::Key, Self::V0>,
         bridge1: &mut ProxyBridge<T, Self::R1, Self::Key, Self::V1>,
     ) {
-        self.inner.advance(instance, from, bridge0, bridge1);
         // Every output time is at or beyond the fresh input's times, hence `lower`: beyond `since`.
-        if self.since.is_empty() || self.since.less_equal(&instance.lower) { return; }
+        if self.since.is_empty() || self.since.less_equal(instance.lower) {
+            return self.inner.advance(instance, from, bridge0, bridge1);
+        }
+        // What is read as of `since` must be presented to be read.
+        self.inner.advance(&JoinInstance { present_all: true, ..*instance }, from, bridge0, bridge1);
         // A key whose updates net away on one side has nothing to match, and the harness requires
         // the bridges' keys to agree.
         let moved0 = read_as_of(bridge0, &self.since);
@@ -168,7 +179,7 @@ where
 
     fn cross(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
+        instance: &JoinInstance<'_, T, B0, B1>,
         matches: &mut JoinMatches<T, Self::ROut, Self::Key, Self::V0, Self::V1>,
         output: &mut Vec<Self::Output>,
     ) {
@@ -198,10 +209,13 @@ where
         from: &mut KeyPosition<Self::Key>,
         window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
     ) {
-        self.inner.next_window(instance, changed, from, window);
         // The retire evaluates only at times at or beyond `lower`; beyond `since`, a record and
         // its advanced self accumulate and synthesize alike.
-        if self.since.is_empty() || instance.lower.iter().all(|time| self.since.less_equal(time)) { return; }
+        if self.since.is_empty() || instance.lower.iter().all(|time| self.since.less_equal(time)) {
+            return self.inner.next_window(instance, changed, from, window);
+        }
+        // What is read as of `since` must be presented to be read.
+        self.inner.next_window(&ReduceInstance { present_all: true, ..*instance }, changed, from, window);
         // The input, novel and prior merged, is read as of `since`; so is the novel time support,
         // which seeds the retire's interesting times. The output is the operator's own, at times
         // beyond `since` already.
