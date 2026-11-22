@@ -609,6 +609,46 @@ fn reduce_prior_advanced_past_novel() {
     assert!(pending.is_empty());
 }
 
+/// Advancing a prior record by the meet of the seeds can move it past `upper` while its join with
+/// a seed is still owed. Prior `(0,1,0)` advances by the meet `(0,0,1)` of seeds `(0,0,2)` and
+/// `(1,0,1)` to `(0,1,1)`, which is past `upper`. Its join with `(0,0,2)`, at `(0,1,2)`, must be
+/// pended, as the value is present twice there. Two dimensions cannot produce this case.
+#[test]
+fn reduce_unreached_time_past_upper_pends_joins() {
+    type T = Product<u64, Product<u64, u64>>;
+    let time = |a, b, c| -> T { Product::new(a, Product::new(b, c)) };
+    let updates = vec![((7u64, 3u64), time(0, 1, 0), 1i64), ((7, 3), time(0, 0, 2), 1), ((7, 3), time(1, 0, 1), 1)];
+    let prior = hbatch(updates[.. 1].to_vec(), time(0, 0, 0), time(0, 0, 1));
+    let novel = hbatch(updates[1 ..].to_vec(), time(0, 0, 1), time(0, 1, 1));
+    let frontier = Antichain::from_elem;
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+    let (first, pending) = tactic.retire(
+        vec![], vec![], vec![prior.clone()],
+        &frontier(time(0, 0, 0)), &frontier(time(0, 0, 1)), &frontier(time(0, 0, 0)),
+    );
+    assert!(pending.is_empty());
+    let mut outputs: Vec<_> = first.into_iter().filter_map(|s| s.inner).collect();
+    let (second, pending) = tactic.retire(
+        vec![prior.clone()], outputs.clone(), vec![novel.clone()],
+        &frontier(time(0, 0, 1)), &frontier(time(0, 1, 1)), &frontier(time(0, 0, 1)),
+    );
+    outputs.extend(second.into_iter().filter_map(|s| s.inner));
+    // No new records: the rest of the work is the pending times.
+    let (third, pending) = tactic.retire(
+        vec![prior, novel], outputs.clone(), vec![],
+        &frontier(time(0, 1, 1)), &frontier(time(3, 3, 3)), &pending,
+    );
+    assert!(pending.is_empty());
+    outputs.extend(third.into_iter().filter_map(|s| s.inner));
+    let outputs = hread(&outputs);
+    for (a, b, c) in (0 .. 3).flat_map(|a| (0 .. 3).flat_map(move |b| (0 .. 3).map(move |c| (a, b, c)))) {
+        let at = time(a, b, c);
+        let count: i64 = updates.iter().filter(|(_, t, _)| timely::PartialOrder::less_equal(t, &at)).map(|(_, _, d)| d).sum();
+        let output: i64 = outputs.iter().filter(|(_, t, _)| timely::PartialOrder::less_equal(t, &at)).map(|(_, _, d)| d).sum();
+        assert_eq!(output, if count > 0 { 1 } else { 0 }, "at {at:?}");
+    }
+}
+
 // ===== Reading as of a time =====
 //
 // A trace's accumulations are correct only at or beyond its compaction frontier: compaction can

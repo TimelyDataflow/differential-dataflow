@@ -412,7 +412,13 @@ mod history_replay {
                 // We have no particular guarantee that known times will not be in advance of `upper_limit`.
                 // We may have the guarantee that synthetic times will not be, as we test against the limit
                 // before we add the time to `synth_times`.
-                if !upper_limit.less_equal(&next_time) {
+                //
+                // An uninteresting time in advance of `upper_limit` still needs its synthetic times. With
+                // partially ordered times, advancing history by `meet` can move a time from before the
+                // interval to beyond it. Its joins with batch times and `times_current` are interesting,
+                // and no later interval finds them, as it seeds only from its own batch and pending times.
+                // The joins are also in advance of `upper_limit`, so the determination below defers them.
+                if !interesting || !upper_limit.less_equal(&next_time) {
 
                     // DETERMINATION (times only). Determine synthetic interesting times.
                     //
