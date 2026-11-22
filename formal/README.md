@@ -37,6 +37,8 @@ It proves soundness (`advance_le_iff`: at or beyond the frontier, the representa
 These are pointwise facts about one time and one frontier; `Differential/Model.lean` handles consolidation and the correctness of computations reading compacted state across rounds.
 
 `Differential/Model.lean` proves end-to-end stream correctness for the incremental operator of `TARGETS2.md`: rounds delimited by antichain frontiers, a truncated join-closure enumeration with a carried pending set, and logical compaction modeled as an ADVERSARY that may re-represent the stored input and output arbitrarily, subject only to preserving accumulations at or beyond the frontier.
+The enumeration may read the round's input and output through a VIEW that agrees with them on an upper set holding every seed (`Enumerates`), for example the state cancelled by a time below every seed (`meet_view_agrees`).
+Cancelling within a round is then a finer schedule: split the round at intermediate frontiers, and let each piece cancel by a time below its own seeds; the run is correct at every frontier it passes (`Run.correct_at`).
 The goal theorem (`Model.Run.stream_correct`, quantified as `Model.streamCorrectness_holds`) is unconditional: every run, under every such adversary, emits corrections that accumulate to the reduction of the true input at every finalized time; once the frontier empties the emitted stream is THE difference trace of the output (`update_ext`, `Run.emitted_unique`).
 The enumeration's ground set includes the stored output support (TARGETS2's step 2, as amended there); whether the OUTPUT-FREE enumeration also suffices is the open question recorded in TARGETS2's amendment note.
 TARGETS2.md states the model in prose; the file header of `Model.lean` has a sentence-by-sentence correspondence table, and `scenario1Run` checks TARGETS2's cancellation scenario end to end.
@@ -70,7 +72,8 @@ Only the pended time knows.
 Within a round the closure is not even completed: a join crossing `upper` is recorded at its first crossing and closed no further.
 When the frontier passes it, it enters `N`, and closing it against the stored times regenerates the deeper joins — the pend resumes a suspended closure computation.
 Resuming from the CURRENT representatives is sound by the first observation: the debt above a due pend is re-derived from the compacted input and output, so the resumption needs nothing that compaction could have destroyed.
-A pend carries no other content — the implementation's own comment, "we know nothing about why we were warned", is the honest reading — which is also why over-warning is harmless and the model asks only that the recorded pends be CONTAINED in the new pending set (`Step.pending_super`).
+A pend carries no other content — the implementation's own comment, "we know nothing about why we were warned", is the honest reading — which is also why over-warning is harmless and the model asks only that each recorded pend be at or above some time of the new pending set (`Enumerates.pending_below`).
+A pend is a witness, not an address: only the upper set the pending times generate matters for correctness, and pending a lower time in place of a higher one costs work, never correctness.
 
 ## Building
 

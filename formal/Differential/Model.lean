@@ -27,16 +27,19 @@ Correspondence with TARGETS2.md:
   advance-and-consolidate is one instance of the adversary
 * "The operator, abstracted", steps 1–4 → `seedSet`, `Reached`/`activeSet`/`pendedSet`
   (step 2, with the truncated closure: a time reached in `Beyond upper` is closed no
-  further), the `emit_*` fields of `Step` (step 3), the `pending_*` fields of `Step`
-  (step 4, relaxed: the implementation may warn about MORE times than the enumeration
-  defers, so long as they stay beyond the frontier; `Step.of_pending_eq` recovers the
-  exact choice)
+  further; the enumeration may join against a VIEW of the state, `viewReached` and
+  `Enumerates`, such as the state cancelled by a time below every seed,
+  `meet_view_agrees`), the `emit_*` fields of `Enumerates` (step 3), the `pending_*`
+  fields of `Enumerates` and `Step` (step 4, relaxed: the implementation may warn about
+  MORE times than the enumeration defers, so long as they stay beyond the frontier, and
+  may warn about a LOWER time in place of a deferred one; `Step.of_pending_eq` recovers
+  the exact choice)
 * "The goal theorem"                  → `Run.StreamCorrect`, `StreamCorrectness`
 * "The round invariant"               → `Run.INV` (clause 1 = finalized correctness,
   clause 2 = pending coverage); `inv_zero` is the base case
 * "Sanity scenarios"                  → `scenario1_cancels` (the adversary may store the
   empty set while the pending join owes a retraction), `Reached.absorb` (a stored time
-  at/above an interesting time is itself interesting), `Step.reached_beyond_pended` and
+  at/above an interesting time is itself interesting), `Enumerates.reached_beyond_pended` and
   `active_not_beyond` (a reached time beyond `upper` is deferred, never evaluated)
 -/
 
@@ -80,7 +83,15 @@ of every time still to be examined, and consolidates.  Because `m` is at or belo
 everything the round still reads, this needs no adversary move at all: the two lemmas
 below (TARGETS2.md's *join preservation*, specialized to a one-element frontier) say the
 compacted buffer yields the same accumulation at every remaining evaluation point and the
-same join against every remaining seed as the uncompacted history would. -/
+same join against every remaining seed as the uncompacted history would.
+
+Consolidation can also CANCEL: updates that land on the same time and sum to zero vanish,
+and their times stop being join partners.  That is licensed by reading the round through a
+view (`Enumerates`, `meet_view_agrees`): a round may enumerate against its input cancelled
+by any time below its own seeds.  Cancelling by a meet that rises during the round is the
+same as running a finer schedule, split at intermediate frontiers, each piece cancelling by
+a time below its own seeds; every such run is correct at every frontier it passes
+(`Run.correct_at`). -/
 
 /-- Advancing by a meet below `t` and consolidating leaves the accumulation at `t`
     unchanged. -/
@@ -106,12 +117,19 @@ structure State (T : Type*) (A : Type*) [SemilatticeSup T] [AddCommGroup A] wher
 def seedSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
   ↑b.support ∪ (σ.pending \ Beyond upper)
 
+/-- The times available to join against, read through a VIEW `(vS, vO)` of the stored input
+    and output: the view's input times, its (post-consolidation) OUTPUT times, and seeds.
+    A view may be the state itself (`baseSet`), or the state compacted by a time below every
+    seed, with whatever cancels gone (`meet_view_agrees`). -/
+def viewBase (vS vO : T →₀ A) (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
+  ↑vS.support ∪ ↑vO.support ∪ seedSet σ b upper
+
 /-- The times available to join against: stored input times, stored (post-consolidation)
     OUTPUT times, and seeds.  Including the output support is what lets the pending
     coverage be re-derived from current representatives each round (`staleness_rederived`),
     dissolving the re-representation question for the fully general adversary. -/
 def baseSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
-  ↑σ.stored.support ∪ ↑σ.output.support ∪ seedSet σ b upper
+  viewBase σ.stored σ.output σ b upper
 
 /-- Step 2, with the truncated closure: the enumeration seeds on `N`, and joins a reached
     time that is NOT beyond `upper` against base times and other such reached times.  A
@@ -123,33 +141,66 @@ inductive Reached (base : Set T) (N : Set T) (upper : Finset T) : T → Prop
   | joinActive {x y : T} : Reached base N upper x → x ∉ Beyond upper →
       Reached base N upper y → y ∉ Beyond upper → Reached base N upper (x ⊔ y)
 
+/-- The times the enumeration reaches, joining against a view. -/
+def viewReached (vS vO : T →₀ A) (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
+  {x | Reached (viewBase vS vO σ b upper) (seedSet σ b upper) upper x}
+
+/-- The interesting times evaluated this round, enumerating against a view. -/
+def viewActive (vS vO : T →₀ A) (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
+  viewReached vS vO σ b upper \ Beyond upper
+
+/-- The interesting times deferred to later rounds, enumerating against a view. -/
+def viewPended (vS vO : T →₀ A) (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
+  viewReached vS vO σ b upper ∩ Beyond upper
+
 def reachedSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
-  {x | Reached (baseSet σ b upper) (seedSet σ b upper) upper x}
+  viewReached σ.stored σ.output σ b upper
 
 /-- The interesting times evaluated this round. -/
 def activeSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
-  reachedSet σ b upper \ Beyond upper
+  viewActive σ.stored σ.output σ b upper
 
 /-- The interesting times deferred to later rounds. -/
 def pendedSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
-  reachedSet σ b upper ∩ Beyond upper
+  viewPended σ.stored σ.output σ b upper
+
+/-- What a round's enumeration owes, when it joins against the view `(vS, vO)` (TARGETS2
+    steps 2–4).  The view must agree with the stored input and output on some upper set
+    holding every seed; everything the round reads is at or above a seed, so the view
+    accumulates the same there, and its cancellations are invisible to the round.  The
+    emission is supported on the view's active times and is correct there; every time the
+    view's enumeration defers, and every carried pending time, is at or above some time of
+    the new pending set. -/
+structure Enumerates (f : A → A) (upper : Finset T) (b : T →₀ A) (σ : State T A)
+    (vS vO : T →₀ A) (e : T →₀ A) (σ' : State T A) : Prop where
+  view_agrees : ∃ U : Set T, IsUpperSet U ∧ seedSet σ b upper ⊆ U ∧
+    (∀ t ∈ U, acc vS t = acc σ.stored t) ∧ (∀ t ∈ U, acc vO t = acc σ.output t)
+  emit_support : ↑e.support ⊆ viewActive vS vO σ b upper
+  emit_correct : ∀ t ∈ viewActive vS vO σ b upper,
+    acc (σ.output + e) t = f (acc (σ.stored + b) t)
+  pending_below : ∀ x ∈ viewPended vS vO σ b upper ∪ (σ.pending ∩ Beyond upper),
+    ∃ p ∈ σ'.pending, p ≤ x
 
 /-- One round of the operator (TARGETS2 steps 3–4), from the state before the round to the
     state after, delivering batch `b` and advancing the frontier to `upper`.
 
+    The enumeration joins against some view of the state (`Enumerates`); the state itself
+    is one such view (`Step.of_pending_eq`).
     The emission `e` is supported on the active times and makes the output correct there
-    (step 3).  The new pending set CONTAINS the deferred times plus the carried ones, and
-    is confined beyond the frontier (step 4, relaxed): the implementation warns about
-    more times than the enumeration defers — e.g. joins with already-finalized times it
-    kept around "to scare future times" — and over-warning is harmless, since a warned
-    time that owes nothing is evaluated to an empty correction when it comes due.  The
+    (step 3).  Every deferred time, and every carried one, is at or above some time of
+    the new pending set, which is confined beyond the frontier (step 4, relaxed): the
+    implementation warns about more times than the enumeration defers — e.g. joins with
+    already-finalized times it kept around "to scare future times" — and over-warning is
+    harmless, since a warned time that owes nothing is evaluated to an empty correction
+    when it comes due.  It may also warn about a time in place of the deferred joins above
+    it: a reached time beyond `upper` is pended without its joins against the times the
+    sweep has already passed.  Only the upper set the pending times generate matters,
+    because a pend is a witness ("some pending time lies below"), not an address.  The
     new stored input and output are ADVERSARIAL: any update sets whose accumulations
     agree with the true ones on `Beyond upper` ("Compaction, modeled adversarially"). -/
 structure Step (f : A → A) (upper : Finset T) (b : T →₀ A)
     (σ : State T A) (e : T →₀ A) (σ' : State T A) : Prop where
-  emit_support : ↑e.support ⊆ activeSet σ b upper
-  emit_correct : ∀ t ∈ activeSet σ b upper, acc (σ.output + e) t = f (acc (σ.stored + b) t)
-  pending_super : pendedSet σ b upper ∪ (σ.pending ∩ Beyond upper) ⊆ σ'.pending
+  enumerates : ∃ vS vO : T →₀ A, Enumerates f upper b σ vS vO e σ'
   pending_confined : σ'.pending ⊆ Beyond upper
   pending_finite : σ'.pending.Finite
   stored_agrees : ∀ t ∈ Beyond upper, acc σ'.stored t = acc (σ.stored + b) t
@@ -240,12 +291,28 @@ theorem Reached.absorb {base N : Set T} {upper : Finset T} {x y : T}
 theorem active_not_beyond {σ : State T A} {b : T →₀ A} {upper : Finset T} {x : T}
     (hx : x ∈ activeSet σ b upper) : x ∉ Beyond upper := hx.2
 
-/-- Scenario 3, half two: a reached time beyond `upper` is deferred into the next pending
-    set. -/
-theorem Step.reached_beyond_pended {f : A → A} {upper : Finset T} {b : T →₀ A}
-    {σ σ' : State T A} {e : T →₀ A} (hs : Step f upper b σ e σ')
-    {x : T} (hr : x ∈ reachedSet σ b upper) (hb : x ∈ Beyond upper) : x ∈ σ'.pending :=
-  hs.pending_super (Or.inl ⟨hr, hb⟩)
+/-- Scenario 3, half two: a reached time beyond `upper` is deferred: it is at or above a
+    time of the next pending set. -/
+theorem Enumerates.reached_beyond_pended {f : A → A} {upper : Finset T} {b : T →₀ A}
+    {σ σ' : State T A} {vS vO e : T →₀ A} (hs : Enumerates f upper b σ vS vO e σ')
+    {x : T} (hr : x ∈ viewReached vS vO σ b upper) (hb : x ∈ Beyond upper) :
+    ∃ p ∈ σ'.pending, p ≤ x :=
+  hs.pending_below x (Or.inl ⟨hr, hb⟩)
+
+/-- **Cancelling by the meet is a view.**  Compacting the stored input and output by any
+    time `m` at or below every seed — advancing each time to its join with `m` and
+    consolidating, so updates that land together and cancel are gone — agrees with the
+    state on `Above m`, which holds every seed.  A round whose seeds all lie above `m` may
+    therefore enumerate against its input cancelled by `m`.  Splitting a round at more
+    frontiers raises the seeds of each piece, hence the `m` each piece may cancel by: the
+    finer schedule cancels more. -/
+theorem meet_view_agrees {σ : State T A} {b : T →₀ A} {upper : Finset T} {m : T}
+    (hm : ∀ s ∈ seedSet σ b upper, m ≤ s) :
+    ∃ U : Set T, IsUpperSet U ∧ seedSet σ b upper ⊆ U ∧
+      (∀ t ∈ U, acc (Finsupp.mapDomain (· ⊔ m) σ.stored) t = acc σ.stored t) ∧
+      (∀ t ∈ U, acc (Finsupp.mapDomain (· ⊔ m) σ.output) t = acc σ.output t) :=
+  ⟨{t | m ≤ t}, fun _ _ hab ha => le_trans ha hab, hm,
+    fun _ ht => acc_mapDomain_sup _ ht, fun _ ht => acc_mapDomain_sup _ ht⟩
 
 /-- Scenario 1 (cancellation), concretely over `ℕ × ℕ` and `ℤ`: the batch
     `{+1 at (1,0), −1 at (0,1)}` accumulates to zero at every point of `Beyond {(1,1)}`,
@@ -333,6 +400,144 @@ theorem true_change_coverage {u : Finset T} {S I b : T →₀ A} (f : A → A)
       Represents SP d (fun t => f (acc (I + b) t) - f (acc I t)) := by
   obtain ⟨SP, d, hsupp, hrep⟩ := change_term_coverage S b f
   exact ⟨SP, d, hsupp, hrep.congr (fun t => (change_term_eq_stored f hagree hb t).symm)⟩
+
+/-! ## Coverage through a view
+
+The enumeration need not read the stored state.  Any VIEW agreeing with the true input and
+output on an upper set `U` holding every seed will do: everything the round must touch is
+in the view's join-closure, above a seed, or above a pending time not yet due.  The change
+term is covered from the view's support (`view_change_coverage`).  The round-start
+staleness is RE-DERIVED over the view (`view_staleness`): the trace the invariant carries is
+not reused, only the fact that staleness vanishes where no pending time reaches. -/
+
+/-- An update set supported in an upper set accumulates to zero outside it. -/
+theorem acc_zero_off_upper {U : Set T} (hU : IsUpperSet U) {d : T →₀ A}
+    (hd : ↑d.support ⊆ U) {t : T} (ht : t ∉ U) : acc d t = 0 := by
+  unfold acc
+  apply Finset.sum_eq_zero
+  intro x hx
+  simp only [Finset.mem_filter] at hx
+  exact absurd (hU hx.2 (hd hx.1)) ht
+
+/-- Accumulations depend only on the cut over any superset of the support. -/
+theorem acc_cut_congr (d : T →₀ A) {E : Finset T} (hdE : d.support ⊆ E) {s t : T}
+    (hst : Cut E s = Cut E t) : acc d s = acc d t := by
+  have h : Cut d.support s = Cut d.support t := cut_mono_congr hdE hst
+  unfold acc
+  exact congrArg (fun F => ∑ x ∈ F, d x) h
+
+/-- **Change term over a view.**  A view `S` agreeing with the input `I` on an upper set
+    holding the batch support covers the change term `f∘acc(I+b) − f∘acc I`, from its own
+    support.  `true_change_coverage` is the case `U = Beyond u`. -/
+theorem view_change_coverage {U : Set T} (hU : IsUpperSet U) {S I b : T →₀ A} (f : A → A)
+    (hagree : ∀ t ∈ U, acc S t = acc I t) (hb : ↑b.support ⊆ U) :
+    ∃ (SP : Finset T) (d : T → A),
+      (∀ x, d x ≠ 0 → x ∈ cl (S.support ∪ b.support) ∧ ∃ nu ∈ b.support, nu ≤ x) ∧
+      Represents SP d (fun t => f (acc (I + b) t) - f (acc I t)) := by
+  obtain ⟨SP, d, hsupp, hrep⟩ := change_term_coverage S b f
+  refine ⟨SP, d, hsupp, hrep.congr (fun t => ?_)⟩
+  by_cases ht : t ∈ U
+  · simp only [acc_add, hagree t ht]
+  · simp only [acc_add, acc_zero_off_upper hU hb ht, add_zero, sub_self]
+
+/-- **Staleness over a view.**  Let `P` be the pending times, `due ⊆ P` those coming due, and
+    `S'`, `O'` a view agreeing with the input `I` and output `O` on an upper set `U` holding
+    `due`.  If the staleness `f∘acc I − acc O` vanishes where no pending time reaches, it has a
+    trace whose every live point is above a carried time of `P \ due`, or is in the closure of
+    `due` and the VIEW's supports, above a due time. -/
+theorem view_staleness {P due : Finset T} {U : Set T} (hU : IsUpperSet U) (hdueU : ↑due ⊆ U)
+    {I O S' O' : T →₀ A} (f : A → A)
+    (hS : ∀ t ∈ U, acc S' t = acc I t) (hO : ∀ t ∈ U, acc O' t = acc O t)
+    (hvan : ∀ t, (∀ p ∈ P, ¬ p ≤ t) → f (acc I t) - acc O t = 0) :
+    ∃ (SQ : Finset T) (dQ : T → A),
+      Represents SQ dQ (fun t => f (acc I t) - acc O t) ∧
+      ∀ x, dQ x ≠ 0 →
+        (∃ p ∈ P \ due, p ≤ x) ∨
+        (x ∈ cl (due ∪ S'.support ∪ O'.support) ∧ ∃ p ∈ due, p ≤ x) := by
+  classical
+  set g : T → A := fun t => f (acc I t) - acc O t with hg
+  -- The part above a due time, read through the view.
+  set gd : T → A := fun t => if ∃ p ∈ due, p ≤ t then g t else 0 with hgd
+  set E1 : Finset T := due ∪ S'.support ∪ O'.support with hE1
+  have hdueE1 : due ⊆ E1 := fun x hx => by simp [hE1, hx]
+  have hS'E1 : S'.support ⊆ E1 := fun x hx => by simp [hE1, hx]
+  have hO'E1 : O'.support ⊆ E1 := fun x hx => by simp [hE1, hx]
+  have hdue_cut : ∀ s t, Cut E1 s = Cut E1 t →
+      ((∃ p ∈ due, p ≤ s) ↔ (∃ p ∈ due, p ≤ t)) := by
+    intro s t hst
+    have hc : Cut due s = Cut due t := cut_mono_congr hdueE1 hst
+    constructor
+    · rintro ⟨p, hp, hps⟩
+      have hmem : p ∈ Cut due s := by simp [Cut, hp, hps]
+      rw [hc] at hmem
+      exact ⟨p, hp, (Finset.mem_filter.mp hmem).2⟩
+    · rintro ⟨p, hp, hpt⟩
+      have hmem : p ∈ Cut due t := by simp [Cut, hp, hpt]
+      rw [← hc] at hmem
+      exact ⟨p, hp, (Finset.mem_filter.mp hmem).2⟩
+  have hsimple1 : Simple E1 gd := by
+    intro s t hst
+    by_cases hs : ∃ p ∈ due, p ≤ s
+    · have ht := (hdue_cut s t hst).mp hs
+      have hsU : s ∈ U := by obtain ⟨p, hp, hps⟩ := hs; exact hU hps (hdueU hp)
+      have htU : t ∈ U := by obtain ⟨p, hp, hpt⟩ := ht; exact hU hpt (hdueU hp)
+      simp only [hgd, if_pos hs, if_pos ht, hg]
+      rw [← hS s hsU, ← hO s hsU, ← hS t htU, ← hO t htU,
+        acc_cut_congr S' hS'E1 hst, acc_cut_congr O' hO'E1 hst]
+    · have ht : ¬ ∃ p ∈ due, p ≤ t := fun h => hs ((hdue_cut s t hst).mpr h)
+      simp only [hgd, if_neg hs, if_neg ht]
+  have hbase1 : ∀ t, (∀ c ∈ E1, ¬ c ≤ t) → gd t = 0 := by
+    intro t ht
+    have hn : ¬ ∃ p ∈ due, p ≤ t := fun ⟨p, hp, hpt⟩ => ht p (hdueE1 hp) hpt
+    simp only [hgd, if_neg hn]
+  have hD1 : IsLowerSet {t : T | ¬ ∃ p ∈ due, p ≤ t} := by
+    intro a b hba ha ⟨p, hp, hpb⟩
+    exact ha ⟨p, hp, le_trans hpb hba⟩
+  obtain ⟨S1, d1, -, hsupp1, hrep1⟩ :=
+    exists_diff_trace_vanish' hsimple1 hbase1 hD1 (fun t ht => by
+      simp only [Set.mem_setOf_eq] at ht
+      simp only [hgd, if_neg ht])
+  -- The rest, above carried times only.
+  set gr : T → A := fun t => g t - gd t with hgr
+  set E2 : Finset T := P ∪ I.support ∪ O.support ∪ E1 with hE2
+  have hsimple2 : Simple E2 gr := by
+    have hI : Simple E2 (fun t => f (acc I t)) :=
+      (((acc_represents I).simple).comp f).mono (fun x hx => by simp [hE2, hx])
+    have hOs : Simple E2 (acc O) :=
+      ((acc_represents O).simple).mono (fun x hx => by simp [hE2, hx])
+    have hgS : Simple E2 g := hI.sub hOs
+    exact hgS.sub (hsimple1.mono (fun x hx => by simp [hE2, hx]))
+  have hbase2 : ∀ t, (∀ c ∈ E2, ¬ c ≤ t) → gr t = 0 := by
+    intro t ht
+    have hg0 : g t = 0 := hvan t (fun p hp => ht p (by simp [hE2, hp]))
+    have hgd0 : gd t = 0 := hbase1 t (fun c hc => ht c (by simp [hE2, hc]))
+    simp only [hgr, hg0, hgd0, sub_self]
+  have hD2 : IsLowerSet {t : T | ¬ ∃ p ∈ P \ due, p ≤ t} := by
+    intro a b hba ha ⟨p, hp, hpb⟩
+    exact ha ⟨p, hp, le_trans hpb hba⟩
+  obtain ⟨S2, d2, -, hsupp2, hrep2⟩ :=
+    exists_diff_trace_vanish' hsimple2 hbase2 hD2 (fun t ht => by
+      simp only [Set.mem_setOf_eq] at ht
+      by_cases hd : ∃ p ∈ due, p ≤ t
+      · simp only [hgr, hgd, if_pos hd, sub_self]
+      · have hnone : ∀ p ∈ P, ¬ p ≤ t := by
+          intro p hp hpt
+          by_cases hpd : p ∈ due
+          · exact hd ⟨p, hpd, hpt⟩
+          · exact ht ⟨p, Finset.mem_sdiff.mpr ⟨hp, hpd⟩, hpt⟩
+        have hg0 : g t = 0 := hvan t hnone
+        simp only [hgr, hgd, if_neg hd, hg0, sub_self])
+  -- Together: `gd + gr = g`.
+  refine ⟨S1 ∪ S2, fun s => (if s ∈ S1 then d1 s else 0) + (if s ∈ S2 then d2 s else 0),
+    (hrep1.add hrep2).congr (fun t => by simp only [hgr]; abel), ?_⟩
+  intro x hx
+  rcases Represents.add_support hx with h | h
+  · obtain ⟨hcl, hxD⟩ := hsupp1 x h
+    simp only [Set.mem_setOf_eq, not_not] at hxD
+    exact Or.inr ⟨hcl, hxD⟩
+  · obtain ⟨-, hxD⟩ := hsupp2 x h
+    simp only [Set.mem_setOf_eq, not_not] at hxD
+    exact Or.inl hxD
 
 /-! ## Cut toolkit -/
 
@@ -451,6 +656,58 @@ theorem exists_pended_le_of_mem_cl {base N : Set T} {upper : Finset T} {X : Set 
     exact hX y (hYX (Finset.mem_coe.mpr hyY)) (hsup ▸ Finset.le_sup' id hyY)
   rw [← hfold] at hbey ⊢
   exact exists_crossing_of_foldl (Reached.seed hnN) Y.toList hl hbey
+
+/-- **The view enumeration covers the round.**  Seed on `N` (holding the batch support and
+    the due pending times); join against `base` (holding the VIEW's input and output
+    supports and the seeds).  Every live point of the change term and of the re-derived
+    staleness is reached if it is below `upper`, and is at or above a pended time of that
+    enumeration, or a carried pending time, if it is beyond `upper`.  These are the two facts
+    `Run.round_discrepancy` takes from the enumeration. -/
+theorem view_round_coverage {P due : Finset T} {upper : Finset T}
+    (hcarried : ↑(P \ due) ⊆ Beyond upper)
+    {U : Set T} (hU : IsUpperSet U) (hdueU : ↑due ⊆ U)
+    {I O b S' O' : T →₀ A} (hbU : ↑b.support ⊆ U) (f : A → A)
+    (hS : ∀ t ∈ U, acc S' t = acc I t) (hO : ∀ t ∈ U, acc O' t = acc O t)
+    (hvan : ∀ t, (∀ p ∈ P, ¬ p ≤ t) → f (acc I t) - acc O t = 0)
+    {N base : Set T} (hbN : ↑b.support ⊆ N) (hdN : ↑due ⊆ N) (hNb : N ⊆ base)
+    (hSb : ↑S'.support ⊆ base) (hOb : ↑O'.support ⊆ base) :
+    ∃ (SC : Finset T) (dC : T → A) (SQ : Finset T) (dQ : T → A),
+      Represents SC dC (fun t => f (acc (I + b) t) - f (acc I t)) ∧
+      Represents SQ dQ (fun t => f (acc I t) - acc O t) ∧
+      ∀ x, (dC x ≠ 0 ∨ dQ x ≠ 0) →
+        (x ∉ Beyond upper → Reached base N upper x) ∧
+        (x ∈ Beyond upper →
+          (∃ p, Reached base N upper p ∧ p ∈ Beyond upper ∧ p ≤ x) ∨
+          (∃ p ∈ P \ due, p ≤ x)) := by
+  obtain ⟨SC, dC, hsuppC, hrepC⟩ := view_change_coverage hU f hS hbU
+  obtain ⟨SQ, dQ, hrepQ, hsuppQ⟩ := view_staleness (P := P) hU hdueU f hS hO hvan
+  refine ⟨SC, dC, SQ, dQ, hrepC, hrepQ, ?_⟩
+  intro x hx
+  -- Each live point is a closure point over a subset of `base`, above a seed in `N`,
+  -- or sits above a carried pending time.
+  have hcases : (∃ (X : Finset T) (n : T), ↑X ⊆ base ∧ n ∈ N ∧ n ≤ x ∧ x ∈ cl X) ∨
+      (∃ p ∈ P \ due, p ≤ x) := by
+    rcases hx with h | h
+    · obtain ⟨hcl, nu, hnu, hnux⟩ := hsuppC x h
+      refine Or.inl ⟨S'.support ∪ b.support, nu, ?_, hbN hnu, hnux, hcl⟩
+      intro y hy
+      rcases Finset.mem_union.mp hy with hy | hy
+      · exact hSb hy
+      · exact hNb (hbN hy)
+    · rcases hsuppQ x h with hc | ⟨hcl, p, hp, hpx⟩
+      · exact Or.inr hc
+      · refine Or.inl ⟨due ∪ S'.support ∪ O'.support, p, ?_, hdN hp, hpx, hcl⟩
+        intro y hy
+        rcases Finset.mem_union.mp hy with hy | hy
+        · rcases Finset.mem_union.mp hy with hy | hy
+          · exact hNb (hdN hy)
+          · exact hSb hy
+        · exact hOb hy
+  rcases hcases with ⟨X, n, hXb, hn, hnx, hcl⟩ | ⟨p, hp, hpx⟩
+  · exact ⟨fun hxu => reached_of_mem_cl (fun y hy _ => hXb hy) hn hnx hcl hxu,
+      fun hxb => Or.inl (exists_pended_le_of_mem_cl (fun y hy _ => hXb hy) hn hnx hcl hxb)⟩
+  · exact ⟨fun hxu => absurd (beyond_isUpperSet upper hpx (hcarried hp)) hxu,
+      fun _ => Or.inr ⟨p, hp, hpx⟩⟩
 
 /-- Reached times stay in any upper set containing the seeds. -/
 theorem Reached.mem_of_upperSet {base N : Set T} {upper : Finset T} {U : Set T}
@@ -587,6 +844,16 @@ theorem Run.pending_beyond {f : A → A} {n : ℕ} (R : Run T A f n) :
     exact Set.empty_subset _
   | succ r => exact (R.step r (by omega)).pending_confined
 
+/-- Pending sets are finite. -/
+theorem Run.pending_finite {f : A → A} {n : ℕ} (R : Run T A f n) :
+    ∀ r ≤ n, ((R.state r).pending).Finite := by
+  intro r hr
+  cases r with
+  | zero =>
+    rw [R.state_zero]
+    exact Set.finite_empty
+  | succ r => exact (R.step r (by omega)).pending_finite
+
 /-- The three-part discrepancy trace of a round: the change term, the carried staleness,
     minus the emission. -/
 noncomputable def roundTrace (dC dP : T → A) (SC SP : Finset T) (e : T →₀ A) : T → A :=
@@ -595,12 +862,14 @@ noncomputable def roundTrace (dC dP : T → A) (SC SP : Finset T) (e : T →₀ 
 
 /-- **The round-discrepancy package.**  Under the invariant at round `r`, the discrepancy
     `f∘input − emitted` after round `r + 1` (with the run's own emission) is represented
-    by `roundTrace` — the change term over the STORED representative, the carried
-    staleness, minus the emission — at every time, and in band-gated form below the new
-    frontier; its live in-band points are all ACTIVE (change points reach from batch
-    seeds, carried points from due pending seeds, emission points by `emit_support`); and
-    it vanishes at active times, by `emit_correct` through the stored-representative
-    agreements.  `step_clause1` and `step_residual` are corollaries. -/
+    by `roundTrace` — the change term over the round's VIEW, the staleness re-derived over
+    the view, minus the emission — at every time, and in band-gated form below the new
+    frontier.  Its live in-band points are all ACTIVE for the view's enumeration (change
+    points reach from batch seeds, staleness points from due pending seeds, emission points
+    by `emit_support`); it vanishes at active times, by `emit_correct` through the
+    stored-representative agreements; and its live change and staleness points beyond the
+    new frontier are at or above a new pending time (a first crossing, or a carried pending
+    time, through `pending_below`).  `step_clause1` and `step_residual` are corollaries. -/
 theorem Run.round_discrepancy {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (hr : r < n)
     (h1 : ∀ t, t ∉ Beyond (R.frontier r) → acc (R.emitted r) t = f (acc (R.input r) t))
     {SP : Finset T} {dP : T → A}
@@ -610,131 +879,114 @@ theorem Run.round_discrepancy {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ
       x ∈ supClosure ((R.state r).pending ∪ ↑(R.state r).stored.support
           ∪ ↑(R.state r).output.support) ∧
       ∃ p ∈ (R.state r).pending, p ≤ x) :
-    ∃ (SC : Finset T) (dC : T → A),
-      (∀ x, dC x ≠ 0 → x ∈ cl ((R.state r).stored.support ∪ (R.batch (r + 1)).support) ∧
-        ∃ nu ∈ (R.batch (r + 1)).support, nu ≤ x) ∧
+    ∃ (SC : Finset T) (dC : T → A) (SQ : Finset T) (dQ : T → A) (W : Set T),
+      (∀ w ∈ W, w ∉ Beyond (R.frontier (r + 1))) ∧
+      ↑(R.emit (r + 1)).support ⊆ W ∧
       (∀ t, f (acc (R.input r + R.batch (r + 1)) t) - acc (R.emitted r) t
           - acc (R.emit (r + 1)) t
-        = ∑ s ∈ Cut (SC ∪ SP ∪ (R.emit (r + 1)).support) t,
-            roundTrace dC dP SC SP (R.emit (r + 1)) s) ∧
+        = ∑ s ∈ Cut (SC ∪ SQ ∪ (R.emit (r + 1)).support) t,
+            roundTrace dC dQ SC SQ (R.emit (r + 1)) s) ∧
       (∀ t, t ∉ Beyond (R.frontier (r + 1)) →
         f (acc (R.input r + R.batch (r + 1)) t) - acc (R.emitted r) t
           - acc (R.emit (r + 1)) t
-        = ∑ s ∈ Cut (SC ∪ SP ∪ (R.emit (r + 1)).support) t,
+        = ∑ s ∈ Cut (SC ∪ SQ ∪ (R.emit (r + 1)).support) t,
             (if s ∈ Beyond (R.frontier (r + 1)) then 0
-              else roundTrace dC dP SC SP (R.emit (r + 1)) s)) ∧
-      (∀ x, roundTrace dC dP SC SP (R.emit (r + 1)) x ≠ 0 →
-        x ∉ Beyond (R.frontier (r + 1)) →
-        x ∈ activeSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1))) ∧
-      (∀ w ∈ activeSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)),
+              else roundTrace dC dQ SC SQ (R.emit (r + 1)) s)) ∧
+      (∀ x, roundTrace dC dQ SC SQ (R.emit (r + 1)) x ≠ 0 →
+        x ∉ Beyond (R.frontier (r + 1)) → x ∈ W) ∧
+      (∀ w ∈ W,
         f (acc (R.input r + R.batch (r + 1)) w) - acc (R.emitted r) w
-          - acc (R.emit (r + 1)) w = 0) := by
+          - acc (R.emit (r + 1)) w = 0) ∧
+      (∀ x, (dC x ≠ 0 ∨ dQ x ≠ 0) → x ∈ Beyond (R.frontier (r + 1)) →
+        ∃ p ∈ (R.state (r + 1)).pending, p ≤ x) := by
   classical
   have hrn : r ≤ n := le_of_lt hr
   have hstep := R.step r hr
+  obtain ⟨vS, vO, hen⟩ := hstep.enumerates
+  obtain ⟨U, hU, hNU, hvS, hvO⟩ := hen.view_agrees
   have hbsupp : ↑(R.batch (r + 1)).support ⊆ Beyond (R.frontier r) :=
     fun x hx => (R.batch_support r hr hx).1
   have hpend : (R.state r).pending ⊆ Beyond (R.frontier r) := R.pending_beyond r hrn
-  obtain ⟨SC, dC, hsuppC, hCrep⟩ :=
-    true_change_coverage (u := R.frontier r) f
-      (fun t ht => R.stored_agrees_input r hrn t ht) hbsupp
-  have h2live : ∀ x, dP x ≠ 0 → x ∈ Beyond (R.frontier r) := by
-    intro x hx
-    obtain ⟨-, p, hpP, hpx⟩ := h2supp x hx
-    exact beyond_isUpperSet _ hpx (hpend hpP)
-  have h2all : ∀ t',
-      f (acc (R.input r) t') - acc (R.emitted r) t' = ∑ s ∈ Cut SP t', dP s := by
-    intro t'
-    by_cases ht' : t' ∈ Beyond (R.frontier r)
-    · exact h2rep t' ht'
-    · rw [h1 t' ht', sub_self]
-      symm
+  have hPfin : ((R.state r).pending).Finite := R.pending_finite r hrn
+  set PF : Finset T := hPfin.toFinset with hPF
+  set due : Finset T := PF.filter (fun p => p ∉ Beyond (R.frontier (r + 1))) with hdue
+  have hdue_coe : (↑due : Set T) = (R.state r).pending \ Beyond (R.frontier (r + 1)) := by
+    ext p
+    simp [hdue, hPF, Set.Finite.mem_toFinset]
+  have hcar : (↑(PF \ due) : Set T) ⊆ Beyond (R.frontier (r + 1)) := by
+    intro p hp
+    rw [Finset.coe_sdiff, Set.mem_sdiff] at hp
+    by_contra hpb
+    exact hp.2 (Finset.mem_coe.mpr (Finset.mem_filter.mpr ⟨Finset.mem_coe.mp hp.1, hpb⟩))
+  -- The view agrees with the TRUTH where it agrees with the state and the state does.
+  have hU' : IsUpperSet (U ∩ Beyond (R.frontier r)) := hU.inter (beyond_isUpperSet _)
+  have hdueU' : (↑due : Set T) ⊆ U ∩ Beyond (R.frontier r) := by
+    rw [hdue_coe]
+    intro p hp
+    exact ⟨hNU (Or.inr hp), hpend hp.1⟩
+  have hbU' : ↑(R.batch (r + 1)).support ⊆ U ∩ Beyond (R.frontier r) :=
+    fun x hx => ⟨hNU (Or.inl hx), hbsupp hx⟩
+  have hS : ∀ t ∈ U ∩ Beyond (R.frontier r), acc vS t = acc (R.input r) t :=
+    fun t ht => (hvS t ht.1).trans (R.stored_agrees_input r hrn t ht.2)
+  have hO : ∀ t ∈ U ∩ Beyond (R.frontier r), acc vO t = acc (R.emitted r) t :=
+    fun t ht => (hvO t ht.1).trans (R.output_agrees_emitted r hrn t ht.2)
+  -- The invariant says the staleness vanishes wherever no pending time reaches.
+  have hvan : ∀ t, (∀ p ∈ PF, ¬ p ≤ t) →
+      f (acc (R.input r) t) - acc (R.emitted r) t = 0 := by
+    intro t ht
+    by_cases htb : t ∈ Beyond (R.frontier r)
+    · rw [h2rep t htb]
       apply Finset.sum_eq_zero
       intro s hs
       simp only [Cut, Finset.mem_filter] at hs
       by_contra hds
-      exact ht' (beyond_isUpperSet _ hs.2 (h2live s hds))
+      obtain ⟨-, p, hpP, hps⟩ := h2supp s hds
+      exact ht p (hPfin.mem_toFinset.mpr hpP) (hps.trans hs.2)
+    · rw [h1 t htb, sub_self]
+  have hbN : ↑(R.batch (r + 1)).support
+      ⊆ seedSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)) := fun _ hx => Or.inl hx
+  have hdN : (↑due : Set T) ⊆ seedSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)) := by
+    rw [hdue_coe]
+    exact fun _ hp => Or.inr hp
+  obtain ⟨SC, dC, SQ, dQ, hrepC, hrepQ, hcov⟩ :=
+    view_round_coverage (P := PF) (due := due) (upper := R.frontier (r + 1))
+      (N := seedSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)))
+      (base := viewBase vS vO (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)))
+      hcar hU' hdueU' hbU' f hS hO hvan hbN hdN Set.subset_union_right
+      (fun _ hx => Or.inl (Or.inl hx)) (fun _ hx => Or.inl (Or.inr hx))
   have hArep : ∀ t',
       f (acc (R.input r + R.batch (r + 1)) t') - acc (R.emitted r) t'
         - acc (R.emit (r + 1)) t'
-      = ∑ s ∈ Cut (SC ∪ SP ∪ (R.emit (r + 1)).support) t',
-          ((if s ∈ SC then dC s else 0) + (if s ∈ SP then dP s else 0)
+      = ∑ s ∈ Cut (SC ∪ SQ ∪ (R.emit (r + 1)).support) t',
+          ((if s ∈ SC then dC s else 0) + (if s ∈ SQ then dQ s else 0)
             + (if s ∈ (R.emit (r + 1)).support then -(R.emit (r + 1) s) else 0)) := by
     intro t'
     have hgate : ∀ s,
-        ((if s ∈ SC then dC s else 0) + (if s ∈ SP then dP s else 0)
+        ((if s ∈ SC then dC s else 0) + (if s ∈ SQ then dQ s else 0)
           + (if s ∈ (R.emit (r + 1)).support then -(R.emit (r + 1) s) else 0))
-        = ((if s ∈ SC ∪ SP then
-              ((if s ∈ SC then dC s else 0) + (if s ∈ SP then dP s else 0)) else 0)
+        = ((if s ∈ SC ∪ SQ then
+              ((if s ∈ SC then dC s else 0) + (if s ∈ SQ then dQ s else 0)) else 0)
             + (if s ∈ (R.emit (r + 1)).support then -(R.emit (r + 1) s) else 0)) := by
       intro s
-      by_cases hs : s ∈ SC ∪ SP
+      by_cases hs : s ∈ SC ∪ SQ
       · rw [if_pos hs]
       · rw [if_neg hs]
         simp only [Finset.mem_union, not_or] at hs
         rw [if_neg hs.1, if_neg hs.2]
         simp only [zero_add]
     have hc : f (acc (R.input r + R.batch (r + 1)) t') - f (acc (R.input r) t')
-        = ∑ s ∈ Cut SC t', dC s := hCrep t'
+        = ∑ s ∈ Cut SC t', dC s := hrepC t'
+    have hq : f (acc (R.input r) t') - acc (R.emitted r) t' = ∑ s ∈ Cut SQ t', dQ s :=
+      hrepQ t'
     have hneg : ∑ s ∈ Cut (R.emit (r + 1)).support t', -(R.emit (r + 1) s)
         = -acc (R.emit (r + 1)) t' := by
       rw [Finset.sum_neg_distrib]
       rfl
     rw [Finset.sum_congr rfl (fun s _ => hgate s), cut_sum_union, cut_sum_union,
-      ← hc, ← h2all t', hneg]
+      ← hc, ← hq, hneg]
     abel
-  have hlive0 : ∀ x,
-      ((if x ∈ SC then dC x else 0) + (if x ∈ SP then dP x else 0)
-        + (if x ∈ (R.emit (r + 1)).support then -(R.emit (r + 1) x) else 0)) ≠ 0 →
-      x ∉ Beyond (R.frontier (r + 1)) →
-      x ∈ activeSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)) := by
-    intro x hx hxu
-    have h3 : dC x ≠ 0 ∨ dP x ≠ 0 ∨ x ∈ (R.emit (r + 1)).support := by
-      by_contra hcon
-      simp only [not_or, ne_eq, not_not] at hcon
-      obtain ⟨h₁, h₂, h₃⟩ := hcon
-      apply hx
-      rw [if_neg h₃]
-      by_cases hxC : x ∈ SC <;> by_cases hxP : x ∈ SP <;>
-        simp [hxC, hxP, h₁, h₂]
-    rcases h3 with h | h | h
-    · obtain ⟨hcl, nu, hnu, hnux⟩ := hsuppC x h
-      refine ⟨reached_of_mem_cl (base := baseSet (R.state r) (R.batch (r + 1))
-          (R.frontier (r + 1))) ?_ ?_ hnux hcl hxu, hxu⟩
-      · intro y hy _
-        rw [Finset.coe_union] at hy
-        rcases hy with hy | hy
-        · exact Or.inl (Or.inl hy)
-        · exact Or.inr (Or.inl hy)
-      · exact Or.inl (Finset.mem_coe.mpr hnu)
-    · obtain ⟨hcl, p, hpP, hpx⟩ := h2supp x h
-      have hpact : p ∉ Beyond (R.frontier (r + 1)) :=
-        fun hc => hxu (beyond_isUpperSet _ hpx hc)
-      refine ⟨reached_of_mem_cl (base := baseSet (R.state r) (R.batch (r + 1))
-          (R.frontier (r + 1))) ?_ ?_ hpx hcl hxu, hxu⟩
-      · intro y hy hyx
-        rcases hy with (hy | hy) | hy
-        · exact Or.inr (Or.inr ⟨hy, fun hc => hxu (beyond_isUpperSet _ hyx hc)⟩)
-        · exact Or.inl (Or.inl hy)
-        · exact Or.inl (Or.inr hy)
-      · exact Or.inr ⟨hpP, hpact⟩
-    · exact hstep.emit_support (Finset.mem_coe.mpr h)
-  have hgW : ∀ w ∈ activeSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)),
-      f (acc (R.input r + R.batch (r + 1)) w) - acc (R.emitted r) w
-        - acc (R.emit (r + 1)) w = 0 := by
-    intro w hw
-    have hwl : w ∈ Beyond (R.frontier r) := by
-      refine Reached.mem_of_upperSet (beyond_isUpperSet _) ?_ hw.1
-      intro y hy
-      rcases hy with hy | hy
-      · exact hbsupp hy
-      · exact hpend hy.1
-    have hec := hstep.emit_correct w hw
-    rw [acc_add, acc_add, R.output_agrees_emitted r hrn w hwl,
-      R.stored_agrees_input r hrn w hwl] at hec
-    rw [acc_add, ← hec]
-    abel
-  refine ⟨SC, dC, hsuppC, ?_, ?_, ?_, hgW⟩
+  refine ⟨SC, dC, SQ, dQ, viewActive vS vO (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)),
+    fun w hw => hw.2, hen.emit_support, ?_, ?_, ?_, ?_, ?_⟩
   · intro t
     simp only [roundTrace]
     exact hArep t
@@ -746,7 +998,38 @@ theorem Run.round_discrepancy {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ
     exact (if_neg (fun hc => ht (beyond_isUpperSet _ hs.2 hc))).symm
   · intro x hx hxu
     simp only [roundTrace] at hx
-    exact hlive0 x hx hxu
+    have h3 : dC x ≠ 0 ∨ dQ x ≠ 0 ∨ x ∈ (R.emit (r + 1)).support := by
+      by_contra hcon
+      simp only [not_or, ne_eq, not_not] at hcon
+      obtain ⟨h₁, h₂, h₃⟩ := hcon
+      apply hx
+      rw [if_neg h₃]
+      by_cases hxC : x ∈ SC <;> by_cases hxQ : x ∈ SQ <;>
+        simp [hxC, hxQ, h₁, h₂]
+    rcases h3 with h | h | h
+    · exact ⟨(hcov x (Or.inl h)).1 hxu, hxu⟩
+    · exact ⟨(hcov x (Or.inr h)).1 hxu, hxu⟩
+    · exact hen.emit_support (Finset.mem_coe.mpr h)
+  · intro w hw
+    have hwl : w ∈ Beyond (R.frontier r) := by
+      refine Reached.mem_of_upperSet (beyond_isUpperSet _) ?_ hw.1
+      intro y hy
+      rcases hy with hy | hy
+      · exact hbsupp hy
+      · exact hpend hy.1
+    have hec := hen.emit_correct w hw
+    rw [acc_add, acc_add, R.output_agrees_emitted r hrn w hwl,
+      R.stored_agrees_input r hrn w hwl] at hec
+    rw [acc_add, ← hec]
+    abel
+  · intro x h hxb
+    rcases (hcov x h).2 hxb with ⟨p, hpr, hpb, hple⟩ | ⟨p, hp, hpx⟩
+    · obtain ⟨q, hq, hqp⟩ := hen.pending_below p (Or.inl ⟨hpr, hpb⟩)
+      exact ⟨q, hq, hqp.trans hple⟩
+    · have hpP : p ∈ (R.state r).pending :=
+        hPfin.mem_toFinset.mp (Finset.mem_sdiff.mp hp).1
+      obtain ⟨q, hq, hqp⟩ := hen.pending_below p (Or.inr ⟨hpP, hcar (Finset.mem_coe.mpr hp)⟩)
+      exact ⟨q, hq, hqp.trans hpx⟩
 
 /-- **Clause 1 advances for the run's own emission**: given the invariant at round `r`,
     ANY `Step`-compliant emission achieves finalized correctness below the next frontier —
@@ -762,12 +1045,13 @@ theorem Run.step_clause1 {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (hr
       ∃ p ∈ (R.state r).pending, p ≤ x) :
     ∀ t, t ∉ Beyond (R.frontier (r + 1)) →
       acc (R.emitted (r + 1)) t = f (acc (R.input (r + 1)) t) := by
-  obtain ⟨SC, dC, -, -, hArep', hlive, hgW⟩ := R.round_discrepancy hr h1 h2rep h2supp
+  obtain ⟨SC, dC, SQ, dQ, W, hW, -, -, hArep', hlive, hgW, -⟩ :=
+    R.round_discrepancy hr h1 h2rep h2supp
   intro t htu
-  have hδ := rep_zero_of_live_vanish (fun w hw => hArep' w hw.2) hgW
+  have hδ := rep_zero_of_live_vanish (fun w hw => hArep' w (hW w hw)) hgW
     (fun x _ hx => by
       have hx' : (if x ∈ Beyond (R.frontier (r + 1)) then (0 : A)
-          else roundTrace dC dP SC SP (R.emit (r + 1)) x) ≠ 0 := hx
+          else roundTrace dC dQ SC SQ (R.emit (r + 1)) x) ≠ 0 := hx
       have hxu : x ∉ Beyond (R.frontier (r + 1)) := fun hc => hx' (if_pos hc)
       rw [if_neg hxu] at hx'
       exact hlive x hx' hxu)
@@ -778,10 +1062,9 @@ theorem Run.step_clause1 {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (hr
 
 /-- **The residual staleness trace.**  Under the invariant at round `r`, the staleness
     after round `r + 1` is a difference trace at EVERY time, whose live points are beyond
-    the new frontier, inside the closure of the OLD ground set, and at or above some NEW
-    pending time — by the first-crossing argument for change points, and still-pending or
-    due-seed witnesses for carried points.  In-band live points are impossible: the round
-    trace vanishes there outright. -/
+    the new frontier and at or above some NEW pending time — by the first-crossing argument
+    for change and due staleness points, and still-pending witnesses for carried points.
+    In-band live points are impossible: the round trace vanishes there outright. -/
 theorem Run.step_residual {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (hr : r < n)
     (h1 : ∀ t, t ∉ Beyond (R.frontier r) → acc (R.emitted r) t = f (acc (R.input r) t))
     {SP : Finset T} {dP : T → A}
@@ -796,30 +1079,27 @@ theorem Run.step_residual {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (h
         = ∑ s ∈ Cut SR t, dR s) ∧
       ∀ x, dR x ≠ 0 →
         x ∈ Beyond (R.frontier (r + 1)) ∧
-        x ∈ supClosure ((R.state r).pending ∪ ↑(R.state r).stored.support
-              ∪ ↑(R.state r).output.support ∪ ↑(R.batch (r + 1)).support) ∧
         ∃ p ∈ (R.state (r + 1)).pending, p ≤ x := by
   classical
-  have hstep := R.step r hr
-  obtain ⟨SC, dC, hsuppC, hArep, hArep', hlive, hgW⟩ :=
+  obtain ⟨SC, dC, SQ, dQ, W, hW, hWe, hArep, hArep', hlive, hgW, hbey⟩ :=
     R.round_discrepancy hr h1 h2rep h2supp
-  have hzero := live_eq_zero_of_vanish (fun w hw => hArep' w hw.2) hgW
+  have hzero := live_eq_zero_of_vanish (fun w hw => hArep' w (hW w hw)) hgW
     (fun x _ hx => by
       have hx' : (if x ∈ Beyond (R.frontier (r + 1)) then (0 : A)
-          else roundTrace dC dP SC SP (R.emit (r + 1)) x) ≠ 0 := hx
+          else roundTrace dC dQ SC SQ (R.emit (r + 1)) x) ≠ 0 := hx
       have hxu : x ∉ Beyond (R.frontier (r + 1)) := fun hc => hx' (if_pos hc)
       rw [if_neg hxu] at hx'
       exact hlive x hx' hxu)
-  refine ⟨SC ∪ SP ∪ (R.emit (r + 1)).support,
-    roundTrace dC dP SC SP (R.emit (r + 1)), ?_, ?_⟩
+  refine ⟨SC ∪ SQ ∪ (R.emit (r + 1)).support,
+    roundTrace dC dQ SC SQ (R.emit (r + 1)), ?_, ?_⟩
   · intro t
     rw [R.input_succ, R.emitted_succ, acc_add (R.emitted r) (R.emit (r + 1)), ← sub_sub]
     exact hArep t
   · intro x hx
-    replace hx : ((if x ∈ SC then dC x else 0) + (if x ∈ SP then dP x else 0)
+    replace hx : ((if x ∈ SC then dC x else 0) + (if x ∈ SQ then dQ x else 0)
         + (if x ∈ (R.emit (r + 1)).support then -(R.emit (r + 1) x) else 0)) ≠ 0 := by
       simpa only [roundTrace] using hx
-    have hxSA : x ∈ SC ∪ SP ∪ (R.emit (r + 1)).support := by
+    have hxSA : x ∈ SC ∪ SQ ∪ (R.emit (r + 1)).support := by
       by_contra hcon
       simp only [Finset.mem_union, not_or] at hcon
       apply hx
@@ -831,60 +1111,19 @@ theorem Run.step_residual {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (h
       rw [if_neg hxu] at h0
       simp only [roundTrace] at h0
       exact hx h0
-    have hnotact : x ∉ activeSet (R.state r) (R.batch (r + 1)) (R.frontier (r + 1)) :=
-      fun hc => hc.2 hxb
     have hxe : x ∉ (R.emit (r + 1)).support :=
-      fun hc => hnotact (hstep.emit_support (Finset.mem_coe.mpr hc))
+      fun hc => hW x (hWe (Finset.mem_coe.mpr hc)) hxb
     rw [if_neg hxe, add_zero] at hx
-    have h2 : dC x ≠ 0 ∨ dP x ≠ 0 := by
+    have h2 : dC x ≠ 0 ∨ dQ x ≠ 0 := by
       by_contra hcon
       simp only [not_or, ne_eq, not_not] at hcon
       apply hx
       rw [hcon.1, hcon.2]
       simp
-    refine ⟨hxb, ?_, ?_⟩
-    · rcases h2 with h | h
-      · refine supClosure_mono ?_ (hsuppC x h).1
-        rw [Finset.coe_union]
-        rintro z (hz | hz)
-        · exact Or.inl (Or.inl (Or.inr hz))
-        · exact Or.inr hz
-      · exact supClosure_mono Set.subset_union_left (h2supp x h).1
-    · rcases h2 with h | h
-      · obtain ⟨hcl, nu, hnu, hnux⟩ := hsuppC x h
-        obtain ⟨p, hpr, hpb, hple⟩ :=
-          exists_pended_le_of_mem_cl (base := baseSet (R.state r) (R.batch (r + 1))
-            (R.frontier (r + 1))) (N := seedSet (R.state r) (R.batch (r + 1))
-            (R.frontier (r + 1)))
-            (fun y hy _ => by
-              rw [Finset.coe_union] at hy
-              rcases hy with hy | hy
-              · exact Or.inl (Or.inl hy)
-              · exact Or.inr (Or.inl hy))
-            (Or.inl (Finset.mem_coe.mpr hnu)) hnux hcl hxb
-        exact ⟨p, hstep.pending_super (Or.inl ⟨hpr, hpb⟩), hple⟩
-      · by_cases hyp : ∃ y ∈ (R.state r).pending, y ≤ x ∧ y ∈ Beyond (R.frontier (r + 1))
-        · obtain ⟨y, hyP, hyx, hyb⟩ := hyp
-          exact ⟨y, hstep.pending_super (Or.inr ⟨hyP, hyb⟩), hyx⟩
-        · replace hyp : ∀ y ∈ (R.state r).pending, y ≤ x →
-              y ∉ Beyond (R.frontier (r + 1)) :=
-            fun y hy hyx hyb => hyp ⟨y, hy, hyx, hyb⟩
-          obtain ⟨hcl, p₀, hp₀P, hp₀x⟩ := h2supp x h
-          have hp₀due : p₀ ∉ Beyond (R.frontier (r + 1)) := hyp p₀ hp₀P hp₀x
-          obtain ⟨p, hpr, hpb, hple⟩ :=
-            exists_pended_le_of_mem_cl (base := baseSet (R.state r) (R.batch (r + 1))
-              (R.frontier (r + 1))) (N := seedSet (R.state r) (R.batch (r + 1))
-              (R.frontier (r + 1)))
-              (fun y hy hyx => by
-                rcases hy with (hy | hy) | hy
-                · exact Or.inr (Or.inr ⟨hy, hyp y hy hyx⟩)
-                · exact Or.inl (Or.inl hy)
-                · exact Or.inl (Or.inr hy))
-              (Or.inr ⟨hp₀P, hp₀due⟩) hp₀x hcl hxb
-          exact ⟨p, hstep.pending_super (Or.inl ⟨hpr, hpb⟩), hple⟩
+    exact ⟨hxb, hbey x h2 hxb⟩
 
-/-- **The transfer property**: the residual staleness trace, supported in the OLD ground
-    set's closure above a new pending time, can be re-based onto the NEW representatives'
+/-- **The transfer property**: the residual staleness trace, supported beyond the new
+    frontier above a new pending time, can be re-based onto the NEW representatives'
     closure after the adversary re-picks them.  This HOLDS for every run
     (`transfer_always` below): with the output support in the ground set, the trace is
     re-derived from the current representatives rather than carried, so nothing crosses
@@ -899,8 +1138,6 @@ def Run.Transfer {f : A → A} {n : ℕ} (R : Run T A f n) : Prop :=
         = ∑ s ∈ Cut SR t, dR s) →
       (∀ x, dR x ≠ 0 →
         x ∈ Beyond (R.frontier (r + 1)) ∧
-        x ∈ supClosure ((R.state r).pending ∪ ↑(R.state r).stored.support
-              ∪ ↑(R.state r).output.support ∪ ↑(R.batch (r + 1)).support) ∧
         ∃ p ∈ (R.state (r + 1)).pending, p ≤ x) →
       ∃ (SP' : Finset T) (dP' : T → A),
         (∀ t ∈ Beyond (R.frontier (r + 1)),
@@ -921,18 +1158,21 @@ theorem Run.inv_step {f : A → A} {n : ℕ} (R : Run T A f n) (htr : R.Transfer
   obtain ⟨SP', dP', hrep', hsupp'⟩ := htr r hr SR dR hRrep hRsupp
   exact ⟨SP', dP', hrep', hsupp'⟩
 
+/-- The invariant holds at every round, given the transfer. -/
+theorem Run.inv_of_transfer {f : A → A} {n : ℕ} (R : Run T A f n)
+    (hf0 : f 0 = 0) (htr : R.Transfer) : ∀ r, r ≤ n → R.INV r := by
+  intro r
+  induction r with
+  | zero => exact fun _ => inv_zero hf0 R
+  | succ r ih => exact fun hr => R.inv_step htr (by omega) (ih (by omega))
+
 /-- **Stream correctness, modulo the transfer.**  TARGETS2.md's goal theorem: for every
     run — every choice of rounds, frontiers, emissions, and adversary — satisfying the
     re-representation transfer, the emitted corrections accumulate to the reduction of
     the true input at every finalized time. -/
 theorem Run.stream_correct_of_transfer {f : A → A} {n : ℕ} (R : Run T A f n)
-    (hf0 : f 0 = 0) (htr : R.Transfer) : R.StreamCorrect := by
-  have hinv : ∀ r, r ≤ n → R.INV r := by
-    intro r
-    induction r with
-    | zero => exact fun _ => inv_zero hf0 R
-    | succ r ih => exact fun hr => R.inv_step htr (by omega) (ih (by omega))
-  exact fun t ht => (hinv n le_rfl).1 t ht
+    (hf0 : f 0 = 0) (htr : R.Transfer) : R.StreamCorrect :=
+  fun t ht => (R.inv_of_transfer hf0 htr n le_rfl).1 t ht
 
 /-! ## Uniqueness: the emitted stream is THE difference trace (`TARGETS2.md` corollary) -/
 
@@ -998,8 +1238,8 @@ theorem pendedSet_finite (σ : State T A) (b : T →₀ A) (upper : Finset T)
       (Set.Finite.subset hP Set.sdiff_subset))
 
 /-- Build a `Step` from the EXACT pending choice — the deferred times plus the carried
-    ones, nothing more.  This is TARGETS2.md's step 4 as originally written; the relaxed
-    `pending_*` fields follow from exactness. -/
+    ones, nothing more — enumerating against the state itself.  This is TARGETS2.md's
+    step 4 as originally written; the relaxed `pending_*` fields follow from exactness. -/
 theorem Step.of_pending_eq {f : A → A} {upper : Finset T} {b : T →₀ A}
     {σ σ' : State T A} {e : T →₀ A} (hP : σ.pending.Finite)
     (emit_support : ↑e.support ⊆ activeSet σ b upper)
@@ -1009,9 +1249,12 @@ theorem Step.of_pending_eq {f : A → A} {upper : Finset T} {b : T →₀ A}
     (stored_agrees : ∀ t ∈ Beyond upper, acc σ'.stored t = acc (σ.stored + b) t)
     (output_agrees : ∀ t ∈ Beyond upper, acc σ'.output t = acc (σ.output + e) t) :
     Step f upper b σ e σ' where
-  emit_support := emit_support
-  emit_correct := emit_correct
-  pending_super := by rw [pending_eq]
+  enumerates := ⟨σ.stored, σ.output,
+    { view_agrees := ⟨Set.univ, isUpperSet_univ, Set.subset_univ _,
+        fun _ _ => rfl, fun _ _ => rfl⟩
+      emit_support := emit_support
+      emit_correct := emit_correct
+      pending_below := fun x hx => ⟨x, by rw [pending_eq]; exact hx, le_rfl⟩ }⟩
   pending_confined := by
     rw [pending_eq]
     exact Set.union_subset (fun _ hx => hx.2) (fun _ hx => hx.2)
@@ -1034,16 +1277,6 @@ closure, and why `baseSet` includes it (matching an enumeration that also joins 
 stored output times, as the implementation does): it is exactly what makes
 `Run.stream_correct` unconditional.  An output-free variant of the model would still
 need `Transfer` proved by other means. -/
-
-/-- Pending sets are finite. -/
-theorem Run.pending_finite {f : A → A} {n : ℕ} (R : Run T A f n) :
-    ∀ r ≤ n, ((R.state r).pending).Finite := by
-  intro r hr
-  cases r with
-  | zero =>
-    rw [R.state_zero]
-    exact Set.finite_empty
-  | succ r => exact (R.step r (by omega)).pending_finite
 
 /-- **The with-output re-derivation.**  If the staleness at round `r` vanishes wherever no
     pending time reaches (which `step_residual` supplies), then it has a trace supported
@@ -1150,7 +1383,7 @@ theorem Run.transfer_always {f : A → A} {n : ℕ} (R : Run T A f n) : R.Transf
     intro s hs
     simp only [Cut, Finset.mem_filter] at hs
     by_contra hds
-    obtain ⟨-, -, p, hpP, hps⟩ := hsupp s hds
+    obtain ⟨-, p, hpP, hps⟩ := hsupp s hds
     exact ht ⟨p, hpP, hps.trans hs.2⟩
   obtain ⟨SP, dP, hrep', hsupp'⟩ := R.staleness_rederived (by omega) hvan
   exact ⟨SP, dP, fun t _ => hrep' t, hsupp'⟩
@@ -1162,6 +1395,16 @@ theorem Run.transfer_always {f : A → A} {n : ℕ} (R : Run T A f n) : R.Transf
 theorem Run.stream_correct {f : A → A} {n : ℕ} (R : Run T A f n) (hf0 : f 0 = 0) :
     R.StreamCorrect :=
   R.stream_correct_of_transfer hf0 R.transfer_always
+
+/-- **Correct at every frontier the run passes**, not only the last.  A coarse schedule run
+    as a finer one — each coarse round split at intermediate frontiers, each piece
+    enumerating against its input cancelled by a time below its own seeds
+    (`meet_view_agrees`) — is correct at every coarse frontier, since those are frontiers of
+    the finer run. -/
+theorem Run.correct_at {f : A → A} {n : ℕ} (R : Run T A f n) (hf0 : f 0 = 0)
+    {r : ℕ} (hr : r ≤ n) :
+    ∀ t, t ∉ Beyond (R.frontier r) → acc (R.emitted r) t = f (acc (R.input r) t) :=
+  (R.inv_of_transfer hf0 R.transfer_always r hr).1
 
 /-- The quantified target, discharged. -/
 theorem streamCorrectness_holds (T A : Type*) [SemilatticeSup T] [AddCommGroup A]
