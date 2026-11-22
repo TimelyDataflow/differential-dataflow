@@ -1,6 +1,7 @@
 use timely::dataflow::operators::{ToStream, Capture, vec::Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
+use differential_dataflow::operators::Iterate;
 use differential_dataflow::input::InputSession;
 use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
 
@@ -83,4 +84,112 @@ fn reduce_frontier_ahead_of_trace() {
 
     let updates: Vec<_> = recv.extract().into_iter().flat_map(|(_, data)| data).collect();
     assert_eq!(updates, vec![((0, 1), 7, 1)]);
+}
+
+/// A time in a three-dimensional product order. The case below needs three dimensions.
+type Time3 = timely::order::Product<u64, timely::order::Product<u64, u64>>;
+fn time3(a: u64, b: u64, c: u64) -> Time3 { timely::order::Product::new(a, timely::order::Product::new(b, c)) }
+
+/// Feeds `rounds` to `logic` through an unordered input whose frontier starts at `initial`. Each
+/// round gives its updates, advances the input frontier to the round's frontier, and runs the
+/// dataflow until the output frontier catches up. Returns every output update.
+fn run_rounds<D, F>(initial: Vec<Time3>, rounds: Vec<(Vec<(D, Time3, isize)>, Vec<Time3>)>, logic: F) -> Vec<(D, Time3, isize)>
+where
+    D: differential_dataflow::Data + Send + Sync,
+    F: for<'scope> FnOnce(differential_dataflow::VecCollection<'scope, Time3, D, isize>) -> differential_dataflow::VecCollection<'scope, Time3, D, isize> + Send + Sync + 'static,
+{
+    use timely::PartialOrder;
+    use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
+
+    let (send, recv) = std::sync::mpsc::channel();
+    timely::execute_directly(move |worker| {
+        let (mut input, root, probe) = worker.dataflow::<u64, _, _>(|outer| {
+            outer.scoped::<Time3, _, _>("Product", |scope| {
+                let ((input, root), stream) = scope.new_unordered_input::<(D, Time3, isize)>();
+                // `inspect` rather than `capture`: the output can carry multi-capability stamps.
+                let (probe, _) = logic(stream.as_collection()).inspect(move |update| send.send(update.clone()).unwrap()).probe();
+                (input, root, probe)
+            })
+        });
+        let mut caps: Vec<_> = initial.iter().map(|t| root.delayed(t)).collect();
+        drop(root);
+        for (updates, frontier) in rounds {
+            for (data, time, diff) in updates {
+                let cap = caps.iter().find(|c| c.time().less_equal(&time)).expect("update behind the frontier");
+                input.activate().session(cap).give((data, time, diff));
+            }
+            caps = frontier.iter().map(|t| caps.iter().find(|c| c.time().less_equal(t)).expect("frontier regresses").delayed(t)).collect();
+            worker.step_while(|| probe.with_frontier(|f| f.iter().any(|p| !caps.iter().any(|c| c.time().less_equal(p)))));
+        }
+    });
+    recv.try_iter().collect()
+}
+
+/// The accumulation of `updates` at `time`, without zeros.
+fn accumulate<D: Ord + Clone>(updates: &[(D, Time3, isize)], time: &Time3) -> std::collections::BTreeMap<D, isize> {
+    use timely::PartialOrder;
+    let mut acc = std::collections::BTreeMap::new();
+    for (data, t, diff) in updates {
+        if t.less_equal(time) { *acc.entry(data.clone()).or_insert(0) += diff; }
+    }
+    acc.retain(|_, diff| *diff != 0);
+    acc
+}
+
+/// Every time in `[0, bound)^3`.
+fn grid(bound: u64) -> impl Iterator<Item = Time3> {
+    (0 .. bound).flat_map(move |a| (0 .. bound).flat_map(move |b| (0 .. bound).map(move |c| time3(a, b, c))))
+}
+
+/// A history time can need re-evaluation at its join with a new time even though both lie outside
+/// the interval the reduce retires. Here `(0,1,0)` arrives first; `(0,0,2)` and `(1,0,1)` follow in
+/// `[(0,0,1), (0,1,1))`. The reduce advances the history time by the meet of the new times, to
+/// `(0,1,1)`, past the interval. Its join with `(0,0,2)`, at `(0,1,2)`, must still come back as a
+/// pending time, where `distinct` retracts the second copy of the record.
+#[test]
+fn distinct_join_with_history_past_upper() {
+    let rounds = vec![
+        (vec![(0u64, time3(0, 1, 0), 1)], vec![time3(0, 0, 1)]),
+        (vec![(0, time3(0, 0, 2), 1), (0, time3(1, 0, 1), 1)], vec![time3(0, 1, 1)]),
+    ];
+    let input: Vec<_> = rounds.iter().flat_map(|(updates, _)| updates.clone()).collect();
+    let output = run_rounds(vec![time3(0, 0, 0)], rounds, |c| c.distinct());
+    for time in grid(4) {
+        let expected = accumulate(&input, &time).into_keys().map(|k| (k, 1)).collect();
+        assert_eq!(accumulate(&output, &time), expected, "at {time:?}");
+    }
+}
+
+/// The case above, as a randomized test found it (seed 219): a transitive closure by `iterate` and
+/// `distinct`, over edges that arrive at incomparable times in two rounds. The edge `1 -> 6` is
+/// derived at `(0,1,2)` (`1 -> 2 -> 6`) and at `(2,1,0)` (`1 -> 2 -> 5 -> 6`), and at their join
+/// `(2,1,2)` the closure must still hold it once.
+#[test]
+fn iterate_distinct_join_with_history_past_upper() {
+    let rounds = vec![
+        (vec![((5u8, 6u8), time3(1, 0, 0), 1), ((1, 2), time3(0, 1, 0), 1), ((2, 5), time3(2, 0, 0), 1), ((1, 6), time3(3, 0, 0), 1)],
+         vec![time3(4, 0, 0), time3(0, 2, 0), time3(0, 0, 1)]),
+        (vec![((1, 1), time3(0, 0, 1), 1), ((2, 6), time3(0, 0, 2), 1)],
+         vec![time3(4, 0, 0), time3(0, 2, 0), time3(0, 0, 3)]),
+    ];
+    let input: Vec<_> = rounds.iter().flat_map(|(updates, _)| updates.clone()).collect();
+    let initial = vec![time3(1, 0, 0), time3(0, 1, 0), time3(0, 0, 1)];
+    let output = run_rounds(initial, rounds, |edges| {
+        let links = edges.clone();
+        edges.iterate(move |inner, reach| {
+            let links = links.enter(inner);
+            reach.map(|(a, b)| (b, a)).join_map(links.clone(), |_b, a, c| (*a, *c)).concat(links).distinct()
+        })
+    });
+    for time in grid(4) {
+        let mut expected = accumulate(&input, &time);
+        loop {
+            let paths: Vec<_> = expected.keys().flat_map(|&(a, b)| expected.keys().filter(move |&&(c, _)| c == b).map(move |&(_, d)| (a, d))).collect();
+            let size = expected.len();
+            expected.extend(paths.into_iter().map(|path| (path, 1)));
+            if expected.len() == size { break; }
+        }
+        let expected = expected.into_keys().map(|path| (path, 1)).collect();
+        assert_eq!(accumulate(&output, &time), expected, "at {time:?}");
+    }
 }
