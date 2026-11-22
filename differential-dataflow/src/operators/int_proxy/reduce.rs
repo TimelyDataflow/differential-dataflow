@@ -599,14 +599,18 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
     fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
         let Some(at) = self.frontier() else { return Tick::Done };
         let reached = self.absorb(&at);
-        if upper.less_equal(&at) {
-            // Out of the interval: nothing can be emitted here, so there is nothing to close
-            // against either — a join with `at` is at or beyond `at`, hence also out of interval,
-            // and will be rediscovered from `at` in the round that admits it.
+        if reached && upper.less_equal(&at) {
+            // Out of the interval: nothing can be emitted here. A join with `at` is at or beyond
+            // `at`, hence also out of interval, and will be rediscovered from `at` in the round
+            // that admits it.
             self.settle();
-            if reached { pended.push(at); return Tick::Pended; }
-            return Tick::Passed;
+            pended.push(at);
+            return Tick::Pended;
         }
+        // An unreached time is closed against the reached times even out of the interval. With
+        // partially ordered times, advancing the prior times by the meet can move one from before
+        // the interval to beyond it, and no later round rediscovers its joins with this round's
+        // seeds: there both are prior. The joins are at or beyond `at`, so `close` pends them.
         self.close(&at, reached, upper, pended);
         if reached { return Tick::Crossing(at); }
         self.settle();
