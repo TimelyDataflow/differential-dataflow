@@ -9,7 +9,7 @@
 //! A backend may do that itself, *completing* the key, and leave it out of the window.
 //! What the tactic adds is the schedule for a key with several times to evaluate at: which they are, in what order, and what each must read.
 
-use super::pending::Pending;
+use super::pending::{Due, Pending};
 
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
@@ -150,12 +150,12 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// The backend writes the window's exclusive upper bound as `At(key)`, or `End` when exhausted.
     /// Each call must strictly advance `from`.
     ///
-    /// The window must cover every key in `[from_before, from_after)` that carries a novel update or appears in `changed`.
+    /// The window must cover every key in `[from_before, from_after)` that carries a novel update or is `due`.
     /// For each key, present merged input (novel and prior together, netted), raw novel time support in `seeds`, and accumulated output.
     /// A key must be reported entirely within the window that first mentions it: splitting one across windows drops the interaction between the halves.
-    /// `changed` is ascending; the harness reads no key outside the window's range, so a backend that keeps its own key order need not consult the whole space.
+    /// `due` is ascending by key; the harness reads no key outside the window's range, so a backend that keeps its own key order need not consult the whole space.
     ///
-    /// The exception is a key the backend *completes*, which it may do for a key not in `changed` where [`direct`] finds its time,
+    /// The exception is a key the backend *completes*, which it may do where [`direct`] finds its time, with its due times among the seeds,
     /// unless [`ReduceInstance::present_all`] is set.
     /// It leaves the key out of the window's presentations, commits the key's output to the batch in progress itself,
     /// and adds the key's carried times to `window.carried`, as [`direct`] describes.
@@ -170,7 +170,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     fn next_window(
         &mut self,
         instance: &ReduceInstance<'_, T, B1, B2>,
-        changed: &[Self::Key],
+        due: &Due<T, Self::Key>,
         from: &mut KeyPosition<Self::Key>,
         window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
     );
@@ -306,7 +306,7 @@ where
         while from != KeyPosition::End {
             let before = from;
             window.clear();
-            self.backend.next_window(&instance, &changed, &mut from, &mut window);
+            self.backend.next_window(&instance, &due, &mut from, &mut window);
             let p_in = &mut window.input;
             let seeds = &window.seeds;
             let p_out = &mut window.output;

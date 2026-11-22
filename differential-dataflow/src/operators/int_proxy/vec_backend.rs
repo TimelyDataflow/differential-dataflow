@@ -35,7 +35,7 @@ use crate::trace::chunk::ChunkBatch;
 use crate::trace::chunk::vec::VecChunk;
 use crate::trace::Description;
 
-use super::{KeyPosition, ProxyReduceBackend, ReduceInstance, ReduceWindow};
+use super::{Due, KeyPosition, ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 /// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): updates
 /// `D` is `(K, V)` on the input side and `(K, W)` on the output side.
@@ -115,11 +115,12 @@ where
     fn next_window(
         &mut self,
         instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
-        changed: &[u64],
+        due: &Due<T, u64>,
         from: &mut KeyPosition<u64>,
         window: &mut ReduceWindow<T, R, R>,
     ) {
         let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
+        let changed: Vec<u64> = due.keys().collect();
 
         // Populating the input bridge and the seeds.
         self.in_pool.clear();
@@ -129,7 +130,7 @@ where
         let mut walk = MergedWalk::new(
             instance.input_batches,
             instance.source_batches,
-            changed,
+            &changed,
             start,
             instance.lower,
         );

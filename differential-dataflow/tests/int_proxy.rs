@@ -1078,13 +1078,13 @@ where
     fn next_window(
         &mut self,
         instance: &differential_dataflow::operators::int_proxy::ReduceInstance<'_, T, B1, B2>,
-        changed: &[u64],
+        due: &differential_dataflow::operators::int_proxy::Due<T, u64>,
         from: &mut KeyPosition<u64>,
         window: &mut differential_dataflow::operators::int_proxy::ReduceWindow<T, i64, i64>,
     ) {
         use differential_dataflow::operators::int_proxy::reduce::direct;
         self.emit(&[]);
-        self.inner.next_window(instance, changed, from, window);
+        self.inner.next_window(instance, due, from, window);
         if instance.present_all { return; }
         let (input, seeds, output) = (std::mem::take(&mut window.input), std::mem::take(&mut window.seeds), std::mem::take(&mut window.output));
         let mut keys: Vec<u64> = input.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(output.iter().map(|r| r.0.0)).collect();
@@ -1096,9 +1096,8 @@ where
             let ins: Vec<_> = input.iter().filter(|r| r.0.0 == key).cloned().collect();
             let novel: Vec<_> = seeds.iter().filter(|s| s.0 == key).cloned().collect();
             let outs: Vec<_> = output.iter().filter(|r| r.0.0 == key).cloned().collect();
-            let at = if changed.binary_search(&key).is_ok() { None } else {
-                direct(novel.iter().map(|s| &s.1), ins.iter().map(|r| &r.1).chain(outs.iter().map(|r| &r.1)), self.upper.borrow()).cloned()
-            };
+            let owed = due.rows.iter().filter(|row| row.0 == key).map(|row| &due.times[row.1]);
+            let at = direct(owed.chain(novel.iter().map(|s| &s.1)), ins.iter().map(|r| &r.1).chain(outs.iter().map(|r| &r.1)), self.upper.borrow()).cloned();
             let Some(at) = at else {
                 window.input.extend(ins);
                 window.seeds.extend(novel);
@@ -1180,7 +1179,8 @@ fn reduce_completed_key_carries_time_beyond_upper() {
     let got = run(&mut ProxyReduceTactic::new(completing));
     let want = run(&mut ProxyReduceTactic::new(max_backend_at()));
     // The prior input record and the prior output record each carry (2, 1).
-    assert_eq!(*count.lock().unwrap(), (1, 2), "the key is completed in the first retire, and carries its two records' joins");
+    // It is completed again in the second retire, at its due time, where nothing is left to carry.
+    assert_eq!(*count.lock().unwrap(), (2, 2), "the key is completed in both retires, and carries its two records' joins once");
     assert_eq!(got.0, Antichain::from_elem(time(2, 1)), "the carried time holds the first retire's frontier");
     assert_eq!(got, want);
     assert_eq!(got.2, vec![((7, 3), seed, 1), ((7, 3), time(2, 1), -1)]);
@@ -1222,8 +1222,9 @@ fn reduce_completed_keys_match_partial_order_oracle() {
         let got = run(&mut ProxyReduceTactic::new(completing));
         let want = run(&mut ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic as MaxLogic, window)));
         assert_eq!(got, want, "window {window}");
-        // Keys divisible by 2 or 3 change in the third retire, each at one time with all records before it.
-        assert_eq!(count.lock().unwrap().0, (0..64).filter(|k| k % 2 == 0 || k % 3 == 0).count(), "window {window}");
+        // Every key is due at (1, 1) in the second retire, with all its records before it; keys divisible
+        // by 2 or 3 change in the third retire, each at one time with all records before it.
+        assert_eq!(count.lock().unwrap().0, 64 + (0..64).filter(|k| k % 2 == 0 || k % 3 == 0).count(), "window {window}");
     }
 }
 
