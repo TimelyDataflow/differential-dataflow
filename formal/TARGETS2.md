@@ -55,11 +55,18 @@ Round `r+1` computes:
 1. Seeds: `N = supp b_{r+1} ∪ { p ∈ P_r : p ∉ Beyond u_{r+1} }`.
 2. Interesting times: the joins of finite subsets of `supp S_r ∪ supp O_r ∪ N` containing at least one element of `N` — the set `cl (supp S_r ∪ supp O_r ∪ N) ∩ Above(N)` in `Coverage.lean`'s terms (`cl_inter_above_eq_novelJoins` characterizes it).
    (Amended 2026-07-02: the stored-output support participates in the ground set.  This is what the original implementation does, and it is what makes the round invariant re-derivable from current representatives under any adversary — the proven, unconditional path.  The output-free variant remains an open question; see PLAN.md.)
+   (Amended 2026-11-22: step 2 may join against a VIEW `S'`, `O'` in place of `S_r`, `O_r`, if the view agrees with them in accumulation on some upper set holding every seed; `Enumerates` in the Lean.
+   The view may be the state advanced by any time below every seed and consolidated, so that updates which land together and cancel are gone (`meet_view_agrees`).
+   The change term and the staleness are covered from the view's closure, the staleness being re-derived over the view rather than carried (`view_round_coverage`).
+   Cancelling by a meet that rises during a round is a finer schedule of this kind: each piece of the round cancels by a time below its own seeds, and the run is correct at every frontier it passes (`Run.correct_at`).)
    Split it: `active` is the part not in `Beyond u_{r+1}`; `pended` is the part in `Beyond u_{r+1}` that the enumeration reaches before crossing `upper` (a join beyond `upper` is deferred and closed no further).
 3. Emission: an update set `e_{r+1}` supported on `active`, chosen so that for every `t ∈ active`, `acc (O_r + e_{r+1}) t = f (acc (S_r + b_{r+1}) t)`.
    (The greedy `dtrace` construction of `Coverage.lean` builds it.)
 4. `P_{r+1} = pended ∪ (P_r ∩ Beyond u_{r+1})`, and the adversary chooses fresh representatives `S_{r+1}`, `O_{r+1}`.
    (Amended 2026-07-02: the model requires only `P_{r+1} ⊇ pended ∪ (P_r ∩ Beyond u_{r+1})` with `P_{r+1} ⊆ Beyond u_{r+1}` finite — the implementation warns about MORE times than the enumeration defers, e.g. joins with already-finalized times it keeps around "to scare future times", and over-warning is harmless: a warned time owing nothing evaluates to an empty correction when due.  The exact choice above is one instance, `Step.of_pending_eq` in the Lean.)
+   (Amended 2026-11-22: weaker still, every time of `pended ∪ (P_r ∩ Beyond u_{r+1})` need only be at or above some time of `P_{r+1}`, as `Enumerates.pending_below` in the Lean.
+   The implementation pends a reached time beyond `upper` without its joins against the times its sweep has already passed, and those joins lie above it.
+   The proof used the containment only to find some pending time below a live point, which the weaker condition still supplies.)
 
 ## The goal theorem
 
