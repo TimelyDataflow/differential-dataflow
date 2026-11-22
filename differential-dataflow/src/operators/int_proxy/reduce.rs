@@ -48,6 +48,7 @@ pub struct ReduceInstance<'a, T, B1, B2> {
 /// not at or before it, which the retire does not reach. So the retire evaluates the key at `at` alone, where the accumulations
 /// are the records at or before `at`. The other records' joins with `at` are times to carry to later retires.
 ///
+/// The tactic evaluates a presented key this way whenever this finds its time, with the key's due times among its seeds.
 /// A backend completes such a key by evaluating it once over its input and output records at or before `at`, committing
 /// the difference at `at` to the batch in progress, and reporting the carried times in [`ReduceWindow::carried`].
 /// It may leave out of the carried times those whose records net to nothing once each is advanced to its join with `at`.
@@ -63,6 +64,21 @@ pub fn direct<'a, T: Timestamp + Lattice>(
         && !upper.less_equal(at)
         && records.into_iter().all(|time| time.less_equal(at) || upper.less_equal(&time.join(at)))
     ).then_some(at)
+}
+
+/// The times a [`direct`] key's `records` carry: the joins with `at` of those not at or before it,
+/// less the ones whose records net to nothing once advanced so.
+fn carry<T: Timestamp + Lattice, K: Copy, V: Copy + Ord, R: Semigroup + Clone>(
+    key: K,
+    at: &T,
+    records: &[((K, V), T, R)],
+    scratch: &mut Vec<((V, T), R)>,
+    carried: &mut Vec<(T, K)>,
+) {
+    scratch.clear();
+    scratch.extend(records.iter().filter(|record| !record.1.less_equal(at)).map(|record| ((record.0.1, record.1.join(at)), record.2.clone())));
+    crate::consolidation::consolidate(scratch);
+    carried.extend(scratch.drain(..).map(|((_, time), _)| (time, key)));
 }
 
 /// One window of the key space: the presentations a bounded, key-contiguous snip needs.
@@ -284,6 +300,8 @@ where
         let mut active: Vec<(usize, T)> = Vec::new();
         let mut in_accum: Vec<(Bk::VIn, Bk::RIn)> = Vec::new();
         let mut cur_out: Vec<(Bk::VOut, Bk::ROut)> = Vec::new();
+        let mut in_carry: Vec<((Bk::VIn, T), Bk::RIn)> = Vec::new();
+        let mut out_carry: Vec<((Bk::VOut, T), Bk::ROut)> = Vec::new();
 
         while from != KeyPosition::End {
             let before = from;
@@ -364,16 +382,18 @@ where
                     while due_pos < due.rows.len() && due.rows[due_pos].0 == key { due_pos += 1; }
                     let owed = &due.rows[start..due_pos];
                     let novel = &seeds[n0..n1];
-                    // One seed dominating every record has exactly one possible evaluation.
-                    let single = owed.first().map(|r| &due.times[r.1]).or_else(|| novel.first().map(|r| &r.1))
-                        .filter(|at| owed.len() <= 1 && novel.len() <= 1
-                            && novel.first().is_none_or(|r| &r.1 == *at)
-                            && p_in[i0..i1].iter().all(|r| r.1.less_equal(at))
-                            && p_out[o0..o1].iter().all(|r| r.1.less_equal(at)));
+                    // A key with one time to evaluate at is evaluated there once, over its records at
+                    // or before it; its other records carry their joins with it.
+                    let single = direct(
+                        owed.iter().map(|r| &due.times[r.1]).chain(novel.iter().map(|r| &r.1)),
+                        p_in[i0..i1].iter().map(|r| &r.1).chain(p_out[o0..o1].iter().map(|r| &r.1)),
+                        upper.borrow(),
+                    );
                     slot.direct = single.map(|_| (i0..i1, o0..o1));
                     slot.at = if let Some(at) = single {
-                        if upper.less_equal(at) { slot.pended.push(at.clone()); None }
-                        else { Some(at.clone()) }
+                        carry(key, at, &p_in[i0..i1], &mut in_carry, &mut deferred);
+                        carry(key, at, &p_out[o0..o1], &mut out_carry, &mut deferred);
+                        Some(at.clone())
                     } else {
                         slot.sweep.load(
                             owed.iter().map(|&(_, row)| due.times[row].clone()),
@@ -407,8 +427,8 @@ where
                         in_accum.clear();
                         cur_out.clear();
                         if let Some((ir, or)) = &slots[si].direct {
-                            in_accum.extend(p_in[ir.clone()].iter().map(|r| (r.0.1, r.2.clone())));
-                            cur_out.extend(p_out[or.clone()].iter().map(|r| (r.0.1, r.2.clone())));
+                            in_accum.extend(p_in[ir.clone()].iter().filter(|r| r.1.less_equal(&at)).map(|r| (r.0.1, r.2.clone())));
+                            cur_out.extend(p_out[or.clone()].iter().filter(|r| r.1.less_equal(&at)).map(|r| (r.0.1, r.2.clone())));
                             crate::consolidation::consolidate(&mut in_accum);
                             crate::consolidation::consolidate(&mut cur_out);
                         } else {
@@ -476,6 +496,8 @@ where
 struct KeySweep<T, RIn, ROut, K, VIn, VOut> {
     key: K,
     sweep: Sweep<T, RIn, ROut, VIn, VOut>,
+    /// The key's input and output records in the window, when it is [`direct`]: it is then evaluated
+    /// once, from these, and its sweep is not used.
     direct: Option<(std::ops::Range<usize>, std::ops::Range<usize>)>,
     /// Times at or beyond `upper` the sweep has reached; carried forward when the slot retires.
     pended: Vec<T>,
