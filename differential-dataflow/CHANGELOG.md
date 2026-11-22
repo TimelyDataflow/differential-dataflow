@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.26.0...differential-dataflow-v0.26.1) - 2026-11-22
+
+### Fixed
+
+- `reduce`, and operators built on it such as `distinct`, could miss output corrections when times are partially ordered with three or more dimensions. ([#1109](https://github.com/TimelyDataflow/differential-dataflow/pull/1109))
+
 ## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.1...differential-dataflow-v0.26.0) - 2026-11-05
 
 This release targets timely 0.32 and reshapes several public traits.
