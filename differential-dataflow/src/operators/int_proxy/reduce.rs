@@ -29,35 +29,36 @@ pub struct ReduceInstance<'a, T, B1, B2> {
 
 /// One window of the key space: the presentations a bounded, key-contiguous snip needs.
 ///
-/// Seeds travel as times; records travel netted. The novel data's two roles are carried by two
-/// different channels: its TIME SUPPORT seeds interesting times and rides `seeds`, raw; its
-/// RECORDS are mere accumulants and join partners, so they ride `input` merged with the prior
-/// history, where they may net against it and be advanced like anything else. Consolidation can
-/// only cancel equal-`((key, id), time)` pairs, and such a time is necessarily in `seeds`, so no
-/// interesting time is lost to netting — the invariant that once forced the runs apart.
+/// The novel records travel twice. Merged with the prior history in `input`, they are mere
+/// accumulants and join partners, and may net against that history and be advanced like anything
+/// else. On their own in `novel`, they are the witnesses of interesting times. Apart from the
+/// history, a novel record that cancels a compacted prior record still witnesses its time. As
+/// records rather than bare times, an insertion and its retraction can cancel each other once the
+/// sweep's meet moves them to one time, and then witness nothing.
 ///
 /// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`].
 pub struct ReduceWindow<T, RIn, ROut, K = u64, VIn = u64, VOut = u64> {
     /// The key's full input — novel and prior merged, netted — sorted & consolidated by `((key, value_id), time)`.
     /// May be advanced to the compaction frontier.
     pub input: ProxyBridge<T, RIn, K, VIn>,
-    /// The RAW novel time support: `(key, time)` pairs sorted by `(key, time)` and deduplicated.
-    /// Record these from the novel batches BEFORE any consolidation or advancement.
-    /// A netted-away record's time must still appear here.
-    pub seeds: Vec<(K, T)>,
+    /// The novel records alone, sorted & consolidated by `((key, value_id), time)`.
+    /// Draw these from the novel batches BEFORE they meet the prior history: a record netted away
+    /// in `input` must still appear here. An id names one value, as in `input`, but the ids need
+    /// not match `input`'s.
+    pub novel: ProxyBridge<T, RIn, K, VIn>,
     /// Accumulated output preceding the retire's interval, same ordering as `input`.
     pub output: ProxyBridge<T, ROut, K, VOut>,
 }
 
 impl<T, RIn, ROut, K, VIn, VOut> Default for ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
-    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
+    fn default() -> Self { ReduceWindow { input: Vec::new(), novel: Vec::new(), output: Vec::new() } }
 }
 
 impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
     /// Clear the presentations, keeping their allocations.
     pub fn clear(&mut self) {
         self.input.clear();
-        self.seeds.clear();
+        self.novel.clear();
         self.output.clear();
     }
 }
@@ -93,13 +94,13 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// Each call must strictly advance `from`.
     ///
     /// The window must cover every key in `[from_before, from_after)` that carries a novel update or appears in `changed`.
-    /// For each key, present merged input (novel and prior together, netted), raw novel time support in `seeds`, and accumulated output.
+    /// For each key, present merged input (novel and prior together, netted), the novel records alone in `novel`, and accumulated output.
     /// A key must be reported entirely within the window that first mentions it: splitting one across windows drops the interaction between the halves.
     /// `changed` is ascending; the harness reads no key outside the window's range, so a backend that keeps its own key order need not consult the whole space.
     ///
-    /// `seeds` must be recorded from the novel batches before any consolidation or advancement:
-    /// a novel record that nets to zero against compacted history vanishes from `input`, but its
-    /// time must still seed — that cancellation is exactly the case that loses updates otherwise.
+    /// `novel` must be drawn from the novel batches before they meet the prior history:
+    /// a novel record that nets to zero against compacted history vanishes from `input`, but it
+    /// must still witness its time — that cancellation is exactly the case that loses updates otherwise.
     ///
     /// The size of the window is up to the backend: large enough to amortize the crossings, small
     /// enough that the presentations are affordable, as all are live at once.
@@ -241,14 +242,11 @@ where
             window.clear();
             self.backend.next_window(&instance, &changed, &mut from, &mut window);
             let p_in = &mut window.input;
-            let seeds = &window.seeds;
+            let p_new = &window.novel;
             let p_out = &mut window.output;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
+            super::debug_assert_sorted_bridge(p_new, "next_window.novel");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
-            debug_assert!(
-                seeds.windows(2).all(|w| w[0] < w[1]),
-                "next_window.seeds must be sorted by (key, time) and deduplicated",
-            );
             // Without progress the window loop would never retire, so this guards liveness as well
             // as contract; the range check catches a key reported outside the window that owns it,
             // which would silently drop the interaction between its halves.
@@ -258,7 +256,7 @@ where
             );
             debug_assert!(
                 {
-                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0));
+                    let mut keys = p_in.iter().map(|r| r.0.0).chain(p_new.iter().map(|r| r.0.0)).chain(p_out.iter().map(|r| r.0.0));
                     keys.all(|k| before <= KeyPosition::At(k) && KeyPosition::At(k) < from)
                 },
                 "next_window must report a key entirely within the window that first mentions it",
@@ -279,20 +277,20 @@ where
             // across bounded groups as well as windows. A backend can present a large
             // window without allocating sweep state for every key simultaneously.
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
-            while is < p_in.len() || ns < seeds.len() || os < p_out.len() {
+            while is < p_in.len() || ns < p_new.len() || os < p_out.len() {
                 let mut n_slots = 0usize;
                 live.clear();
                 // Mapped to keys before the min: the sources differ in shape.
                 while let Some(key) = [
                     p_in.get(is).map(|record| record.0.0),
-                    seeds.get(ns).map(|seed| seed.0),
+                    p_new.get(ns).map(|record| record.0.0),
                     p_out.get(os).map(|record| record.0.0),
                 ].into_iter().flatten().min() {
                     let i0 = is;
                     while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
                     let i1 = is;
                     let n0 = ns;
-                    while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
+                    while ns < p_new.len() && p_new[ns].0.0 == key { ns += 1; }
                     let n1 = ns;
                     let o0 = os;
                     while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
@@ -307,11 +305,11 @@ where
                     let start = due_pos;
                     while due_pos < due.rows.len() && due.rows[due_pos].0 == key { due_pos += 1; }
                     let owed = &due.rows[start..due_pos];
-                    let novel = &seeds[n0..n1];
+                    let novel = &p_new[n0..n1];
                     // One seed dominating every record has exactly one possible evaluation.
                     let single = owed.first().map(|r| &due.times[r.1]).or_else(|| novel.first().map(|r| &r.1))
-                        .filter(|at| owed.len() <= 1 && novel.len() <= 1
-                            && novel.first().is_none_or(|r| &r.1 == *at)
+                        .filter(|at| owed.len() <= 1
+                            && novel.iter().all(|r| &r.1 == *at)
                             && p_in[i0..i1].iter().all(|r| r.1.less_equal(at))
                             && p_out[o0..o1].iter().all(|r| r.1.less_equal(at)));
                     slot.direct = single.map(|_| (i0..i1, o0..o1));
@@ -321,7 +319,7 @@ where
                     } else {
                         slot.sweep.load(
                             owed.iter().map(|&(_, row)| due.times[row].clone()),
-                            novel.iter().map(|r| r.1.clone()),
+                            novel.iter().map(|r| (r.0.1, r.1.clone(), r.2.clone())),
                             p_in[i0..i1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
                             p_out[o0..o1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
                         );
@@ -461,34 +459,38 @@ fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
 ///
 /// The schedule is `formal/Differential/RoundCoverage.lean`'s `round_coverage`: a time carrying an
 /// output change lies in the join-closure of `prior ∪ novel` AND is at or above some novel time.
-/// The novel times arrive as the SEED LIST (the harness's warned times merged with the window's raw
-/// novel time support); the records themselves travel merged with the prior history and carry no
-/// witness duty, which is what lets them net and advance. Coverage is invariant under that move:
-/// the witness clause reads only times, and consolidation cancels only equal-time pairs whose time
-/// the seed list retains.
+/// The sweep reads it at a finer grain, as `formal/Differential/Model.lean`'s `meet_view_agrees`
+/// permits: cut the round at the sweep's position, and the novel records already passed are
+/// history to the rest of the round, which may cancel them by the meet of what is still to come.
+/// So the witnesses are the novel records that survive that cancellation, the harness's due
+/// (warned) times, and the corrections emitted so far. The novel records also travel merged with
+/// the prior history, and there carry no witness duty, which is what lets them net and advance.
 struct Sweep<T, RIn, ROut, VIn, VOut> {
     /// The accumulated input (novel and prior, merged and netted) and output: join partners, and
     /// the accumulations to evaluate over. Both may be advanced freely — witness duty lives in
-    /// `seeds`, not in any record.
+    /// `novel`, `seeds` and `produced`, not in these.
     input: ValueHistory<VIn, T, RIn>,
     output: ValueHistory<VOut, T, ROut>,
-    /// The key's seed times — the harness's due (warned) times merged with the raw novel time
-    /// support — ascending and deduplicated, with their suffix meets; `seed_pos` consumes them.
-    /// These are the ONLY source of interest: the schedule is stated over them, so they are held
-    /// raw, never advanced.
+    /// The novel records alone, not netted against the prior history: witnesses and join partners
+    /// for every time. `settle` advances their buffer by the running meet, so an insertion and its
+    /// retraction that land on one time cancel, and stop witnessing.
+    novel: ValueHistory<VIn, T, RIn>,
+    /// The key's seed times — the harness's due (warned) times — ascending and deduplicated, with
+    /// their suffix meets; `seed_pos` consumes them. They are bare times, with nothing to cancel
+    /// against, so they are held raw, never advanced.
     seeds: Vec<T>,
     seed_meets: Vec<T>,
     seed_pos: usize,
     /// Synthesized times not yet visited, sorted DESCENDING so `last()` is the least.
     synth: Vec<T>,
-    /// The seed times reached so far, compacted by the running meet. They are the witnesses the
-    /// absorption test looks for, and the partners a close joins against; keeping them collapsed is
+    /// The seed times reached so far, compacted by the running meet. They are witnesses the
+    /// absorption test looks for, and partners a close joins against; keeping them collapsed is
     /// what stops a key with many reached times rescanning all of them.
     reached: Vec<T>,
     /// Scratch for one step's synthesized times.
     temporary: Vec<T>,
-    /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
-    /// output accumulation.
+    /// Corrections emitted so far this sweep, meet-collapsed; a witness, a join partner for every
+    /// time, and part of the output accumulation.
     produced: Vec<((VOut, T), ROut)>,
     /// The meet of every time still to come.
     meet: Option<T>,
@@ -498,7 +500,7 @@ struct Sweep<T, RIn, ROut, VIn, VOut> {
 
 /// What one [`tick`](Sweep::tick) decided about the time it visited.
 enum Tick<T> {
-    /// No seed reaches this time; the sweep moved past it.
+    /// No witness reaches this time; the sweep moved past it.
     Passed,
     /// Reached, but at or beyond `upper`: carried to a later round rather than evaluated.
     Pended,
@@ -512,7 +514,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
     /// An empty sweep, to be `load`ed and reused for successive keys.
     fn new() -> Self {
         Sweep {
-            input: ValueHistory::new(), output: ValueHistory::new(),
+            input: ValueHistory::new(), output: ValueHistory::new(), novel: ValueHistory::new(),
             seeds: Vec::new(), seed_meets: Vec::new(), seed_pos: 0,
             synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
             produced: Vec::new(), meet: None, suspended: false,
@@ -521,31 +523,20 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
 
     /// Position the sweep at the start of one key.
     ///
-    /// `owed` is the harness's due (warned) times and `novel_times` the window's raw novel time
-    /// support, both ascending; they merge into the seed list, which is held raw — the schedule is
-    /// stated over these times, so they are never advanced. The records in `input` are merged and
-    /// netted (novel and prior together): a cancelled record's time survives in the seed list, so
-    /// netting loses nothing, and every record is a mere partner/accumulant that the meet may
-    /// advance freely.
+    /// `owed` is the harness's due (warned) times, ascending; they form the seed list, which is held
+    /// raw. `novel` is the window's novel records alone, grouped by value. The records in `input`
+    /// are merged and netted (novel and prior together): a cancelled record still witnesses in
+    /// `novel`, so netting loses nothing, and every record in `input` is a mere partner/accumulant
+    /// that the meet may advance freely.
     fn load(
         &mut self,
         owed: impl Iterator<Item = T>,
-        novel_times: impl Iterator<Item = T>,
+        novel: impl Iterator<Item = (VIn, T, RIn)>,
         input: impl Iterator<Item = (VIn, T, RIn)>,
         output: impl Iterator<Item = (VOut, T, ROut)>,
     ) {
-        // Merge the two ascending seed sources, deduplicated.
         self.seeds.clear();
-        let mut owed = owed.peekable();
-        let mut novel = novel_times.peekable();
-        loop {
-            let take_owed = match (owed.peek(), novel.peek()) {
-                (Some(a), Some(b)) => a <= b,
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (None, None) => break,
-            };
-            let time = if take_owed { owed.next() } else { novel.next() }.expect("peeked");
+        for time in owed {
             if self.seeds.last() != Some(&time) {
                 self.seeds.push(time);
             }
@@ -563,10 +554,12 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
         self.produced.clear();
         self.suspended = false;
 
-        // The meet of every seed bounds every time the sweep will visit, so the record buffers can
-        // be advanced by it at load.
+        // The meet of every seed and novel time bounds every time the sweep will visit, so the
+        // record buffers can be advanced by it at load. The novel records are already beyond it.
+        self.novel.load_iter(novel, None);
         let mut meet: Option<T> = None;
         update_meet(&mut meet, self.seed_meets.first());
+        update_meet(&mut meet, self.novel.meet());
         self.input.load_iter(input, meet.as_ref());
         self.output.load_iter(output, meet.as_ref());
         self.meet = meet;
@@ -607,10 +600,10 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
             pended.push(at);
             return Tick::Pended;
         }
-        // An unreached time is closed against the reached times even out of the interval. With
+        // An unreached time is closed against the witnesses even out of the interval. With
         // partially ordered times, advancing the prior times by the meet can move one from before
         // the interval to beyond it, and no later round rediscovers its joins with this round's
-        // seeds: there both are prior. The joins are at or beyond `at`, so `close` pends them.
+        // novel records: there both are prior. The joins are at or beyond `at`, so `close` pends them.
         self.close(&at, reached, upper, pended);
         if reached { return Tick::Crossing(at); }
         self.settle();
@@ -625,31 +618,36 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
     fn frontier(&self) -> Option<T> {
         [
             self.seeds.get(self.seed_pos), self.input.time(),
-            self.output.time(), self.synth.last(),
+            self.output.time(), self.novel.time(), self.synth.last(),
         ].into_iter().flatten().min().cloned()
     }
 
     /// Step every source sitting at `at`, and decide whether `at` is REACHED.
     ///
     /// Reached is clause two of `round_coverage` — `∃ nu ∈ novel, nu ≤ at` — evaluated
-    /// incrementally: either a seed lands exactly here, or one already stepped in lies below.
+    /// incrementally over the surviving witnesses: either a seed or a synthetic join lands exactly
+    /// here, or a seed, a novel record, or a correction already stepped in lies below.
     ///
     /// Input and output are stepped whether or not `at` is reached, and that is forced rather than
     /// eager: they are sources of the frontier, so leaving them would stall the sweep, and their
     /// edits must reach the buffers or they are lost to every later accumulation. Stepping only
     /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
     /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
-    /// only where the buffers are actually read.
+    /// only where the buffers are actually read. The novel records are stepped for the same reason;
+    /// their buffer is read at every time, and is advanced in `settle`.
     fn absorb(&mut self, at: &T) -> bool {
         self.input.step_while_time_is(at);
         self.output.step_while_time_is(at);
+        self.novel.step_while_time_is(at);
 
-        // A seed here — a due time or a novel-support time — is consumed into the reached set,
-        // where it becomes a witness and a join partner for every later time. So is a synthetic
-        // join scheduled for here.
+        // A seed here — a due time — is consumed into the reached set, where it becomes a witness
+        // and a join partner for every later time. A synthetic join scheduled for here is reached,
+        // but not kept: what made it reached is still among the witnesses, and what it emits goes
+        // to `produced`. Both are advanced by the meet and consolidated, so they vanish once they
+        // cancel, where a bare time would stay and make every later time it joins reached.
         let mut reached = false;
         while self.synth.last() == Some(at) {
-            self.reached.push(self.synth.pop().expect("nonempty"));
+            self.synth.pop();
             reached = true;
         }
         while self.seeds.get(self.seed_pos) == Some(at) {
@@ -657,27 +655,35 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
             self.seed_pos += 1;
             reached = true;
         }
-        // Absorption: a time at or above a seed already consumed is itself reached, because
-        // joining that seed with it yields it back.
-        reached || self.reached.iter().any(|t| t.less_equal(at))
+        // Absorption: a time at or above a witness is itself reached, because joining that witness
+        // with it yields it back. A novel record landing here is in the buffer by now.
+        reached
+            || self.reached.iter().any(|t| t.less_equal(at))
+            || self.novel.buffer().iter().any(|((_, t), _)| t.less_equal(at))
+            // A correction emitted this round changes the output at every time above it.
+            || self.produced.iter().any(|((_, t), _)| t.less_equal(at))
     }
 
     /// Close `at` forward under joins — clause one of `round_coverage`, the join-closure.
     ///
-    /// Against the REACHED (seed-derived) times always, reached or not: an unreached time joined
-    /// with a seed lands at or above that seed, so it carries a witness and is on the schedule.
+    /// Against the WITNESSES always, reached or not — the reached seeds, the novel records, and
+    /// `produced`: an unreached time joined with a witness lands at or above that witness, so it
+    /// is on the schedule.
     ///
     /// Against the PRIOR times only when `at` is itself reached, because the join then inherits
     /// `at`'s witness. A join of two prior times carries none and is deliberately never produced —
     /// that asymmetry is the whole of why an incremental operator does less work than the closure
     /// of everything.
     ///
-    /// `produced` counts as prior. A correction emitted at `p` changes the accumulated output at
-    /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
-    /// this round's corrections are not in the output history and `at` was not yet stepped in when
-    /// the sweep passed `p`.
+    /// A correction emitted at `p` changes the accumulated output at every time at or above `p`,
+    /// so `p ∨ at` has to be visited; nothing else covers it, since this round's corrections are
+    /// not in the output history and `at` was not yet stepped in when the sweep passed `p`.
     fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
         self.temporary.extend(self.reached.iter()
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        self.temporary.extend(self.novel.buffer().iter().map(|((_, t), _)| t)
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
             .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         if reached {
             if let Some(meet) = self.meet.as_ref() {
@@ -687,8 +693,6 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
             self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
             self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         }
         sort_dedup(&mut self.temporary);
@@ -730,16 +734,19 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone, VI
         }
     }
 
-    /// Close a step: recompute the meet of everything still to come, and compact the reached set by
-    /// it. This is what keeps a key with a long history linear rather than quadratic.
+    /// Close a step: recompute the meet of everything still to come, and compact the reached set and
+    /// the novel records by it. This is what keeps a key with a long history linear rather than
+    /// quadratic, and what retires novel records that cancel as witnesses.
     fn settle(&mut self) {
         let mut meet: Option<T> = None;
         update_meet(&mut meet, self.input.meet());
         update_meet(&mut meet, self.output.meet());
+        update_meet(&mut meet, self.novel.meet());
         for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
         update_meet(&mut meet, self.seed_meets.get(self.seed_pos));
         if let Some(m) = meet.as_ref() {
             for time in self.reached.iter_mut() { *time = time.join(m); }
+            self.novel.advance_buffer_by(m);
         }
         sort_dedup(&mut self.reached);
         self.meet = meet;

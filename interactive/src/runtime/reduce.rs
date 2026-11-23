@@ -482,22 +482,17 @@ where
         retire.colliding = keys.iter().zip(&colliding).filter(|(_, c)| **c).map(|(key, _)| *key).collect();
         let colliding = if retire.colliding.is_empty() { &[][..] } else { &colliding[..] };
 
-        // The seeds are the novel batches' RAW (key, time) support, recorded here — before the
-        // merged presentation below, whose consolidation may net a novel record away entirely.
-        window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
-        for (chunk, found) in in_chunks[prior..].iter().zip(&matches[prior..]) {
-            for (index, rows) in found {
-                window.seeds.extend(rows.clone().map(|row| (keys[*index], chunk.times().get(row))));
-            }
-        }
-        window.seeds.sort_unstable();
-        window.seeds.dedup();
-
-        // ONE merged input presentation: novel and prior together, netted by the consolidation —
-        // equal values share an id, so an exactly cancelling pair vanishes here, and its time
-        // survives in `window.seeds` above. Input ids name rows for this window only.
+        // The novel records alone, presented apart from the merged presentation below, whose
+        // consolidation may net a novel record away entirely. Their ids name rows of the input
+        // pool, as the merged input's do, but are not the same ids.
         self.input.refs.clear();
         let projected = (self.project_values && self.reads.value != Demand::All).then_some(&self.input.columns[..]);
+        let novel_matches: Matches = std::iter::repeat_with(Vec::new).take(prior).chain(matches[prior..].iter().cloned()).collect();
+        present(&in_chunks, keys, &novel_matches, colliding, projected, &mut self.input.refs, &mut window.novel);
+
+        // ONE merged input presentation: novel and prior together, netted by the consolidation —
+        // equal values share an id, so an exactly cancelling pair vanishes here, and it survives
+        // in `window.novel` above. Input ids name rows for this window only.
         present(&in_chunks, keys, &matches, colliding, projected, &mut self.input.refs, &mut window.input);
         // The output history, same keys. Output ids name rows for the whole retire, and the rows
         // that hold their keys are at the same positions of the output chunks' key columns.
@@ -913,7 +908,7 @@ mod tests {
                 // Distinct reads its values whole, so the input pool holds what was presented.
                 let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Expr(crate::parse::Reducer::Distinct.lambda()), None, shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
-                let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+                let (mut inputs, mut novels, mut outputs) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
                 while from != KeyPosition::End {
                     let before = from;
@@ -924,23 +919,17 @@ mod tests {
                     let counts: Vec<usize> = held.iter().filter(|(key, _)| within(**key)).map(|(_, count)| *count).collect();
                     assert!(counts.iter().rev().skip(1).sum::<usize>() < window_size, "a window stops once it holds the budget");
                     assert!(from == KeyPosition::End || counts.iter().sum::<usize>() >= window_size, "a window holds the budget");
-                    for (bridge, pool, into) in [(&window.input, &backend.input, &mut inputs), (&window.output, &backend.output, &mut outputs)] {
+                    for (bridge, pool, into) in [(&window.input, &backend.input, &mut inputs), (&window.novel, &backend.input, &mut novels), (&window.output, &backend.output, &mut outputs)] {
                         let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
                         for (((key, _), time, diff), value) in bridge.iter().zip(values) {
                             assert!(within(*key));
                             assert!(into.insert((*key, value, time.clone()), *diff).is_none());
                         }
                     }
-                    for (key, time) in window.seeds.iter() {
-                        assert!(within(*key) && seeds.insert((*key, time.clone())));
-                    }
                 }
-                (inputs, seeds, outputs)
+                (inputs, novels, outputs)
             };
-            let support: BTreeSet<_> = chunks_of(&input).iter()
-                .flat_map(|chunk| key_ids(chunk.keys()).into_iter().enumerate().map(|(i, key)| (key, chunk.times().get(i))))
-                .collect();
-            assert!(run(usize::MAX) == (netted(&in_chunks, &retire), support, netted(&chunks_of(&out), &retire)));
+            assert!(run(usize::MAX) == (netted(&in_chunks, &retire), netted(&chunks_of(&input), &retire), netted(&chunks_of(&out), &retire)));
             for window_size in [1, 3, 17] {
                 assert!(run(window_size) == run(usize::MAX), "window_size={window_size}");
             }
