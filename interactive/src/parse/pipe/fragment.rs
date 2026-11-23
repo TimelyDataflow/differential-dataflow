@@ -36,6 +36,23 @@ impl Pattern {
         }
         walk(self, &mut Vec::new())
     }
+    fn leaves(&self, accept: impl Fn(&Self) -> bool + Copy) -> bool {
+        match self {
+            Self::Tuple(ps) => ps.iter().all(|p| p.leaves(accept)),
+            leaf => accept(leaf),
+        }
+    }
+    fn number_matches(&mut self, names: &mut Vec<String>) {
+        match self {
+            Self::Var(name) => {
+                let position = format!("match{}", names.len());
+                names.push(std::mem::replace(name, position));
+            }
+            Self::Tuple(ps) => ps.iter_mut().for_each(|p| p.number_matches(names)),
+            Self::Variant { payload, .. } => payload.number_matches(names),
+            _ => {},
+        }
+    }
     fn constant(&self) -> bool {
         match self { Self::Literal(_) => true, Self::Tuple(ps) => ps.iter().all(Self::constant), _ => false }
     }
@@ -67,7 +84,48 @@ impl Pattern {
     }
 }
 
-struct Atom { source: Expr, key: Pattern, val: Pattern }
+struct Atom {
+    source: Expr,
+    key: Pattern,
+    val: Pattern,
+    absent: Option<Vec<String>>,
+}
+
+impl Atom {
+    fn target(&self, state: &State<'_>, keep: bool) -> Target<'_> {
+        if let Some(names) = &self.absent {
+            for name in names {
+                assert!(state.bound.contains_key(name), "fragment test variable `{name}` is not bound by an earlier atom");
+            }
+        }
+        if keep { Target::Keep(&self.key) } else { Target::Key(&self.key) }
+    }
+
+    fn absence(source: Expr, mut key: Pattern, mut val: Pattern, scope: &corgi::Scope) -> Self {
+        let full_key = key.leaves(|p| matches!(p, Pattern::Var(_))) && val.leaves(|p| matches!(p, Pattern::Wild));
+        let original_key = key.clone();
+        // Number occurrences by position. Two uses of the same pattern can share
+        // the right side even if they give their variables different names.
+        let mut names = Vec::new();
+        key.number_matches(&mut names);
+        val.number_matches(&mut names);
+        assert!(!names.is_empty(), "a fragment test needs at least one matched variable");
+
+        let mut state = State::new(scope);
+        let (source, key) = if full_key {
+            let pat = format!("(k, vals : List(({}, int)))", val.shape_pattern());
+            let reducer = state.lambda(&pat, "((), 1) enlist".into());
+            (Expr::Reduce(Box::new(source), Reducer::Expr(reducer, Some(1))), original_key)
+        } else {
+            let pat = state.bind_first(&key, &val);
+            let projected = state.checkpoint(source, Target::Output, &pat);
+            let fields = names.iter().cloned().map(Pattern::Var).collect::<Vec<_>>();
+            let key = if let [field] = &fields[..] { field.clone() } else { Pattern::Tuple(fields) };
+            (Expr::Reduce(Box::new(projected), Reducer::Distinct), key)
+        };
+        Self { source, key, val: Pattern::Wild, absent: Some(names) }
+    }
+}
 
 /// A fragment's atoms, expanded as soon as they are parsed: no syntax tree holds a fragment.
 struct Fragment { atoms: Vec<Atom>, head: Option<String> }
@@ -76,18 +134,25 @@ impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
         let mut atoms = Vec::new();
         let mut source = source;
+        let mut absent = false;
         loop {
             assert!(matches!(source, Expr::Name(_) | Expr::Path(..)), "a fragment atom names an existing binding");
             self.expect(&Token::LParen);
             let key = self.fragment_pattern();
             self.expect(&Token::Comma);
             let val = self.fragment_pattern();
-            if atoms.is_empty() { key.check_lists(); }
+            if atoms.is_empty() || absent { key.check_lists(); }
             val.check_lists();
             self.expect(&Token::RParen);
-            atoms.push(Atom { source, key, val });
+            atoms.push(if absent {
+                Atom::absence(source, key, val, self.lambda_scope())
+            } else {
+                Atom { source, key, val, absent: None }
+            });
             if *self.peek() != Token::Star { break; }
             self.next();
+            absent = *self.peek() == Token::Bang;
+            if absent { self.next(); }
             source = self.parse_atom();
         }
         let head = if *self.peek() == Token::Turnstile {
@@ -225,7 +290,17 @@ struct State<'a> {
     variants: Vec<Variant>,
     tests: Vec<Test>,
 }
-impl State<'_> {
+impl<'a> State<'a> {
+    fn new(scope: &'a corgi::Scope) -> Self {
+        Self { scope, next: 0, names: vec![], bound: BTreeMap::new(), locations: BTreeMap::new(),
+            key: BTreeMap::new(), variants: vec![], tests: vec![] }
+    }
+    fn bind_first(&mut self, key: &Pattern, val: &Pattern) -> String {
+        self.ingest(key, "k".into());
+        self.key = self.locations.iter().map(|(at, expr)| (at.clone(), KeyRead::Value(expr.clone()))).collect();
+        self.ingest(val, "v".into());
+        format!("(k : {}, v : {})", key.shape_pattern(), val.shape_pattern())
+    }
     fn lambda(&self, pat: &str, body: String) -> Lambda { Lambda::new(format!("let {pat} = input in {body}"), self.scope) }
     fn read(&self, at: &Access) -> String {
         if let Some(expr) = self.locations.get(at) { return expr.clone(); }
@@ -451,34 +526,50 @@ impl State<'_> {
 
 impl Fragment {
     fn expansion(&self, scope: &corgi::Scope) -> Expr {
-        let mut s = State { scope, next: 0, names: vec![], bound: BTreeMap::new(),
-            locations: BTreeMap::new(), key: BTreeMap::new(), variants: vec![], tests: vec![] };
+        let mut s = State::new(scope);
         let output = self.head.as_deref().map_or(Target::Output, Target::Head);
         let first = &self.atoms[0];
-        s.ingest(&first.key, "k".into());
-        s.key = s.locations.iter().map(|(a, expr)| (a.clone(), KeyRead::Value(expr.clone()))).collect();
-        s.ingest(&first.val, "v".into());
+        let first_pat = s.bind_first(&first.key, &first.val);
         // A restricted first key is tested before a new arrangement, so rows it rejects are never paired.
         let same_key = self.atoms.get(1).is_some_and(|next| first.key == next.key);
         let direct = first.key.unrestricted() && same_key;
         let mut expr = first.source.clone();
         if !direct {
             // Tests may restrict the key, but an identical lookup must retain its original value.
-            let target = self.atoms.get(1).map_or(output, |a| if same_key { Target::Keep(&a.key) } else { Target::Key(&a.key) });
-            expr = s.checkpoint(expr, target, &format!("(k : {}, v : {})", first.key.shape_pattern(), first.val.shape_pattern()));
+            let target = self.atoms.get(1).map_or(output, |a| a.target(&s, same_key));
+            expr = s.checkpoint(expr, target, &first_pat);
         }
         for i in 1..self.atoms.len() {
             let atom = &self.atoms[i];
-            s.validate_key(&atom.key);
-            s.ingest(&atom.val, "r".into());
-            let body = s.row("k".into(), s.key.clone());
-            let pat = if i == 1 && direct {
-                format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
-            } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
-            expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
-            let target = self.atoms.get(i + 1).map_or(output, |a| Target::Key(&a.key));
-            expr = s.checkpoint(expr, target, "(k, v)");
+            if atom.absent.is_some() {
+                let joined = Expr::Join(Box::new(expr.clone()), Box::new(atom.source.clone()),
+                    s.lambda("(k, (v, _))", "(k, v)".into()));
+                expr = Expr::Concat(vec![expr, Expr::Negate(Box::new(joined))]);
+                if i == 1 && direct && self.atoms.len() == 2 && self.keeps_first_row() {
+                    return expr;
+                }
+            } else {
+                s.validate_key(&atom.key);
+                s.ingest(&atom.val, "r".into());
+                let body = s.row("k".into(), s.key.clone());
+                let pat = if i == 1 && direct {
+                    format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
+                } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
+                expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
+            }
+            let target = self.atoms.get(i + 1).map_or(output, |a| a.target(&s, false));
+            let checkpoint_pat = if i == 1 && direct && atom.absent.is_some() { &first_pat } else { "(k, v)" };
+            expr = s.checkpoint(expr, target, checkpoint_pat);
         }
         expr
     }
+
+    /// A direct first antijoin with this head already has the requested row.
+    fn keeps_first_row(&self) -> bool {
+        let (Pattern::Var(key), Pattern::Var(val), Some(head)) =
+            (&self.atoms[0].key, &self.atoms[0].val, &self.head) else { return false; };
+        key != val && head.strip_prefix('(').and_then(|s| s.strip_suffix(')')).and_then(|s| s.split_once(','))
+            .is_some_and(|(k, v)| k.trim() == key && v.trim() == val)
+    }
+
 }

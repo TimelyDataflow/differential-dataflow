@@ -160,9 +160,18 @@ The pipeline can continue after the head's closing parenthesis.
 Without a head, the output key contains the variables in order of first appearance and the value is unit.
 A single variable is itself the key, and zero variables give a unit key.
 A repeated variable tests equality, and a literal in a pattern tests that value.
-Every later atom's key must use a variable bound by an earlier atom.
+Every later plain atom's key must use a variable bound by an earlier atom.
 Put selective atoms first.
-Fragments are experimental: the parser expands them into plain joins, and they may change.
+Fragments are experimental.
+The parser expands them into ordinary pipeline operators.
+
+Write `a(k, v) * !b(k, _) |- (k, v)` to keep rows of `a` whose key is absent from `b`.
+The test runs where written and keeps the original weight of each surviving row.
+Its pattern may match fields in the key or value and may include wildcards, literals, and variants.
+It must mention at least one variable, and each variable must already be bound.
+A test cannot start a fragment.
+The parser uses one presence row per matched key and subtracts the rows joined against that set.
+When the test matches the entire key and leaves the value unrestricted, it reads the tested collection's key arrangement directly.
 
 ### Reductions
 

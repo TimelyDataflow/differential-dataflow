@@ -586,3 +586,75 @@ fn malformed_heads_explain_the_error() {
         rejects(&format!("{prefix} {tail}"), expected);
     }
 }
+
+#[test]
+fn absence_keeps_bag_weights_and_reuses_the_first_key_arrangement() {
+    use interactive::scope_ir::{Item, Node, Ref};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        output "out" = a(k,v) * !b(k,_) |- (k,v);
+    "#;
+    let p = program(src);
+    let items = &p.root.items;
+    assert!(matches!(items.last(), Some(Item::Op(Node::Concat(_)))));
+    let left = items.iter().find_map(|item| match item {
+        Item::Op(Node::Join { left: Ref::Local(i), .. }) => Some(*i),
+        _ => None,
+    }).unwrap();
+    assert!(matches!(items[left], Item::Op(Node::Arrange(Ref::Import(0)))));
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let parsed = report.emit_ddp_at(plan::ddp::DdpStage::Parsed).unwrap().text;
+    assert!(!parsed.contains("| map("), "{parsed}");
+    assert_eq!(rows(src, vec![(0, "1 val=8 diff=3\n2 val=9 diff=4".into()),
+        (1, "1 val=2 diff=2\n1 val=3".into())]), vec![("2".into(), "9".into(), 4)]);
+}
+
+#[test]
+fn absence_matches_literals_and_bound_variables_in_values() {
+    let cases = [
+        ("b(k,7)", "1 val=7 diff=2\n2 val=8", "2"),
+        ("b(k,v)", "1 val=8 diff=2\n2 val=8", "2"),
+        ("b(_,(v))", "9 val=tuple(8) diff=2\n2 val=tuple(8)", "2"),
+        ("b(_,Some(v))", "9 val=inject(1,8) diff=2\n2 val=inject(0,tuple())", "2"),
+        ("b(_, (v,v))", "9 val=tuple(8,9)\n2 val=tuple(9,9)", "1"),
+        ("b(v,_)", "8 val=3 diff=2\n2 val=3", "2"),
+    ];
+    for (atom, right, survivor) in cases {
+        let value = if atom.contains("Some") { "Option(int)" }
+            else if atom.contains("(v,v)") { "(int,int)" }
+            else if atom.contains("(v)") { "(int)" } else { "int" };
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,{value}); \
+            output \"out\" = a(k,v) * !{atom} |- (k,());");
+        assert_eq!(rows(&src, vec![(0, "1 val=8\n2 val=9".into()), (1, right.into())]),
+            vec![(survivor.into(), "tuple()".into(), 1)], "{atom}");
+    }
+}
+
+#[test]
+fn absence_in_a_loop_can_test_the_feedback_collection() {
+    let src = r#"
+        let seed = input 0 : (int,());
+        let edges = input 1 : (int,int);
+        let blocked = input 2 : (int,int);
+        s: {
+            var reached : (int,());
+            set reached = seed + (reached(x,()) * edges(x,y) * !blocked(y,_) |- (y,())) | distinct;
+        }
+        output "out" = s::reached;
+    "#;
+    assert_eq!(rows(src, vec![(0, "1".into()), (1, "1 val=2\n2 val=3\n3 val=4".into()),
+        (2, "3 val=9 diff=2".into())]), vec![("1".into(), "tuple()".into(), 1),
+        ("2".into(), "tuple()".into(), 1)]);
+}
+
+#[test]
+fn absence_reports_invalid_patterns() {
+    for (fragment, expected) in [
+        ("!b(k,_) |- (k,())", "a fragment test cannot be the first atom"),
+        ("a(k,v) * !b(_,_) |- (k,v)", "a fragment test needs at least one matched variable"),
+        ("a(k,v) * !b(k,fresh) |- (k,v)", "fragment test variable `fresh` is not bound by an earlier atom"),
+    ] {
+        rejects(&format!("let a = input 0 : (int,int); let b = a; output \"out\" = {fragment};"), expected);
+    }
+}

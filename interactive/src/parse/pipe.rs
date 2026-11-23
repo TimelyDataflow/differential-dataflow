@@ -91,6 +91,8 @@
 //! contain each variable once, in first-appearance order, keyed by their tuple (the
 //! variable itself for one, `()` for none), with unit value. A test-free final layout composes into
 //! the last join's projection. Weights multiply; nothing implies distinct.
+//! An atom `!b(key, value)` keeps rows with no matching row of `b` and binds no variables.
+//! It uses a distinct set of matched fields and subtracts the rows joined against that set.
 //! Even the parsed view shows the expansion.
 //!
 //! Statements: `let x = …;`, `set x = …;` (a feedback variable: in a named
@@ -160,7 +162,7 @@ enum Token {
     Turnstile, Head(String),
     LParen, RParen, LBrace, RBrace,
     Comma, Semi, Colon, ColonColon, Eq,
-    Pipe, Plus, Minus, Star, LBracket, RBracket, Eof,
+    Pipe, Plus, Minus, Star, Bang, LBracket, RBracket, Eof,
 }
 
 /// A shape before names in type declarations have been resolved.
@@ -322,6 +324,7 @@ fn lex(input: &str) -> Vec<Token> {
             },
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '*' => { chars.next(); tokens.push(Token::Star); },
+            '!' => { chars.next(); tokens.push(Token::Bang); },
             '[' => { chars.next(); tokens.push(Token::LBracket); },
             ']' => { chars.next(); tokens.push(Token::RBracket); },
             '=' => { chars.next(); tokens.push(Token::Eq); },
@@ -615,6 +618,7 @@ impl Parser {
     }
 
     fn parse_product(&mut self) -> Expr {
+        assert!(*self.peek() != Token::Bang, "a fragment test cannot be the first atom");
         let source = self.parse_atom();
         if *self.peek() == Token::LParen { self.fragment(source) } else { source }
     }
