@@ -87,10 +87,8 @@
 //! Reusing a variable tests equality. Plain filters run as soon as their fields are bound,
 //! before the next rekey; a direct first join precedes its first atom's tests. Variants bind
 //! through typed payload lists in `flatmap`, which can also emit the next lookup key.
-//! The head is a pair of corgi expressions for the key and value. Without a head, rows
-//! contain each variable once, in first-appearance order, keyed by their tuple (the
-//! variable itself for one, `()` for none), with unit value. A test-free final layout composes into
-//! the last join's projection. Weights multiply; nothing implies distinct.
+//! The head is required. It is a pair of corgi expressions for the key and value.
+//! The final join projects the head directly when no tests are pending.
 //! An atom `!b(key, value)` keeps rows with no matching row of `b` and binds no variables.
 //! The corresponding `?b(key, value)` keeps rows with a match.
 //! Both join against a distinct set of matched fields. An antijoin subtracts those rows.

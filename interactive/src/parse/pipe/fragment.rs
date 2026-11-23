@@ -131,7 +131,7 @@ impl Atom {
             (Expr::Reduce(Box::new(source), Reducer::Expr(reducer, Some(1))), original_key)
         } else {
             let pat = state.bind_first(&key, &val);
-            let projected = state.checkpoint(source, Target::Output, &pat);
+            let projected = state.checkpoint(source, Target::MatchedFields, &pat);
             let fields = names.iter().cloned().map(Pattern::Var).collect::<Vec<_>>();
             let key = if let [field] = &fields[..] { field.clone() } else { Pattern::Tuple(fields) };
             (Expr::Reduce(Box::new(projected), Reducer::Distinct), key)
@@ -208,7 +208,7 @@ struct Step {
 }
 
 /// A fragment's atoms, expanded as soon as they are parsed: no syntax tree holds a fragment.
-struct Fragment { steps: Vec<Step>, head: Option<String> }
+struct Fragment { steps: Vec<Step>, head: String }
 
 impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
@@ -264,13 +264,9 @@ impl Parser {
                 steps.push(Step { action: Action::Read(atom), tests: vec![] });
             }
         }
-        let head = if *self.peek() == Token::Turnstile {
-            self.next();
-            let Token::Head(head) = self.next() else { panic!("a fragment head must be a tuple `|- (key, value)`") };
-            Some(head)
-        } else {
-            None
-        };
+        assert!(*self.peek() == Token::Turnstile, "end the fragment with `|- (key, value)`");
+        self.next();
+        let Token::Head(head) = self.next() else { panic!("a fragment head must be a tuple `|- (key, value)`") };
         let (mut fresh, mut hoisted) = (self.fresh, Vec::new());
         let expr = Fragment { steps, head }.expansion(self.lambda_scope(), &mut |rows| {
             let name = format!("fragment_rows{fresh}");
@@ -422,7 +418,7 @@ enum Test<'a> { Equal(Access, Access), Literal(Access, String), Eval(&'a Evaluat
 #[derive(Clone)]
 struct Variant { at: Access, tag: usize, shape: String }
 #[derive(Clone, Copy)]
-enum Target<'a> { Key(&'a Pattern), Keep(&'a Pattern), Current, Head(&'a str), Output }
+enum Target<'a> { Key(&'a Pattern), Keep(&'a Pattern), Current, Head(&'a str), MatchedFields }
 struct State<'a> {
     scope: &'a corgi::Scope,
     next: usize,
@@ -584,7 +580,7 @@ impl<'a> State<'a> {
                 let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
                 format!("let {names} = {} in {head}", tuple(&values))
             }
-            Target::Output => {
+            Target::MatchedFields => {
                 let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
                 let key = fields(&values);
                 format!("({key}, ())")
@@ -704,7 +700,7 @@ impl Fragment {
     /// `share` binds rows read twice to a name and returns that name.
     fn expansion(&self, scope: &corgi::Scope, share: &mut dyn FnMut(Expr) -> Expr) -> Expr {
         let mut s = State::new(scope);
-        let output = self.head.as_deref().map_or(Target::Output, Target::Head);
+        let output = Target::Head(&self.head);
         let Action::Read(first) = &self.steps[0].action else { unreachable!() };
         let first_pat = s.bind_first(&first.key, &first.val);
         s.tests.extend(self.steps[0].tests.iter().map(Test::Eval));
@@ -767,9 +763,9 @@ impl Fragment {
 
     /// A direct first antijoin with this head already has the requested row.
     fn keeps_first_row(&self, first: &Atom) -> bool {
-        let (Pattern::Var(key), Pattern::Var(val), Some(head)) =
-            (&first.key, &first.val, &self.head) else { return false; };
-        key != val && head.strip_prefix('(').and_then(|s| s.strip_suffix(')')).and_then(|s| s.split_once(','))
+        let (Pattern::Var(key), Pattern::Var(val)) =
+            (&first.key, &first.val) else { return false; };
+        key != val && self.head.strip_prefix('(').and_then(|s| s.strip_suffix(')')).and_then(|s| s.split_once(','))
             .is_some_and(|(k, v)| k.trim() == key && v.trim() == val)
     }
 }

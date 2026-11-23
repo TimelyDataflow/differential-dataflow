@@ -153,12 +153,11 @@ let revenue = orders(o, (c, _)) * customer(c, (_, n)) * nation(n, (name, r))
             |- (name, o);
 ```
 
-The turnstile `|-` introduces the head, a pair of corgi expressions for the output key and value.
+End each fragment with a head `|- (key, value)`.
+The turnstile `|-` introduces a pair of corgi expressions for the output key and value.
 A head can read variables bound by the atoms.
 The parser puts the head in the last join's projection when the join ends the expansion.
 The pipeline can continue after the head's closing parenthesis.
-Without a head, the output key contains the variables in order of first appearance and the value is unit.
-A single variable is itself the key, and zero variables give a unit key.
 A repeated variable tests equality, and a literal in a pattern tests that value.
 Every later plain atom's key must use a variable bound by an earlier atom.
 Put selective atoms first.
