@@ -145,16 +145,23 @@ For each key it pairs every row `(k, v1)` on the left with every row `(k, v2)` o
 #### Join fragments
 
 A join fragment writes a multiway join as a rule.
-Each atom names a collection and its key and value patterns, and `*` joins the atoms left to right:
+Each atom names a collection and its key and value patterns.
+The `*` joins the atoms left to right.
 
 ```
 let revenue = orders(o, (c, _)) * customer(c, (_, n)) * nation(n, (name, r))
-            | map(((o, c, n, name, r), ()) -> (name, o));
+            |- (name, o);
 ```
 
-A fragment's rows are keyed by its variables in order of first appearance, with a unit value; one variable is the key itself, and no variables are `()`.
+The turnstile `|-` introduces the head, a pair of corgi expressions for the output key and value.
+A head can read variables bound by the atoms.
+The parser puts the head in the last join's projection when the join ends the expansion.
+The pipeline can continue after the head's closing parenthesis.
+Without a head, the output key contains the variables in order of first appearance and the value is unit.
+A single variable is itself the key, and zero variables give a unit key.
 A repeated variable tests equality, and a literal in a pattern tests that value.
-Every later atom's key must use a variable bound by an earlier atom; the join order is the order written, so put selective atoms first.
+Every later atom's key must use a variable bound by an earlier atom.
+Put selective atoms first.
 Fragments are experimental: the parser expands them into plain joins, and they may change.
 
 ### Reductions

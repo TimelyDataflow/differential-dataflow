@@ -69,7 +69,7 @@
 //! Join fragments are an experimental surface form, not part of the plan language or a stable
 //! interface. The parser expands each one into plain DDP as it reads it, so no syntax tree,
 //! later stage or emitted plan contains one. They may change or be removed.
-//! A fragment is a pipeline source: `a(x, y) * b(y, z) | map(((x, y, z), ()) -> (x, z))`.
+//! A fragment is a pipeline source: `a(x, y) * b(y, z) |- (x, z)`.
 //! Atoms name existing bindings (including scope paths); they always have key and value arguments.
 //! Every later key must mention at least one variable bound by an earlier atom; it may combine
 //! earlier variables with literals, tuples, unit and constructors, but not wildcards or new variables.
@@ -87,7 +87,8 @@
 //! Reusing a variable tests equality. Plain filters run as soon as their fields are bound,
 //! before the next rekey; a direct first join precedes its first atom's tests. Variants bind
 //! through typed payload lists in `flatmap`, which can also emit the next lookup key.
-//! Rows contain each variable once, in first-appearance order, keyed by their tuple (the
+//! The head is a pair of corgi expressions for the key and value. Without a head, rows
+//! contain each variable once, in first-appearance order, keyed by their tuple (the
 //! variable itself for one, `()` for none), with unit value. A test-free final layout composes into
 //! the last join's projection. Weights multiply; nothing implies distinct.
 //! Even the parsed view shows the expansion.
@@ -156,6 +157,7 @@ enum Token {
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
+    Turnstile, Head(String),
     LParen, RParen, LBrace, RBrace,
     Comma, Semi, Colon, ColonColon, Eq,
     Pipe, Plus, Minus, Star, LBracket, RBracket, Eof,
@@ -204,16 +206,17 @@ impl Iterator for Chars<'_> {
     fn next(&mut self) -> Option<char> { let c = self.src[self.at..].chars().next()?; self.at += c.len_utf8(); Some(c) }
 }
 
-/// A corgi lambda that ends the parenthesized group starting at byte `from` of `src` (just after
-/// its `(`): the group holds a `->` outside any nested bracket. Returns the lambda's start (after
-/// the group's last comma before the arrow, or `from`), the arrow, and the group's `)`.
-///
-/// Corgi's text is not DDIR's (it has `.2`, float literals, `#` comments), so the lexer takes the
-/// lambda whole rather than lexing it. A pattern holds no comma outside parentheses, so the last
-/// comma before the arrow separates the lambda from the arguments before it, as in `join`.
-fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
+/// Scan the contents of a parenthesized group without lexing corgi text as DDIR.
+struct CorgiGroup {
+    close: usize,
+    commas: usize,
+    lambda: Option<(usize, usize)>,
+}
+
+fn corgi_group(src: &str, from: usize) -> Option<CorgiGroup> {
     let bytes = src.as_bytes();
     let (mut depth, mut start, mut arrow) = (0usize, from, None);
+    let mut commas = 0;
     let mut i = from;
     while i < bytes.len() {
         match bytes[i] {
@@ -225,9 +228,12 @@ fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
             b'-' if bytes.get(i + 1) == Some(&b'-') => { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } }
             b'-' if bytes.get(i + 1) == Some(&b'>') && depth == 0 && arrow.is_none() => { arrow = Some(i); i += 1; }
             b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' if depth == 0 => return arrow.map(|a| (start, a, i)),
+            b')' | b']' | b'}' if depth == 0 => return Some(CorgiGroup { close: i, commas, lambda: arrow.map(|a| (start, a)) }),
             b')' | b']' | b'}' => depth -= 1,
-            b',' if depth == 0 && arrow.is_none() => start = i + 1,
+            b',' if depth == 0 => {
+                commas += 1;
+                if arrow.is_none() { start = i + 1; }
+            },
             _ => {}
         }
         i += 1;
@@ -235,7 +241,7 @@ fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
     None
 }
 
-/// Lambda text as corgi reads it: a DDIR `--` comment becomes corgi's `#` comment.
+/// Slot text as corgi reads it: a DDIR `--` comment becomes corgi's `#` comment.
 fn corgi_comments(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -282,8 +288,17 @@ fn lex(input: &str) -> Vec<Token> {
             },
             '(' => {
                 chars.next();
+                if matches!(tokens.last(), Some(Token::Turnstile)) {
+                    let group = corgi_group(input, chars.at).expect("unclosed fragment head; write `|- (key, value)`");
+                    assert!(group.commas == 1 && group.lambda.is_none(), "a fragment head must be a tuple `|- (key, value)`");
+                    tokens.push(Token::Head(corgi_comments(&input[chars.at - 1..=group.close])));
+                    chars.at = group.close + 1;
+                    continue;
+                }
                 tokens.push(Token::LParen);
-                if let Some((start, arrow, close)) = lambda_in(input, chars.at) {
+                // The last top-level comma before an arrow separates a lambda from
+                // preceding arguments, as in join.
+                if let Some(CorgiGroup { close, lambda: Some((start, arrow)), .. }) = corgi_group(input, chars.at) {
                     tokens.extend(lex(&input[chars.at..start]));
                     let (pat, body) = (corgi_comments(input[start..arrow].trim()), corgi_comments(input[arrow + 2..close].trim()));
                     tokens.push(Token::Lambda { pat, body });
@@ -296,7 +311,15 @@ fn lex(input: &str) -> Vec<Token> {
             '}' => { chars.next(); tokens.push(Token::RBrace); },
             ',' => { chars.next(); tokens.push(Token::Comma); },
             ';' => { chars.next(); tokens.push(Token::Semi); },
-            '|' => { chars.next(); tokens.push(Token::Pipe); },
+            '|' => {
+                chars.next();
+                if chars.peek() == Some(&'-') && chars.clone().nth(1) != Some('-') {
+                    chars.next();
+                    tokens.push(Token::Turnstile);
+                } else {
+                    tokens.push(Token::Pipe);
+                }
+            },
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '*' => { chars.next(); tokens.push(Token::Star); },
             '[' => { chars.next(); tokens.push(Token::LBracket); },

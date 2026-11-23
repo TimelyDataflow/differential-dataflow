@@ -70,7 +70,7 @@ impl Pattern {
 struct Atom { source: Expr, key: Pattern, val: Pattern }
 
 /// A fragment's atoms, expanded as soon as they are parsed: no syntax tree holds a fragment.
-struct Fragment { atoms: Vec<Atom> }
+struct Fragment { atoms: Vec<Atom>, head: Option<String> }
 
 impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
@@ -90,7 +90,14 @@ impl Parser {
             self.next();
             source = self.parse_atom();
         }
-        Fragment { atoms }.expansion(self.lambda_scope())
+        let head = if *self.peek() == Token::Turnstile {
+            self.next();
+            let Token::Head(head) = self.next() else { panic!("a fragment head must be a tuple `|- (key, value)`") };
+            Some(head)
+        } else {
+            None
+        };
+        Fragment { atoms, head }.expansion(self.lambda_scope())
     }
 
     fn fragment_pattern(&mut self) -> Pattern {
@@ -207,7 +214,7 @@ enum Test { Equal(Access, Access), Literal(Access, String) }
 #[derive(Clone)]
 struct Variant { at: Access, tag: usize, shape: String }
 #[derive(Clone, Copy)]
-enum Target<'a> { Key(&'a Pattern), Keep(&'a Pattern), Current, Output }
+enum Target<'a> { Key(&'a Pattern), Keep(&'a Pattern), Current, Head(&'a str), Output }
 struct State<'a> {
     scope: &'a corgi::Scope,
     next: usize,
@@ -333,6 +340,15 @@ impl State<'_> {
     }
     fn layout(&mut self, target: Target<'_>) -> String {
         match target {
+            Target::Head(head) => {
+                let names = tuple(&self.names);
+                // A closed corgi lambda catches free names, including an accidental
+                // reference to the generated slot's input.
+                corgi::parse_ml_in(&format!("input map ({names} -> {head})"), self.scope)
+                    .unwrap_or_else(|error| panic!("fragment head: {error}"));
+                let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
+                format!("let {names} = {} in {head}", tuple(&values))
+            }
             Target::Output => {
                 let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
                 let key = fields(&values);
@@ -437,6 +453,7 @@ impl Fragment {
     fn expansion(&self, scope: &corgi::Scope) -> Expr {
         let mut s = State { scope, next: 0, names: vec![], bound: BTreeMap::new(),
             locations: BTreeMap::new(), key: BTreeMap::new(), variants: vec![], tests: vec![] };
+        let output = self.head.as_deref().map_or(Target::Output, Target::Head);
         let first = &self.atoms[0];
         s.ingest(&first.key, "k".into());
         s.key = s.locations.iter().map(|(a, expr)| (a.clone(), KeyRead::Value(expr.clone()))).collect();
@@ -447,7 +464,7 @@ impl Fragment {
         let mut expr = first.source.clone();
         if !direct {
             // Tests may restrict the key, but an identical lookup must retain its original value.
-            let target = self.atoms.get(1).map_or(Target::Output, |a| if same_key { Target::Keep(&a.key) } else { Target::Key(&a.key) });
+            let target = self.atoms.get(1).map_or(output, |a| if same_key { Target::Keep(&a.key) } else { Target::Key(&a.key) });
             expr = s.checkpoint(expr, target, &format!("(k : {}, v : {})", first.key.shape_pattern(), first.val.shape_pattern()));
         }
         for i in 1..self.atoms.len() {
@@ -459,7 +476,7 @@ impl Fragment {
                 format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
             } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
             expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
-            let target = self.atoms.get(i + 1).map_or(Target::Output, |a| Target::Key(&a.key));
+            let target = self.atoms.get(i + 1).map_or(output, |a| Target::Key(&a.key));
             expr = s.checkpoint(expr, target, "(k, v)");
         }
         expr

@@ -542,3 +542,47 @@ fn one_variable_is_not_a_tuple() {
     "#;
     assert_eq!(rows(src, vec![(0, "4".into()), (1, "4".into()), (1, "5".into())]), vec![("4".into(), "tuple()".into(), 1)]);
 }
+
+#[test]
+fn heads_are_raw_corgi_and_end_at_the_closing_paren() {
+    let src = r#"
+        let a = input 0 : (int, (int,int));
+        output "out" = (a(k, v) |- ((v.0), 2.5 # this ) is inside a comment
+        ) |-- a comment directly after a pipe
+        distinct) + (a(k, v) |- ((v.1), 2.5)) -- a line comment
+        ;
+    "#;
+    assert_eq!(rows(src, vec![(0, "1 val=tuple(3,4) diff=2".into())]), vec![
+        ("tuple(3)".into(), "2.5".into(), 1),
+        ("tuple(4)".into(), "2.5".into(), 2),
+    ]);
+}
+
+#[test]
+fn a_final_join_emits_the_head_directly() {
+    use interactive::scope_ir::{Item, Node};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        output "out" = a(x,y) * b(y,z) |- (z, (x,y) add);
+    "#;
+    assert!(matches!(program(src).root.items.last(), Some(Item::Op(Node::Join { .. }))));
+    assert_eq!(rows(src, vec![(0, "1 val=2".into()), (1, "2 val=3".into())]),
+        vec![("3".into(), "3".into(), 1)]);
+}
+
+#[test]
+fn malformed_heads_explain_the_error() {
+    let prefix = "let a = input 0 : (int,int); output \"out\" = a(x,y)";
+    for (tail, expected) in [
+        ("|- (missing,x);", "unbound variable 'missing'"),
+        ("|- (input,x);", "unbound variable 'input'"),
+        ("|- (x);", "a fragment head must be a tuple"),
+        ("|- (x,y,());", "a fragment head must be a tuple"),
+        ("|- x;", "a fragment head must be a tuple"),
+        ("|- (x,y;", "unclosed fragment head"),
+        ("| - (x,y);", "Expected pipe operator"),
+    ] {
+        rejects(&format!("{prefix} {tail}"), expected);
+    }
+}
