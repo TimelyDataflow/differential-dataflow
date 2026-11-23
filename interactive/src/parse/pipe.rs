@@ -94,7 +94,9 @@
 //! An atom `!b(key, value)` keeps rows with no matching row of `b` and binds no variables.
 //! The corresponding `?b(key, value)` keeps rows with a match.
 //! Both join against a distinct set of matched fields. An antijoin subtracts those rows.
-//! A plain atom, by contrast, multiplies the weights.
+//! A plain atom multiplies the weights.
+//! A relation `@name(args)` tests bound values or computes a new value in the written order.
+//! Tests run at the first checkpoint that has their arguments. Use `!@name(args)` to negate a test.
 //! Even the parsed view shows the expansion.
 //!
 //! Statements: `let x = …;`, `set x = …;` (a feedback variable: in a named
@@ -161,10 +163,10 @@ enum Token {
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
-    Turnstile, Head(String),
+    Turnstile, Head(String), RelationArgs(Vec<String>),
     LParen, RParen, LBrace, RBrace,
     Comma, Semi, Colon, ColonColon, Eq,
-    Pipe, Plus, Minus, Star, Bang, Question, LBracket, RBracket, Eof,
+    Pipe, Plus, Minus, Star, Bang, Question, At, LBracket, RBracket, Eof,
 }
 
 /// A shape before names in type declarations have been resolved.
@@ -213,29 +215,28 @@ impl Iterator for Chars<'_> {
 /// Scan the contents of a parenthesized group without lexing corgi text as DDIR.
 struct CorgiGroup {
     close: usize,
-    commas: usize,
     lambda: Option<(usize, usize)>,
 }
 
-fn corgi_group(src: &str, from: usize) -> Option<CorgiGroup> {
+fn corgi_group(src: &str, from: usize, mut comma: impl FnMut(usize)) -> Option<CorgiGroup> {
     let bytes = src.as_bytes();
     let (mut depth, mut start, mut arrow) = (0usize, from, None);
-    let mut commas = 0;
     let mut i = from;
     while i < bytes.len() {
         match bytes[i] {
             b'"' => {
                 i += 1;
-                while i < bytes.len() && bytes[i] != b'"' { if bytes[i] == b'\\' { i += 1; } i += 1; }
+                while i < bytes.len() && bytes[i] != b'"' { i += 1; }
             }
             b'#' => { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } }
             b'-' if bytes.get(i + 1) == Some(&b'-') => { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } }
             b'-' if bytes.get(i + 1) == Some(&b'>') && depth == 0 && arrow.is_none() => { arrow = Some(i); i += 1; }
             b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' if depth == 0 => return Some(CorgiGroup { close: i, commas, lambda: arrow.map(|a| (start, a)) }),
+            b')' if depth == 0 => return Some(CorgiGroup { close: i, lambda: arrow.map(|a| (start, a)) }),
+            b']' | b'}' if depth == 0 => return None,
             b')' | b']' | b'}' => depth -= 1,
             b',' if depth == 0 => {
-                commas += 1;
+                comma(i);
                 if arrow.is_none() { start = i + 1; }
             },
             _ => {}
@@ -245,8 +246,8 @@ fn corgi_group(src: &str, from: usize) -> Option<CorgiGroup> {
     None
 }
 
-/// Slot text as corgi reads it: a DDIR `--` comment becomes corgi's `#` comment.
-fn corgi_comments(text: &str) -> String {
+/// A DDIR `--` comment becomes corgi's `#` comment when retaining source text.
+fn corgi_text(text: &str, keep_comments: bool) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
@@ -255,15 +256,17 @@ fn corgi_comments(text: &str) -> String {
             b'"' => {
                 let from = i;
                 i += 1;
-                while i < bytes.len() && bytes[i] != b'"' { if bytes[i] == b'\\' { i += 1; } i += 1; }
+                while i < bytes.len() && bytes[i] != b'"' { i += 1; }
                 i = (i + 1).min(bytes.len());
                 out.push_str(&text[from..i]);
             }
-            b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                let from = i + 2;
+            b'#' | b'-' if bytes[i] == b'#' || bytes.get(i + 1) == Some(&b'-') => {
+                let from = i + if bytes[i] == b'#' { 1 } else { 2 };
                 while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-                out.push('#');
-                out.push_str(&text[from..i]);
+                if keep_comments {
+                    out.push('#');
+                    out.push_str(&text[from..i]);
+                }
             }
             _ => {
                 let c = text[i..].chars().next().unwrap();
@@ -293,18 +296,32 @@ fn lex(input: &str) -> Vec<Token> {
             '(' => {
                 chars.next();
                 if matches!(tokens.last(), Some(Token::Turnstile)) {
-                    let group = corgi_group(input, chars.at).expect("unclosed fragment head; write `|- (key, value)`");
-                    assert!(group.commas == 1 && group.lambda.is_none(), "a fragment head must be a tuple `|- (key, value)`");
-                    tokens.push(Token::Head(corgi_comments(&input[chars.at - 1..=group.close])));
+                    let mut commas = 0;
+                    let group = corgi_group(input, chars.at, |_| commas += 1).expect("unclosed fragment head; write `|- (key, value)`");
+                    assert!(commas == 1 && group.lambda.is_none(), "a fragment head must be a tuple `|- (key, value)`");
+                    tokens.push(Token::Head(corgi_text(&input[chars.at - 1..=group.close], true)));
+                    chars.at = group.close + 1;
+                    continue;
+                }
+                if matches!(&tokens[..], [.., Token::At, Token::Ident(_)]) {
+                    let mut start = chars.at;
+                    let mut args = Vec::new();
+                    let group = corgi_group(input, start, |end| {
+                        args.push(corgi_text(&input[start..end], false));
+                        start = end + 1;
+                    }).expect("unclosed computed relation arguments");
+                    let last = corgi_text(&input[start..group.close], false);
+                    if !args.is_empty() || !last.trim().is_empty() { args.push(last); }
+                    tokens.push(Token::RelationArgs(args));
                     chars.at = group.close + 1;
                     continue;
                 }
                 tokens.push(Token::LParen);
                 // The last top-level comma before an arrow separates a lambda from
                 // preceding arguments, as in join.
-                if let Some(CorgiGroup { close, lambda: Some((start, arrow)), .. }) = corgi_group(input, chars.at) {
+                if let Some(CorgiGroup { close, lambda: Some((start, arrow)), .. }) = corgi_group(input, chars.at, |_| {}) {
                     tokens.extend(lex(&input[chars.at..start]));
-                    let (pat, body) = (corgi_comments(input[start..arrow].trim()), corgi_comments(input[arrow + 2..close].trim()));
+                    let (pat, body) = (corgi_text(input[start..arrow].trim(), true), corgi_text(input[arrow + 2..close].trim(), true));
                     tokens.push(Token::Lambda { pat, body });
                     tokens.push(Token::RParen);
                     chars.at = close + 1;
@@ -328,6 +345,7 @@ fn lex(input: &str) -> Vec<Token> {
             '*' => { chars.next(); tokens.push(Token::Star); },
             '!' => { chars.next(); tokens.push(Token::Bang); },
             '?' => { chars.next(); tokens.push(Token::Question); },
+            '@' => { chars.next(); tokens.push(Token::At); },
             '[' => { chars.next(); tokens.push(Token::LBracket); },
             ']' => { chars.next(); tokens.push(Token::RBracket); },
             '=' => { chars.next(); tokens.push(Token::Eq); },
@@ -354,7 +372,11 @@ fn lex(input: &str) -> Vec<Token> {
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let mut ident = String::new();
                 while let Some(&c) = chars.peek() { if c.is_ascii_alphanumeric() || c == '_' { ident.push(c); chars.next(); } else { break; } }
-                tokens.push(keyword(&ident).unwrap_or(Token::Ident(ident)));
+                let token = match tokens.last() {
+                    Some(Token::At) => Token::Ident(ident),
+                    _ => keyword(&ident).unwrap_or(Token::Ident(ident)),
+                };
+                tokens.push(token);
             },
             other => panic!("Unexpected character: {:?}", other),
         }
@@ -621,6 +643,7 @@ impl Parser {
     }
 
     fn parse_product(&mut self) -> Expr {
+        assert!(*self.peek() != Token::At, "a computed relation cannot be the first atom");
         assert!(!matches!(self.peek(), Token::Bang | Token::Question), "a fragment test cannot be the first atom");
         let source = self.parse_atom();
         if *self.peek() == Token::LParen { self.fragment(source) } else { source }

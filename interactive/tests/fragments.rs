@@ -683,3 +683,94 @@ fn opposite_membership_tests_share_one_presence_plan() {
     assert_eq!(rows(src, vec![(0, "1 val=8 diff=3\n2 val=4".into()), (1, "1 val=tuple(8,7) diff=2".into())]),
         vec![("1".into(), "8".into(), 3), ("2".into(), "4".into(), 1)]);
 }
+
+#[test]
+fn comparisons_use_corgi_words_and_can_be_negated() {
+    let feed = "1 val=2\n2 val=2 diff=2\n3 val=2";
+    for (rel, expected) in [
+        ("eq", &[2][..]), ("ne", &[1, 3]), ("lt", &[1]), ("le", &[1, 2]),
+        ("gt", &[3]), ("ge", &[2, 3]), ("!@eq", &[1, 3]),
+    ] {
+        let atom = if rel.starts_with('!') { rel.into() } else { format!("@{rel}") };
+        let src = format!("let a = input 0 : (int,int); let eq = a; \
+            output \"out\" = eq(x,y) * {atom}(x,y) |- (x,y);");
+        let expected = expected.iter().map(|x| (x.to_string(), "2".into(), if *x == 2 { 2 } else { 1 })).collect::<Vec<_>>();
+        assert_eq!(rows(&src, vec![(0, feed.into())]), expected, "{rel}");
+    }
+}
+
+#[test]
+fn arithmetic_relations_produce_and_test_a_result() {
+    for (op, value, unexpected) in [("add", 9, 5), ("sub", 5, 9), ("mul", 14, 9)] {
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,int); \
+            output \"out\" = a(x,y) * @{op}(x,y,z) * b(z,w) * @{op}(x,y,w) \
+            * !@{op}(x,y,{unexpected}) |- (z,w);");
+        assert_eq!(rows(&src, vec![(0, "7 val=2 diff=2".into()),
+            (1, format!("{value} val={value}\n{value} val={unexpected}"))]),
+            vec![(value.to_string(), value.to_string(), 2)]);
+    }
+    let src = r#"
+        let a = input 0 : (int,float);
+        output "out" = a(k,v) * @add(v, -2.5e0, w) * @lt(w # post-argument comment with a )
+            , 0.5) |- (k,w);
+    "#;
+    assert_eq!(rows(src, vec![(0, "1 val=2.0\n2 val=3.0".into())]),
+        vec![("1".into(), "-0.5".into(), 1)]);
+}
+
+#[test]
+fn computed_tests_run_at_the_first_checkpoint_with_their_arguments() {
+    use interactive::{ir::LinearOp, scope_ir::{Item, Node}};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        let c = input 2 : (int,int);
+        output "out" = a(x,y) * b(y,z) * @add(y,z,w) * c(w,v) * @gt(w,x) * @gt(y,x) |- (x,v);
+    "#;
+    let p = program(src);
+    let joins = p.root.items.iter().enumerate().filter_map(|(i, item)|
+        matches!(item, Item::Op(Node::Join { .. })).then_some(i)).collect::<Vec<_>>();
+    let filters = p.root.items.iter().enumerate().filter_map(|(i, item)|
+        matches!(item, Item::Op(Node::Linear { ops, .. }) if matches!(ops.as_slice(), [LinearOp::Filter(_)])).then_some(i)).collect::<Vec<_>>();
+    assert_eq!(filters.len(), 2);
+    assert!(filters[0] < joins[0] && joins[0] < filters[1] && filters[1] < joins[1]);
+    assert_eq!(rows(src, vec![(0, "1 val=2\n3 val=2".into()), (1, "2 val=7".into()),
+        (2, "9 val=8".into())]), vec![("1".into(), "8".into(), 1)]);
+}
+
+#[test]
+fn computed_relation_errors_name_arguments_and_modes() {
+    for (fragment, expected) in [
+        ("@eq(x,y)", "a computed relation cannot be the first atom"),
+        ("a(x,y) * ?@eq(x,y)", "write a computed relation with `@` or `!@`"),
+        ("a(x,y) * @filter(x,y)", "unknown computed relation `@filter`"),
+        ("a(x,y) * @eq(x)", "expects 2 arguments, got 1"),
+        ("a(x,y) * @eq", "expected arguments for relation `@eq`"),
+        ("a(x,y) * @eq(x,y", "unclosed computed relation arguments"),
+        ("a(x,y) * @eq(x,_)", "a computed relation cannot use a wildcard"),
+        ("a(x,y) * @eq(x,(1,2) add)", "computed relation argument must be a variable or literal"),
+        ("a(x,y) * @eq(x,z)", "unbound argument 2 `z`. Supported modes are test"),
+        ("a(x,y) * @add(x,z,y)", "unbound argument 2 `z`. Supported modes are test (all arguments bound) and compute"),
+        ("a(x,y) * @add(x,z,w)", "unbound argument 2 `z`, argument 3 `w`"),
+        ("a(x,y) * !@mul(x,y,z)", "Negation needs every argument bound"),
+    ] {
+        rejects(&format!("let a = input 0 : (int,int); output \"out\" = {fragment} |- (x,y);"), expected);
+    }
+}
+
+#[test]
+fn a_relation_can_test_a_variant_payload_with_a_corgi_string_literal() {
+    let src = r#"
+        let a = input 0 : (int, Option(List(int)));
+        let b = input 1 : (List(int),int);
+        output "out" = a(k,Some(v)) * b(v,w) * @eq(v,"a#\") |- (k,w);
+    "#;
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let lowered = report.emit_ddp_at(plan::ddp::DdpStage::Lowered).unwrap().text;
+    assert!(lowered.find("| flatmap(").unwrap() < lowered.find("| filter(").unwrap());
+    assert!(lowered.find("| filter(").unwrap() < lowered.find("| join(").unwrap());
+    assert_eq!(rows(src, vec![
+        (0, "1 val=inject(1,list(97,35,92))\n2 val=inject(1,list(2))\n3 val=inject(0,tuple())".into()),
+        (1, "list(97,35,92) val=3\nlist(2) val=4".into()),
+    ]), vec![("1".into(), "3".into(), 1)]);
+}

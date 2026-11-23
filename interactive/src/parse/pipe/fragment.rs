@@ -42,6 +42,14 @@ impl Pattern {
             leaf => accept(leaf),
         }
     }
+    fn visit_vars(&self, visit: &mut impl FnMut(&str)) {
+        match self {
+            Self::Var(name) => visit(name),
+            Self::Tuple(ps) => ps.iter().for_each(|p| p.visit_vars(visit)),
+            Self::Variant { payload, .. } => payload.visit_vars(visit),
+            _ => {},
+        }
+    }
     fn number_matches(&mut self, names: &mut Vec<String>) {
         match self {
             Self::Var(name) => {
@@ -132,36 +140,129 @@ impl Atom {
     }
 }
 
+enum Mode {
+    Test,
+    ComputeLast,
+}
+impl Mode {
+    fn description(&self) -> &str {
+        match self {
+            Self::Test => "test (all arguments bound)",
+            Self::ComputeLast => "compute (arguments 1 and 2 bound, argument 3 new)",
+        }
+    }
+}
+
+struct Relation {
+    name: &'static str,
+    arity: usize,
+    modes: &'static [Mode],
+}
+
+const RELATIONS: &[Relation] = &[
+    Relation { name: "eq", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "ne", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "lt", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "le", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "gt", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "ge", arity: 2, modes: &[Mode::Test] },
+    Relation { name: "add", arity: 3, modes: &[Mode::Test, Mode::ComputeLast] },
+    Relation { name: "sub", arity: 3, modes: &[Mode::Test, Mode::ComputeLast] },
+    Relation { name: "mul", arity: 3, modes: &[Mode::Test, Mode::ComputeLast] },
+];
+
+enum Argument {
+    Name(String),
+    Literal(String),
+}
+impl Argument {
+    fn parse(text: String) -> Self {
+        let text = text.trim();
+        assert!(text != "_", "a computed relation cannot use a wildcard");
+        let mut chars = text.chars();
+        if chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Self::Name(text.into());
+        }
+        // A corgi list accepts only constants, including nested tuples and lists.
+        corgi::parse_ml(&format!("[\n{text}\n]")).unwrap_or_else(|error|
+            panic!("computed relation argument must be a variable or literal: {error}"));
+        Self::Literal(text.into())
+    }
+}
+
+struct Evaluation {
+    relation: &'static Relation,
+    args: Vec<Argument>,
+    negated: bool,
+}
+
+enum Action {
+    Read(Atom),
+    Compute(String, Evaluation),
+}
+struct Step {
+    action: Action,
+    tests: Vec<Evaluation>,
+}
+
 /// A fragment's atoms, expanded as soon as they are parsed: no syntax tree holds a fragment.
-struct Fragment { atoms: Vec<Atom>, head: Option<String> }
+struct Fragment { steps: Vec<Step>, head: Option<String> }
 
 impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
-        let mut atoms = Vec::new();
-        let mut source = source;
-        let mut membership = None;
-        loop {
-            assert!(matches!(source, Expr::Name(_) | Expr::Path(..)), "a fragment atom names an existing binding");
-            self.expect(&Token::LParen);
-            let key = self.fragment_pattern();
-            self.expect(&Token::Comma);
-            let val = self.fragment_pattern();
-            if atoms.is_empty() || membership.is_some() { key.check_lists(); }
-            val.check_lists();
-            self.expect(&Token::RParen);
-            atoms.push(match membership {
-                Some(negated) => Atom::membership(source, key, val, negated, self.lambda_scope()),
-                None => Atom { source, key, val, membership: None },
-            });
-            if *self.peek() != Token::Star { break; }
+        let first = self.collection_atom(source, None, true);
+        let mut bound = BTreeMap::new();
+        first.key.visit_vars(&mut |name| { bound.insert(name.to_string(), 0); });
+        first.val.visit_vars(&mut |name| { bound.insert(name.to_string(), 0); });
+        let mut steps = vec![Step { action: Action::Read(first), tests: vec![] }];
+        while *self.peek() == Token::Star {
             self.next();
-            membership = match self.peek() {
+            let membership = match self.peek() {
                 Token::Bang => Some(true),
                 Token::Question => Some(false),
                 _ => None,
             };
             if membership.is_some() { self.next(); }
-            source = self.parse_atom();
+            if *self.peek() == Token::At {
+                assert!(membership != Some(false), "write a computed relation with `@` or `!@`");
+                let eval = self.evaluation(membership == Some(true));
+                let mut ready = 0;
+                let mut missing = Vec::new();
+                for (i, arg) in eval.args.iter().enumerate() {
+                    if let Argument::Name(name) = arg {
+                        if let Some(&at) = bound.get(name) {
+                            ready = ready.max(at);
+                        } else {
+                            missing.push((i, name));
+                        }
+                    }
+                }
+                let output = match &missing[..] {
+                    [(2, name)] if !eval.negated && eval.relation.modes.iter().any(|mode| matches!(mode, Mode::ComputeLast)) => Some((*name).clone()),
+                    _ => None,
+                };
+                if missing.is_empty() {
+                    steps[ready].tests.push(eval);
+                } else if let Some(name) = output {
+                    bound.insert(name.clone(), steps.len());
+                    steps.push(Step { action: Action::Compute(name, eval), tests: vec![] });
+                } else {
+                    let unbound = missing.iter().map(|(i, name)| format!("argument {} `{name}`", i + 1)).collect::<Vec<_>>();
+                    let modes = eval.relation.modes.iter().map(Mode::description).collect::<Vec<_>>();
+                    let note = if eval.negated { ". Negation needs every argument bound" } else { "" };
+                    panic!("relation `@{}` has unbound {}. Supported modes are {}{note}",
+                        eval.relation.name, unbound.join(", "), modes.join(" and "));
+                }
+            } else {
+                let source = self.parse_atom();
+                let atom = self.collection_atom(source, membership, false);
+                if atom.membership.is_none() {
+                    atom.val.visit_vars(&mut |name| { bound.entry(name.to_string()).or_insert(steps.len()); });
+                }
+                steps.push(Step { action: Action::Read(atom), tests: vec![] });
+            }
         }
         let head = if *self.peek() == Token::Turnstile {
             self.next();
@@ -170,7 +271,32 @@ impl Parser {
         } else {
             None
         };
-        Fragment { atoms, head }.expansion(self.lambda_scope())
+        Fragment { steps, head }.expansion(self.lambda_scope())
+    }
+
+    fn collection_atom(&mut self, source: Expr, membership: Option<bool>, first: bool) -> Atom {
+        assert!(matches!(source, Expr::Name(_) | Expr::Path(..)), "a fragment atom names an existing binding");
+        self.expect(&Token::LParen);
+        let key = self.fragment_pattern();
+        self.expect(&Token::Comma);
+        let val = self.fragment_pattern();
+        if first || membership.is_some() { key.check_lists(); }
+        val.check_lists();
+        self.expect(&Token::RParen);
+        match membership {
+            Some(negated) => Atom::membership(source, key, val, negated, self.lambda_scope()),
+            None => Atom { source, key, val, membership: None },
+        }
+    }
+
+    fn evaluation(&mut self, negated: bool) -> Evaluation {
+        self.expect(&Token::At);
+        let name = self.parse_ident();
+        let relation = RELATIONS.iter().find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("unknown computed relation `@{name}`"));
+        let Token::RelationArgs(args) = self.next() else { panic!("expected arguments for relation `@{name}`") };
+        assert!(args.len() == relation.arity, "relation `@{name}` expects {} arguments, got {}", relation.arity, args.len());
+        Evaluation { relation, args: args.into_iter().map(Argument::parse).collect(), negated }
     }
 
     fn fragment_pattern(&mut self) -> Pattern {
@@ -283,7 +409,7 @@ impl KeyRead {
     }
 }
 
-enum Test { Equal(Access, Access), Literal(Access, String) }
+enum Test<'a> { Equal(Access, Access), Literal(Access, String), Eval(&'a Evaluation) }
 #[derive(Clone)]
 struct Variant { at: Access, tag: usize, shape: String }
 #[derive(Clone, Copy)]
@@ -296,7 +422,7 @@ struct State<'a> {
     locations: BTreeMap<Access, String>,
     key: BTreeMap<Access, KeyRead>,
     variants: Vec<Variant>,
-    tests: Vec<Test>,
+    tests: Vec<Test<'a>>,
 }
 impl<'a> State<'a> {
     fn new(scope: &'a corgi::Scope) -> Self {
@@ -320,11 +446,27 @@ impl<'a> State<'a> {
     fn ready(&self, at: &Access) -> bool {
         self.locations.contains_key(at) || matches!(at, Access::Field(a, _) if self.ready(a))
     }
-    fn test(&self, test: &Test) -> String {
+    fn argument(&self, arg: &Argument) -> String {
+        match arg {
+            Argument::Name(name) => self.read(&self.bound[name]),
+            Argument::Literal(literal) => literal.clone(),
+        }
+    }
+    fn evaluate(&self, eval: &Evaluation) -> String {
+        format!("({}, {}) {}", self.argument(&eval.args[0]), self.argument(&eval.args[1]), eval.relation.name)
+    }
+    fn test(&self, test: &Test<'_>) -> String {
         match test {
             Test::Equal(a, b) => format!("({}, {}) eq", self.read(a), self.read(b)),
             Test::Literal(a, lit) if lit == "[]" => format!("({} len, 0) eq", self.read(a)),
             Test::Literal(a, lit) => format!("({}, {lit}) eq", self.read(a)),
+            Test::Eval(eval) => {
+                let mut body = self.evaluate(eval);
+                if let [_, _, result] = &eval.args[..] {
+                    body = format!("({body}, {}) eq", self.argument(result));
+                }
+                if eval.negated { format!("({body}, 0) eq") } else { body }
+            }
         }
     }
     fn pattern(&mut self, p: &Pattern, at: Access) {
@@ -407,6 +549,7 @@ impl<'a> State<'a> {
         for test in &self.tests { match test {
             Test::Equal(a, b) => { inputs.push(a.clone()); inputs.push(b.clone()); }
             Test::Literal(a, _) => inputs.push(a.clone()),
+            Test::Eval(_) => {}, // Every argument is already in bound.
         } }
         inputs.extend(variants.iter().map(|v| v.at.clone()));
         inputs
@@ -455,6 +598,10 @@ impl<'a> State<'a> {
             let available = match &t {
                 Test::Equal(a, b) => self.ready(a) && self.ready(b),
                 Test::Literal(a, _) => self.ready(a),
+                Test::Eval(eval) => eval.args.iter().all(|arg| match arg {
+                    Argument::Name(name) => self.ready(&self.bound[name]),
+                    Argument::Literal(_) => true,
+                }),
             };
             if available { ready.push(self.test(&t)); } else { self.tests.push(t); }
         }
@@ -505,6 +652,9 @@ impl<'a> State<'a> {
         for (at, read) in &self.key { self.locations.insert(at.clone(), read.bind(&mut bindings, &mut names)); }
         let variants = std::mem::take(&mut self.variants);
         if variants.is_empty() && bindings.is_empty() {
+            if matches!(target, Target::Current) && pat == "(k, v)" {
+                return expr;
+            }
             let body = self.layout(target);
             return project(expr, self.lambda(pat, body));
         }
@@ -532,56 +682,82 @@ impl<'a> State<'a> {
     }
 }
 
+impl Step {
+    fn target(&self, state: &State<'_>, keep: bool) -> Target<'_> {
+        match &self.action {
+            Action::Read(atom) => atom.target(state, keep),
+            Action::Compute(..) => Target::Current,
+        }
+    }
+}
+
 impl Fragment {
     fn expansion(&self, scope: &corgi::Scope) -> Expr {
         let mut s = State::new(scope);
         let output = self.head.as_deref().map_or(Target::Output, Target::Head);
-        let first = &self.atoms[0];
+        let Action::Read(first) = &self.steps[0].action else { unreachable!() };
         let first_pat = s.bind_first(&first.key, &first.val);
+        s.tests.extend(self.steps[0].tests.iter().map(Test::Eval));
         // A restricted first key is tested before a new arrangement, so rows it rejects are never paired.
-        let same_key = self.atoms.get(1).is_some_and(|next| first.key == next.key);
+        let same_key = matches!(self.steps.get(1), Some(Step { action: Action::Read(next), .. }) if first.key == next.key);
         let direct = first.key.unrestricted() && same_key;
         let mut expr = first.source.clone();
         if !direct {
             // Tests may restrict the key, but an identical lookup must retain its original value.
-            let target = self.atoms.get(1).map_or(output, |a| a.target(&s, same_key));
+            let target = self.steps.get(1).map_or(output, |step| step.target(&s, same_key));
             expr = s.checkpoint(expr, target, &first_pat);
         }
-        for i in 1..self.atoms.len() {
-            let atom = &self.atoms[i];
-            if let Some(test) = &atom.membership {
-                let left = test.negated.then(|| expr.clone());
-                let joined = Expr::Join(Box::new(expr), Box::new(atom.source.clone()),
-                    s.lambda("(k, (v, _))", "(k, v)".into()));
-                expr = if let Some(left) = left {
-                    let difference = Expr::Concat(vec![left, Expr::Negate(Box::new(joined))]);
-                    if i == 1 && direct && self.atoms.len() == 2 && self.keeps_first_row() {
-                        return difference;
+        for (i, step) in self.steps.iter().enumerate().skip(1) {
+            let mut checkpoint_pat = "(k, v)";
+            match &step.action {
+                Action::Read(atom) => {
+                    if let Some(test) = &atom.membership {
+                        let left = test.negated.then(|| expr.clone());
+                        let joined = Expr::Join(Box::new(expr), Box::new(atom.source.clone()),
+                            s.lambda("(k, (v, _))", "(k, v)".into()));
+                        expr = if let Some(left) = left {
+                            let difference = Expr::Concat(vec![left, Expr::Negate(Box::new(joined))]);
+                            if i == 1 && direct && self.steps.len() == 2 && s.tests.is_empty() && self.keeps_first_row(first) {
+                                return difference;
+                            }
+                            difference
+                        } else { joined };
+                        if i == 1 && direct { checkpoint_pat = &first_pat; }
+                    } else {
+                        s.validate_key(&atom.key);
+                        s.ingest(&atom.val, "r".into());
+                        let body = s.row("k".into(), s.key.clone());
+                        let pat = if i == 1 && direct {
+                            format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
+                        } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
+                        expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
                     }
-                    difference
-                } else { joined };
-            } else {
-                s.validate_key(&atom.key);
-                s.ingest(&atom.val, "r".into());
-                let body = s.row("k".into(), s.key.clone());
-                let pat = if i == 1 && direct {
-                    format!("(k : {}, (v : {}, r : {}))", first.key.shape_pattern(), first.val.shape_pattern(), atom.val.shape_pattern())
-                } else { format!("(k, (v, r : {}))", atom.val.shape_pattern()) };
-                expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
+                }
+                Action::Compute(name, eval) => {
+                    let value = s.evaluate(eval);
+                    s.ingest(&Pattern::Var(name.clone()), "computed".into());
+                    let target = if step.tests.is_empty() {
+                        self.steps.get(i + 1).map_or(output, |next| next.target(&s, false))
+                    } else {
+                        Target::Current
+                    };
+                    let row = s.layout(target);
+                    expr = project(expr, s.lambda("(k, v)", format!("let computed = {value} in {row}")));
+                    if step.tests.is_empty() { continue; }
+                }
             }
-            let target = self.atoms.get(i + 1).map_or(output, |a| a.target(&s, false));
-            let checkpoint_pat = if i == 1 && direct && atom.membership.is_some() { &first_pat } else { "(k, v)" };
+            s.tests.extend(step.tests.iter().map(Test::Eval));
+            let target = self.steps.get(i + 1).map_or(output, |next| next.target(&s, false));
             expr = s.checkpoint(expr, target, checkpoint_pat);
         }
         expr
     }
 
     /// A direct first antijoin with this head already has the requested row.
-    fn keeps_first_row(&self) -> bool {
+    fn keeps_first_row(&self, first: &Atom) -> bool {
         let (Pattern::Var(key), Pattern::Var(val), Some(head)) =
-            (&self.atoms[0].key, &self.atoms[0].val, &self.head) else { return false; };
+            (&first.key, &first.val, &self.head) else { return false; };
         key != val && head.strip_prefix('(').and_then(|s| s.strip_suffix(')')).and_then(|s| s.split_once(','))
             .is_some_and(|(k, v)| k.trim() == key && v.trim() == val)
     }
-
 }
