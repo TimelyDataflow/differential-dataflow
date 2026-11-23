@@ -658,3 +658,28 @@ fn absence_reports_invalid_patterns() {
         rejects(&format!("let a = input 0 : (int,int); let b = a; output \"out\" = {fragment};"), expected);
     }
 }
+
+#[test]
+fn presence_ignores_duplicates_and_a_plain_atom_multiplies_them() {
+    for (atom, weight) in [("?b(k,_)", 3), ("b(k,_)", 6), ("?b(k,v)", 3)] {
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,int); \
+            output \"out\" = a(k,v) * {atom} |- (k,v);");
+        assert_eq!(rows(&src, vec![(0, "1 val=8 diff=3\n2 val=4".into()),
+            (1, "1 val=8 diff=2".into())]), vec![("1".into(), "8".into(), weight)]);
+    }
+}
+
+#[test]
+fn opposite_membership_tests_share_one_presence_plan() {
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,(int,int));
+        output "out" = (a(k,v) * ?b(k,(v,7)) |- (k,v))
+                     + (a(x,y) * !b(x,(y,7)) |- (x,y));
+    "#;
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let plan = report.emit_ddp_at(plan::ddp::DdpStage::Optimized).unwrap().text;
+    assert_eq!(plan.matches("| reduce(").count(), 1, "{plan}");
+    assert_eq!(rows(src, vec![(0, "1 val=8 diff=3\n2 val=4".into()), (1, "1 val=tuple(8,7) diff=2".into())]),
+        vec![("1".into(), "8".into(), 3), ("2".into(), "4".into(), 1)]);
+}

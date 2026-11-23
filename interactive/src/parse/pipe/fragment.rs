@@ -88,20 +88,25 @@ struct Atom {
     source: Expr,
     key: Pattern,
     val: Pattern,
-    absent: Option<Vec<String>>,
+    membership: Option<Membership>,
+}
+
+struct Membership {
+    names: Vec<String>,
+    negated: bool,
 }
 
 impl Atom {
     fn target(&self, state: &State<'_>, keep: bool) -> Target<'_> {
-        if let Some(names) = &self.absent {
-            for name in names {
+        if let Some(test) = &self.membership {
+            for name in &test.names {
                 assert!(state.bound.contains_key(name), "fragment test variable `{name}` is not bound by an earlier atom");
             }
         }
         if keep { Target::Keep(&self.key) } else { Target::Key(&self.key) }
     }
 
-    fn absence(source: Expr, mut key: Pattern, mut val: Pattern, scope: &corgi::Scope) -> Self {
+    fn membership(source: Expr, mut key: Pattern, mut val: Pattern, negated: bool, scope: &corgi::Scope) -> Self {
         let full_key = key.leaves(|p| matches!(p, Pattern::Var(_))) && val.leaves(|p| matches!(p, Pattern::Wild));
         let original_key = key.clone();
         // Number occurrences by position. Two uses of the same pattern can share
@@ -123,7 +128,7 @@ impl Atom {
             let key = if let [field] = &fields[..] { field.clone() } else { Pattern::Tuple(fields) };
             (Expr::Reduce(Box::new(projected), Reducer::Distinct), key)
         };
-        Self { source, key, val: Pattern::Wild, absent: Some(names) }
+        Self { source, key, val: Pattern::Wild, membership: Some(Membership { names, negated }) }
     }
 }
 
@@ -134,25 +139,28 @@ impl Parser {
     pub(super) fn fragment(&mut self, source: Expr) -> Expr {
         let mut atoms = Vec::new();
         let mut source = source;
-        let mut absent = false;
+        let mut membership = None;
         loop {
             assert!(matches!(source, Expr::Name(_) | Expr::Path(..)), "a fragment atom names an existing binding");
             self.expect(&Token::LParen);
             let key = self.fragment_pattern();
             self.expect(&Token::Comma);
             let val = self.fragment_pattern();
-            if atoms.is_empty() || absent { key.check_lists(); }
+            if atoms.is_empty() || membership.is_some() { key.check_lists(); }
             val.check_lists();
             self.expect(&Token::RParen);
-            atoms.push(if absent {
-                Atom::absence(source, key, val, self.lambda_scope())
-            } else {
-                Atom { source, key, val, absent: None }
+            atoms.push(match membership {
+                Some(negated) => Atom::membership(source, key, val, negated, self.lambda_scope()),
+                None => Atom { source, key, val, membership: None },
             });
             if *self.peek() != Token::Star { break; }
             self.next();
-            absent = *self.peek() == Token::Bang;
-            if absent { self.next(); }
+            membership = match self.peek() {
+                Token::Bang => Some(true),
+                Token::Question => Some(false),
+                _ => None,
+            };
+            if membership.is_some() { self.next(); }
             source = self.parse_atom();
         }
         let head = if *self.peek() == Token::Turnstile {
@@ -541,13 +549,17 @@ impl Fragment {
         }
         for i in 1..self.atoms.len() {
             let atom = &self.atoms[i];
-            if atom.absent.is_some() {
-                let joined = Expr::Join(Box::new(expr.clone()), Box::new(atom.source.clone()),
+            if let Some(test) = &atom.membership {
+                let left = test.negated.then(|| expr.clone());
+                let joined = Expr::Join(Box::new(expr), Box::new(atom.source.clone()),
                     s.lambda("(k, (v, _))", "(k, v)".into()));
-                expr = Expr::Concat(vec![expr, Expr::Negate(Box::new(joined))]);
-                if i == 1 && direct && self.atoms.len() == 2 && self.keeps_first_row() {
-                    return expr;
-                }
+                expr = if let Some(left) = left {
+                    let difference = Expr::Concat(vec![left, Expr::Negate(Box::new(joined))]);
+                    if i == 1 && direct && self.atoms.len() == 2 && self.keeps_first_row() {
+                        return difference;
+                    }
+                    difference
+                } else { joined };
             } else {
                 s.validate_key(&atom.key);
                 s.ingest(&atom.val, "r".into());
@@ -558,7 +570,7 @@ impl Fragment {
                 expr = Expr::Join(Box::new(expr), Box::new(atom.source.clone()), s.lambda(&pat, body));
             }
             let target = self.atoms.get(i + 1).map_or(output, |a| a.target(&s, false));
-            let checkpoint_pat = if i == 1 && direct && atom.absent.is_some() { &first_pat } else { "(k, v)" };
+            let checkpoint_pat = if i == 1 && direct && atom.membership.is_some() { &first_pat } else { "(k, v)" };
             expr = s.checkpoint(expr, target, checkpoint_pat);
         }
         expr

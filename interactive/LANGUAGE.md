@@ -166,11 +166,14 @@ Fragments are experimental.
 The parser expands them into ordinary pipeline operators.
 
 Write `a(k, v) * !b(k, _) |- (k, v)` to keep rows of `a` whose key is absent from `b`.
-The test runs where written and keeps the original weight of each surviving row.
+Write `a(k, v) * ?b(k, _) |- (k, v)` to keep rows whose key is present in `b`.
+Both tests run where written and keep the original weight of each surviving row.
 Its pattern may match fields in the key or value and may include wildcards, literals, and variants.
 It must mention at least one variable, and each variable must already be bound.
 A test cannot start a fragment.
-The parser uses one presence row per matched key and subtracts the rows joined against that set.
+The parser uses one presence row per matched key for either test.
+A semijoin joins against that set, and an antijoin subtracts the rows from that same join.
+A plain atom multiplies the weights and acts as a semijoin when its matching rows already form a set with one row per matched key.
 When the test matches the entire key and leaves the value unrestricted, it reads the tested collection's key arrangement directly.
 
 ### Reductions
