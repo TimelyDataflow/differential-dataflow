@@ -271,7 +271,16 @@ impl Parser {
         } else {
             None
         };
-        Fragment { steps, head }.expansion(self.lambda_scope())
+        let (mut fresh, mut hoisted) = (self.fresh, Vec::new());
+        let expr = Fragment { steps, head }.expansion(self.lambda_scope(), &mut |rows| {
+            let name = format!("fragment_rows{fresh}");
+            fresh += 1;
+            hoisted.push(Stmt::Let(name.clone(), rows));
+            Expr::Name(name)
+        });
+        self.fresh = fresh;
+        self.hoisted.extend(hoisted);
+        expr
     }
 
     fn collection_atom(&mut self, source: Expr, membership: Option<bool>, first: bool) -> Atom {
@@ -692,7 +701,8 @@ impl Step {
 }
 
 impl Fragment {
-    fn expansion(&self, scope: &corgi::Scope) -> Expr {
+    /// `share` binds rows read twice to a name and returns that name.
+    fn expansion(&self, scope: &corgi::Scope, share: &mut dyn FnMut(Expr) -> Expr) -> Expr {
         let mut s = State::new(scope);
         let output = self.head.as_deref().map_or(Target::Output, Target::Head);
         let Action::Read(first) = &self.steps[0].action else { unreachable!() };
@@ -712,6 +722,8 @@ impl Fragment {
             match &step.action {
                 Action::Read(atom) => {
                     if let Some(test) = &atom.membership {
+                        // An antijoin reads the rows so far twice; a name keeps them from being copied.
+                        if test.negated && !matches!(expr, Expr::Name(_) | Expr::Path(..)) { expr = share(expr); }
                         let left = test.negated.then(|| expr.clone());
                         let joined = Expr::Join(Box::new(expr), Box::new(atom.source.clone()),
                             s.lambda("(k, (v, _))", "(k, v)".into()));

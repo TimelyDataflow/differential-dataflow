@@ -413,11 +413,16 @@ struct Parser {
     type_order: Vec<String>,
     /// The corgi scope lambdas are parsed in, built at the first lambda.
     scope: Option<corgi::Scope>,
+    /// Rows a fragment reads twice, bound to fresh names just before the statement that uses them,
+    /// so that a chain of antijoins does not copy its left side at every step.
+    hoisted: Vec<Stmt>,
+    /// The next fresh name's number.
+    fresh: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None }
+        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None, hoisted: Vec::new(), fresh: 0 }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
@@ -489,7 +494,9 @@ impl Parser {
     fn parse_program(&mut self) -> Vec<Stmt> {
         let mut stmts = Vec::new();
         while *self.peek() != Token::Eof && *self.peek() != Token::RBrace {
-            stmts.push(self.parse_stmt());
+            let stmt = self.parse_stmt();
+            stmts.append(&mut self.hoisted);
+            stmts.push(stmt);
         }
         stmts
     }
