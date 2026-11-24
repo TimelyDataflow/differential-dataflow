@@ -610,6 +610,28 @@ fn absence_keeps_bag_weights_and_reuses_the_first_key_arrangement() {
 }
 
 #[test]
+fn tests_against_a_unit_distinct_join_it_without_a_key_set() {
+    // `b` is a distinct of unit values, already one row per key; `c` is a min, which has values.
+    let src = r#"
+        let a = input 0 : (int,int);
+        let r = input 1 : (int,int);
+        let b = r | map((k, _) -> (k, ())) | distinct;
+        let c = r | min;
+        output "out" = a(k,v) * !b(k,_) |- (k,v);
+        output "in" = a(k,v) * ?b(k,_) |- (k,v);
+        output "unit" = a(k,v) * !b(k,()) |- (k,v);
+        output "min" = a(k,v) * !c(k,_) |- (k,v);
+    "#;
+    let report = plan::report(src, &|_| None, &Config::default()).unwrap();
+    let optimized = report.emit_ddp_at(plan::ddp::DdpStage::Optimized).unwrap().text;
+    assert_eq!(optimized.matches("-> ((), 1) enlist)").count(), 1, "only the min keeps a key set:\n{optimized}");
+    let feeds = || vec![(0, "1 val=8 diff=3\n2 val=9 diff=4\n3 val=7".into()), (1, "1 val=2 diff=2\n1 val=3\n3 val=5 diff=-1".into())];
+    assert_eq!(rows(src, feeds()), vec![("2".into(), "9".into(), 4)]);
+    let present = src.replace("\"out\"", "\"absent\"").replace("\"in\"", "\"out\"");
+    assert_eq!(rows(&present, feeds()), vec![("1".into(), "8".into(), 3), ("3".into(), "7".into(), 1)]);
+}
+
+#[test]
 fn absence_matches_literals_and_bound_variables_in_values() {
     let cases = [
         ("b(k,7)", "1 val=7 diff=2\n2 val=8", "2"),

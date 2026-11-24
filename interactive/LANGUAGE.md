@@ -174,6 +174,7 @@ The parser uses one presence row per matched key for either test.
 A semijoin joins against that set, and an antijoin subtracts the rows from that same join.
 A plain atom multiplies the weights and acts as a semijoin when its matching rows already form a set with one row per matched key.
 When the test matches the entire key and leaves the value unrestricted, it reads the tested collection's key arrangement directly.
+When that collection is a `distinct` of unit values, it is already the set, and the optimizer drops the set's reduce.
 
 Write `@eq(a, b)`, `@ne(a, b)`, `@lt(a, b)`, `@le(a, b)`, `@gt(a, b)`, or `@ge(a, b)` to compare two arguments.
 Write `@add(a, b, c)`, `@sub(a, b, c)`, or `@mul(a, b, c)` to compute `c` from `a` and `b`.

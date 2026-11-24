@@ -126,8 +126,7 @@ impl Atom {
 
         let mut state = State::new(scope);
         let (source, key) = if full_key {
-            let pat = format!("(k, vals : List(({}, int)))", val.shape_pattern());
-            let reducer = state.lambda(&pat, "((), 1) enlist".into());
+            let reducer = crate::reducers::key_set(&val.shape_pattern());
             (Expr::Reduce(Box::new(source), Reducer::Expr(reducer, Some(1))), original_key)
         } else {
             let pat = state.bind_first(&key, &val);

@@ -1,5 +1,6 @@
 //! Structural rewrites and item compaction within each scope.
 
+use crate::ir::Reducer;
 use crate::scope_ir::{Item, Node, Ref, Scope, Source};
 
 /// Intern identical imports, as lowering does for repeated parent references. Names
@@ -24,15 +25,17 @@ pub(super) fn merge_imports(scope: &mut Scope) -> usize {
 }
 
 /// Optimize this scope (and, recursively, its children) in place, iterating
-/// three rewrites to a fixed point:
+/// four rewrites to a fixed point:
 ///
 /// - collapse an `Arrange` whose input is already an arrangement
 ///   (an `Arrange` or a `Reduce`);
 /// - deduplicate structurally identical operators and child scopes;
 /// - fuse a `Linear` into its `Linear` input when it is that input's only
-///   consumer. Deduplication comes first so fusion cannot hide shared prefixes.
+///   consumer. Deduplication comes first so fusion cannot hide shared prefixes;
+/// - collapse a fragment test's key set whose input is a `distinct` of unit
+///   values, which is already that set.
 ///
-/// All three are *within-scope*: a scope boundary is a semantic barrier,
+/// All four are *within-scope*: a scope boundary is a semantic barrier,
 /// so nothing merges or moves across one.
 /// Observations are made before items are removed or renumbered.
 pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super::Observe<'_>) {
@@ -47,7 +50,8 @@ pub(super) fn optimize_scope(scope: &mut Scope, path: &str, observe: &mut super:
     loop {
         let changed = collapse_arranges(scope, &mut dead, &mut note)
             | dedup(scope, &mut dead, &mut note)
-            | fuse_linear(scope, &mut dead, &mut note);
+            | fuse_linear(scope, &mut dead, &mut note)
+            | collapse_key_sets(scope, &mut dead, &mut note);
         if !changed { break; }
     }
     compact(scope, &dead);
@@ -96,6 +100,31 @@ fn collapse_arranges(scope: &mut Scope, dead: &mut [bool], note: &mut dyn FnMut(
         let j = remap[*j];
         if !dead[j] && matches!(&scope.items[j], Item::Op(Node::Arrange(_) | Node::Reduce { .. })) {
             note(scope, "removed redundant arrange", i, j);
+            remap[i] = j;
+            dead[i] = true;
+            changed = true;
+        }
+    }
+    if changed { scope.for_each_ref(|r| if let Ref::Local(i) = r { *i = remap[*i]; }); }
+    changed
+}
+
+/// A fragment test's key set over a `distinct` is redundant. `distinct` lowers to
+/// `reducers::unit_distinct`, whose input has unit values (a valued `distinct` first keys by the
+/// whole record), so it holds each key once, as `()` with diff 1: exactly the set the test builds.
+/// The test's value pattern is `_` or, naming the unit value, `()`.
+fn collapse_key_sets(scope: &mut Scope, dead: &mut [bool], note: &mut dyn FnMut(&Scope, &'static str, usize, usize)) -> bool {
+    let key_sets = [crate::reducers::key_set("_"), crate::reducers::key_set("()")];
+    let distinct = crate::reducers::unit_distinct();
+    let mut changed = false;
+    let mut remap: Vec<_> = (0..scope.items.len()).collect();
+    for i in 0..scope.items.len() {
+        if dead[i] { continue; }
+        let Item::Op(Node::Reduce { input: Ref::Local(j), reducer: Reducer::Expr(set), limit: Some(1) }) = &scope.items[i] else { continue };
+        let j = remap[*j];
+        let is_distinct = matches!(&scope.items[j], Item::Op(Node::Reduce { reducer: Reducer::Expr(d), limit: None, .. }) if *d == distinct);
+        if !dead[j] && key_sets.contains(set) && is_distinct {
+            note(scope, "removed key set of a distinct", i, j);
             remap[i] = j;
             dead[i] = true;
             changed = true;
