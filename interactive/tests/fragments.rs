@@ -34,7 +34,7 @@ fn joins_multiply_weights_and_handle_retractions() {
         let b = input 1 : (int, int);
         let c = input 2 : ((int, int), ());
         output "out" = a(x, y) * b(y, z) * c((x, z), ())
-            | map(((x, y, z), ()) -> ((x, y, z), ()));
+            |- ((x, y, z), ());
     "#;
     let p = program(src);
     timely::execute_directly(move |worker| {
@@ -67,16 +67,16 @@ fn patterns_tests_and_output_order() {
     let src = r#"
         let a = input 0 : ((int, int), (List(int), int));
         let b = input 1 : (int, int);
-        output "out" = a((x, x), ("hi", y)) * b(y, -7);
+        output "out" = a((x, x), ("hi", y)) * b(y, -7) |- ((x,y),());
     "#;
     assert_eq!(rows(src,vec![(0,"1,1 val=tuple(list(104,105),2)\n1,9 val=tuple(list(104,105),2)\n3,3 val=tuple(list(104),2)".into()),(1,"2 val=-7 diff=3\n2 val=7".into())]),vec![("tuple(1,2)".into(),"tuple()".into(),3)]);
-    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(_, _);",vec![(0,"1 val=2 diff=4".into())]),vec![("tuple()".into(),"tuple()".into(),4)]);
-    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(x, _);",vec![(0,"1 val=2".into())]),vec![("1".into(),"tuple()".into(),1)]);
+    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(_, _) |- ((),());",vec![(0,"1 val=2 diff=4".into())]),vec![("tuple()".into(),"tuple()".into(),4)]);
+    assert_eq!(rows("let a = input 0 : (int,int); output \"out\" = a(x, _) |- (x,());",vec![(0,"1 val=2".into())]),vec![("1".into(),"tuple()".into(),1)]);
 }
 
 #[test]
 fn empty_list_pattern_does_not_choose_an_element_shape() {
-    assert_eq!(rows("let a = input 0 : (int,List((int,int))); output \"out\" = a(x, []);",
+    assert_eq!(rows("let a = input 0 : (int,List((int,int))); output \"out\" = a(x, []) |- (x,());",
         vec![(0,"1 val=list()\n2 val=list(tuple(3,4))".into())]),
         vec![("1".into(),"tuple()".into(),1)]);
 }
@@ -89,7 +89,7 @@ fn nested_open_variants_and_early_key_extraction() {
         let a = input 0 : (int, Option(Result((int, List(int)), ())));
         let b = input 1 : (int, A);
         let c = input 2 : (A, int);
-        output "out" = a(_, Some(Ok((x, text)))) * b(x, A::Shared(y)) * c(A::Shared(y), z);
+        output "out" = a(_, Some(Ok((x, text)))) * b(x, A::Shared(y)) * c(A::Shared(y), z) |- ((x,text,y,z),());
     "#;
     let got = rows(src,vec![
         (0,"1 val=inject(1,inject(0,tuple(2,list(65))))\n2 val=inject(0,tuple())\n3 val=inject(1,inject(1,tuple()))".into()),
@@ -108,7 +108,7 @@ fn nested_open_variants_and_early_key_extraction() {
         enum Key = Wrap Inner | Empty;
         let a = input 0 : (int, ());
         let b = input 1 : (Key, int);
-        output "out" = a(y, ()) * b(Key::Wrap(Inner::Leaf(y)), z);
+        output "out" = a(y, ()) * b(Key::Wrap(Inner::Leaf(y)), z) |- ((y,z),());
     "#;
     assert_eq!(rows(nested_key, vec![(0, "1".into()),
         (1, "inject(0,inject(0,1)) val=9".into())]),
@@ -124,8 +124,8 @@ fn paths_feedback_pipeline_union_and_difference() {
         let a = input 0 : (int, int);
         looped: { var x : (int,int); set x = a; }
         let b = ::looped::x;
-        output "out" = (looped::x(x,y) * b(x,z) | map(((x,y,z),()) -> (y,z)))
-            + (a(x,y) | map(((x,y),()) -> (x,y))) - a;
+        output "out" = (looped::x(x,y) * b(x,z) |- (y,z))
+            + (a(x,y) |- (x,y)) - a;
     "#;
     assert_eq!(rows(src,vec![(0,"1 val=2".into())]),vec![("2".into(),"2".into(),1)]);
 }
@@ -139,19 +139,19 @@ fn key_restrictions_and_arity() {
         ("b((x,missing),z)", "fragment key variable `missing` is not bound by an earlier atom"),
         ("b(Some(_),z)", "a later fragment key cannot contain a wildcard"),
     ] {
-        let src=format!("let a = input 0 : (int,int); let b = a; output \"out\" = a(x,y) * {atom};");
+        let src=format!("let a = input 0 : (int,int); let b = a; output \"out\" = a(x,y) * {atom} |- (x,y);");
         rejects(&src, error);
     }
     for (bad, error) in [("a(x)", "Expected Comma, got RParen"),
         ("a(x,y,z)", "Expected RParen, got Comma"), ("a(x,[y])", "a list pattern is a literal")] {
-        rejects(&format!("let a=input 0 : (int,int); output \"out\"={bad};"), error);
+        rejects(&format!("let a=input 0 : (int,int); output \"out\"={bad} |- ((),());"), error);
     }
 }
 
 #[test]
 fn constant_later_keys_explain_cross_joins() {
     for key in ["1", "-7", "\"ok\"", "[1,2]", "[]", "[[]]", "()", "(1,())", "Empty", "Empty()", "Group(7)", "(Empty(),[1,2])"] {
-        let src = format!("enum K=Group int | Empty; let a=input 0 : (int,int); let b=a; output \"out\"=a(x,y)*b({key},z);");
+        let src = format!("enum K=Group int | Empty; let a=input 0 : (int,int); let b=a; output \"out\"=a(x,y)*b({key},z) |- (x,y);");
         rejects(&src, "a constant fragment key would move every incoming row to one key; write a cross join as plain DDP");
     }
 }
@@ -164,7 +164,7 @@ fn later_keys_combine_bound_variables_with_constants() {
         let b = input 1 : ((int,int),int);
         let c = input 2 : (K,int);
         let d = input 3 : ((int,K,()),int);
-        output "out" = a(rid,()) * b((rid,7),v) * c(Group((rid,v)),w) * d((w,Empty,()),z);
+        output "out" = a(rid,()) * b((rid,7),v) * c(Group((rid,v)),w) * d((w,Empty,()),z) |- ((rid,v,w,z),());
     "#;
     assert_eq!(rows(src, vec![(0,"1\n2".into()), (1,"1,7 val=10\n2,8 val=20".into()),
         (2,"inject(0,tuple(1,10)) val=99".into()), (3,"tuple(99,inject(1,tuple()),tuple()) val=5".into())]),
@@ -173,40 +173,40 @@ fn later_keys_combine_bound_variables_with_constants() {
 
 #[test]
 fn bare_constructors_match_empty_payloads_and_do_not_bind_variables() {
-    assert_eq!(rows("let a=input 0 : (int,Option(int)); output \"out\"=a(x,None);",
+    assert_eq!(rows("let a=input 0 : (int,Option(int)); output \"out\"=a(x,None) |- (x,());",
         vec![(0,"1 val=inject(0,tuple()) diff=3\n2 val=inject(1,7)".into())]),
         vec![("1".into(), "tuple()".into(), 3)]);
-    let src = "let a=input 0 : (int,(Option(int),Option(int))); output \"out\"=a(x,(None,None));";
+    let src = "let a=input 0 : (int,(Option(int),Option(int))); output \"out\"=a(x,(None,None)) |- (x,());";
     assert_eq!(rows(src, vec![(0,"1 val=tuple(inject(0,tuple()),inject(0,tuple()))\n2 val=tuple(inject(0,tuple()),inject(1,7))\n3 val=tuple(inject(1,7),inject(1,7))".into())]),
         vec![("1".into(), "tuple()".into(), 1)]);
     let text = plan::report(src, &|_| None, &Config::all()).unwrap().emit_ddp().unwrap().text;
     assert!(!text.contains("| filter("), "repeated None must not become equality: {text}");
-    assert_eq!(rows("enum K=Empty | Full int; let a=input 0 : (K,int); output \"out\"=a(K::Empty,v);",
+    assert_eq!(rows("enum K=Empty | Full int; let a=input 0 : (K,int); output \"out\"=a(K::Empty,v) |- (v,());",
         vec![(0,"inject(0,tuple()) val=9\ninject(1,7) val=8".into())]),
         vec![("9".into(), "tuple()".into(), 1)]);
-    assert_eq!(rows("let a=input 0 : (int,int); output \"out\"=a(x,Fresh);", vec![(0,"1 val=2".into())]),
+    assert_eq!(rows("let a=input 0 : (int,int); output \"out\"=a(x,Fresh) |- ((x,Fresh),());", vec![(0,"1 val=2".into())]),
         vec![("tuple(1,2)".into(), "tuple()".into(), 1)]);
 }
 
 #[test]
 fn bare_constructors_requiring_payloads_report_the_constructor() {
     for name in ["Some", "Group", "K::Group", "Ok"] {
-        let src = format!("enum K=Group int | Empty; let a=input 0 : (int,K); output \"out\"=a(x,{name});");
+        let src = format!("enum K=Group int | Empty; let a=input 0 : (int,K); output \"out\"=a(x,{name}) |- (x,());");
         rejects(&src, &format!("fragment constructor `{name}` requires a payload; write `{name}(pattern)`"));
     }
-    rejects("enum A=Shared; enum B=Shared; let a=input 0 : (int,A); output \"out\"=a(x,Shared);",
+    rejects("enum A=Shared; enum B=Shared; let a=input 0 : (int,A); output \"out\"=a(x,Shared) |- (x,());",
         "fragment constructor `Shared`: 'Shared' is a variant of");
 }
 
 #[test]
 fn nested_empty_list_literals_report_a_ddir_error() {
     for literal in ["[[]]", "[[[]]]", "[([], 7)]"] {
-        let src = format!("let a=input 0 : (int,List(List(int))); output \"out\"=a(x,{literal});");
+        let src = format!("let a=input 0 : (int,List(List(int))); output \"out\"=a(x,{literal}) |- (x,());");
         rejects(&src, &format!("DDIR fragment list literal `{literal}` needs a complete element shape; use plain DDP with an explicit list shape"));
     }
     for (literal, value) in [("[[1],[2]]", "list(list(1),list(2))"),
         ("[[1],[]]", "list(list(1),list())"), ("[[],[1]]", "list(list(),list(1))")] {
-        let src = format!("let a=input 0 : (int,List(List(int))); output \"out\"=a(x,{literal});");
+        let src = format!("let a=input 0 : (int,List(List(int))); output \"out\"=a(x,{literal}) |- (x,());");
         assert_eq!(rows(&src, vec![(0,format!("1 val={value}\n2 val=list()"))]),
             vec![("1".into(), "tuple()".into(), 1)]);
     }
@@ -218,7 +218,7 @@ fn fragments_read_their_own_feedback_variable() {
         let edges = input 0 : (int,int);
         let roots = input 1 : (int,());
         s: {
-            set x = roots + (x(src,()) * edges(src,dst) | map(((src,dst),()) -> (dst,()))) | distinct;
+            set x = roots + (x(src,()) * edges(src,dst) |- (dst,())) | distinct;
         }
         output "out" = s::x;
     "#;
@@ -229,7 +229,7 @@ fn fragments_read_their_own_feedback_variable() {
 #[test]
 fn fragments_are_absent_from_every_emitted_plan_stage() {
     use plan::ddp::DdpStage;
-    let src = "let a=input 0 : (int,int); let b=a; output \"out\"=a(x,7)*b(x,y);";
+    let src = "let a=input 0 : (int,int); let b=a; output \"out\"=a(x,7)*b(x,y) |- ((x,y),());";
     let report = plan::report(src, &|_| None, &Config::all()).unwrap();
     for stage in [DdpStage::Parsed, DdpStage::Lowered, DdpStage::Optimized, DdpStage::Projected, DdpStage::AsOf] {
         let text = report.emit_ddp_at(stage).unwrap().text;
@@ -242,7 +242,7 @@ fn fragments_are_absent_from_every_emitted_plan_stage() {
 #[test]
 fn parsed_shows_the_expansion_and_direct_first_tests_follow_the_first_join() {
     use plan::ddp::DdpStage;
-    let src="let a = input 0 : (int,int); let b = a; let c = a; output \"out\" = a(x,7) * b(x,y) * c(y,9);";
+    let src="let a = input 0 : (int,int); let b = a; let c = a; output \"out\" = a(x,7) * b(x,y) * c(y,9) |- ((x,y),());";
     let report=plan::report(src,&|_|None,&Config::parse("all").unwrap()).unwrap();
     let parsed=report.emit_ddp_at(DdpStage::Parsed).unwrap().text;
     assert!(!parsed.contains('*') && parsed.contains("| join("));
@@ -259,7 +259,7 @@ fn parsed_shows_the_expansion_and_direct_first_tests_follow_the_first_join() {
 
 #[test]
 fn open_result_constructor_key_exposes_corgis_missing_lane_shape() {
-    let src = "let a=input 0 : (int,()); let b=input 1 : (Result(int,()),int); output \"out\"=a(x,()) * b(Ok(x),y);";
+    let src = "let a=input 0 : (int,()); let b=input 1 : (Result(int,()),int); output \"out\"=a(x,()) * b(Ok(x),y) |- ((x,y),());";
     let report=plan::report(src,&|_|None,&Config::parse("all").unwrap()).unwrap();
     assert!(report.stages[0].problems.iter().any(|s|s.contains("declares no payload shape")));
 }
@@ -267,7 +267,7 @@ fn open_result_constructor_key_exposes_corgis_missing_lane_shape() {
 #[test]
 fn direct_first_join_reads_the_key_and_carries_it_when_rekeyed() {
     use interactive::scope_ir::{Item, Node, Ref};
-    let src = "let a=input 0 : (int,int); let b=input 1 : (int,int); let c=input 2 : (int,int); output \"out\"=a(x,y) * b(x,z) * c(y,w);";
+    let src = "let a=input 0 : (int,int); let b=input 1 : (int,int); let c=input 2 : (int,int); output \"out\"=a(x,y) * b(x,z) * c(y,w) |- ((x,y,z,w),());";
     let report = plan::report(src, &|_| None, &Config::parse("all").unwrap()).unwrap();
     let root = &report.stages[0].program.root;
     let (left, projection) = root.items.iter().find_map(|item| match item {
@@ -294,7 +294,7 @@ fn first_atom_tests_do_not_prevent_direct_arrangement_reuse() {
         let a=input 0 : (int,(Option(int),int,int));
         let b=input 1 : (int,int);
         let c=input 2 : (int,int);
-        output "out"=a(x,(Some(y),x,7)) * b(x,z) * c(z,w);
+        output "out"=a(x,(Some(y),x,7)) * b(x,z) * c(z,w) |- ((x,y,z,w),());
     "#;
     let report = plan::report(src, &|_| None, &Config::parse("all").unwrap()).unwrap();
     let root = &report.stages[0].program.root;
@@ -322,7 +322,7 @@ fn first_key_restrictions_are_tested_before_a_new_arrangement() {
         enum Key = Group (int,int) | User (int,int);
         let a=input 0 : (Key,int);
         let b=input 1 : (Key,int);
-        output "out"=a(Group((x,x)),y) * b(Group((x,x)),z);
+        output "out"=a(Group((x,x)),y) * b(Group((x,x)),z) |- ((x,y,z),());
     "#;
     let report=plan::report(src,&|_|None,&Config::parse("all").unwrap()).unwrap();
     let root=&report.stages[0].program.root;
@@ -347,7 +347,7 @@ fn first_key_restrictions_are_tested_before_a_new_arrangement() {
 fn nested_variant_lists_and_equalities_build_only_survivors() {
     let src = r#"
         let a = input 0 : (int, Option(Result((int,int),())));
-        output "out" = a(doc, Some(Ok((u,u))));
+        output "out" = a(doc, Some(Ok((u,u)))) |- ((doc,u),());
     "#;
     assert_eq!(rows(src, vec![(0, "1 val=inject(1,inject(0,tuple(2,2))) diff=3\n1 val=inject(1,inject(0,tuple(2,9)))\n2 val=inject(0,tuple())\n3 val=inject(1,inject(1,tuple()))".into())]),
         vec![("tuple(1,2)".into(), "tuple()".into(), 3)]);
@@ -364,7 +364,7 @@ fn one_atom_variant_demux() {
     let src = r#"
         enum Member = User int | Group int;
         let grants = input 0 : (int, (Member, int));
-        output "out" = grants(doc, (User(u), level)) | map(((doc, u, level), ()) -> (u, (doc, level)));
+        output "out" = grants(doc, (User(u), level)) |- (u, (doc, level));
     "#;
     let feed = "100 val=tuple(inject(0,1),3)\n100 val=tuple(inject(1,10),2) diff=5\n200 val=tuple(inject(0,2),1) diff=2";
     assert_eq!(rows(src, vec![(0, feed.into())]),
@@ -376,7 +376,7 @@ fn first_literal_precedes_the_first_rekey_and_arrangement() {
     use interactive::{ir::LinearOp, scope_ir::{Item, Node, Ref}};
     let src = r#"
         let message = input 0 : (int, (int,int,int));
-        output "out" = message(_, (1, who, parent)) * message(parent, (_, to, _));
+        output "out" = message(_, (1, who, parent)) * message(parent, (_, to, _)) |- ((who,parent,to),());
     "#;
     let p = program(src);
     let items = &p.root.items;
@@ -401,7 +401,7 @@ fn later_literals_follow_their_join_and_leave_before_the_next_arrangement() {
         let by_name = input 1 : (int,int);
         let place = input 2 : (int,(int,int));
         output "out" = asked(xname,(rid,yname)) * by_name(xname,x)
-            * place(x,(7,_)) * by_name(yname,y) * place(y,(7,_));
+            * place(x,(7,_)) * by_name(yname,y) * place(y,(7,_)) |- ((xname,rid,yname,x,y),());
     "#;
     let p = program(src);
     let items = &p.root.items;
@@ -423,7 +423,7 @@ fn later_literals_follow_their_join_and_leave_before_the_next_arrangement() {
 #[test]
 fn test_free_chain_has_no_flatmap_or_layout_stage_after_the_last_join() {
     use interactive::{ir::LinearOp, scope_ir::{Item, Node}};
-    let src = "let a=input 0 : (int,int); let b=a; let c=a; output \"out\"=a(x,y)*b(y,z)*c(z,w);";
+    let src = "let a=input 0 : (int,int); let b=a; let c=a; output \"out\"=a(x,y)*b(y,z)*c(z,w) |- ((x,y,z,w),());";
     let p = program(src);
     assert!(!p.root.items.iter().any(|i| matches!(i, Item::Op(Node::Linear { ops, .. }) if ops.iter().any(|op| matches!(op, LinearOp::FlatMap(_))))));
     assert!(matches!(p.root.items.last(), Some(Item::Op(Node::Join { .. }))));
@@ -438,7 +438,7 @@ fn variant_payload_rekeys_before_its_join_without_head_or_tag_columns() {
         enum Member = User int | Group int;
         let members = input 0 : (int, Member);
         let groups = input 1 : (int, Member);
-        output "out" = members(doc, Group(g)) * groups(g, m);
+        output "out" = members(doc, Group(g)) * groups(g, m) |- ((doc,g,m),());
     "#;
     let p = program(src);
     let items = &p.root.items;
@@ -459,7 +459,7 @@ fn variant_payload_rekeys_before_its_join_without_head_or_tag_columns() {
 fn wildcard_payloads_still_check_their_tuple_shape() {
     for (val, error) in [("Some((_,_))", "wants a product of 2 fields, not Int"),
         ("Some((_))", "wants a product of 1 field, not Int")] {
-        let src = format!("let a=input 0 : (int,Option(int)); output \"out\"=a(_, {val});");
+        let src = format!("let a=input 0 : (int,Option(int)); output \"out\"=a(_, {val}) |- ((),());");
         let report = plan::report(&src, &|_| None, &Config::all()).unwrap();
         assert!(report.stages[0].problems.iter().any(|e| e.contains(error)), "{src}: {:?}", report.stages[0].problems);
     }
@@ -472,7 +472,7 @@ fn variants_rekey_before_pending_plain_payload_tests() {
         enum Member = User int | Group (int,int);
         let members = input 0 : (int,Member);
         let groups = input 1 : (int,int);
-        output "out" = members(doc,Group((g,7))) * groups(g,m);
+        output "out" = members(doc,Group((g,7))) * groups(g,m) |- ((doc,g,m),());
     "#;
     let mut p = program(src);
     let flatmap = p.root.items.iter().position(|i| matches!(i, Item::Op(Node::Linear { ops, .. }) if matches!(ops.as_slice(), [LinearOp::FlatMap(_)]))).unwrap();
@@ -504,7 +504,7 @@ fn identical_restricted_first_keys_keep_their_original_values() {
         ("Result(int,int)", "Err(x)", "inject(1,1)", "inject(0,2)"),
         ("(int,Option(int))", "(x,None)", "tuple(1,inject(0,tuple()))", "tuple(2,inject(1,7))"),
     ] {
-        let src = format!("let a=input 0 : ({shape},int); let b=input 1 : ({shape},int); output \"out\"=a({pattern},v)*b({pattern},w);");
+        let src = format!("let a=input 0 : ({shape},int); let b=input 1 : ({shape},int); output \"out\"=a({pattern},v)*b({pattern},w) |- ((x,v,w),());");
         assert_eq!(rows(&src, vec![(0,format!("{kept} val=8 diff=2\n{dropped} val=7")),
             (1,format!("{kept} val=9 diff=3\n{dropped} val=5"))]),
             vec![("tuple(1,8,9)".into(), "tuple()".into(), 6)]);
@@ -517,20 +517,19 @@ fn identical_restricted_first_keys_keep_their_original_values() {
 #[test]
 fn empty_lists_and_strings_in_later_keys_report_a_ddir_error() {
     for literal in ["[]", "\"\"", "(7,[])", "Some((x,[]))"] {
-        let src = format!("let a=input 0 : (int,int); let b=input 1 : ((int,List(int)),int); output \"out\"=a(x,y)*b((x,{literal}),z);");
+        let src = format!("let a=input 0 : (int,int); let b=input 1 : ((int,List(int)),int); output \"out\"=a(x,y)*b((x,{literal}),z) |- (x,y);");
         rejects(&src, "DDIR fragment key literal `[]` needs a complete element shape; use plain DDP with an explicit list shape");
     }
 }
 
-/// A fragment with one output variable gives that variable as the key, not a tuple of one, as do
-/// the rows it carries between joins.
+/// A scalar lookup key remains scalar through the fragment.
 #[test]
 fn one_variable_is_not_a_tuple() {
     let src = r#"
         let a = input 0 : (int, int);
         let b = input 1 : (int, ());
-        output "out" = a(x, y) * b(y, ()) | map(((x, y), ()) -> (y, x));
-        output "one" = a(x, ()) * b(x, ()) | map((x, ()) -> (x, ()));
+        output "out" = a(x, y) * b(y, ()) |- (y, x);
+        output "one" = a(x, ()) * b(x, ()) |- (x, ());
     "#;
     let report = plan::report(src, &|_| None, &Config::parse("all").unwrap()).unwrap();
     let text = report.print();
@@ -538,7 +537,313 @@ fn one_variable_is_not_a_tuple() {
     let src = r#"
         let a = input 0 : (int, ());
         let b = input 1 : (int, ());
-        output "out" = a(x, ()) * b(x, ()) | map((x, ()) -> (x, ()));
+        output "out" = a(x, ()) * b(x, ()) |- (x, ());
     "#;
     assert_eq!(rows(src, vec![(0, "4".into()), (1, "4".into()), (1, "5".into())]), vec![("4".into(), "tuple()".into(), 1)]);
+}
+
+#[test]
+fn heads_are_raw_corgi_and_end_at_the_closing_paren() {
+    let src = r#"
+        let a = input 0 : (int, (int,int));
+        output "out" = (a(k, v) |- ((v.0), 2.5 # this ) is inside a comment
+        ) |-- a comment directly after a pipe
+        distinct) + (a(k, v) |- ((v.1), 2.5)) -- a line comment
+        ;
+    "#;
+    assert_eq!(rows(src, vec![(0, "1 val=tuple(3,4) diff=2".into())]), vec![
+        ("tuple(3)".into(), "2.5".into(), 1),
+        ("tuple(4)".into(), "2.5".into(), 2),
+    ]);
+}
+
+#[test]
+fn a_final_join_emits_the_head_directly() {
+    use interactive::scope_ir::{Item, Node};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        output "out" = a(x,y) * b(y,z) |- (z, (x,y) add);
+    "#;
+    assert!(matches!(program(src).root.items.last(), Some(Item::Op(Node::Join { .. }))));
+    assert_eq!(rows(src, vec![(0, "1 val=2".into()), (1, "2 val=3".into())]),
+        vec![("3".into(), "3".into(), 1)]);
+}
+
+#[test]
+fn malformed_heads_explain_the_error() {
+    let prefix = "let a = input 0 : (int,int); output \"out\" = a(x,y)";
+    for (tail, expected) in [
+        ("|- (missing,x);", "unbound variable 'missing'"),
+        ("|- (input,x);", "unbound variable 'input'"),
+        ("|- (x);", "a fragment head must be a tuple"),
+        ("|- (x,y,());", "a fragment head must be a tuple"),
+        ("|- x;", "a fragment head must be a tuple"),
+        ("|- (x,y;", "unclosed fragment head"),
+        ("| - (x,y);", "end the fragment with `|- (key, value)`"),
+    ] {
+        rejects(&format!("{prefix} {tail}"), expected);
+    }
+}
+
+#[test]
+fn absence_keeps_bag_weights_and_reuses_the_first_key_arrangement() {
+    use interactive::scope_ir::{Item, Node, Ref};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        output "out" = a(k,v) * !b(k,_) |- (k,v);
+    "#;
+    let p = program(src);
+    let items = &p.root.items;
+    assert!(matches!(items.last(), Some(Item::Op(Node::Concat(_)))));
+    let left = items.iter().find_map(|item| match item {
+        Item::Op(Node::Join { left: Ref::Local(i), .. }) => Some(*i),
+        _ => None,
+    }).unwrap();
+    assert!(matches!(items[left], Item::Op(Node::Arrange(Ref::Import(0)))));
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let parsed = report.emit_ddp_at(plan::ddp::DdpStage::Parsed).unwrap().text;
+    assert!(!parsed.contains("| map("), "{parsed}");
+    assert_eq!(rows(src, vec![(0, "1 val=8 diff=3\n2 val=9 diff=4".into()),
+        (1, "1 val=2 diff=2\n1 val=3".into())]), vec![("2".into(), "9".into(), 4)]);
+}
+
+#[test]
+fn wildcards_match_any_row_so_projected_and_whole_key_tests_agree() {
+    // Two rows under one key with opposite counts are both present, so the projected
+    // `!b((x, _), _)` finds one, as the whole-key `?b((x, ()), _)` does.
+    let src = r#"
+        let a = input 0 : (int, ());
+        let b = input 1 : ((int, ()), int);
+        output "out" = a(x, ()) * ?b((x, ()), _) * !b((x, _), _) |- (x, ());
+    "#;
+    let feeds = vec![(0, "1".into()), (1, "tuple(1,tuple()) val=7\ntuple(1,tuple()) val=8 diff=-1".into())];
+    assert_eq!(rows(src, feeds), Vec::<(String, String, i64)>::new());
+    // Rows differing only under `_` are not summed: their counts cancel, but each is present.
+    let src = r#"
+        let a = input 0 : (int, ());
+        let b = input 1 : (int, int);
+        output "out" = a(x, ()) * ?b(_, x) |- (x, ());
+    "#;
+    let feeds = vec![(0, "7".into()), (1, "1 val=7\n2 val=7 diff=-1".into())];
+    assert_eq!(rows(src, feeds), vec![("7".into(), "tuple()".into(), 1)]);
+}
+
+#[test]
+fn antijoin_rows_take_names_the_source_does_not_write() {
+    // An outer binding with the generated name is still what the child scope reads.
+    let outer = r#"
+        let fragment_rows0 = input 0 : (int, int);
+        let a = input 1 : (int, int);
+        inner: {
+            let keep = a(k, v) * !a(v, _) |- (k, v);
+            let copied = fragment_rows0;
+        }
+        output "out" = inner::copied;
+    "#;
+    assert_eq!(rows(outer, vec![(0, "9 val=8".into()), (1, "1 val=2".into())]), vec![("9".into(), "8".into(), 1)]);
+    // A program may bind the name itself.
+    let local = r#"
+        let fragment_rows0 = input 0 : (int, int);
+        output "out" = fragment_rows0(k, v) * !fragment_rows0(v, _) |- (k, v);
+    "#;
+    assert_eq!(rows(local, vec![(0, "1 val=2".into())]), vec![("1".into(), "2".into(), 1)]);
+    // A name the program never binds stays unbound.
+    rejects(r#"let a = input 0 : (int, int); let keep = a(k, v) * !a(v, _) |- (k, v); output "out" = fragment_rows0;"#, "fragment_rows0");
+}
+
+#[test]
+fn tests_against_a_unit_distinct_join_it_without_a_key_set() {
+    // `b` is a distinct of unit values, already one row per key; `c` is a min, which has values.
+    let src = r#"
+        let a = input 0 : (int,int);
+        let r = input 1 : (int,int);
+        let b = r | map((k, _) -> (k, ())) | distinct;
+        let c = r | min;
+        output "out" = a(k,v) * !b(k,_) |- (k,v);
+        output "in" = a(k,v) * ?b(k,_) |- (k,v);
+        output "unit" = a(k,v) * !b(k,()) |- (k,v);
+        output "min" = a(k,v) * !c(k,_) |- (k,v);
+    "#;
+    let report = plan::report(src, &|_| None, &Config::default()).unwrap();
+    let optimized = report.emit_ddp_at(plan::ddp::DdpStage::Optimized).unwrap().text;
+    assert_eq!(optimized.matches("-> ((), 1) enlist)").count(), 1, "only the min keeps a key set:\n{optimized}");
+    let feeds = || vec![(0, "1 val=8 diff=3\n2 val=9 diff=4\n3 val=7".into()), (1, "1 val=2 diff=2\n1 val=3\n3 val=5 diff=-1".into())];
+    assert_eq!(rows(src, feeds()), vec![("2".into(), "9".into(), 4)]);
+    let present = src.replace("\"out\"", "\"absent\"").replace("\"in\"", "\"out\"");
+    assert_eq!(rows(&present, feeds()), vec![("1".into(), "8".into(), 3), ("3".into(), "7".into(), 1)]);
+}
+
+#[test]
+fn absence_matches_literals_and_bound_variables_in_values() {
+    let cases = [
+        ("b(k,7)", "1 val=7 diff=2\n2 val=8", "2"),
+        ("b(k,v)", "1 val=8 diff=2\n2 val=8", "2"),
+        ("b(_,(v))", "9 val=tuple(8) diff=2\n2 val=tuple(8)", "2"),
+        ("b(_,Some(v))", "9 val=inject(1,8) diff=2\n2 val=inject(0,tuple())", "2"),
+        ("b(_, (v,v))", "9 val=tuple(8,9)\n2 val=tuple(9,9)", "1"),
+        ("b(v,_)", "8 val=3 diff=2\n2 val=3", "2"),
+    ];
+    for (atom, right, survivor) in cases {
+        let value = if atom.contains("Some") { "Option(int)" }
+            else if atom.contains("(v,v)") { "(int,int)" }
+            else if atom.contains("(v)") { "(int)" } else { "int" };
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,{value}); \
+            output \"out\" = a(k,v) * !{atom} |- (k,());");
+        assert_eq!(rows(&src, vec![(0, "1 val=8\n2 val=9".into()), (1, right.into())]),
+            vec![(survivor.into(), "tuple()".into(), 1)], "{atom}");
+    }
+}
+
+#[test]
+fn absence_in_a_loop_can_test_the_feedback_collection() {
+    let src = r#"
+        let seed = input 0 : (int,());
+        let edges = input 1 : (int,int);
+        let blocked = input 2 : (int,int);
+        s: {
+            var reached : (int,());
+            set reached = seed + (reached(x,()) * edges(x,y) * !blocked(y,_) |- (y,())) | distinct;
+        }
+        output "out" = s::reached;
+    "#;
+    assert_eq!(rows(src, vec![(0, "1".into()), (1, "1 val=2\n2 val=3\n3 val=4".into()),
+        (2, "3 val=9 diff=2".into())]), vec![("1".into(), "tuple()".into(), 1),
+        ("2".into(), "tuple()".into(), 1)]);
+}
+
+#[test]
+fn absence_reports_invalid_patterns() {
+    for (fragment, expected) in [
+        ("!b(k,_) |- (k,())", "a fragment test cannot be the first atom"),
+        ("a(k,v) * !b(_,_) |- (k,v)", "a fragment test needs at least one matched variable"),
+        ("a(k,v) * !b(k,fresh) |- (k,v)", "fragment test variable `fresh` is not bound by an earlier atom"),
+    ] {
+        rejects(&format!("let a = input 0 : (int,int); let b = a; output \"out\" = {fragment};"), expected);
+    }
+}
+
+#[test]
+fn presence_ignores_duplicates_and_a_plain_atom_multiplies_them() {
+    for (atom, weight) in [("?b(k,_)", 3), ("b(k,_)", 6), ("?b(k,v)", 3)] {
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,int); \
+            output \"out\" = a(k,v) * {atom} |- (k,v);");
+        assert_eq!(rows(&src, vec![(0, "1 val=8 diff=3\n2 val=4".into()),
+            (1, "1 val=8 diff=2".into())]), vec![("1".into(), "8".into(), weight)]);
+    }
+}
+
+#[test]
+fn opposite_membership_tests_share_one_presence_plan() {
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,(int,int));
+        output "out" = (a(k,v) * ?b(k,(v,7)) |- (k,v))
+                     + (a(x,y) * !b(x,(y,7)) |- (x,y));
+    "#;
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let plan = report.emit_ddp_at(plan::ddp::DdpStage::Optimized).unwrap().text;
+    assert_eq!(plan.matches("| reduce(").count(), 1, "{plan}");
+    assert_eq!(rows(src, vec![(0, "1 val=8 diff=3\n2 val=4".into()), (1, "1 val=tuple(8,7) diff=2".into())]),
+        vec![("1".into(), "8".into(), 3), ("2".into(), "4".into(), 1)]);
+}
+
+#[test]
+fn comparisons_use_corgi_words_and_can_be_negated() {
+    let feed = "1 val=2\n2 val=2 diff=2\n3 val=2";
+    for (rel, expected) in [
+        ("eq", &[2][..]), ("ne", &[1, 3]), ("lt", &[1]), ("le", &[1, 2]),
+        ("gt", &[3]), ("ge", &[2, 3]), ("!@eq", &[1, 3]),
+    ] {
+        let atom = if rel.starts_with('!') { rel.into() } else { format!("@{rel}") };
+        let src = format!("let a = input 0 : (int,int); let eq = a; \
+            output \"out\" = eq(x,y) * {atom}(x,y) |- (x,y);");
+        let expected = expected.iter().map(|x| (x.to_string(), "2".into(), if *x == 2 { 2 } else { 1 })).collect::<Vec<_>>();
+        assert_eq!(rows(&src, vec![(0, feed.into())]), expected, "{rel}");
+    }
+}
+
+#[test]
+fn arithmetic_relations_produce_and_test_a_result() {
+    for (op, value, unexpected) in [("add", 9, 5), ("sub", 5, 9), ("mul", 14, 9)] {
+        let src = format!("let a = input 0 : (int,int); let b = input 1 : (int,int); \
+            output \"out\" = a(x,y) * @{op}(x,y,z) * b(z,w) * @{op}(x,y,w) \
+            * !@{op}(x,y,{unexpected}) |- (z,w);");
+        assert_eq!(rows(&src, vec![(0, "7 val=2 diff=2".into()),
+            (1, format!("{value} val={value}\n{value} val={unexpected}"))]),
+            vec![(value.to_string(), value.to_string(), 2)]);
+    }
+    let src = r#"
+        let a = input 0 : (int,float);
+        output "out" = a(k,v) * @add(v, -2.5e0, w) * @lt(w # post-argument comment with a )
+            , 0.5) |- (k,w);
+    "#;
+    assert_eq!(rows(src, vec![(0, "1 val=2.0\n2 val=3.0".into())]),
+        vec![("1".into(), "-0.5".into(), 1)]);
+}
+
+#[test]
+fn computed_tests_run_at_the_first_checkpoint_with_their_arguments() {
+    use interactive::{ir::LinearOp, scope_ir::{Item, Node}};
+    let src = r#"
+        let a = input 0 : (int,int);
+        let b = input 1 : (int,int);
+        let c = input 2 : (int,int);
+        output "out" = a(x,y) * b(y,z) * @add(y,z,w) * c(w,v) * @gt(w,x) * @gt(y,x) |- (x,v);
+    "#;
+    let p = program(src);
+    let joins = p.root.items.iter().enumerate().filter_map(|(i, item)|
+        matches!(item, Item::Op(Node::Join { .. })).then_some(i)).collect::<Vec<_>>();
+    let filters = p.root.items.iter().enumerate().filter_map(|(i, item)|
+        matches!(item, Item::Op(Node::Linear { ops, .. }) if matches!(ops.as_slice(), [LinearOp::Filter(_)])).then_some(i)).collect::<Vec<_>>();
+    assert_eq!(filters.len(), 2);
+    assert!(filters[0] < joins[0] && joins[0] < filters[1] && filters[1] < joins[1]);
+    assert_eq!(rows(src, vec![(0, "1 val=2\n3 val=2".into()), (1, "2 val=7".into()),
+        (2, "9 val=8".into())]), vec![("1".into(), "8".into(), 1)]);
+}
+
+#[test]
+fn computed_relation_errors_name_arguments_and_modes() {
+    for (fragment, expected) in [
+        ("@eq(x,y)", "a computed relation cannot be the first atom"),
+        ("a(x,y) * ?@eq(x,y)", "write a computed relation with `@` or `!@`"),
+        ("a(x,y) * @filter(x,y)", "unknown computed relation `@filter`"),
+        ("a(x,y) * @eq(x)", "expects 2 arguments, got 1"),
+        ("a(x,y) * @eq", "expected arguments for relation `@eq`"),
+        ("a(x,y) * @eq(x,y", "unclosed computed relation arguments"),
+        ("a(x,y) * @eq(x,_)", "a computed relation cannot use a wildcard"),
+        ("a(x,y) * @eq(x,(1,2) add)", "computed relation argument must be a variable or literal"),
+        ("a(x,y) * @eq(x,z)", "unbound argument 2 `z`. Supported modes are test"),
+        ("a(x,y) * @add(x,z,y)", "unbound argument 2 `z`. Supported modes are test (all arguments bound) and compute"),
+        ("a(x,y) * @add(x,z,w)", "unbound argument 2 `z`, argument 3 `w`"),
+        ("a(x,y) * !@mul(x,y,z)", "Negation needs every argument bound"),
+    ] {
+        rejects(&format!("let a = input 0 : (int,int); output \"out\" = {fragment} |- (x,y);"), expected);
+    }
+}
+
+#[test]
+fn a_relation_can_test_a_variant_payload_with_a_corgi_string_literal() {
+    let src = r#"
+        let a = input 0 : (int, Option(List(int)));
+        let b = input 1 : (List(int),int);
+        output "out" = a(k,Some(v)) * b(v,w) * @eq(v,"a#\") |- (k,w);
+    "#;
+    let report = plan::report(src, &|_| None, &Config::all()).unwrap();
+    let lowered = report.emit_ddp_at(plan::ddp::DdpStage::Lowered).unwrap().text;
+    assert!(lowered.find("| flatmap(").unwrap() < lowered.find("| filter(").unwrap());
+    assert!(lowered.find("| filter(").unwrap() < lowered.find("| join(").unwrap());
+    assert_eq!(rows(src, vec![
+        (0, "1 val=inject(1,list(97,35,92))\n2 val=inject(1,list(2))\n3 val=inject(0,tuple())".into()),
+        (1, "list(97,35,92) val=3\nlist(2) val=4".into()),
+    ]), vec![("1".into(), "3".into(), 1)]);
+}
+
+#[test]
+fn a_fragment_needs_a_head() {
+    for fragment in ["a(x,y)", "a(x,y) * a(x,z)", "a(x,y) * !a(x,_)", "a(x,y) * @eq(x,y)"] {
+        rejects(&format!("let a = input 0 : (int,int); output \"out\" = {fragment};"),
+            "end the fragment with `|- (key, value)`");
+    }
 }

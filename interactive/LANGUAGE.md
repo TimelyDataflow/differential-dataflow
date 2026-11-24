@@ -140,22 +140,53 @@ For each key it pairs every row `(k, v1)` on the left with every row `(k, v2)` o
 |---|---|
 | `join(other, (k, (v1, v2)) -> (k2, v3))` | `join(other) \| map((k, (v1, v2)) -> (k2, v3))`, without building the joined rows |
 
-[Join fragments](#join-fragments) are sugar for a chain of `join`s.
+[Join fragments](#join-fragments) expand into ordinary pipeline operators.
 
 #### Join fragments
 
-A join fragment writes a multiway join as a rule.
-Each atom names a collection and its key and value patterns, and `*` joins the atoms left to right:
+A join fragment writes joins and tests as a rule.
+A plain atom names a collection and its key and value patterns.
+The `*` orders the atoms left to right.
 
 ```
 let revenue = orders(o, (c, _)) * customer(c, (_, n)) * nation(n, (name, r))
-            | map(((o, c, n, name, r), ()) -> (name, o));
+            |- (name, o);
 ```
 
-A fragment's rows are keyed by its variables in order of first appearance, with a unit value; one variable is the key itself, and no variables are `()`.
+End each fragment with a head `|- (key, value)`.
+The turnstile `|-` introduces a pair of corgi expressions for the output key and value.
+A head can read variables bound by the atoms.
+The parser puts the head in the last join's projection when the join ends the expansion.
+The pipeline can continue after the head's closing parenthesis.
 A repeated variable tests equality, and a literal in a pattern tests that value.
-Every later atom's key must use a variable bound by an earlier atom; the join order is the order written, so put selective atoms first.
-Fragments are experimental: the parser expands them into plain joins, and they may change.
+Every later plain atom's key must use a variable bound by an earlier atom.
+Put selective atoms first.
+Fragments are experimental.
+The parser expands them into ordinary pipeline operators.
+
+Write `a(k, v) * !b(k, _) |- (k, v)` to keep rows of `a` whose key is absent from `b`.
+Write `a(k, v) * ?b(k, _) |- (k, v)` to keep rows whose key is present in `b`.
+Both tests run where written and keep the original weight of each surviving row.
+Its pattern may match fields in the key or value and may include wildcards, literals, and variants.
+It must mention at least one variable, and each variable must already be bound.
+A test cannot start a fragment.
+It looks for a row of the tested collection whose count is not zero and that agrees with the pattern's variables, literals and variants; `_` agrees with any value.
+The parser uses one presence row per matched key for either test.
+A semijoin joins against that set, and an antijoin subtracts the rows from that same join.
+A plain atom multiplies the weights and acts as a semijoin when its matching rows already form a set with one row per matched key.
+When the test matches the entire key and leaves the value unrestricted, it reads the tested collection's key arrangement directly.
+When that collection is a `distinct` of unit values, it is already the set, and the optimizer drops the set's reduce.
+
+Write `@eq(a, b)`, `@ne(a, b)`, `@lt(a, b)`, `@le(a, b)`, `@gt(a, b)`, or `@ge(a, b)` to compare two arguments.
+Write `@add(a, b, c)`, `@sub(a, b, c)`, or `@mul(a, b, c)` to compute `c` from `a` and `b`.
+With all three arguments bound, those relations test whether the result equals `c`.
+An input argument is a bound variable or a literal.
+A new variable is allowed only in the result position of arithmetic.
+These relations accept no wildcards.
+Prefix a test with `!`, as in `!@eq(a, b)`, to keep the rows where it is false.
+Every argument of a negated relation must be bound.
+A test runs at the first point its arguments are available, and a computed field is added where written.
+Neither form needs its own arrangement.
 
 ### Reductions
 

@@ -9,6 +9,12 @@ pub(crate) fn unit_distinct() -> Lambda {
     Lambda::new("let (_, vals) = input in vals map (((), _) -> ((), 1))".into(), &corgi::Scope::default())
 }
 
+/// A fragment test's key set: `()` with diff 1 for each key that has values. `val` is the test's
+/// value pattern, all wildcards, which the reduce checks the tested value against.
+pub(crate) fn key_set(val: &str) -> Lambda {
+    Lambda::new(format!("let (k, vals : List(({val}, int))) = input in ((), 1) enlist"), &corgi::Scope::default())
+}
+
 /// A reduce sugar whose lowering waits for its input's shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ByShape {
