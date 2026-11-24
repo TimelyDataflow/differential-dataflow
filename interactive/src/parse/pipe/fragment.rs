@@ -266,14 +266,18 @@ impl Parser {
         assert!(*self.peek() == Token::Turnstile, "end the fragment with `|- (key, value)`");
         self.next();
         let Token::Head(head) = self.next() else { panic!("a fragment head must be a tuple `|- (key, value)`") };
-        let (mut fresh, mut hoisted) = (self.fresh, Vec::new());
+        let (mut fresh, mut hoisted, written) = (self.fresh, Vec::new(), std::mem::take(&mut self.written));
         let expr = Fragment { steps, head }.expansion(self.lambda_scope(), &mut |rows| {
-            let name = format!("fragment_rows{fresh}");
-            fresh += 1;
+            let name = loop {
+                let name = format!("fragment_rows{fresh}");
+                fresh += 1;
+                if !written.contains(&name) { break name; }
+            };
             hoisted.push(Stmt::Let(name.clone(), rows));
             Expr::Name(name)
         });
         self.fresh = fresh;
+        self.written = written;
         self.hoisted.extend(hoisted);
         expr
     }

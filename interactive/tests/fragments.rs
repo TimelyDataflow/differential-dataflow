@@ -610,6 +610,29 @@ fn absence_keeps_bag_weights_and_reuses_the_first_key_arrangement() {
 }
 
 #[test]
+fn antijoin_rows_take_names_the_source_does_not_write() {
+    // An outer binding with the generated name is still what the child scope reads.
+    let outer = r#"
+        let fragment_rows0 = input 0 : (int, int);
+        let a = input 1 : (int, int);
+        inner: {
+            let keep = a(k, v) * !a(v, _) |- (k, v);
+            let copied = fragment_rows0;
+        }
+        output "out" = inner::copied;
+    "#;
+    assert_eq!(rows(outer, vec![(0, "9 val=8".into()), (1, "1 val=2".into())]), vec![("9".into(), "8".into(), 1)]);
+    // A program may bind the name itself.
+    let local = r#"
+        let fragment_rows0 = input 0 : (int, int);
+        output "out" = fragment_rows0(k, v) * !fragment_rows0(v, _) |- (k, v);
+    "#;
+    assert_eq!(rows(local, vec![(0, "1 val=2".into())]), vec![("1".into(), "2".into(), 1)]);
+    // A name the program never binds stays unbound.
+    rejects(r#"let a = input 0 : (int, int); let keep = a(k, v) * !a(v, _) |- (k, v); output "out" = fragment_rows0;"#, "fragment_rows0");
+}
+
+#[test]
 fn tests_against_a_unit_distinct_join_it_without_a_key_set() {
     // `b` is a distinct of unit values, already one row per key; `c` is a min, which has values.
     let src = r#"

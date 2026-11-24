@@ -416,11 +416,15 @@ struct Parser {
     hoisted: Vec<Stmt>,
     /// The next fresh name's number.
     fresh: usize,
+    /// Every name the source writes, so that a fresh name neither collides with a binding nor
+    /// captures a reference to one in any scope.
+    written: std::collections::HashSet<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None, hoisted: Vec::new(), fresh: 0 }
+        let written = tokens.iter().filter_map(|t| match t { Token::Ident(name) => Some(name.clone()), _ => None }).collect();
+        Parser { tokens, pos: 0, types: Default::default(), aliases: Default::default(), type_order: Vec::new(), scope: None, hoisted: Vec::new(), fresh: 0, written }
     }
 
     /// The corgi scope of this program's lambdas: the registered functions and the base words
