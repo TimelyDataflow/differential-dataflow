@@ -193,3 +193,29 @@ fn iterate_distinct_join_with_history_past_upper() {
         assert_eq!(accumulate(&output, &time), expected, "at {time:?}");
     }
 }
+
+/// Records that each live for one step of the first coordinate, all retired in one round. At step
+/// `i`, record `2i` is present at `(i, 0)` and record `2i+1` at `(i, n+1-i)`, and both are retracted
+/// at step `i+1`. A later step `(s, 0)` joins `(i, n+1-i)` at `(s, n+1-i)`, where nothing changes,
+/// since record `2i+1` has come and gone there. If the reduce remembers those times after the
+/// record cancels, step `s` evaluates about `s` of them, and the round takes about `n²/2`
+/// evaluations rather than about `3n`. The third coordinate is unused.
+#[test]
+fn reduce_scaling_cancelled_history() {
+    let n: u64 = 100_000;
+    let mut updates = Vec::new();
+    for i in 0 ..= n {
+        updates.push(((0u64, 2 * i), time3(i, 0, 0), 1));
+        updates.push(((0u64, 2 * i), time3(i + 1, 0, 0), -1));
+        updates.push(((0u64, 2 * i + 1), time3(i, n + 1 - i, 0), 1));
+        updates.push(((0u64, 2 * i + 1), time3(i + 1, n + 1 - i, 0), -1));
+    }
+    let output = run_rounds(vec![time3(0, 0, 0)], vec![(updates, vec![])], |c| {
+        c.reduce(|_key, input, output| output.push((input.len() as u64, 1)))
+    });
+    // At step `i`, one record is present below `(i, n+1-i)`, and two from there on.
+    for i in [0, 1, n / 2, n] {
+        assert_eq!(accumulate(&output, &time3(i, n - i, 0)), [((0, 1), 1)].into(), "at step {i}");
+        assert_eq!(accumulate(&output, &time3(i, n + 1 - i, 0)), [((0, 2), 1)].into(), "at step {i}");
+    }
+}

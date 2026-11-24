@@ -386,9 +386,11 @@ mod history_replay {
 
                 // advance both `synth_times` and `times_slice`, marking this time interesting if in either.
                 while self.synth_times.last() == Some(&next_time) {
-                    // We don't know enough about `next_time` to avoid putting it in to `times_current`.
-                    // TODO: If we knew that the time derived from a canceled batch update, we could remove the time.
-                    self.times_current.push(self.synth_times.pop().expect("failed to pop from synth_times")); // <-- TODO: this could be a min-heap.
+                    // A visited synthetic time is not kept in `times_current`. What made it interesting stays
+                    // in the batch buffer, and what it emits goes to `output_produced`. Both are advanced by
+                    // `meet` and consolidated, so they vanish once they cancel, where a bare time would stay
+                    // forever and make every later time it joins interesting.
+                    self.synth_times.pop().expect("failed to pop from synth_times"); // <-- TODO: this could be a min-heap.
                     interesting = true;
                 }
                 while times_slice.first() == Some(&next_time) {
@@ -406,6 +408,8 @@ mod history_replay {
                 //       yield false positives if not sufficiently compact. Maybe we should look into this and see.
                 interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
                 interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
+                // A correction this round changes the output at every time above it.
+                interesting = interesting || self.output_produced.iter().any(|((_, t), _)| t.less_equal(&next_time));
 
                 // We should only process times that are not in advance of `upper_limit`.
                 //
@@ -415,35 +419,36 @@ mod history_replay {
                 //
                 // An uninteresting time in advance of `upper_limit` still needs its synthetic times. With
                 // partially ordered times, advancing history by `meet` can move a time from before the
-                // interval to beyond it. Its joins with batch times and `times_current` are interesting,
-                // and no later interval finds them, as it seeds only from its own batch and pending times.
-                // The joins are also in advance of `upper_limit`, so the determination below defers them.
+                // interval to beyond it. Its joins with batch times, `times_current`, and this round's output
+                // are interesting, and no later interval finds them, as it seeds only from its own batch and
+                // pending times. The joins are also in advance of `upper_limit`, so the determination below
+                // defers them.
                 if !interesting || !upper_limit.less_equal(&next_time) {
 
                     // DETERMINATION (times only). Determine synthetic interesting times.
                     //
                     // Synthetic interesting times are produced differently for interesting and uninteresting
                     // times. An uninteresting time must join with an interesting time to become interesting,
-                    // which means joins with `self.batch_history` and  `self.times_current`. I think we can
-                    // skip `self.synth_times` as we haven't gotten to them yet, but we will and they will be
-                    // joined against everything.
+                    // which means joins with `self.batch_history`, `self.times_current`, and `self.output_produced`.
+                    // I think we can skip `self.synth_times` as we haven't gotten to them yet, but we will and they
+                    // will be joined against everything.
 
                     // Any time, even uninteresting times, must be joined with the current accumulation of
-                    // batch times as well as the current accumulation of `times_current`.
+                    // batch times, the current accumulation of `times_current`, and this round's produced output.
                     self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                     self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                    self.temporary.extend(self.output_produced.iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
 
-                    // An interesting time additionally joins with `input` and `output` history and this round's
-                    // produced output: it carries the seed, so those joins stay interesting (an uninteresting
-                    // time does not, as `input`/`output` times are not themselves seeds). We advance the buffers
-                    // by `meet` first, exactly as evaluation reads them below; by join preservation the advanced
-                    // and unadvanced times spawn the same synthetics, so this matches the pre-split behavior.
+                    // An interesting time additionally joins with `input` and `output` history: it carries the seed,
+                    // so those joins stay interesting (an uninteresting time does not, as `input`/`output` times are
+                    // not themselves seeds). We advance the buffers by `meet` first, exactly as evaluation reads them
+                    // below; by join preservation the advanced and unadvanced times spawn the same synthetics, so this
+                    // matches the pre-split behavior.
                     if interesting {
                         if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
                         if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
                         self.temporary.extend(input_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                         self.temporary.extend(output_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
-                        self.temporary.extend(self.output_produced.iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                     }
                     sort_dedup(&mut self.temporary);
 
