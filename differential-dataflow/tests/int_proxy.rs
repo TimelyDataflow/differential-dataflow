@@ -836,7 +836,14 @@ fn antichains() -> Vec<Antichain<N5>> {
 
 /// A join backend over hash-keyed pairs at any time, which either presents stored times or
 /// consolidates on load by `instance.lower`, as the contract allows either.
-struct PairJoinAt<T> { apply_lower: bool, _t: std::marker::PhantomData<T> }
+///
+/// With `complete` set it completes every key that has one update on some side, unless asked to
+/// present all: it holds the key's output, every pair of its updates, for the following `cross`.
+/// `completed` counts the keys it completed.
+struct PairJoinAt<T> { apply_lower: bool, complete: bool, done: JoinedAt<T>, completed: Rc<std::cell::Cell<usize>> }
+impl<T> PairJoinAt<T> {
+    fn new(apply_lower: bool, complete: bool) -> Self { PairJoinAt { apply_lower, complete, done: Vec::new(), completed: Rc::default() } }
+}
 type PairsAt<T> = Span<u64, (u64, u64), T, i64>;
 type JoinedAt<T> = Vec<((u64, ((u64, u64), (u64, u64))), T, i64)>;
 impl<T: Lattice + Timestamp> ProxyJoinBackend<T, PairsAt<T>, PairsAt<T>> for PairJoinAt<T> {
@@ -857,11 +864,23 @@ impl<T: Lattice + Timestamp> ProxyJoinBackend<T, PairsAt<T>, PairsAt<T>> for Pai
             rows
         };
         let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
-        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
-        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        let rows = |bridge: &ProxyBridge<T, i64, u64, (u64, u64)>, key: u64| bridge.iter().filter(|r| r.0.0 == key).count();
+        let complete = self.complete && !instance.present_all;
+        let completes = |key: u64| complete && (rows(&b0, key) == 1 || rows(&b1, key) == 1);
+        for r in b0.iter() {
+            for s in b1.iter().filter(|s| s.0.0 == r.0.0 && completes(r.0.0)) {
+                self.done.push(((r.0.0, (r.0.1, s.0.1)), r.1.join(&s.1), r.2 * s.2));
+            }
+        }
+        let mut keys: Vec<u64> = b0.iter().map(|r| r.0.0).filter(|key| completes(*key) && rows(&b1, *key) > 0).collect();
+        keys.dedup();
+        self.completed.set(self.completed.get() + keys.len());
+        bridge0.extend(b0.iter().filter(|r| !completes(r.0.0) && b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        bridge1.extend(b1.iter().filter(|r| !completes(r.0.0) && b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
         *from = KeyPosition::End;
     }
     fn cross(&mut self, _instance: &JoinInstance<T, PairsAt<T>, PairsAt<T>>, matches: &mut JoinMatches<T, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
+        if !self.done.is_empty() { output.push(std::mem::take(&mut self.done)); }
         output.push(matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, t.clone(), *r)).collect());
     }
 }
@@ -901,7 +920,7 @@ fn join_as_of_frontier_in_n5() {
             for t1 in N5::ALL.into_iter().filter(|t| lower.less_equal(t)) {   // the fresh input's time
                 for t0 in N5::ALL {
                     for apply_lower in [false, true] {
-                        let backend = || PairJoinAt::<N5> { apply_lower, _t: std::marker::PhantomData };
+                        let backend = || PairJoinAt::<N5>::new(apply_lower, false);
                         // The history: one key with two values, one of them retracted at `t1`, so that
                         // consolidation after advancing has something to do; the other input at `t1`.
                         let history = vec![((7u64, 3u64), t0, 1i64), ((7, 3), t1, -1), ((7, 4), t0, 1)];
@@ -976,4 +995,342 @@ fn reduce_as_of_frontier_in_n5() {
         }
     }
     println!("reduce over N5: {units} retires; {exact} exact by the claims; {crossing} where the bound crosses F, of which {} differ exactly: {differ:?}", differ.len());
+}
+
+// ===== Keys the backend completes =====
+//
+// A backend may complete a key itself rather than present it. The join's completed output is every
+// pair of the key's updates; the reduce's is one evaluation at the key's one time, which
+// `int_proxy::reduce::direct` finds, and the times the key carries beyond `upper`. These tests
+// check that a completing backend produces what a presenting one does, inside and outside
+// `BackendFrontier`, and that completion happens where it may.
+
+#[test]
+fn join_completed_keys_match_presented() {
+    let (mut completed_passed, mut completed_read) = (0, 0);
+    for frontier in antichains() {
+        for lower in N5::ALL {
+            for t1 in N5::ALL.into_iter().filter(|t| lower.less_equal(t)) {
+                for t0 in N5::ALL {
+                    for apply_lower in [false, true] {
+                        // Key 7 has one update on its second side, so the completing backend completes it;
+                        // key 8 has two on each side, so it is presented.
+                        let history = vec![((7u64, 3u64), t0, 1i64), ((7, 3), t1, -1), ((7, 4), t0, 1), ((8, 1), t0, 1), ((8, 2), t1, 1)];
+                        let other = vec![((7u64, 70u64), t1, 1i64), ((8, 80), t0, 1), ((8, 81), t1, -1)];
+                        let run = |backend: PairJoinAt<N5>, wrap: bool| {
+                            let (b0, b1) = (vec![hbatch(history.clone(), N5(0), N5(0))], vec![hbatch(other.clone(), N5(0), N5(0))]);
+                            if wrap { joined_at(ProxyJoinTactic::new(BackendFrontier::new(backend, frontier.clone())).prep(b0, b1, Fresh::Input1, lower)) }
+                            else { joined_at(ProxyJoinTactic::new(backend).prep(b0, b1, Fresh::Input1, lower)) }
+                        };
+                        for wrap in [false, true] {
+                            let completing = PairJoinAt::new(apply_lower, true);
+                            let count = Rc::clone(&completing.completed);
+                            let got = run(completing, wrap);
+                            let want = run(PairJoinAt::new(apply_lower, false), wrap);
+                            assert_eq!(got, want, "F {frontier:?}, lower {lower:?}, t0 {t0:?}, t1 {t1:?}, apply_lower {apply_lower}, wrapped {wrap}");
+                            // The wrapper reads, and so asks for every key, exactly when the bound is not beyond `F`.
+                            if wrap && !beyond(&frontier, lower) { completed_read += count.get(); } else { completed_passed += count.get(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(completed_passed > 0, "the completing backend completed keys");
+    assert_eq!(completed_read, 0, "a unit read as of a frontier presents every key");
+}
+
+/// A reduce backend that completes the keys [`direct`](differential_dataflow::operators::int_proxy::reduce::direct)
+/// finds, over any backend that presents.
+///
+/// It has the inner backend present the window, then evaluates each direct key that the tactic does
+/// not owe a time through the inner backend's own `reduce_corrections`, and removes it from the
+/// window. Its corrections are held, and committed with the window's presented keys' at the next
+/// `emit`, or before the next window or the finish if no `emit` follows.
+struct Completing<B, T> {
+    inner: B,
+    upper: Antichain<T>,
+    held: Vec<((u64, u64), T, i64)>,
+    /// The keys completed, and the times they carried.
+    completed: Arc<Mutex<(usize, usize)>>,
+}
+
+impl<B, T> Completing<B, T> {
+    fn new(inner: B) -> Self { Completing { inner, upper: Antichain::new(), held: Vec::new(), completed: Arc::default() } }
+}
+
+impl<T, B1, B2, B> differential_dataflow::operators::int_proxy::ProxyReduceBackend<T, B1, B2> for Completing<B, T>
+where
+    T: Timestamp + Lattice,
+    B: differential_dataflow::operators::int_proxy::ProxyReduceBackend<T, B1, B2, Key = u64, VIn = u64, VOut = u64, RIn = i64, ROut = i64>,
+{
+    type Key = u64;
+    type VIn = u64;
+    type VOut = u64;
+    type RIn = i64;
+    type ROut = i64;
+
+    fn begin(&mut self, description: differential_dataflow::trace::Description<T>) {
+        self.upper = description.upper().clone();
+        self.inner.begin(description)
+    }
+
+    fn next_window(
+        &mut self,
+        instance: &differential_dataflow::operators::int_proxy::ReduceInstance<'_, T, B1, B2>,
+        due: &differential_dataflow::operators::int_proxy::Due<T, u64>,
+        from: &mut KeyPosition<u64>,
+        window: &mut differential_dataflow::operators::int_proxy::ReduceWindow<T, i64, i64>,
+    ) {
+        use differential_dataflow::operators::int_proxy::reduce::direct;
+        self.emit(&[]);
+        self.inner.next_window(instance, due, from, window);
+        if instance.present_all { return; }
+        let (input, seeds, output) = (std::mem::take(&mut window.input), std::mem::take(&mut window.seeds), std::mem::take(&mut window.output));
+        let mut keys: Vec<u64> = input.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(output.iter().map(|r| r.0.0)).collect();
+        keys.sort();
+        keys.dedup();
+        let (mut done, mut ats, mut in_ends, mut in_all, mut out_ends, mut out_all) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut completed, mut carried) = (0, 0);
+        for key in keys {
+            let ins: Vec<_> = input.iter().filter(|r| r.0.0 == key).cloned().collect();
+            let novel: Vec<_> = seeds.iter().filter(|s| s.0 == key).cloned().collect();
+            let outs: Vec<_> = output.iter().filter(|r| r.0.0 == key).cloned().collect();
+            let owed = due.rows.iter().filter(|row| row.0 == key).map(|row| &due.times[row.1]);
+            let at = direct(owed.chain(novel.iter().map(|s| &s.1)), ins.iter().map(|r| &r.1).chain(outs.iter().map(|r| &r.1)), self.upper.borrow()).cloned();
+            let Some(at) = at else {
+                window.input.extend(ins);
+                window.seeds.extend(novel);
+                window.output.extend(outs);
+                continue;
+            };
+            completed += 1;
+            // The records not at or before `at` carry their joins with it.
+            for record in ins.iter().map(|r| &r.1).chain(outs.iter().map(|r| &r.1)).filter(|t| !t.less_equal(&at)) {
+                window.carried.push((record.join(&at), key));
+                carried += 1;
+            }
+            let accumulate = |rows: &[((u64, u64), T, i64)], all: &mut Vec<(u64, i64)>, ends: &mut Vec<usize>| {
+                let start = all.len();
+                all.extend(rows.iter().filter(|r| r.1.less_equal(&at)).map(|r| (r.0.1, r.2)));
+                differential_dataflow::consolidation::consolidate_from(all, start);
+                ends.push(all.len());
+            };
+            accumulate(&ins, &mut in_all, &mut in_ends);
+            accumulate(&outs, &mut out_all, &mut out_ends);
+            done.push(key);
+            ats.push(at);
+        }
+        let mut count = self.completed.lock().unwrap();
+        count.0 += completed;
+        count.1 += carried;
+        drop(count);
+        if !done.is_empty() {
+            let (corrections, ends) = self.inner.reduce_corrections(&done, &in_ends, &in_all, &out_ends, &out_all);
+            let mut start = 0;
+            for ((key, at), end) in done.iter().zip(ats).zip(ends) {
+                self.held.extend(corrections[start..end].iter().map(|(id, diff)| ((*key, *id), at.clone(), *diff)));
+                start = end;
+            }
+        }
+    }
+
+    fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, i64)], out_ends: &[usize], output: &[(u64, i64)]) -> (Vec<(u64, i64)>, Vec<usize>) {
+        self.inner.reduce_corrections(keys, in_ends, input, out_ends, output)
+    }
+
+    fn emit(&mut self, records: &[((u64, u64), T, i64)]) {
+        if self.held.is_empty() && records.is_empty() { return; }
+        let mut all = std::mem::take(&mut self.held);
+        all.extend_from_slice(records);
+        consolidate_updates(&mut all);
+        self.inner.emit(&all);
+    }
+
+    fn finish(&mut self) -> Option<B2> {
+        self.emit(&[]);
+        self.inner.finish()
+    }
+}
+
+/// A key whose only seed is in the retire and whose other record joins with it beyond `upper` is
+/// completed, and carries that join: the next retire must evaluate the key there.
+#[test]
+fn reduce_completed_key_carries_time_beyond_upper() {
+    let time = Product::<u64, u64>::new;
+    let seed = time(2, 0);
+    let mut lower = Antichain::from_elem(time(0, 2));
+    lower.insert(seed);
+    // The prior record at (1, 1) is not at or before the seed, and joins with it at (2, 1).
+    let first_upper = Antichain::from_elem(time(2, 1));
+    let last_upper = Antichain::from_elem(time(3, 3));
+    let prior = hbatch(vec![((7u64, 9u64), time(1, 1), 1i64)], time(0, 0), time(1, 1));
+    let input = hbatch(vec![((7u64, 3u64), seed, 1i64)], time(0, 0), time(2, 2));
+    let run = |backend: &mut dyn ReduceTactic<Product<u64, u64>, Span<u64, (u64, u64), Product<u64, u64>, i64>, Span<u64, (u64, u64), Product<u64, u64>, i64>>| {
+        let (first, carried) = backend.retire(vec![prior.clone()], vec![prior.clone()], vec![input.clone()], &lower, &first_upper, &lower);
+        let mut outputs: Vec<_> = vec![prior.clone()];
+        outputs.extend(first.into_iter().filter_map(|s| s.inner));
+        let (second, pending) = backend.retire(vec![prior.clone(), input.clone()], outputs.clone(), vec![], &first_upper, &last_upper, &carried);
+        outputs.extend(second.into_iter().filter_map(|s| s.inner));
+        (carried, pending, hread(&outputs[1..]))
+    };
+    let completing = Completing::new(max_backend_at());
+    let count = Arc::clone(&completing.completed);
+    let got = run(&mut ProxyReduceTactic::new(completing));
+    let want = run(&mut ProxyReduceTactic::new(max_backend_at()));
+    // The prior input record and the prior output record each carry (2, 1).
+    // It is completed again in the second retire, at its due time, where nothing is left to carry.
+    assert_eq!(*count.lock().unwrap(), (2, 2), "the key is completed in both retires, and carries its two records' joins once");
+    assert_eq!(got.0, Antichain::from_elem(time(2, 1)), "the carried time holds the first retire's frontier");
+    assert_eq!(got, want);
+    assert_eq!(got.2, vec![((7, 3), seed, 1), ((7, 3), time(2, 1), -1)]);
+    assert!(got.1.is_empty());
+}
+
+/// The max-reduce's backend at product times.
+fn max_backend_at() -> VecReduceBackend<u64, u64, u64, Product<u64, u64>, i64, MaxLogic> { VecReduceBackend::new(max_logic as MaxLogic) }
+
+/// The partial-order oracle's three retires, with keys completed in the third.
+#[test]
+fn reduce_completed_keys_match_partial_order_oracle() {
+    type T = Product<u64, u64>;
+    let time = T::new;
+    let (mut initial, mut novel) = (Vec::new(), Vec::new());
+    for key in 0..64u64 {
+        initial.extend([((key, 3), time(0, 0), 1i64), ((key, 7), time(1, 0), 1), ((key, 9), time(0, 1), 1)]);
+        if key % 2 == 0 { novel.push(((key, 9), time(2, 2), -1)); }
+        if key % 3 == 0 { novel.push(((key, 7), time(2, 2), -1)); }
+        if key % 6 == 0 { novel.push(((key, 3), time(2, 2), -1)); }
+    }
+    let run = |tactic: &mut dyn ReduceTactic<T, Span<u64, (u64, u64), T, i64>, Span<u64, (u64, u64), T, i64>>| {
+        let source = hbatch(initial.clone(), time(0, 0), time(1, 1));
+        let lower = Antichain::from_elem(time(0, 0));
+        let middle = Antichain::from_elem(time(1, 1));
+        let upper = Antichain::from_elem(time(2, 2));
+        let (first, pending1) = tactic.retire(vec![], vec![], vec![source.clone()], &lower, &middle, &lower);
+        let mut all: Vec<_> = first.into_iter().filter_map(|s| s.inner).collect();
+        let (second, pending2) = tactic.retire(vec![source.clone()], all.clone(), vec![], &middle, &upper, &pending1);
+        all.extend(second.into_iter().filter_map(|s| s.inner));
+        let input = hbatch(novel.clone(), time(2, 2), time(3, 3));
+        let (third, pending3) = tactic.retire(vec![source], all.clone(), vec![input], &upper, &Antichain::from_elem(time(3, 3)), &upper);
+        all.extend(third.into_iter().filter_map(|s| s.inner));
+        (pending1, pending2, pending3, hread(&all))
+    };
+    for window in [1, 5, usize::MAX] {
+        let completing = Completing::new(VecReduceBackend::with_window(max_logic as MaxLogic, window));
+        let count = Arc::clone(&completing.completed);
+        let got = run(&mut ProxyReduceTactic::new(completing));
+        let want = run(&mut ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic as MaxLogic, window)));
+        assert_eq!(got, want, "window {window}");
+        // Every key is due at (1, 1) in the second retire, with all its records before it; keys divisible
+        // by 2 or 3 change in the third retire, each at one time with all records before it.
+        assert_eq!(count.lock().unwrap().0, 64 + (0..64).filter(|k| k % 2 == 0 || k % 3 == 0).count(), "window {window}");
+    }
+}
+
+/// The reduce over N5, read as of each frontier and not, by a completing backend and a presenting one.
+#[test]
+fn reduce_completed_keys_as_of_frontier_in_n5() {
+    type MaxN5 = VecReduceBackend<u64, u64, u64, N5, i64, MaxLogic>;
+    let backend = || -> MaxN5 { VecReduceBackend::new(max_logic as MaxLogic) };
+    let (mut completed_passed, mut completed_read) = (0, 0);
+    for frontier in antichains() {
+        for lower in N5::ALL {
+            let lower_ac = Antichain::from_elem(lower);
+            for tp in N5::ALL {
+                for tn in N5::ALL.into_iter().filter(|t| lower.less_equal(t)) {
+                    for retract in [false, true] {
+                        let prior = vec![((7u64, 3u64), tp, 1i64), ((7, 2), tp, 1)];
+                        let mut novel = vec![((7u64, 9u64), tn, 1i64)];
+                        if retract { novel.push(((7, 3), tn, -1)); }
+                        let run = |tactic: &mut dyn ReduceTactic<N5, Span<u64, (u64, u64), N5, i64>, Span<u64, (u64, u64), N5, i64>>| {
+                            let (produced, carried) = tactic.retire(vec![hbatch(prior.clone(), N5(0), N5(0))], vec![], vec![hbatch(novel.clone(), N5(0), N5(0))], &lower_ac, &Antichain::new(), &lower_ac);
+                            (carried, produced.into_iter().filter_map(|b| b.inner).flat_map(|b| hread(&[b])).collect::<Vec<_>>())
+                        };
+                        for wrap in [false, true] {
+                            let completing = Completing::new(backend());
+                            let count = Arc::clone(&completing.completed);
+                            let (got, want) = if wrap {
+                                (run(&mut ProxyReduceTactic::new(BackendFrontier::new(completing, frontier.clone()))),
+                                 run(&mut ProxyReduceTactic::new(BackendFrontier::new(backend(), frontier.clone()))))
+                            } else {
+                                (run(&mut ProxyReduceTactic::new(completing)), run(&mut ProxyReduceTactic::new(backend())))
+                            };
+                            assert_eq!(got, want, "F {frontier:?}, lower {lower:?}, prior at {tp:?}, novel at {tn:?}, retract {retract}, wrapped {wrap}");
+                            let completed = count.lock().unwrap().0;
+                            if wrap && !beyond(&frontier, lower) { completed_read += completed; } else { completed_passed += completed; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(completed_passed > 0, "the completing backend completed keys");
+    assert_eq!(completed_read, 0, "a retire read as of a frontier presents every key");
+}
+
+/// Label propagation to a fixed point, over a graph that changes across outer times, one time at a
+/// time, through a completing backend and a presenting one. Inside the loop a key's records from
+/// earlier rounds can join its seed beyond the retire's upper bound, so completed keys carry times.
+#[test]
+fn reduce_completed_keys_inside_iterate() {
+    use differential_dataflow::input::InputSession;
+    use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
+    let run = |complete: bool| {
+        let out = Arc::new(Mutex::new(Vec::<((u64, u64), u64, i64)>::new()));
+        let count = Arc::new(Mutex::new((0, 0)));
+        let (os, cs) = (out.clone(), count.clone());
+        // A chain 11 -> 10 -> ... -> 0, so node 0 learns label 11 eleven rounds in. At time 1 node 12
+        // arrives with an edge to node 0, which learns 12 a round in: its records from round 11 at
+        // time 0 join that seed beyond the retire.
+        let mut nodes: Vec<((u64, u64), u64, i64)> = (0..12u64).map(|n| ((n, n), 0, 1)).collect();
+        nodes.push(((12, 12), 1, 1));
+        let mut edges: Vec<((u64, u64), u64, i64)> = (0..11u64).map(|n| ((n + 1, n), 0, 1)).collect();
+        edges.extend([((12, 0), 1, 1), ((6, 5), 2, -1), ((3, 9), 3, 1), ((12, 0), 4, -1), ((6, 5), 5, 1)]);
+        timely::execute_directly(move |worker| {
+            let mut node_input: InputSession<u64, (u64, u64), i64> = InputSession::new();
+            let mut edge_input: InputSession<u64, (u64, u64), i64> = InputSession::new();
+            let probe = worker.dataflow::<u64, _, _>(|scope| {
+                let nodes = node_input.to_collection(scope);
+                let edges = edge_input.to_collection(scope);
+                let mut probe = ProbeHandle::new();
+                nodes.clone().iterate(|scope, inner| {
+                    let edges = edges.enter(scope);
+                    let nodes = nodes.enter(scope);
+                    let hashed = inner.join_map(edges, |_src, label, dst| (*dst, *label)).concat(nodes).map(|(k, v)| (k.hashed(), (k, v)));
+                    let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrLabels", VChunkBatcher::new);
+                    let backend = VecReduceBackend::with_window(max_logic as MaxLogic, 4);
+                    let reduced = if complete {
+                        let mut completing = Completing::new(backend);
+                        completing.completed = cs;
+                        reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "Labels", ProxyReduceTactic::new(completing))
+                    } else {
+                        reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "Labels", ProxyReduceTactic::new(backend))
+                    };
+                    reduced.as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
+                })
+                .inspect(move |(d, t, r)| os.lock().unwrap().push((*d, *t, *r)))
+                .inner.probe_with(&mut probe);
+                probe
+            });
+            for epoch in 0..6u64 {
+                for (d, _, r) in nodes.iter().filter(|u| u.1 == epoch) { node_input.update(*d, *r); }
+                for (d, _, r) in edges.iter().filter(|u| u.1 == epoch) { edge_input.update(*d, *r); }
+                node_input.advance_to(epoch + 1);
+                edge_input.advance_to(epoch + 1);
+                node_input.flush();
+                edge_input.flush();
+                while probe.less_than(&(epoch + 1)) { worker.step(); }
+            }
+        });
+        let mut got = out.lock().unwrap().clone();
+        consolidate_updates(&mut got);
+        let count = *count.lock().unwrap();
+        (got, count)
+    };
+    let (got, (completed, carried)) = run(true);
+    let (want, _) = run(false);
+    assert_eq!(got, want);
+    println!("inside iterate: {completed} keys completed, carrying {carried} times");
+    assert!(completed > 0 && carried > 0, "keys were completed ({completed}) and carried times ({carried})");
 }

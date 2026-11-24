@@ -2,10 +2,22 @@
 use std::ops::Range;
 use timely::progress::{Antichain, frontier::AntichainRef, Timestamp};
 
-/// Activated associations refer to a shared time table, sorted by (key, time).
-pub(super) struct Due<T, K> {
+/// The carried interesting times a retire must act on: `(key, time)` associations, sorted by (key, time).
+///
+/// Associations refer to a shared time table, as many keys are commonly due at few times.
+pub struct Due<T, K> {
+    /// The distinct due times, ascending.
     pub times: Vec<T>,
+    /// Each due key with the index in `times` of a time it is due at, ascending and distinct.
     pub rows: Vec<(K, usize)>,
+}
+
+impl<T, K: Copy + PartialEq> Due<T, K> {
+    /// The due keys, ascending and distinct.
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        let mut last = None;
+        self.rows.iter().map(|row| row.0).filter(move |key| last.replace(*key) != Some(*key))
+    }
 }
 
 struct Run<T, K> {

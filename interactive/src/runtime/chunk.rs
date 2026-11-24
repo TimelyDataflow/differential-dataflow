@@ -518,14 +518,24 @@ where
 
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
-/// output with (it resolves proxy ids to real columns by `gather` and hands them here).
-pub(crate) fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
+/// output with. `None` if the columns consolidate to nothing.
+pub(crate) fn columns_to_nonempty_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Option<ChunkBatch<CorgiChunk<T, R>>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
 {
     let chunk = CorgiChunk::from_columns(keys, vals, times, diffs);
-    settle_one(chunk)
+    (chunk.len_() > 0).then(|| settle_one(chunk))
+}
+
+/// As [`columns_to_nonempty_batch`], for tests whose columns are known to hold updates.
+#[cfg(test)]
+pub(crate) fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
+where
+    T: ColTime,
+    R: Semigroup + Clone + 'static,
+{
+    settle_one(CorgiChunk::from_columns(keys, vals, times, diffs))
 }
 
 /// Grade one chunk into a `ChunkBatch`.
@@ -632,6 +642,7 @@ pub(crate) fn ident(keys: &CValue) -> &[i64] {
 
 /// The integer identifier of each row of a [`present_key`] column: the key's own values when it is
 /// an integer, and the prepended hash lane otherwise. Never re-hashes.
+#[cfg(test)]
 pub(crate) fn key_ids(keys: &CValue) -> Vec<i64> {
     ident(keys).to_vec()
 }
