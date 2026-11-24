@@ -170,6 +170,7 @@ Both tests run where written and keep the original weight of each surviving row.
 Its pattern may match fields in the key or value and may include wildcards, literals, and variants.
 It must mention at least one variable, and each variable must already be bound.
 A test cannot start a fragment.
+It looks for a row of the tested collection whose count is not zero and that agrees with the pattern's variables, literals and variants; `_` agrees with any value.
 The parser uses one presence row per matched key for either test.
 A semijoin joins against that set, and an antijoin subtracts the rows from that same join.
 A plain atom multiplies the weights and acts as a semijoin when its matching rows already form a set with one row per matched key.

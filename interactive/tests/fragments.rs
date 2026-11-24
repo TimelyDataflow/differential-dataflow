@@ -610,6 +610,27 @@ fn absence_keeps_bag_weights_and_reuses_the_first_key_arrangement() {
 }
 
 #[test]
+fn wildcards_match_any_row_so_projected_and_whole_key_tests_agree() {
+    // Two rows under one key with opposite counts are both present, so the projected
+    // `!b((x, _), _)` finds one, as the whole-key `?b((x, ()), _)` does.
+    let src = r#"
+        let a = input 0 : (int, ());
+        let b = input 1 : ((int, ()), int);
+        output "out" = a(x, ()) * ?b((x, ()), _) * !b((x, _), _) |- (x, ());
+    "#;
+    let feeds = vec![(0, "1".into()), (1, "tuple(1,tuple()) val=7\ntuple(1,tuple()) val=8 diff=-1".into())];
+    assert_eq!(rows(src, feeds), Vec::<(String, String, i64)>::new());
+    // Rows differing only under `_` are not summed: their counts cancel, but each is present.
+    let src = r#"
+        let a = input 0 : (int, ());
+        let b = input 1 : (int, int);
+        output "out" = a(x, ()) * ?b(_, x) |- (x, ());
+    "#;
+    let feeds = vec![(0, "7".into()), (1, "1 val=7\n2 val=7 diff=-1".into())];
+    assert_eq!(rows(src, feeds), vec![("7".into(), "tuple()".into(), 1)]);
+}
+
+#[test]
 fn antijoin_rows_take_names_the_source_does_not_write() {
     // An outer binding with the generated name is still what the child scope reads.
     let outer = r#"

@@ -129,11 +129,14 @@ impl Atom {
             let reducer = crate::reducers::key_set(&val.shape_pattern());
             (Expr::Reduce(Box::new(source), Reducer::Expr(reducer, Some(1))), original_key)
         } else {
+            // Key the matching rows by the matched fields and keep what the wildcards match as the
+            // value, so a key is present when any matching row is, as with the whole key.
+            state.wild = Some(Vec::new());
             let pat = state.bind_first(&key, &val);
             let projected = state.checkpoint(source, Target::MatchedFields, &pat);
             let fields = names.iter().cloned().map(Pattern::Var).collect::<Vec<_>>();
             let key = if let [field] = &fields[..] { field.clone() } else { Pattern::Tuple(fields) };
-            (Expr::Reduce(Box::new(projected), Reducer::Distinct), key)
+            (Expr::Reduce(Box::new(projected), Reducer::Expr(crate::reducers::key_set("_"), Some(1))), key)
         };
         Self { source, key, val: Pattern::Wild, membership: Some(Membership { names, negated }) }
     }
@@ -431,11 +434,13 @@ struct State<'a> {
     key: BTreeMap<Access, KeyRead>,
     variants: Vec<Variant>,
     tests: Vec<Test<'a>>,
+    /// The fields a test's wildcards match, kept so that rows differing only there stay apart.
+    wild: Option<Vec<Access>>,
 }
 impl<'a> State<'a> {
     fn new(scope: &'a corgi::Scope) -> Self {
         Self { scope, next: 0, names: vec![], bound: BTreeMap::new(), locations: BTreeMap::new(),
-            key: BTreeMap::new(), variants: vec![], tests: vec![] }
+            key: BTreeMap::new(), variants: vec![], tests: vec![], wild: None }
     }
     fn bind_first(&mut self, key: &Pattern, val: &Pattern) -> String {
         self.ingest(key, "k".into());
@@ -479,7 +484,7 @@ impl<'a> State<'a> {
     }
     fn pattern(&mut self, p: &Pattern, at: Access) {
         match p {
-            Pattern::Wild => {},
+            Pattern::Wild => if let Some(wild) = &mut self.wild { wild.push(at); },
             Pattern::Var(n) => {
                 if let Some(old) = self.bound.get(n) { self.tests.push(Test::Equal(old.clone(), at)); }
                 else { self.names.push(n.clone()); self.bound.insert(n.clone(), at); }
@@ -497,7 +502,7 @@ impl<'a> State<'a> {
     fn ingest(&mut self, p: &Pattern, expr: String) {
         if let Pattern::Tuple(ps) = p {
             for (i, p) in ps.iter().enumerate() { self.ingest(p, format!("{expr}.{i}")); }
-        } else if !matches!(p, Pattern::Wild) {
+        } else if !matches!(p, Pattern::Wild) || self.wild.is_some() {
             let at = Access::Slot(self.next);
             self.next += 1;
             self.locations.insert(at.clone(), expr);
@@ -560,6 +565,7 @@ impl<'a> State<'a> {
             Test::Eval(_) => {}, // Every argument is already in bound.
         } }
         inputs.extend(variants.iter().map(|v| v.at.clone()));
+        inputs.extend(self.wild.iter().flatten().cloned());
         inputs
     }
     fn row(&mut self, key_expr: String, key: BTreeMap<Access, KeyRead>) -> String {
@@ -584,9 +590,9 @@ impl<'a> State<'a> {
                 format!("let {names} = {} in {head}", tuple(&values))
             }
             Target::MatchedFields => {
-                let values = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
-                let key = fields(&values);
-                format!("({key}, ())")
+                let key = self.names.iter().map(|n| self.read(&self.bound[n])).collect::<Vec<_>>();
+                let wild = self.wild.iter().flatten().map(|a| self.read(a)).collect::<Vec<_>>();
+                format!("({}, {})", fields(&key), fields(&wild))
             }
             Target::Key(p) | Target::Keep(p) => {
                 self.validate_key(p);
