@@ -202,22 +202,11 @@ where
         // The retire evaluates only at times at or beyond `lower`; beyond `since`, a record and
         // its advanced self accumulate and synthesize alike.
         if self.since.is_empty() || instance.lower.iter().all(|time| self.since.less_equal(time)) { return; }
-        // The input, novel and prior merged, is read as of `since`; so is the novel time support,
-        // which seeds the retire's interesting times. The output is the operator's own, at times
+        // The input, novel and prior merged, is read as of `since`; so are the novel records alone,
+        // which witness the retire's interesting times. The output is the operator's own, at times
         // beyond `since` already.
         read_as_of(&mut window.input, &self.since);
-        let mut moved = false;
-        for (_, time) in window.seeds.iter_mut() {
-            if !self.since.less_equal(time) {
-                let stored = time.clone();
-                time.advance_by(self.since.borrow());
-                moved |= *time != stored;
-            }
-        }
-        if moved {
-            window.seeds.sort();
-            window.seeds.dedup();
-        }
+        read_as_of(&mut window.novel, &self.since);
     }
 
     fn reduce_corrections(

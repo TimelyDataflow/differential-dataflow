@@ -12,11 +12,12 @@
 //! the `u64` key hash and whose value is the full `(key, val)` pair.
 //!
 //! Per window, the backend presents the input (the novel batches and the prior history, merged), the
-//! times of the novel records as seeds, and the prior output.
+//! novel records alone, and the prior output.
 //! Identifiers are ordinal positions minted by a single `MergedWalk` over the novel batches and the
 //! prior ones together, so a value carries ONE identifier whichever run it appears in and a novel
 //! retraction cancels against its own history. They are minted after the walk consolidates, so a value
-//! whose records all cancel never reaches the tactic and never spends an identifier.
+//! whose records all cancel never reaches the tactic's input and never spends an identifier.
+//! The novel records alone carry identifiers of their own: ordinals among each key's novel values.
 //!
 //! The backend clones keys and values like it is being paid to waste cycles.
 //! Generally, this is not a high-performance backend, but shouldn't be abysmal.
@@ -121,7 +122,7 @@ where
     ) {
         let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
 
-        // Populating the input bridge and the seeds.
+        // Populating the input bridge and the novel records.
         self.in_pool.clear();
         self.keys_cache.clear();
         self.collisions.clear();
@@ -153,7 +154,12 @@ where
                 let id = (self.in_pool.len() - 1) as u64;
                 window.input.push(((key, id), time, diff));
             }
-            window.seeds.extend(walk.seeds.drain(..).map(|t| (key, t)));
+            let (mut id, mut prev): (u64, Option<&(K, V)>) = (0, None);
+            for ((data, time), diff) in walk.novel_records.drain(..) {
+                if prev.is_some_and(|p| p != data) { id += 1; }
+                prev = Some(data);
+                window.novel.push(((key, id), time, diff));
+            }
             self.reps.push(single.map(|_| rep));
             if collides { self.collisions.push(key); }
             if budget == 0 { break; }
@@ -362,10 +368,10 @@ struct MergedWalk<'a, D: Ord + Clone + 'static, T: Lattice + Timestamp, R: Semig
     /// record per value: advancement is only useful because something merges the collisions it
     /// creates. An empty frontier advances nothing.
     frontier: AntichainRef<'a, T>,
-    /// The times of the novel records of the key last drawn, sorted and deduplicated: the
-    /// interesting-time seeds. They are recorded as drawn, before consolidation can net a novel
-    /// record against the history it changes.
-    seeds: Vec<T>,
+    /// The novel records of the key last drawn, consolidated among themselves: the witnesses of
+    /// interesting times. They are recorded as drawn, before consolidation can net a novel record
+    /// against the history it changes.
+    novel_records: Vec<Drawn<'a, D, T, R>>,
 }
 
 impl<'a, D, T, R> MergedWalk<'a, D, T, R>
@@ -391,7 +397,7 @@ where
             pos: vec![(0, 0); count],
             due: None,
             frontier,
-            seeds: Vec::new(),
+            novel_records: Vec::new(),
         };
         for b in 0..count {
             walk.seek_to(b, from);
@@ -469,7 +475,7 @@ where
             let run = &slice[start..end];
             // Novel records are at or beyond the frontier, so only the prior history is advanced.
             if novel {
-                self.seeds.extend(run.iter().map(|record| record.1.clone()));
+                self.novel_records.extend(run.iter().map(|record| ((&record.0.1, record.1.clone()), record.2.clone())));
                 into.extend(run.iter().map(|record| ((&record.0.1, record.1.clone()), record.2.clone())));
             } else {
                 into.extend(run.iter().map(|record| {
@@ -490,19 +496,18 @@ where
     ///
     /// Returns the key drawn, or `None` once the key space is spent. `into` is left sorted by
     /// `(data, time)` and consolidated, so a value whose records all cancel is gone before the
-    /// caller ever sees it — and so never spends an identifier. The key's seeds are left in
-    /// [`seeds`](Self::seeds).
+    /// caller ever sees it — and so never spends an identifier. The key's novel records are left in
+    /// [`novel_records`](Self::novel_records), consolidated among themselves.
     fn advance(&mut self, into: &mut Vec<Drawn<'a, D, T, R>>) -> Option<u64> {
         let key = self.due?;
         into.clear();
-        self.seeds.clear();
+        self.novel_records.clear();
         for b in 0..self.count() {
             self.seek_to(b, key);
             self.take_run(b, key, into);
         }
         consolidate(into);
-        self.seeds.sort();
-        self.seeds.dedup();
+        consolidate(&mut self.novel_records);
         if self.changed.get(self.ci) == Some(&key) { self.ci += 1; }
         self.refresh();
         Some(key)

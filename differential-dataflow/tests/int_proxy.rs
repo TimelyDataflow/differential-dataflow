@@ -417,10 +417,11 @@ fn reduce_cancelling_keys_matches_mainline() {
     proxy_matches_mainline(updates, 1);
 }
 
-/// The cancellation case that forces seeds to travel apart from records: retire 2's novel update
-/// exactly cancels the compaction-advanced prior record, so the merged input presentation for the
-/// key is EMPTY — yet its time must still seed, because the key's stale output has to be
-/// retracted. Deriving seeds from the merged view would lose the time and keep the stale output.
+/// The cancellation case that forces the novel records to travel apart from the merged input:
+/// retire 2's novel update exactly cancels the compaction-advanced prior record, so the merged
+/// input presentation for the key is EMPTY — yet its time must still seed, because the key's stale
+/// output has to be retracted. Deriving the witnesses from the merged view would lose the time and
+/// keep the stale output.
 #[test]
 fn reduce_seed_survives_cancellation() {
     let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
@@ -440,7 +441,7 @@ fn reduce_seed_survives_cancellation() {
 
     // Retire 2: the novel batch retracts (7, 3) at time 1. The prior record is advanced to the
     // compaction frontier (lower = 1) as it is drawn, so it lands at time 1 too, and the pair nets
-    // to zero: the merged input presents NOTHING for the key. Only the seed carries time 1.
+    // to zero: the merged input presents NOTHING for the key. Only the novel records carry time 1.
     let b1 = hbatch::<u64, u64, u64, i64>(vec![((7, 3), 1, -1)], 1, 2);
     let (p1, _f) = tactic.retire(
         vec![b0], outs, vec![b1],
@@ -467,7 +468,7 @@ fn bounded_sweeps_match_partial_order_oracle() {
         let mut changes = Vec::new();
         if key % 2 == 0 { changes.push(((key, 9), time(2, 2), -1)); }
         if key % 3 == 0 { changes.push(((key, 7), time(2, 2), -1)); }
-        // Some keys cancel entirely after compaction: only the raw novel seeds
+        // Some keys cancel entirely after compaction: only the novel records alone
         // and stale output remain to trigger their final retraction.
         if key % 6 == 0 { changes.push(((key, 3), time(2, 2), -1)); }
         novel.extend(changes.iter().cloned());
@@ -646,6 +647,53 @@ fn reduce_unreached_time_past_upper_pends_joins() {
         let count: i64 = updates.iter().filter(|(_, t, _)| timely::PartialOrder::less_equal(t, &at)).map(|(_, _, d)| d).sum();
         let output: i64 = outputs.iter().filter(|(_, t, _)| timely::PartialOrder::less_equal(t, &at)).map(|(_, _, d)| d).sum();
         assert_eq!(output, if count > 0 { 1 } else { 0 }, "at {at:?}");
+    }
+}
+
+/// Records that each live for one step of the first coordinate, all retired in one round. At step
+/// `i`, record `2i` is present at `(i, 0)` and record `2i+1` at `(i, n+1-i)`, and both are retracted
+/// at step `i+1`. A later step `(s, 0)` joins `(i, n+1-i)` at `(s, n+1-i)`, where nothing changes,
+/// since record `2i+1` has come and gone there. If the reduce remembers those times after the
+/// record cancels, step `s` evaluates about `s` of them, and the round takes about `n²/2`
+/// evaluations rather than about `3n`.
+#[test]
+fn reduce_scaling_cancelled_history() {
+    type T = Product<u64, u64>;
+    let time = T::new;
+    let n: u64 = 100_000;
+    let mut updates = Vec::new();
+    for i in 0 ..= n {
+        updates.push(((0u64, 2 * i), time(i, 0), 1i64));
+        updates.push(((0u64, 2 * i), time(i + 1, 0), -1));
+        updates.push(((0u64, 2 * i + 1), time(i, n + 1 - i), 1));
+        updates.push(((0u64, 2 * i + 1), time(i + 1, n + 1 - i), -1));
+    }
+    fn count(_k: &u64, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>) {
+        updates.push((input.len() as u64, 1));
+        for (w, d) in current.iter() { updates.push((*w, -*d)); }
+    }
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let sink = output.clone();
+    timely::execute_directly(move |worker| {
+        worker.dataflow::<u64, _, _>(|outer| outer.scoped::<T, _, _>("Product", |scope| {
+            let hashed = updates.to_stream(scope).as_collection().map(|(k, v): (u64, u64)| (k.hashed(), (k, v)));
+            let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), T, i64)>, _, VChunkSpine<u64, (u64, u64), T, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
+            reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), T, i64>, _>(arr, "VecReduce", ProxyReduceTactic::new(VecReduceBackend::new(count)))
+                .as_collection(|_h, kw: &(u64, u64)| kw.1)
+                .inspect(move |(d, t, r)| sink.lock().unwrap().push((*d, *t, *r)));
+        }));
+    });
+    let output = output.lock().unwrap();
+    let accumulate = |at: T| -> Vec<(u64, i64)> {
+        let mut counts = std::collections::BTreeMap::new();
+        for (d, t, r) in output.iter() {
+            if timely::PartialOrder::less_equal(t, &at) { *counts.entry(*d).or_insert(0i64) += r; }
+        }
+        counts.into_iter().filter(|(_, r)| *r != 0).collect()
+    };
+    for i in [0, 1, n / 2, n] {
+        assert_eq!(accumulate(time(i, n - i)), [(1, 1)], "at step {i}");
+        assert_eq!(accumulate(time(i, n + 1 - i)), [(2, 1)], "at step {i}");
     }
 }
 
