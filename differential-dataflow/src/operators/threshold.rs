@@ -5,7 +5,8 @@
 
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::lattice::Lattice;
@@ -121,14 +122,24 @@ where
 
         let mut trace = self.trace.clone();
 
-        self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
+        // As `count_total`: no capabilities, output only in response to batches, so no need to
+        // run on frontier advances.
+        let interest = crate::idle::reader_interest(&self.stream.scope());
+        let mut builder = OperatorBuilder::new("ThresholdTotal".to_owned(), self.stream.scope());
+        let mut input = builder.new_input(self.stream, Pipeline);
+        builder.set_notify_for(0, interest);
+        let (output, stream) = builder.new_output();
+        let mut output = OutputBuilder::from(output);
+
+        builder.build(move |_capabilities| {
 
             // tracks the lower and upper limit of received batches.
             let mut lower_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
 
-            move |(input, _frontier), output| {
+            move |_frontiers| {
 
+                let mut output = output.activate();
                 let mut batch_storage = Vec::new();
 
                 // Downgrde previous upper limit to be current lower limit.
@@ -203,7 +214,8 @@ where
                 trace.set_logical_compaction(upper_limit.borrow());
                 trace.set_physical_compaction(upper_limit.borrow());
             }
-        })
-        .as_collection()
+        });
+
+        stream.as_collection()
     }
 }
