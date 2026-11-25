@@ -1,0 +1,5 @@
+-- Two identical non-linear pipelines: dedup merges them one level per round.
+let x = input 0 : ((int, int) ; ()) | map(((a, b), _) -> (a, b));
+let p1 = x | join(x, (k, a, b) -> (k, (a, b))) | min | join(x, (k, _, b) -> (k, b)) | count | join(x, (k, n, _) -> (k, n)) | distinct;
+let p2 = x | join(x, (k, a, b) -> (k, (a, b))) | min | join(x, (k, _, b) -> (k, b)) | count | join(x, (k, n, _) -> (k, n)) | distinct;
+export "p" = p1 + p2 | arrange;
