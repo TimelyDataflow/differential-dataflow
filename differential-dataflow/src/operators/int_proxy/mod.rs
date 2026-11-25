@@ -44,6 +44,11 @@
 //! Both are welcome to efficiently notice that there have been no collisions and optimize,
 //! or to ignore the risk entirely and live dangerously.
 
+use std::ops::Range;
+
+use crate::difference::Multiply;
+use crate::lattice::Lattice;
+
 mod history;
 
 pub mod join;
@@ -68,6 +73,51 @@ pub fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord>(bridg
         "{}: a presented bridge must be sorted & consolidated by ((key, val), time)",
         who,
     );
+}
+
+/// A column of times, as a backend stores them, with the operations the proxy tactics need.
+///
+/// Operations take and produce columns, never owned times, except the two scaffolding exits,
+/// which exist for paths not yet expressed as column operations and go once nothing calls them.
+pub trait TimeColumn<T>: Default {
+    /// The number of times in the column.
+    fn len(&self) -> usize;
+    /// Remove every time, keeping the allocation.
+    fn clear(&mut self);
+    /// For each block `(r0, r1)`, append `a[i] ∨ b[j]` for `i` in `r0`, `j` in `r1`, `i` outer.
+    fn extend_cross_join(&mut self, a: &Self, b: &Self, blocks: &[(Range<usize>, Range<usize>)]);
+
+    // Scaffolding: the owned exits, to delete once nothing calls them.
+    /// The time at `i`, owned.
+    fn owned_get(&self, i: usize) -> T;
+    /// Append an owned time.
+    fn owned_push(&mut self, t: &T);
+}
+
+impl<T: Lattice + Clone> TimeColumn<T> for Vec<T> {
+    fn len(&self) -> usize { Vec::len(self) }
+    fn clear(&mut self) { Vec::clear(self) }
+    fn extend_cross_join(&mut self, a: &Self, b: &Self, blocks: &[(Range<usize>, Range<usize>)]) {
+        for (r0, r1) in blocks {
+            for i in r0.clone() {
+                self.extend(b[r1.clone()].iter().map(|t| a[i].join(t)));
+            }
+        }
+    }
+    fn owned_get(&self, i: usize) -> T { self[i].clone() }
+    fn owned_push(&mut self, t: &T) { self.push(t.clone()) }
+}
+
+/// For each block `(r0, r1)`, append `a[i] · b[j]` for `i` in `r0`, `j` in `r1`, `i` outer.
+pub fn extend_cross_product<R0, R1, RO>(out: &mut Vec<RO>, a: &[R0], b: &[R1], blocks: &[(Range<usize>, Range<usize>)])
+where
+    R0: Multiply<R1, Output = RO> + Clone,
+{
+    for (r0, r1) in blocks {
+        for i in r0.clone() {
+            out.extend(b[r1.clone()].iter().map(|d| a[i].clone().multiply(d)));
+        }
+    }
 }
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
