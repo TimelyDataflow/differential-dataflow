@@ -22,10 +22,10 @@ use std::rc::Rc;
 
 use differential_dataflow::trace::chunk::ChunkBatch;
 
-use corgi::arrange::gather;
+use corgi::arrange::{gather, sort_blocks};
 use corgi::Value as CValue;
 
-use crate::runtime::chunk::{ident, present_key, CorgiChunk};
+use crate::runtime::chunk::{present_key, CorgiChunk};
 use crate::runtime::col_times::ColTimes;
 use crate::runtime::container::CorgiContainer;
 use crate::ir::{Diff, Time};
@@ -42,8 +42,9 @@ type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
 /// A run of released updates, as the batcher hands them to the tactic: in identifier order, as the
 /// arrangement's chunks are, with keys as [`present_key`] presents them. One extraction releases
 /// several runs, each sorted within a window of what was released, and the tactic merges them as
-/// it works. Runs are not consolidated: what one extraction releases from different chains may
-/// repeat a row.
+/// it works. Each run is consolidated within its window: equal rows merged, rows that cancel gone.
+/// Rows repeated across windows, chains or arrivals are not merged; that would mean holding
+/// releases back, which the batcher does not do.
 #[derive(Clone)]
 pub(crate) struct Run {
     keys: CValue,
@@ -82,23 +83,57 @@ struct Part<'a> {
 impl Part<'_> {
     /// The part's rows as runs of at most `size` rows, their times written as `width` lanes. Each
     /// run is sorted and gathered from one window of the part, so its reads stay within it.
+    ///
+    /// A window is sorted by `(identifier, key, value, time)` and its equal rows merged: the
+    /// presented key leads with the identifier, so the order is identifier order, and it holds the
+    /// real key, so keys that share an identifier never merge. The half join is linear in its
+    /// stream, so this is exact, and it costs nothing in latency: it merges only rows already
+    /// released together. A stream that repeats a row, as converging paths do, then meets the
+    /// arrangement once per window rather than once per copy.
     fn runs(&self, size: usize, width: usize, out: &mut Vec<Run>) {
         let keys = present_key(self.keys.clone());
-        let ids = ident(&keys);
         for lo in self.rows.clone().step_by(size) {
             let hi = (lo + size).min(self.rows.end);
-            let mut order: Vec<(i64, usize)> = (lo..hi).map(|i| (ids[i], i)).collect();
-            order.sort_unstable_by_key(|&(id, _)| id);
-            let rows: Vec<usize> = order.into_iter().map(|(_, i)| i).collect();
-            let lanes = (0..width).map(|k| rows.iter().map(|&i| self.times.at(k, i)).collect()).collect();
+            let window: Vec<usize> = (lo..hi).collect();
+            let time_cols: Vec<CValue> = (0..width).map(|k| CValue::i64(window.iter().map(|&i| self.times.at(k, i) as i64).collect())).collect();
+            let rows = CValue::Prod(vec![gather(&keys, &window), gather(self.vals, &window), CValue::Prod(time_cols)]);
+            let diffs: Vec<Diff> = window.iter().map(|&i| self.diffs[i]).collect();
+            let (keep, kept) = consolidate_rows(&rows, &diffs);
+            if kept.is_empty() { continue; }
+            let CValue::Prod(fields) = &rows else { unreachable!() };
+            let CValue::Prod(lanes) = &fields[2] else { unreachable!() };
+            let lanes = lanes.iter().map(|lane| {
+                let lane = lane.as_i64("half_join time lane").unwrap();
+                keep.iter().map(|&p| lane[p] as u64).collect()
+            }).collect();
             out.push(Run {
-                keys: gather(&keys, &rows),
-                vals: gather(self.vals, &rows),
-                times: ColTimes::from_raw_lanes(lanes, rows.len()),
-                diffs: rows.iter().map(|&i| self.diffs[i]).collect(),
+                keys: gather(&fields[0], &keep),
+                vals: gather(&fields[1], &keep),
+                times: ColTimes::from_raw_lanes(lanes, keep.len()),
+                diffs: kept,
             });
         }
     }
+}
+
+/// Rows sorted in corgi's structural order with equal rows merged: the position of each distinct
+/// row's first copy, in order, and the sum of its copies' diffs, leaving out rows whose diffs sum
+/// to zero.
+fn consolidate_rows(rows: &CValue, diffs: &[Diff]) -> (Vec<usize>, Vec<Diff>) {
+    let (perm, labels) = sort_blocks(&[], rows);
+    let (mut keep, mut kept) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < perm.len() {
+        let mut j = i + 1;
+        while j < perm.len() && labels[j] == labels[i] { j += 1; }
+        let d: Diff = perm[i..j].iter().map(|&p| diffs[p]).sum();
+        if d != 0 {
+            keep.push(perm[i]);
+            kept.push(d);
+        }
+        i = j;
+    }
+    (keep, kept)
 }
 
 /// A part's times: a time chunk's lanes, or an arrival's column.
