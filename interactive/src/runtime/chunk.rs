@@ -167,9 +167,9 @@ where
     /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
     /// contract). Batched: corgi's `survey_groups` reports the interleaving of the two `(key, val)`
     /// columns as maximal ranges exclusive to one side and equal classes as their ranges on BOTH
-    /// sides, so rows only one side holds are copied by range, and only the classes both sides
-    /// hold — where consolidation can happen — are merged row by row, on their times, which corgi
-    /// does not own. The shape is walked once per level per chunk, never once per row.
+    /// sides, so exclusive ranges extend the output map and diffs in bulk. Classes both sides
+    /// hold are merged row by row on their times, which corgi does not own. The shape is walked
+    /// once per level per chunk, never once per row.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
@@ -180,29 +180,24 @@ where
 
         let runs = survey_groups(&kv1, &kv2);
         let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
-        // Emitted chunks own this allocation. Size it by surviving rows so cancellation
-        // does not leave a small result holding storage for both full inputs. Times are
-        // reserved for both inputs, to copy ranges without regrowing, and shrunk below if
-        // fewer than half the rows survive.
-        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
-        times.reserve(t1.width().max(t2.width()), n1 + n2);
+        // Diffs grow with the surviving rows because emitted chunks own this allocation.
+        let mut diffs = Vec::new();
         // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
         let (mut p1, mut p2) = (n1, n2);
-        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
-            let (t, d) = if side == 0 { (t1, d1) } else { (t2, d2) };
+        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
+            let d = if side == 0 { d1 } else { d2 };
             tags.resize(tags.len() + (hi - lo), side);
             offs.extend(lo..hi);
-            times.push_range(t, lo, hi);
             diffs.extend_from_slice(&d[lo..hi]);
         };
         for (r, run) in runs.iter().enumerate() {
             let last = r + 1 == runs.len();
             match *run {
                 GroupRun::A(lo, hi) => {
-                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, lo, hi); }
+                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut diffs, 0, lo, hi); }
                 }
                 GroupRun::B(lo, hi) => {
-                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, lo, hi); }
+                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut diffs, 1, lo, hi); }
                 }
                 GroupRun::Both(a_lo, a_hi, b_lo, b_hi) => {
                     // Both classes hold one `(key, val)`, sorted by time: merge on time, summing the
@@ -210,12 +205,12 @@ where
                     let (mut i, mut j) = (a_lo, b_lo);
                     while i < a_hi && j < b_hi {
                         match t1.cmp_cross(i, t2, j) {
-                            Ordering::Less => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, i + 1); i += 1; }
-                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, j + 1); j += 1; }
+                            Ordering::Less => { copy(&mut tags, &mut offs, &mut diffs, 0, i, i + 1); i += 1; }
+                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut diffs, 1, j, j + 1); j += 1; }
                             Ordering::Equal => {
                                 let mut d = d1[i].clone();
                                 d.plus_equals(&d2[j]);
-                                if !d.is_zero() { tags.push(0); offs.push(i); times.push_ref(t1, i); diffs.push(d); }
+                                if !d.is_zero() { tags.push(0); offs.push(i); diffs.push(d); }
                                 i += 1;
                                 j += 1;
                             }
@@ -229,8 +224,8 @@ where
                         p2 = j;
                         break;
                     }
-                    if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
-                    if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
+                    if i < a_hi { copy(&mut tags, &mut offs, &mut diffs, 0, i, a_hi); }
+                    if j < b_hi { copy(&mut tags, &mut offs, &mut diffs, 1, j, b_hi); }
                 }
             }
         }
@@ -238,7 +233,8 @@ where
         // The survey can be large. Its last use precedes materializing the
         // output columns, so do not retain it across that allocation peak.
         drop(runs);
-        if times.len() * 2 < n1 + n2 { times.shrink_to_fit(); }
+        // Reuse the key/value map and fill each timestamp lane in a single pass.
+        let times = t1.gather_two(t2, &tags, &offs);
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, times, diffs, out);
         drop(tags);

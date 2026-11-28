@@ -116,17 +116,6 @@ impl<T> ColTimes<T> {
     /// The number of lanes.
     pub(crate) fn width(&self) -> usize { self.lanes.len() }
 
-    /// Widen to at least `width` lanes and reserve room for `additional` more rows in each.
-    pub(crate) fn reserve(&mut self, width: usize, additional: usize) {
-        self.widen(width);
-        for lane in &mut self.lanes { lane.reserve(additional); }
-    }
-
-    /// Release capacity beyond the current rows.
-    pub(crate) fn shrink_to_fit(&mut self) {
-        for lane in &mut self.lanes { lane.shrink_to_fit(); }
-    }
-
     /// Append `other`'s row `i`.
     #[inline]
     pub(crate) fn push_ref(&mut self, other: &ColTimes<T>, i: usize) {
@@ -150,6 +139,25 @@ impl<T> ColTimes<T> {
     pub(crate) fn gather(&self, rows: &[usize]) -> Self {
         let lanes = self.lanes.iter().map(|lane| rows.iter().map(|&i| lane[i]).collect()).collect();
         ColTimes { lanes, len: rows.len(), _t: PhantomData }
+    }
+
+    /// Copy selected rows in output order, one coordinate at a time.
+    pub(crate) fn gather_two(&self, other: &Self, tags: &[usize], offsets: &[usize]) -> Self {
+        debug_assert_eq!(tags.len(), offsets.len());
+        let width = self.width().max(other.width());
+        let lanes = (0..width).map(|j| {
+            let positions = tags.iter().zip(offsets);
+            match (self.lanes.get(j), other.lanes.get(j)) {
+                (Some(a), Some(b)) => {
+                    let sources = [a.as_slice(), b.as_slice()];
+                    positions.map(|(&side, &row)| sources[side][row]).collect()
+                }
+                (Some(lane), None) => positions.map(|(&side, &row)| if side == 0 { lane[row] } else { 0 }).collect(),
+                (None, Some(lane)) => positions.map(|(&side, &row)| if side == 1 { lane[row] } else { 0 }).collect(),
+                (None, None) => unreachable!("width covers at least one source"),
+            }
+        }).collect();
+        ColTimes { lanes, len: tags.len(), _t: PhantomData }
     }
 
     /// The owned time at row `i`. Reserve for boundaries where DD wants a timestamp.
@@ -355,6 +363,12 @@ mod tests {
         wide.push_range(&narrow, 0, 2);
         assert_eq!(wide.to_vec(), vec![t(0, &[1, 2, 3]), values[0].clone(), values[1].clone()]);
         assert_eq!(source.gather(&[4, 0, 4]).to_vec(), vec![values[4].clone(), values[0].clone(), values[4].clone()]);
+
+        let mixed = narrow.gather_two(&source, &[0, 1, 0], &[1, 4, 0]);
+        assert_eq!(mixed.width(), source.width());
+        assert_eq!(mixed.to_vec(), vec![values[1].clone(), values[4].clone(), values[0].clone()]);
+        let mixed = source.gather_two(&narrow, &[0, 1, 0], &[1, 1, 4]);
+        assert_eq!(mixed.to_vec(), vec![values[1].clone(), values[1].clone(), values[4].clone()]);
     }
 
     /// The lane order must agree with the timestamp's own `Ord` for every pair: the chunk sorts and
