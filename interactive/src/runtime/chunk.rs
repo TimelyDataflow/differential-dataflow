@@ -31,7 +31,7 @@ use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use corgi::arrange::{equal_idx, gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
-use crate::runtime::col_times::{ColTime, ColTimes};
+use crate::runtime::col_times::{push_stretch, ColTime, ColTimes, Stretch};
 
 use std::cmp::Ordering;
 
@@ -182,10 +182,13 @@ where
         let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
         // Diffs grow with the surviving rows because emitted chunks own this allocation.
         let mut diffs = Vec::new();
+        // How the output's times are copied: long runs by slice, short ones row by row.
+        let mut stretches: Vec<Stretch> = Vec::new();
         // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
         let (mut p1, mut p2) = (n1, n2);
-        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
+        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, stretches: &mut Vec<Stretch>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
             let d = if side == 0 { d1 } else { d2 };
+            push_stretch(stretches, tags.len(), side, lo, hi);
             tags.resize(tags.len() + (hi - lo), side);
             offs.extend(lo..hi);
             diffs.extend_from_slice(&d[lo..hi]);
@@ -194,10 +197,10 @@ where
             let last = r + 1 == runs.len();
             match *run {
                 GroupRun::A(lo, hi) => {
-                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut diffs, 0, lo, hi); }
+                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 0, lo, hi); }
                 }
                 GroupRun::B(lo, hi) => {
-                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut diffs, 1, lo, hi); }
+                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 1, lo, hi); }
                 }
                 GroupRun::Both(a_lo, a_hi, b_lo, b_hi) => {
                     // Both classes hold one `(key, val)`, sorted by time: merge on time, summing the
@@ -205,12 +208,12 @@ where
                     let (mut i, mut j) = (a_lo, b_lo);
                     while i < a_hi && j < b_hi {
                         match t1.cmp_cross(i, t2, j) {
-                            Ordering::Less => { copy(&mut tags, &mut offs, &mut diffs, 0, i, i + 1); i += 1; }
-                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut diffs, 1, j, j + 1); j += 1; }
+                            Ordering::Less => { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 0, i, i + 1); i += 1; }
+                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 1, j, j + 1); j += 1; }
                             Ordering::Equal => {
                                 let mut d = d1[i].clone();
                                 d.plus_equals(&d2[j]);
-                                if !d.is_zero() { tags.push(0); offs.push(i); diffs.push(d); }
+                                if !d.is_zero() { push_stretch(&mut stretches, tags.len(), 0, i, i + 1); tags.push(0); offs.push(i); diffs.push(d); }
                                 i += 1;
                                 j += 1;
                             }
@@ -224,8 +227,8 @@ where
                         p2 = j;
                         break;
                     }
-                    if i < a_hi { copy(&mut tags, &mut offs, &mut diffs, 0, i, a_hi); }
-                    if j < b_hi { copy(&mut tags, &mut offs, &mut diffs, 1, j, b_hi); }
+                    if i < a_hi { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 0, i, a_hi); }
+                    if j < b_hi { copy(&mut tags, &mut offs, &mut stretches, &mut diffs, 1, j, b_hi); }
                 }
             }
         }
@@ -233,8 +236,9 @@ where
         // The survey can be large. Its last use precedes materializing the
         // output columns, so do not retain it across that allocation peak.
         drop(runs);
-        // Reuse the key/value map and fill each timestamp lane in a single pass.
-        let times = t1.gather_two(t2, &tags, &offs);
+        // Fill each timestamp lane in a single pass over the stretches.
+        let times = t1.assemble(t2, &tags, &offs, &stretches);
+        drop(stretches);
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, times, diffs, out);
         drop(tags);
@@ -1178,3 +1182,4 @@ mod test {
         }
     }
 }
+

@@ -57,6 +57,32 @@ impl LaneSummary for PointStampSummary<u64> {
     fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (self.retain, self.actions.clone()) }
 }
 
+/// Runs at least this long copy their times as one slice per lane; shorter runs are read row by row.
+pub(crate) const SLICE_RUN: usize = 8;
+
+/// A stretch of a two-source merge's output, for [`ColTimes::assemble`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Stretch {
+    /// Rows `lo..hi` of source `side`, in order.
+    Range { side: usize, lo: usize, hi: usize },
+    /// Output rows `lo..hi`, each named by the merge's `(tag, offset)` map.
+    Rows { lo: usize, hi: usize },
+}
+
+/// Record that output rows from `at` on are rows `lo..hi` of source `side`. Short runs join a
+/// preceding `Rows` stretch, which therefore always ends where the output does.
+pub(crate) fn push_stretch(stretches: &mut Vec<Stretch>, at: usize, side: usize, lo: usize, hi: usize) {
+    let len = hi - lo;
+    if len >= SLICE_RUN {
+        stretches.push(Stretch::Range { side, lo, hi });
+    } else if let Some(Stretch::Rows { hi: end, .. }) = stretches.last_mut() {
+        debug_assert_eq!(*end, at);
+        *end += len;
+    } else {
+        stretches.push(Stretch::Rows { lo: at, hi: at + len });
+    }
+}
+
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
 pub struct ColTimes<T> {
     lanes: Vec<Vec<u64>>,
@@ -141,21 +167,33 @@ impl<T> ColTimes<T> {
         ColTimes { lanes, len: rows.len(), _t: PhantomData }
     }
 
-    /// Copy selected rows in output order, one coordinate at a time.
-    pub(crate) fn gather_two(&self, other: &Self, tags: &[usize], offsets: &[usize]) -> Self {
+    /// Rows from two sources in output order, one lane at a time: `self` is source 0 and `other`
+    /// source 1. A `Range` stretch is one slice copy per lane; a `Rows` stretch reads each row
+    /// through `tags`/`offsets`. A coordinate missing from a source reads as zero.
+    pub(crate) fn assemble(&self, other: &Self, tags: &[usize], offsets: &[usize], stretches: &[Stretch]) -> Self {
         debug_assert_eq!(tags.len(), offsets.len());
         let width = self.width().max(other.width());
         let lanes = (0..width).map(|j| {
-            let positions = tags.iter().zip(offsets);
-            match (self.lanes.get(j), other.lanes.get(j)) {
-                (Some(a), Some(b)) => {
-                    let sources = [a.as_slice(), b.as_slice()];
-                    positions.map(|(&side, &row)| sources[side][row]).collect()
+            let sources = [self.lanes.get(j).map(Vec::as_slice), other.lanes.get(j).map(Vec::as_slice)];
+            let mut lane = Vec::with_capacity(tags.len());
+            for stretch in stretches {
+                match *stretch {
+                    Stretch::Range { side, lo, hi } => match sources[side] {
+                        Some(src) => lane.extend_from_slice(&src[lo..hi]),
+                        None => lane.resize(lane.len() + (hi - lo), 0),
+                    },
+                    Stretch::Rows { lo, hi } => {
+                        let rows = tags[lo..hi].iter().zip(&offsets[lo..hi]);
+                        if let [Some(a), Some(b)] = sources {
+                            let both = [a, b];
+                            lane.extend(rows.map(|(&side, &row)| both[side][row]));
+                        } else {
+                            lane.extend(rows.map(|(&side, &row)| sources[side].map_or(0, |src| src[row])));
+                        }
+                    }
                 }
-                (Some(lane), None) => positions.map(|(&side, &row)| if side == 0 { lane[row] } else { 0 }).collect(),
-                (None, Some(lane)) => positions.map(|(&side, &row)| if side == 1 { lane[row] } else { 0 }).collect(),
-                (None, None) => unreachable!("width covers at least one source"),
             }
+            lane
         }).collect();
         ColTimes { lanes, len: tags.len(), _t: PhantomData }
     }
@@ -364,11 +402,29 @@ mod tests {
         assert_eq!(wide.to_vec(), vec![t(0, &[1, 2, 3]), values[0].clone(), values[1].clone()]);
         assert_eq!(source.gather(&[4, 0, 4]).to_vec(), vec![values[4].clone(), values[0].clone(), values[4].clone()]);
 
-        let mixed = narrow.gather_two(&source, &[0, 1, 0], &[1, 4, 0]);
+        let rows = |n| [Stretch::Rows { lo: 0, hi: n }];
+        let mixed = narrow.assemble(&source, &[0, 1, 0], &[1, 4, 0], &rows(3));
         assert_eq!(mixed.width(), source.width());
         assert_eq!(mixed.to_vec(), vec![values[1].clone(), values[4].clone(), values[0].clone()]);
-        let mixed = source.gather_two(&narrow, &[0, 1, 0], &[1, 1, 4]);
+        let mixed = source.assemble(&narrow, &[0, 1, 0], &[1, 1, 4], &rows(3));
         assert_eq!(mixed.to_vec(), vec![values[1].clone(), values[1].clone(), values[4].clone()]);
+        // Ranges from each side, with and without the lane, around a row-by-row stretch.
+        let (mut tags, mut offs, mut stretches) = (Vec::new(), Vec::new(), Vec::new());
+        for (side, lo, hi) in [(1, 0, 5), (0, 1, 2), (1, 4, 5), (0, 0, 2)] {
+            push_stretch(&mut stretches, tags.len(), side, lo, hi);
+            tags.extend(std::iter::repeat(side).take(hi - lo));
+            offs.extend(lo..hi);
+        }
+        let long: Vec<T> = (0..2 * SLICE_RUN as u64).map(|i| t(i, &[])).collect();
+        let long: ColTimes<T> = long.into_iter().collect();
+        push_stretch(&mut stretches, tags.len(), 0, 0, 2 * SLICE_RUN);
+        tags.extend(std::iter::repeat(0).take(2 * SLICE_RUN));
+        offs.extend(0..2 * SLICE_RUN);
+        assert!(matches!(stretches.last(), Some(Stretch::Range { .. })));
+        let both = long.assemble(&source, &tags, &offs, &stretches);
+        let expect: Vec<T> = tags.iter().zip(&offs)
+            .map(|(&side, &row)| if side == 0 { long.get(row) } else { source.get(row) }).collect();
+        assert_eq!(both.to_vec(), expect);
     }
 
     /// The lane order must agree with the timestamp's own `Ord` for every pair: the chunk sorts and
